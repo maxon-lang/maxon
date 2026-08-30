@@ -53,6 +53,18 @@ func @fill {
   each:
     x64.imulRegRegImm32 rax, r13, 3
     x64.leaRegRegImm32 rax, rax, 1
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow

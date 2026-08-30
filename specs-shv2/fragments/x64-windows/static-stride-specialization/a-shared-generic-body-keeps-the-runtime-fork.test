@@ -108,6 +108,15 @@ func @Bag.put {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 24]
     x64.cmpRegImm32 rsi, 8
     x64.jcc notEqual, __im_stride
@@ -115,24 +124,24 @@ func @Bag.put {
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __im_slow
-  __im_owned#8:
+  __im_owned#10:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_slow
-  __im_bounds#9:
+  __im_bounds#11:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.cmpRegReg rdx, rsi
     x64.jcc aboveEqual, __im_slow
-  __im_buffer#10:
+  __im_buffer#12:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_slow
-  __im_viewed#11:
+  __im_viewed#13:
     x64.leaRegRegImm32 rdi, rsi, -24
     x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, __im_slow
-  __im_store#12:
+  __im_store#14:
     x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], rax
     x64.movRegImm32 rax, 0
     x64.jmp __im_cont
@@ -143,24 +152,24 @@ func @Bag.put {
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, __im_slow
-  __im_owned#13:
+  __im_owned#15:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_slow
-  __im_bounds#14:
+  __im_bounds#16:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.cmpRegReg rdx, rsi
     x64.jcc aboveEqual, __im_slow
-  __im_buffer#15:
+  __im_buffer#17:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_slow
-  __im_viewed#16:
+  __im_viewed#18:
     x64.leaRegRegImm32 rdi, rsi, -24
     x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
     x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, __im_slow
-  __im_store#17:
+  __im_store#19:
     x64.leaRegRegReg rcx, rsi, rdx
     x64.storeBaseDispReg.byte [rcx + 0], rax
     x64.movRegImm32 rax, 0
@@ -191,6 +200,18 @@ func @Bag.at {
     x64.prologue 40
     x64.movRegReg rbx, rax
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
@@ -198,7 +219,7 @@ func @Bag.at {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#9:
+  __im_load#11:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp __im_loaded
@@ -209,7 +230,7 @@ func @Bag.at {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#10:
+  __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
@@ -217,14 +238,14 @@ func @Bag.at {
     x64.movRegImm32 r10, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#12
+    x64.jcc equal, critsplit#14
   __im_empty:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  critsplit#13:
+  critsplit#15:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
-  critsplit#12:
+  critsplit#14:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
   __im_slow:

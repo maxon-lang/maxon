@@ -84,40 +84,48 @@ func @main {
     x64.pushReg r15
     x64.prologue 72
     x64.callDirect Bag.create
-    x64.storeSlotReg slot0, r8
-    x64.movRegImm32 rbx, 0
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 r12, 0
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegImm32 r14, 0
   forhdr:
-    x64.cmpRegReg rcx, rdx
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegReg r14, rax
     x64.jcc greaterEqual, forexit
   scan:
-    x64.loadRegBaseIndexScale.word64 rsi, [rax + rcx*8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r14*8 + 0]
   __il_body:
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
   __il_cont:
-    x64.leaRegRegReg rbx, rbx, rsi
+    x64.leaRegRegReg r12, r12, r8
   forstep:
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
   forexit:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect wipe
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeSlotReg slot1, r12
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
+    x64.storeSlotReg slot1, rbx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
-    x64.leaRegRegReg rax, rbx, r14
+    x64.leaRegRegReg rax, r12, r14
     x64.storeSlotReg slot2, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
@@ -125,10 +133,10 @@ func @main {
     x64.storeSlotReg slot3, r8
     x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, rbx
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r15, rbx
+    x64.leaRegRegReg rbx, r15, r12
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.movRegReg rax, r14

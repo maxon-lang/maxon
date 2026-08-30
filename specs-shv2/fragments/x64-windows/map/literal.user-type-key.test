@@ -74,7 +74,7 @@ func @Point.hash {
     x64.cmpRegReg r8, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_23]
+    x64.leaRegRdata rcx, [rip + __str_blob_27]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -221,10 +221,23 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
-    x64.leaRegRdata rax, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_Point.Hashable]
     x64.leaRegRdata rax, [rip + __witness_Point.Equatable]
   __il_body:
-    x64.loadRegBaseDisp.word64 r13, [r13 + 32]
+    x64.loadRegBaseDisp.word64 r15, [r13 + 32]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc less, __il_slow
+  __rc_chk#13:
+    x64.movRegImm rcx, 4611686018427387904
+    x64.cmpRegReg r15, rcx
+    x64.jcc lessEqual, __rc_ok#12
+  __il_slow:
+    x64.movRegReg rcx, r13
+    x64.callDirect Map.count
+    x64.movRegReg r13, r8
+    x64.jmp __il_cont
+  __rc_ok#12:
+    x64.movRegReg r13, r15
   __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
@@ -283,13 +296,13 @@ func @main {
     x64.loadRegSlot rax, slot4
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
+  __rc_chk#9:
     x64.movRegImm32 rax, 4294967295
     x64.loadRegSlot rcx, slot4
     x64.cmpRegReg rcx, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc lessEqual, __rc_ok#7
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]
+    x64.leaRegRdata rcx, [rip + __str_blob_28]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 120
@@ -300,7 +313,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#7:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __destruct_Map_Point_int
     x64.loadRegSlot rcx, slot2

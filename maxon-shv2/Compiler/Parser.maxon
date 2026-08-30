@@ -25864,6 +25864,28 @@ export type Parser
 		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.countedValueRanges = sharedEmptyProvenIntRanges
+		// ⭐⭐ **BOTH WRITTEN-PROVENANCE MARKS, for `parseFunction`'s stated reason — ValueIds are
+		// FUNCTION-LOCAL, so a mark left standing names a DIFFERENT value here.** This site reset neither,
+		// and a default helper is the one function body that cannot be reached by re-entering
+		// `parseFunction`: the helpers are drained at end-of-file (`parseDefaultHelpers`), so what a helper
+		// inherits is the LAST function in the file — its private set, keyed in ITS SSA space — and
+		// `commitRangeChecks` then publishes the inherited entries under the helper's name.
+		//
+		// MEASURED, `writtenNegativeLiterals`: `function g(p Wide = 0x8000000000000000)` with
+		// `Wide = int(0 to u64.max)`, and a `main` whose only relevant line is `let a = -1`. Both literals
+		// are ValueId 0 in their own function, so the helper read the bit-63 hex constant as source-written
+		// negative and refused it — `E3005: Value -9223372036854775808 is outside the range of 'Wide'` — on
+		// the legal default `ranged-typealias`'s `unsigned-full-alias-admits-a-bit-63-hex-literal` pins.
+		// Delete the `let a = -1` and the identical program compiled. The bootstrap refuses neither, because
+		// its twin sets key on a MaxonValue id that is monotonic across the whole compile (`IrContext.NextId`)
+		// and so has no per-function reset to omit.
+		//
+		// The `unsignedMaxLiterals` half is the same leak and predates the mark above; no witness program is
+		// on file for it, because the values whose signed and unsigned readings differ are bit-63-set
+		// patterns and inside a one-expression helper those fold before `comparisonSignedness` is asked.
+		// A soundness invariant the field header states is not owed a witness to be kept.
+		self.unsignedMaxLiterals = sharedEmptyUnsignedMaxLiterals
+		self.writtenNegativeLiterals = sharedEmptyWrittenNegativeLiterals
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -47453,7 +47475,9 @@ export type Parser
 			return
 		end 'provablyInRange'
 
-		self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: target.name, block: self.currentBlock.id, maxonOpPos: self.currentBlock.opRefs.count(), line: line, column: column))
+		// The DECLARATION rides with the site, not just its name — see `RangeCheckSite.aliasFilePath` for the
+		// wrong answer a name alone produced at the one door whose alias is not the calling file's.
+		self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: target.name, aliasFilePath: target.declFilePath, block: self.currentBlock.id, maxonOpPos: self.currentBlock.opRefs.count(), line: line, column: column))
 	end 'recordRangedTargetSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
@@ -64850,6 +64874,20 @@ export type Parser
 	// itself would be a second copy of the bound, in the one compiler that does not run the declaration.
 	// It is also why a program's OWN array conformer (ARR5b) is checked against ITS declaration and not the
 	// corpus's: `arrayReceiverDeclaredName` names whichever one this receiver was built from.
+	//
+	// ⛔⛔ **THE PARAGRAPH ABOVE WAS A CLAIM, AND IT WAS FALSE FOR THIS DOOR'S WHOLE LIFE (found
+	// 2026-08-30).** The range WAS read out of `stdlib/Array.maxon` here — and then thrown away: the site
+	// recorded only the alias's NAME (`recordRangedTargetSite`), and `InsertRangeChecks` re-resolved that
+	// name against the CALLING file. So the bound actually enforced came from `stdlib/Vector.maxon`'s
+	// identically-named twin, or — measured, and far worse — from a `typealias ElementIndex` the calling
+	// PROGRAM declared privately for its own use, which refused `a.set(9, …)` on a 20-element array. The
+	// claim holds now because `RangeCheckSite.aliasFilePath` carries the declaration this door picked; that
+	// field holds the sabotage in both directions.
+	//
+	// ⚠ **THE STDLIB HALF WAS INVISIBLE, WHICH IS WHY IT SURVIVED REVIEW**: all four stdlib declarations
+	// (two names × `Array.maxon`/`Vector.maxon`) carry the same `int(0 to i64.max)`, so the wrong
+	// declaration answered the right number. Only a program that brought its own range produced a wrong
+	// answer — and only a source sabotage of the library can show the stdlib half at all.
 	//
 	// ⭐ **AND IT IS THE ORDINARY ALIAS-NAMED SITE** — the same door the `as` cast, the field store and the
 	// array ELEMENT record (`requireContainerElementType`), so `InsertRangeChecks` raises the same E3005 for

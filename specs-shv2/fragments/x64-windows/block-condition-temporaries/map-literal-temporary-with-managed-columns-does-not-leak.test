@@ -133,14 +133,26 @@ func @main {
     x64.movRegReg rdx, r14
     x64.movRegReg rax, r13
     x64.callDirect Map.upsert
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
   __il_body:
-    x64.loadRegSlot rax, slot2
-    x64.loadRegBaseDisp.word64 rax, [rax + 32]
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#11:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok#10
+  __il_slow:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect Map.count
+    x64.jmp __il_cont
+  __rc_ok#10:
+    x64.movRegReg r8, rcx
   __il_cont:
-    x64.loadRegSlot rcx, slot1
-    x64.leaRegRegReg rbx, rcx, rax
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegReg rbx, rax, r8
     x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct_Map_String_String
   forstep:
@@ -158,12 +170,12 @@ func @main {
     x64.leaRegRegReg r8, rax, rcx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
+  __rc_chk#7:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc lessEqual, __rc_ok#5
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]
+    x64.leaRegRdata rcx, [rip + __str_blob_29]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -174,7 +186,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#5:
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14

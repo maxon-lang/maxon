@@ -67,6 +67,21 @@ func @main {
     x64.cmpRegImm32 rdx, 3
     x64.jcc greaterEqual, whileexit
   read:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok#9
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#9:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
@@ -139,14 +154,14 @@ func @main {
   whileexit:
     x64.loadRegSlot rax, slot1
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#12
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.loadRegSlot rcx, slot1
     x64.cmpRegReg rcx, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.jcc lessEqual, __rc_ok#11
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -157,7 +172,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#11:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.loadRegSlot r8, slot1

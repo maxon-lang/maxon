@@ -75,12 +75,22 @@ func @Reg.size {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.leaRegRdata rcx, [rip + __witness_int.Hashable]
-    x64.leaRegRdata rcx, [rip + __witness_int.Equatable]
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
   __il_body:
-    x64.loadRegBaseDisp.word64 r8, [rax + 24]
+    x64.loadRegBaseDisp.word64 r8, [rcx + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg r8, rsi
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.callDirect Set.count
   __il_cont:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -113,7 +123,7 @@ func @main {
     x64.cmpRegReg r12, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_19]
+    x64.leaRegRdata rcx, [rip + __str_blob_17]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -128,6 +128,16 @@ func @IntCursor.current {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rax + 8]
     x64.cmpRegReg rdx, rcx
     x64.jcc aboveEqual, __im_slow
@@ -137,18 +147,18 @@ func @IntCursor.current {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rax + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#7
+    x64.jcc equal, critsplit#9
   __im_empty:
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, critsplit#8
+    x64.jcc notEqual, critsplit#10
   __im_slow:
     x64.movRegReg rcx, rax
     x64.callDirect __managed_get
     x64.jmp __im_cont
-  critsplit#8:
+  critsplit#10:
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#7:
+  critsplit#9:
     x64.movRegReg r10, rcx
   __im_cont:
     x64.cmpRegImm32 r10, 0

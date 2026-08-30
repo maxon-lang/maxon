@@ -32,21 +32,31 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect Set.insert
-    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
   __il_body:
     x64.loadRegBaseDisp.word64 rbx, [r12 + 24]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#7:
+    x64.movRegImm rcx, 4611686018427387904
+    x64.cmpRegReg rbx, rcx
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect Set.count
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Set_int
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
+  __rc_chk#3:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_19]
+    x64.leaRegRdata rcx, [rip + __str_blob_17]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

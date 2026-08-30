@@ -68,23 +68,35 @@ func @main {
     x64.leaRegRdata rsi, [rip + __witness_int.Equatable]
     x64.movRegReg rcx, r12
     x64.callDirect Set.insert
-    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
   __il_body#6:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-  __il_body#7:
-    x64.imulRegRegImm32 rbx, rax, 7
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 24]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#8:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok#7
+  __il_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect Set.count
+    x64.jmp __il_body#10
+  __rc_ok#7:
+    x64.movRegReg r8, rcx
+  __il_body#10:
+    x64.imulRegRegImm32 rbx, r8, 7
   __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Set_int
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
+  __rc_chk#3:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc lessEqual, __rc_ok#1
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_19]
+    x64.leaRegRdata rcx, [rip + __str_blob_17]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -92,7 +104,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
     x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12

@@ -63,6 +63,21 @@ func @main {
     x64.cmpRegImm32 r12, 32
     x64.jcc greaterEqual, whileexit
   print:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_39]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
@@ -70,7 +85,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r12, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#15:
+  __im_load#17:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
     x64.jmp __im_loaded
@@ -81,7 +96,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r12, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#16:
+  __im_load#18:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegReg rax, rax, r12
     x64.loadRegBaseDisp.byte rax, [rax + 0]

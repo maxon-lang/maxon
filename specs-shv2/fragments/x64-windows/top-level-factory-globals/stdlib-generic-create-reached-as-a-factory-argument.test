@@ -98,20 +98,28 @@ func @main {
     x64.callDirect __destruct_Map_String_Count
     x64.leaRegGlobal rax, __data_h
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRdata rcx, [rip + __witness_String.Hashable]
-    x64.leaRegRdata rcx, [rip + __witness_String.Equatable]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
   __il_body:
-    x64.loadRegBaseDisp.word64 r8, [rax + 32]
+    x64.loadRegBaseDisp.word64 r8, [rcx + 32]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk#7:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg r8, rsi
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.callDirect Map.count
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
+  __rc_chk#3:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_20]
+    x64.leaRegRdata rcx, [rip + __str_blob_23]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

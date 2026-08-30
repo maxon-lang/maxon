@@ -49,7 +49,8 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.callDirect CommandLine.args
     x64.movRegReg rbx, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -60,7 +61,8 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -77,19 +79,19 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#36
+    x64.jcc equal, critsplit#38
   __im_empty#25:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#37
+    x64.jcc notEqual, critsplit#39
   __im_slow#23:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.jmp __im_cont#22
-  critsplit#37:
+  critsplit#39:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont#22
-  critsplit#36:
+  critsplit#38:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont#22:
@@ -111,7 +113,8 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -128,19 +131,19 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#38
+    x64.jcc equal, critsplit#40
   __im_empty#29:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#39
+    x64.jcc notEqual, critsplit#41
   __im_slow#27:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.jmp __im_cont#26
-  critsplit#39:
+  critsplit#41:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont#26
-  critsplit#38:
+  critsplit#40:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont#26:
@@ -162,7 +165,8 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -179,19 +183,19 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#40
+    x64.jcc equal, critsplit#42
   __im_empty#33:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#41
+    x64.jcc notEqual, critsplit#43
   __im_slow#31:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.jmp __im_cont#30
-  critsplit#41:
+  critsplit#43:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont#30
-  critsplit#40:
+  critsplit#42:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont#30:
@@ -213,13 +217,15 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#17:
     x64.callDirect Process.executablePath
+    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#18
   tryerr#19:
@@ -227,38 +233,48 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok#18:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
   __il_body:
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_cont:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ifcont#21
   exe-empty:
-    x64.movRegImm32 r12, 6
-    x64.movRegReg rcx, r8
+    x64.movRegImm32 r13, 6
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_FilePath
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#21:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_FilePath
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

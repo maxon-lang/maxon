@@ -15651,6 +15651,16 @@ export type ProgramSignatures
 	// from the calling file it resolves to nothing at all. The file that DECLARED the parameter is the file
 	// whose `ElementIndex` that parameter means, and `OverloadedDecl` carries it.
 	//
+	// ⛔⛔ **AND RESOLVING IT HERE IS ONLY HALF THE JOB — THE ANSWER HAS TO SURVIVE THE TRIP.** This door
+	// returned the right declaration from the day it was written and the emitted check still came out of the
+	// WRONG one, because `Parser.recordRangedTargetSite` kept only the alias's NAME and `InsertRangeChecks`
+	// re-resolved it against the CALLING file. `stdlib/Array.maxon` and `stdlib/Vector.maxon` EACH declare
+	// both `ElementIndex` and `ElementCount`, and any program may add its own, so "the same name" was never
+	// "the same declaration" — and the wrong one won. The site carries the declaring
+	// file now — `RangeCheckSite.aliasFilePath`, which holds the measurement — and a reader arriving here
+	// should take that as the shape of the obligation: **a fact resolved against a scope must travel with
+	// the scope it was resolved in, or the next reader resolves it against theirs.**
+	//
 	// ⚠ **AN OVERLOAD SET ANSWERS `undeclared`.** Two declarations of one member may narrow the same
 	// position differently, and which one a call resolves to is not settled where this is asked — so a
 	// member declared more than once yields no bound rather than a guessed one.

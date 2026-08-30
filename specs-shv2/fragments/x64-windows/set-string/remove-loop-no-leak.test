@@ -146,26 +146,38 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.cmpRegImm32 r12, 0
-    x64.jcc equal, critsplit#12
+    x64.jcc equal, critsplit#15
   ok:
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
   __il_body:
-    x64.loadRegSlot rax, slot2
-    x64.loadRegBaseDisp.word64 rax, [rax + 24]
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 24]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect Set.count
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rcx
   __il_cont:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#13
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit#16
   empty:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rax, rax, 1
     x64.jmp ifcont#6
-  critsplit#13:
+  critsplit#16:
     x64.loadRegSlot rax, slot0
   ifcont#6:
     x64.movRegReg rbx, rax
     x64.jmp ifcont#7
-  critsplit#12:
+  critsplit#15:
     x64.loadRegSlot rbx, slot0
   ifcont#7:
     x64.loadRegSlot rax, slot1

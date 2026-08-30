@@ -27,41 +27,58 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
   whilehdr:
-    x64.cmpRegImm32 rax, 3
+    x64.cmpRegImm32 r12, 3
     x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matchcont
+    x64.cmpRegImm32 r12, 1
+    x64.jcc notEqual, __il_body
+  matcharm:
+    x64.movRegReg rax, rbx
+    x64.jmp matchcont
   __il_body:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok#13
+  __il_slow:
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok#13:
+    x64.movRegReg r8, rax
   __il_cont:
-    x64.leaRegRegReg rcx, r8, rcx
-    x64.movRegReg r8, rcx
+    x64.leaRegRegReg rax, rbx, r8
   matchcont:
-    x64.leaRegRegImm32 r8, r8, 1
     x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rbx, rax
     x64.jmp whilehdr
   whileexit:
-    x64.cmpRegImm32 r8, 0
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.cmpRegReg rbx, rax
+    x64.jcc lessEqual, __rc_ok#8
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#8:
+    x64.movRegReg r8, rbx
     x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

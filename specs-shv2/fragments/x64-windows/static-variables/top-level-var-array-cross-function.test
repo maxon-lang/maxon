@@ -162,6 +162,15 @@ func @setScore {
     x64.movRegReg rsi, rdx
     x64.leaRegGlobal rcx, __data_scores
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __im_slow
@@ -222,7 +231,7 @@ func @main {
     x64.cmpRegReg r8, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

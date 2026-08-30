@@ -21,33 +21,49 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
     x64.prologue 40
     x64.leaRegGlobal rax, __data_sep
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.movRegReg rcx, rbx
     x64.callDirect __str_retain
+    x64.movRegReg r12, r8
   __il_body:
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok#6
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  __rc_ok#6:
+    x64.movRegReg rbx, r13
   __il_cont:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc lessEqual, __rc_ok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_85]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r8
+  __rc_ok#1:
+    x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

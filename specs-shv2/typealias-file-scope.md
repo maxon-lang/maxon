@@ -379,6 +379,92 @@ end 'main'
 error E3005: <fragment>:18:25: Value 150 is outside the range of 'Codepoint' (int(0 to 100))
 ```
 
+### ⛔⛔ AN ARM-SERVED DOOR RESOLVES ITS ALIAS IN THE *CALLEE'S* FILE, AND THE ANSWER HAS TO TRAVEL
+
+Every door above resolves the alias where it was WRITTEN, so the site's file and the alias's file are
+one. `Array.get`/`set`/`resize` are the exception: shv2 serves them from an ARM rather than a call, so
+there is no callee entry to guard and the bound is fetched from `stdlib/Array.maxon`'s declaration and
+applied at the CALL (`Parser.recordArmServedIndexRangeCheck`). That resolution was correct from the
+day it was written — and the emitted check still came out of a different declaration, because the site
+recorded only the alias's NAME and `InsertRangeChecks` re-resolved it against the CALLING file.
+
+⛔ **MEASURED 2026-08-30, and it is the defect the `third-file-*` cases above exist to close, arriving
+through a door that never asked `lookup` which reader it meant: a user program's own FILE-PRIVATE
+`typealias ElementIndex = int(0 to 3)` decided what `stdlib/Array.maxon`'s `set` accepts.** On a
+20-element array, `a.set(9, value: 42)` was refused *"Value 9 is outside the range of 'ElementIndex'
+(int(0 to 3))"*. `RangeCheckSite.aliasFilePath` carries the declaration now.
+
+⚠ **THE STDLIB-INTERNAL HALF CANNOT BE WRITTEN AS A PROGRAM, so it is recorded here instead.**
+`ElementIndex` and `ElementCount` are declared in BOTH `stdlib/Array.maxon` and `stdlib/Vector.maxon`,
+and no source file can change either — the only probe is a sabotage of the library. Sabotage-verified
+both ways: narrowing **`stdlib/Vector.maxon`**'s `ElementIndex` to `int(0 to 5)` refused an **`Array`**
+index of 9, and narrowing **`stdlib/Array.maxon`**'s own had **no effect at all**. Both directions
+reverse with the fix. Nothing was visibly wrong before it only because all four declarations carry the
+same `int(0 to i64.max)`.
+
+<!-- test: a-contested-element-index-does-not-govern-the-array-door -->
+`main.maxon` and `lib.maxon` each declare `ElementIndex` over a range of their own, and neither may
+reach `Array`'s. Index 9 is legal for `stdlib/Array.maxon`'s `int(0 to i64.max)` and illegal for both
+user declarations, so a door reading either one refuses a legal program. Each file's own alias is
+exercised beside it — `ownClamp(3)` and `libClamp(2)` — so the case cannot pass by the fix having
+disabled file-scoped resolution instead of correcting it.
+```maxon
+// --- file: lib.maxon
+typealias ElementIndex = int(0 to 2)
+
+export function libClamp(i ElementIndex) returns ElementIndex
+	return i
+end 'libClamp'
+
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias ElementIndex = int(0 to 3)
+
+function ownClamp(i ElementIndex) returns ElementIndex
+	return i
+end 'ownClamp'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.resize(20)
+	try a.set(9, value: 42) otherwise ignore
+	print("{try a.get(9) otherwise 0} {ownClamp(3)} {libClamp(2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42 3 2
+```
+
+<!-- test: error.a-contested-element-index-still-governs-its-own-file -->
+The direction the fix must not overreach into — `error.file-private-alias-still-binds-in-its-own-file`
+one door over. `main.maxon`'s `ElementIndex` still means `int(0 to 3)` for `main.maxon`'s OWN cast,
+even though the same name no longer reaches `Array.get`. If this case stops being an error, the cure
+has stopped resolving by file rather than started resolving by the right one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias ElementIndex = int(0 to 3)
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.resize(20)
+	try a.set(9, value: 42) otherwise ignore
+	// ⚠ NOT `return mine as ExitCode`: that spelling raises E3010 (`unneeded cast`) first and masks
+	// the diagnostic this case is about.
+	let mine = 9 as ElementIndex
+	print("{mine}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:15: Value 9 is outside the range of 'ElementIndex' (int(0 to 3))
+```
+
 
 <!-- test: generic-alias-resolves-in-its-own-file -->
 Each file declares `Slots` over its own element and pushes a value its own element permits. Under one

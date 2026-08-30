@@ -34,6 +34,17 @@ func @Lookup.get {
     x64.callDirect __lazy_init#__data_Lookup.values
     x64.leaRegGlobal rax, __data_Lookup.values
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rbx, rax
     x64.jcc aboveEqual, __im_slow
@@ -43,19 +54,19 @@ func @Lookup.get {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#8
+    x64.jcc equal, critsplit#10
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#9
+    x64.jcc notEqual, critsplit#11
   __im_slow:
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_get
     x64.jmp __im_cont
-  critsplit#9:
+  critsplit#11:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rdx
     x64.jmp __im_cont
-  critsplit#8:
+  critsplit#10:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rdx
   __im_cont:

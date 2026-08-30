@@ -178,7 +178,8 @@ func @returnsOutOfTheBody {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm32 rax, 0
@@ -188,24 +189,40 @@ func @returnsOutOfTheBody {
   walk:
     x64.movRegReg rcx, rbx
     x64.callMem [r12 + 24]
+    x64.movRegReg r13, r8
   __il_body#8:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-  __il_cont#7:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow#10:
+    x64.movRegReg rcx, r13
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont#7
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont#7:
+    x64.cmpRegImm32 r8, 0
     x64.jcc lessEqual, ifcont
-  __il_body#10:
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
-  __il_cont#9:
-    x64.movRegReg rcx, r8
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rbx, [r13 + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greaterEqual, __il_cont#11
+  __il_slow#14:
+    x64.movRegReg rcx, r13
+    x64.callDirect String.byteLength
+    x64.movRegReg rbx, r8
+  __il_cont#11:
+    x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, r13
     x64.callDirect __str_decref
   forstep:
     x64.movRegReg rcx, rbx
@@ -214,7 +231,8 @@ func @returnsOutOfTheBody {
     x64.jmp forhdr
   forexit:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -228,7 +246,8 @@ func @breaksOutOfTheBody {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm32 r13, 0
@@ -239,19 +258,28 @@ func @breaksOutOfTheBody {
   walk:
     x64.movRegReg rcx, rbx
     x64.callMem [r12 + 24]
+    x64.movRegReg r14, r8
   __il_body:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.movRegReg rcx, r14
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
   __il_cont:
-    x64.leaRegRegReg r13, r13, rax
+    x64.leaRegRegReg r13, r13, r8
     x64.cmpRegImm32 r13, 100
     x64.jcc lessEqual, ifcont
   enough:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, r14
     x64.callDirect __str_decref
     x64.movRegReg r8, r13
     x64.jmp forexit
   ifcont:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, r14
     x64.callDirect __str_decref
   forstep:
     x64.movRegReg rcx, rbx
@@ -261,7 +289,8 @@ func @breaksOutOfTheBody {
   critsplit:
     x64.movRegReg r8, r13
   forexit:
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

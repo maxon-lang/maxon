@@ -59,6 +59,31 @@ from the user refusing a negative one first; and the single guard whose limit IS
 inlined `__managed_mem_set` — is emitted BEHIND `emitBufferNotOwned`, which refuses every sentinel
 capacity, so the bound runs on one already proven non-negative.
 
+### ⛔⛔ WHERE A NEGATIVE INDEX IS STILL *REACHABLE* — AND IT IS NO LONGER THE `Array` SURFACE
+
+**This row's subject is a NEGATIVE index arriving at the guard, and on `Array.get`/`set`/`resize` one
+no longer can.** `stdlib/Array.maxon` declares those doors over `ElementIndex = int(0 to i64.max)`,
+and a declared lower bound of 0 is ENFORCED: a foldable negative is `E3005` at compile time and a
+laundered one is an uncatchable `Range check failed` panic at the door
+(`Parser.recordArmServedIndexRangeCheck`). Neither ever reaches `emitIndexOutOfRange`. Written
+against the `Array` surface, this row's controls would be testing the range check and calling it a
+bounds guard — a case that cannot compile is not a control.
+
+**The `__ManagedMemory` BUFFER surface is where they still arrive, and the exemption is deliberate
+rather than an oversight to close.** A buffer member is a compiler BUILTIN whose index is a machine
+word and not a stdlib alias, so `recordArmServedIndexRangeCheck` returns before recording anything
+and `specs-shv2/managed-memory-methods.md` pins that `arr.managed.get(-1)` still THROWS — checked at
+that file, whose `bounds-negative-index` case returns its `otherwise 7`. (The `set(-1)`
+half of that exemption is pinned here rather than there, by the two cases below that use it.) So
+`a.managed.get/set/remove/swap` is exactly one thing: the single unsigned compare, standing alone,
+with a negative index in front of it. That is why every negative-index case below is written on it.
+
+⚠ **The two surfaces answer DIFFERENTLY and that difference is itself pinned**, by
+`a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers` below — one program
+holding both, so nothing can quietly move one to match the other. The `Array` half of that split has
+its own home in `specs-shv2/arrays.md`
+(`get-laundered-negative-index-panics-at-the-door` and its `set`/`insert` siblings).
+
 ### The closed-end twin moves with it, and its overflow guard survives
 
 `emitBoundaryPositionOutOfRange` bounds a POSITION BETWEEN elements — `[0, length]`, because
@@ -69,27 +94,63 @@ positive number. Under the old signed test the wrapped end was caught by the NEG
 the unsigned one it is `>= 2^63` while every length is below `2^63`, so it is caught by the compare
 itself. Same values refused, one instruction instead of six.
 
+### ⛔ SABOTAGE-VERIFIED — RE-MEASURED 2026-08-30, AND THE EARLIER VERDICTS ARE SUPERSEDED
+
+The one-token change is `ManagedMemoryRuntime.BoundsCompareOperandType`, `StdType.u64` → `StdType.i64`:
+it drops the negative half and leaves the past-the-end half standing.
+
+⛔ **THE VERDICT PARAGRAPH THAT STOOD HERE IS DEAD AND MUST NOT BE RESTORED.** It read *"six of this
+spec's eight cases go red"* and named exit codes including a `0xC0000005` ACCESS VIOLATION — measured
+honestly, against cases that indexed the `Array` surface. Three of those six then stopped COMPILING
+when `ElementIndex` gained its lower bound, so the recorded verdict was describing programs that no
+longer existed. A verdict nobody can re-run is a claim; this one is re-run and re-stated with the
+cases as they are now.
+
+**MEASURED 2026-08-30 against the cases as they stand below: SEVEN of this spec's nine go red.**
+
+| case | verdict |
+|---|---|
+| `a-negative-index-is-still-refused` | exit **1** |
+| `a-runtime-negative-index-is-refused` | exit **1** |
+| `the-two-extreme-indices-are-refused` | exit **2** |
+| `an-empty-container-refuses-every-index` | **3221225477** — `0xC0000005`, a Windows ACCESS VIOLATION |
+| `a-laundered-negative-is-a-panic-…-and-a-throw-at-the-buffers` | stderr mismatch: **no panic at all**, the run exits 1 out of `bufferThrows` |
+| `a-fill-window-that-overflows-is-refused` | exit **2** |
+| `a-byte-strided-element-is-guarded-the-same-way` | exit **1** |
+
+⚠ **The two that stay green are the two with no negative and no overflowed boundary in them**:
+`the-last-element-is-in-and-the-length-is-not` (every index non-negative, so the two readings agree)
+and `one-past-the-end-is-a-legal-fill-window-and-one-more-is-not` (both windows in range). That
+partition IS the claim: what the sabotage removes is the negative half, and nothing else.
+
+⛔ **TWO THINGS A PREDICTION GOT WRONG HERE, BOTH CAUGHT ONLY BY RUNNING IT** — recorded because the
+paragraph this replaced was itself a prediction that outlived its cases:
+
+  • **`a-fill-window-that-overflows-is-refused` GOES RED, and it was expected to stay green** on the
+    reasoning that it holds no negative index. It holds no negative *index* and its window END is
+    negative: `start + count` wraps into `[-2^63, -2]`, and with the disjunct gone a single SIGNED
+    compare reads that as far below the length and ADMITS it. The overflow guard is not an extra the
+    unsigned reading merely keeps — the unsigned reading is the ONLY thing catching it now.
+  • **The `0xC0000005` did NOT go away when the case moved to the buffer surface**, though it was
+    predicted to become an ordinary wrong answer. A freshly `create()`d container has no allocation
+    for an admitted read to land inside, on either surface, so the read is still off the page.
+
+⚖ **Do not re-state a verdict here without re-running it.** These numbers are a MEASUREMENT of one
+tree on one day, and the case list they range over has already changed once underneath them.
+
 ## Tests
 
 <!-- test: a-negative-index-is-still-refused -->
 ⭐ **THE CONTROL FOR THE WHOLE ROW.** The unsigned rewrite is only equivalent because a negative
 index wraps ABOVE the length; write the compare signed and `-1` reads as in bounds, the guard admits
-it, and `buffer + index·8` addresses the word BEFORE the buffer. Every one of `get`, `set` and
-`remove` is checked here because they are three entries through the one guard, and the array is read
-back afterwards so an admitted write would be a wrong answer rather than a silent pass.
+it, and `buffer + index·8` addresses the word BEFORE the buffer. All FOUR entries through the one
+guard are checked — `get`, `set`, `remove` and `swap`, which is `emitIndexOutOfRange`'s whole caller
+list — and the array is read back afterwards, through the `Array` surface at non-negative indices, so
+an admitted write is a wrong answer rather than a silent pass.
 
-⛔ **SABOTAGE-VERIFIED, AND THE VERDICTS ARE FAULTS RATHER THAN GOLDEN DRIFT.** With
-`BoundsCompareOperandType` set to `StdType.i64` — the one-token change that drops the negative half —
-**six of this spec's eight cases go red**: this one at exit 1, `a-runtime-negative-index-is-refused`
-at 1, `a-byte-strided-element-is-guarded-the-same-way` at 1, `the-two-extreme-indices-are-refused` at
-2, `a-fill-window-that-overflows-is-refused` at 2, and `an-empty-container-refuses-every-index` at
-**3221225477 — `0xC0000005`, a Windows ACCESS VIOLATION**, which is the admitted read landing outside
-the allocation. The two that stay green are the two with no negative index in them
-(`the-last-element-is-in-and-the-length-is-not` and the fill window), which is what says the split is
-the negative half and not something else. ⚠ Measured TWICE, and the verdicts MOVED between them: with
-`otherwise 0` this case answered **exit 101** — a leak, because the admitted `set(-1)` overwrote the
-allocation header — and with the distinct `otherwise 0 - 5` it answers exit 1, a plain wrong answer
-caught one check earlier. Both are red; the second is the one this file pins.
+⚠ **Written on the BUFFER surface because that is the only surface a negative index still reaches** —
+see the ⛔⛔ section above. `a.count()` and `a.get(0)` read the SAME record the buffer members wrote
+through, so "nothing was touched" is still checked against the array the program actually holds.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -103,32 +164,37 @@ function main() returns ExitCode
 	// ⚠ The `otherwise` value is NOT 0. An admitted out-of-bounds read returns whatever word sits
 	// before the buffer, and 0 is a value it could plausibly hold — a fallback the read can collide
 	// with is a case that would pass under the very rewrite it exists to refuse.
-	if (try a.get(-1) otherwise 0 - 5) != 0 - 5 'negativeGet'
+	if (try a.managed.get(-1) otherwise 0 - 5) != 0 - 5 'negativeGet'
 		return 1
 	end 'negativeGet'
+	if (try a.managed.remove(-1) otherwise 0 - 5) != 0 - 5 'negativeRemove'
+		return 2
+	end 'negativeRemove'
 
-	try a.set(-1, value: 99) otherwise 'negativeSet'
-		if (try a.get(-2) otherwise 0 - 5) != 0 - 5 'negativeGetAgain'
-			return 2
-		end 'negativeGetAgain'
-		if (try a.remove(-1) otherwise 0 - 5) != 0 - 5 'negativeRemove'
-			return 3
-		end 'negativeRemove'
-		// Nothing above may have touched the array.
-		if a.count() != 3 'countUnchanged'
-			return 4
-		end 'countUnchanged'
-		if (try a.get(0) otherwise 0 - 5) != 10 'firstUnchanged'
-			return 5
-		end 'firstUnchanged'
-		if (try a.get(2) otherwise 0 - 5) != 30 'lastUnchanged'
-			return 6
-		end 'lastUnchanged'
-		return 0
-	end 'negativeSet'
+	try a.managed.swap(-1, 0) otherwise 'negativeSwap'
+		try a.managed.set(-1, value: 99) otherwise 'negativeSet'
+			if (try a.managed.get(-2) otherwise 0 - 5) != 0 - 5 'negativeGetAgain'
+				return 3
+			end 'negativeGetAgain'
+			// Nothing above may have touched the array.
+			if a.count() != 3 'countUnchanged'
+				return 4
+			end 'countUnchanged'
+			if (try a.get(0) otherwise 0 - 5) != 10 'firstUnchanged'
+				return 5
+			end 'firstUnchanged'
+			if (try a.get(2) otherwise 0 - 5) != 30 'lastUnchanged'
+				return 6
+			end 'lastUnchanged'
+			return 0
+		end 'negativeSet'
 
-	// The `set` was supposed to throw.
-	return 7
+		// The `set` was supposed to throw.
+		return 7
+	end 'negativeSwap'
+
+	// The `swap` was supposed to throw.
+	return 8
 end 'main'
 ```
 ```exitcode
@@ -142,16 +208,12 @@ the case above pins `cmp length, -1` / `jbe` rather than `cmp index, length` / `
 instruction pair reaching the same slow arm. Here the index is derived from `count()`, which is a
 runtime load, so the guard is the two-register form the row is actually about. Every access is
 negative by a different amount, and the array is read back so an admitted one is a wrong answer.
-
-⛔ Sabotage-verified together with the case above: `BoundsCompareOperandType = StdType.i64` takes
-BOTH red, this one at exit 1 — a WRONG ANSWER out of `readAt`, not a fault, because the admitted read
-of `buffer[-3]` lands inside the allocation's own header rather than off the page.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function readAt(a IntArray, i Int) returns Int
-	return try a.get(i) otherwise 0 - 7
+	return try a.managed.get(i) otherwise 0 - 7
 end 'readAt'
 
 function main() returns ExitCode
@@ -204,13 +266,13 @@ function main() returns ExitCode
 	let top = 9223372036854775807
 	let bottom = (0 - 9223372036854775807) - 1
 
-	if (try a.get(top) otherwise 0 - 5) != 0 - 5 'topGet'
+	if (try a.managed.get(top) otherwise 0 - 5) != 0 - 5 'topGet'
 		return 1
 	end 'topGet'
-	if (try a.get(bottom) otherwise 0 - 5) != 0 - 5 'bottomGet'
+	if (try a.managed.get(bottom) otherwise 0 - 5) != 0 - 5 'bottomGet'
 		return 2
 	end 'bottomGet'
-	if (try a.remove(bottom) otherwise 0 - 5) != 0 - 5 'bottomRemove'
+	if (try a.managed.remove(bottom) otherwise 0 - 5) != 0 - 5 'bottomRemove'
 		return 3
 	end 'bottomRemove'
 	if a.count() != 2 'countUnchanged'
@@ -228,19 +290,24 @@ end 'main'
 every index there is, including 0 itself. Read through a container that has been filled and then
 cleared as well as one that was never filled, because `clear` publishes the 0 through a different
 writer than `create` does.
+
+⚠ **`managed.get` is bounded by the LENGTH, not the capacity** — the cleared container keeps the
+capacity its two pushes bought, so if the buffer read were capacity-bounded this case would admit
+index 0 and go red for a reason that has nothing to do with signedness. `managed.set` is the one
+buffer member whose limit is `capacity@16`, which is why it is not used here.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function probe(a IntArray) returns Int
 	var hits = 0
-	if (try a.get(0) otherwise 0 - 1) != 0 - 1 'zero'
+	if (try a.managed.get(0) otherwise 0 - 1) != 0 - 1 'zero'
 		hits = hits + 1
 	end 'zero'
-	if (try a.get(1) otherwise 0 - 1) != 0 - 1 'one'
+	if (try a.managed.get(1) otherwise 0 - 1) != 0 - 1 'one'
 		hits = hits + 1
 	end 'one'
-	if (try a.get(-1) otherwise 0 - 1) != 0 - 1 'negative'
+	if (try a.managed.get(-1) otherwise 0 - 1) != 0 - 1 'negative'
 		hits = hits + 1
 	end 'negative'
 	return hits
@@ -273,6 +340,11 @@ end 'main'
 The half-open end itself: `length - 1` is the last legal index, `length` is the first illegal one and
 `length + 1` is past it. `jae` is what puts the boundary exactly there — `ja` would admit `length`,
 which is the mistake the closed-end twin below exists to make deliberately.
+
+⚠ This one stays on the `Array` surface, and it is the case that says why the others could not: every
+index in it is NON-NEGATIVE, so `ElementIndex`'s lower bound has nothing to refuse and the access
+reaches the bounds guard exactly as it always did. The surface a case is written on is decided by
+whether it needs a negative, not by preference.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -314,6 +386,57 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers -->
+⭐⭐ **THE TWO SURFACES, IN ONE PROGRAM, DISAGREEING ON PURPOSE.** The same laundered `-1` is a
+CATCHABLE `indexOutOfBounds` at `a.managed.get` — which is this row's guard doing its job — and an
+UNCATCHABLE `Range check failed` panic at `a.get`, which is `ElementIndex`'s declared lower bound
+refusing before the guard is ever reached. Both halves are in one `main` so that moving either
+surface toward the other reddens this case rather than quietly rewriting what the row means.
+
+The `Array` half is pinned in its own file too — `arrays/get-laundered-negative-index-panics-at-the-door`
+and its `set`/`insert` siblings — which is where an author looking for the array door's contract will
+be. What that file cannot show is the CONTRAST, and the contrast is what stops a future rewrite from
+"fixing" the buffer to panic as well and taking this row's only remaining subject with it.
+
+⚠ The negative is laundered through a call so it is not a foldable constant: written `a.get(-1)` the
+array half would be `E3005` at COMPILE time and this case would have no runtime behaviour to pin at
+all.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function launder(n Int) returns Int
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(10)
+	a.push(20)
+	a.push(30)
+
+	// The BUFFER surface: caught, and the program keeps running.
+	if (try a.managed.get(launder(-1)) otherwise 0 - 5) != 0 - 5 'bufferThrows'
+		return 1
+	end 'bufferThrows'
+	if a.count() != 3 'countUnchanged'
+		return 2
+	end 'countUnchanged'
+
+	// The ARRAY surface: the `otherwise` is unreachable — the door panics first.
+	return try a.get(launder(-1)) otherwise 99
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers.test:24: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: one-past-the-end-is-a-legal-fill-window-and-one-more-is-not -->
@@ -399,8 +522,16 @@ end 'main'
 <!-- test: a-byte-strided-element-is-guarded-the-same-way -->
 The other single-op arm. `InlineManagedPrimitives` emits one fast arm per stride, and both call
 `guardIndexInRange`, so a rewrite that reached only the word arm would leave every `ByteArray` and
-every String element on the old seven-instruction guard. The fragment shows the byte arm's
-`cmp`/`jae` beside the word arm's.
+every String element on the old seven-instruction guard.
+
+⛔ **THIS PARAGRAPH SAID *"the fragment shows the byte arm's `cmp`/`jae`"*, AND THE FRAGMENT HAS NEVER
+CONTAINED ONE** — checked at the file, on this version and on the one before it: zero `aboveEqual`,
+ten `belowEqual`. It is still the UNSIGNED guard, spelled the other way round. Every index here is a
+LITERAL, so the operand fold moves the constant into the compare and swaps it, and `__im_byte`'s guard
+comes out `cmp length, -1` / `jbe` — the same slow arm reached by the same unsigned reading. The
+two-register `cmp index, length` / `jae` is what `a-runtime-negative-index-is-refused` pins, and its
+fragment is the one that carries it. **What this case pins is the STRIDE — that the byte arm has a
+guard of this family at all — not a mnemonic.**
 ```maxon
 typealias Byte = int(0 to 255)
 typealias Bytes = Array with Byte
@@ -411,17 +542,17 @@ function main() returns ExitCode
 	b.push(2)
 	b.push(3)
 
-	if (try b.get(-1) otherwise 200) != 200 'negative'
+	if (try b.managed.get(-1) otherwise 200) != 200 'negative'
 		return 1
 	end 'negative'
-	if (try b.get(3) otherwise 200) != 200 'atLength'
+	if (try b.managed.get(3) otherwise 200) != 200 'atLength'
 		return 2
 	end 'atLength'
-	if (try b.get(2) otherwise 200) != 3 'lastIn'
+	if (try b.managed.get(2) otherwise 200) != 3 'lastIn'
 		return 3
 	end 'lastIn'
 
-	try b.set(-1, value: 9) otherwise 'negativeSet'
+	try b.managed.set(-1, value: 9) otherwise 'negativeSet'
 		if (try b.get(0) otherwise 200) != 1 'firstUnchanged'
 			return 4
 		end 'firstUnchanged'

@@ -8,17 +8,17 @@ function main() returns ExitCode
 	b.push(2)
 	b.push(3)
 
-	if (try b.get(-1) otherwise 200) != 200 'negative'
+	if (try b.managed.get(-1) otherwise 200) != 200 'negative'
 		return 1
 	end 'negative'
-	if (try b.get(3) otherwise 200) != 200 'atLength'
+	if (try b.managed.get(3) otherwise 200) != 200 'atLength'
 		return 2
 	end 'atLength'
-	if (try b.get(2) otherwise 200) != 3 'lastIn'
+	if (try b.managed.get(2) otherwise 200) != 3 'lastIn'
 		return 3
 	end 'lastIn'
 
-	try b.set(-1, value: 9) otherwise 'negativeSet'
+	try b.managed.set(-1, value: 9) otherwise 'negativeSet'
 		if (try b.get(0) otherwise 200) != 1 'firstUnchanged'
 			return 4
 		end 'firstUnchanged'
@@ -240,7 +240,7 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#51
   __im_bounds#56:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, -1
     x64.jcc belowEqual, __im_slow#51
   __im_buffer#57:
@@ -269,7 +269,7 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#51
   __im_bounds#61:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, -1
     x64.jcc belowEqual, __im_slow#51
   __im_buffer#62:
@@ -288,7 +288,7 @@ func @main {
     x64.jmp __im_cont#50
   __im_slow#51:
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_set
+    x64.callDirect __managed_mem_set
     x64.movRegReg rax, r10
   __im_cont#50:
     x64.cmpRegImm32 rax, 0

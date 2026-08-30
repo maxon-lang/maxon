@@ -82,6 +82,18 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_await_any
     x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __rc_ok#3
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#3:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r12, rax
     x64.jcc aboveEqual, __im_slow
@@ -91,20 +103,20 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, critsplit#10
+    x64.jcc equal, critsplit#12
   __im_empty:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, critsplit#11
+    x64.jcc notEqual, critsplit#13
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.movRegReg rcx, r8
     x64.jmp __im_cont
-  critsplit#11:
+  critsplit#13:
     x64.movRegReg r10, rax
     x64.jmp __im_cont
-  critsplit#10:
+  critsplit#12:
     x64.movRegReg r10, rax
   __im_cont:
     x64.cmpRegImm32 r10, 0
@@ -123,13 +135,13 @@ func @main {
     x64.callDirect __gt_await
     x64.leaRegRegReg r12, r12, r8
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#6
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.jcc lessEqual, __rc_ok#5
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -137,7 +149,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#5:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12

@@ -1627,6 +1627,48 @@ end 'main'
 7
 ```
 
+### ⛔⛔ The mark is PER FUNCTION, and a synthesized default helper is a function
+
+`writtenNegativeLiterals` is keyed by ValueId, and ValueIds are function-local — so the set must be
+cleared at the start of every function body or a mark names a DIFFERENT value in the next one.
+`parseFunction` cleared it; **`parseDefaultHelperBody` did not**, and a parameter default's helper is
+the one body that cannot be reached by re-entering `parseFunction`: the helpers are drained at
+end-of-file (`parseDefaultHelpers`), so what one inherits is the LAST function in the file, marks and
+all.
+
+⛔ **MEASURED**: with `let written = -1` present in `main`, the bit-63 hex default two functions above
+it was refused — *"`error E3005: Value -9223372036854775808 is outside the range of 'Wide'`"* — because
+both literals are ValueId 0 in their own function. **Delete that one line and the identical program
+compiled.** The legal default this case pins is the same one
+`unsigned-full-alias-admits-a-bit-63-hex-literal` above pins as an argument; what was new is that a
+line in an UNRELATED function could take it away.
+
+⚠ The bootstrap has the same two marks and is NOT affected: its `MaxonValue` ids are monotonic across
+the whole compile (`IrContext.NextId`), so its sets need no per-function reset and have none to omit.
+
+<!-- test: a-written-negative-in-one-function-does-not-reach-another-functions-default -->
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function withDefault(p Wide = 0x8000000000000000) returns Wide
+	return p
+end 'withDefault'
+
+function main() returns ExitCode
+	// ⚠ THE SUBJECT OF THIS CASE IS THIS LINE. It must be in the LAST function of the file, because
+	// that is the one whose marks a drained default helper inherits.
+	let written = -1
+	print("default={withDefault()} written={written}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+default=9223372036854775808 written=-1
+```
+
 ### The refusal is about the LOWER bound, not about the number 0
 
 A partial unsigned range refuses a written negative for the same reason, and its low bound is 5.

@@ -83,6 +83,19 @@ func @appendToken {
     x64.cmpRegReg r14, r13
     x64.jcc greaterEqual, forexit
   byteLoop:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [r12 + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
@@ -90,7 +103,7 @@ func @appendToken {
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r14, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#13:
+  __im_load#15:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r14*8 + 0]
     x64.jmp __im_loaded
@@ -101,7 +114,7 @@ func @appendToken {
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r14, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#14:
+  __im_load#16:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, r14
     x64.loadRegBaseDisp.byte rax, [rax + 0]
@@ -109,14 +122,14 @@ func @appendToken {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rdx, [r12 + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, critsplit#16
+    x64.jcc equal, critsplit#18
   __im_empty:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  critsplit#17:
+  critsplit#19:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
-  critsplit#16:
+  critsplit#18:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
   __im_slow:
@@ -270,7 +283,16 @@ func @main {
     x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
   __il_body:
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r15, [rbx + 8]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg rbx, r15
   __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0

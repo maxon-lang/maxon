@@ -135,6 +135,18 @@ func @Bag.at {
     x64.prologue 40
     x64.movRegReg rbx, rax
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
@@ -142,7 +154,7 @@ func @Bag.at {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#9:
+  __im_load#11:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp __im_loaded
@@ -153,7 +165,7 @@ func @Bag.at {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#10:
+  __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
@@ -161,14 +173,14 @@ func @Bag.at {
     x64.movRegImm32 r10, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#12
+    x64.jcc equal, critsplit#14
   __im_empty:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  critsplit#13:
+  critsplit#15:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
-  critsplit#12:
+  critsplit#14:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
   __im_slow:
@@ -357,7 +369,7 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88

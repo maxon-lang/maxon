@@ -102,12 +102,24 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect Set.insert
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
   __il_body:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Set.count
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rcx
   __il_cont:
-    x64.cmpRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 1
     x64.jcc notEqual, critsplit
   ok:
     x64.loadRegSlot rax, slot1

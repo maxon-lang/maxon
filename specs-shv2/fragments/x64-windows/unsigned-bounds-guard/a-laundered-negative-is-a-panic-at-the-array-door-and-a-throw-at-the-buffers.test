@@ -1,0 +1,127 @@
+// Test: a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function launder(n Int) returns Int
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(10)
+	a.push(20)
+	a.push(30)
+
+	// The BUFFER surface: caught, and the program keeps running.
+	if (try a.managed.get(launder(-1)) otherwise 0 - 5) != 0 - 5 'bufferThrows'
+		return 1
+	end 'bufferThrows'
+	if a.count() != 3 'countUnchanged'
+		return 2
+	end 'countUnchanged'
+
+	// The ARRAY surface: the `otherwise` is unreachable — the door panics first.
+	return try a.get(launder(-1)) otherwise 99
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 30
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm rdx, 18446744073709551615
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, -1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, -8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#28
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#29
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#29:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#28:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm rax, 18446744073709551611
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.cmpRegImm32 rax, -5
+    x64.jcc equal, ifcont
+  bufferThrows:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 3
+    x64.jcc equal, __rc_panic
+  countUnchanged:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

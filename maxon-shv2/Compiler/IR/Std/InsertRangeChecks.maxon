@@ -456,12 +456,17 @@ type RangeCheckEmitter
 		return RangeGuardVerdict.guard(alias)
 	end 'runtimeHalfOf'
 
-	// An alias-named site: both files are this function's own (every door here resolved its alias where it
-	// wrote it), and the site's own `stdOpPos` is where in its block the guard goes. Every one of them owes
-	// the RUNTIME half — the array element was the last that did not, and `A1f-arrayelem` moved its guard
-	// to the store, which is why the site no longer carries a `RangeCheckGuard` to be asked for.
+	// An alias-named site: the site's own `stdOpPos` is where in its block the guard goes. Every one of them
+	// owes the RUNTIME half — the array element was the last that did not, and `A1f-arrayelem` moved its
+	// guard to the store, which is why the site no longer carries a `RangeCheckGuard` to be asked for.
+	//
+	// ⛔ **THE TWO FILES ARE NOT ALWAYS ONE HERE, AND THIS SITE ASSUMED THEY WERE.** It read *"both files are
+	// this function's own (every door here resolved its alias where it wrote it)"* and passed `filePath`
+	// for both — true of the cast, the field store, the struct-literal field and the array element, and
+	// FALSE of the arm-served index, whose alias is the CALLEE's (`Parser.recordArmServedIndexRangeCheck`).
+	// The site now carries the declaration it resolved; `RangeCheckSite.aliasFilePath` holds the measurement.
 	function processSite(site RangeCheckSite, filePath FilePath)
-		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
+		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: site.aliasFilePath, filePath: filePath) 'verdict'
 			noGuard then return
 			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
 		end 'verdict'

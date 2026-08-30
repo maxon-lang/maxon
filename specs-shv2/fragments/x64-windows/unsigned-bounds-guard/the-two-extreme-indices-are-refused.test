@@ -10,13 +10,13 @@ function main() returns ExitCode
 	let top = 9223372036854775807
 	let bottom = (0 - 9223372036854775807) - 1
 
-	if (try a.get(top) otherwise 0 - 5) != 0 - 5 'topGet'
+	if (try a.managed.get(top) otherwise 0 - 5) != 0 - 5 'topGet'
 		return 1
 	end 'topGet'
-	if (try a.get(bottom) otherwise 0 - 5) != 0 - 5 'bottomGet'
+	if (try a.managed.get(bottom) otherwise 0 - 5) != 0 - 5 'bottomGet'
 		return 2
 	end 'bottomGet'
-	if (try a.remove(bottom) otherwise 0 - 5) != 0 - 5 'bottomRemove'
+	if (try a.managed.remove(bottom) otherwise 0 - 5) != 0 - 5 'bottomRemove'
 		return 3
 	end 'bottomRemove'
 	if a.count() != 2 'countUnchanged'
@@ -147,10 +147,9 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#10:
-    x64.leaRegRdata rax, [rip + __layout_Array_Int]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect Array.remove
+    x64.callDirect __managed_remove
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#11
   tryerr#12:

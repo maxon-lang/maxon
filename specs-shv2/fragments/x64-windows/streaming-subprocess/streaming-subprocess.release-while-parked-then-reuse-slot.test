@@ -59,16 +59,25 @@ func @reader {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegImm32 rdx, 1048576
     x64.callDirect __gt_subp_read_line
+    x64.movRegReg rbx, r8
   __il_body:
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg r12, r8
   __il_cont:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -109,8 +118,16 @@ func @main {
     x64.storeSlotReg slot0, r8
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeSlotReg slot2, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok#6
+  __il_slow:
+    x64.movRegReg rcx, r8
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok#6:
+    x64.movRegReg r8, rax
   __il_cont:
+    x64.storeSlotReg slot2, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_subp_wait
     x64.movRegReg r12, r8
@@ -155,7 +172,7 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc lessEqual, __rc_ok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
@@ -168,7 +185,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#1:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __str_decref
     x64.movRegReg r8, rbx

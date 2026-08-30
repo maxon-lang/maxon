@@ -235,10 +235,23 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
   __il_body#10:
-    x64.loadRegBaseDisp.word64 r12, [r12 + 32]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 32]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow#13
+  __rc_chk#12:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok#11
+  __il_slow#13:
+    x64.movRegReg rcx, r12
+    x64.callDirect Map.count
+    x64.movRegReg r12, r8
+    x64.jmp __il_cont#9
+  __rc_ok#11:
+    x64.movRegReg r12, rcx
   __il_cont#9:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
@@ -299,20 +312,30 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
-  __il_body#11:
-    x64.loadRegSlot rax, slot2
-    x64.loadRegBaseDisp.word64 rbx, [rax + 32]
+  __il_body#14:
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 32]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __il_slow#17
+  __rc_chk#16:
+    x64.movRegImm rcx, 4611686018427387904
+    x64.cmpRegReg rbx, rcx
+    x64.jcc lessEqual, __il_cont#8
+  __il_slow#17:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect Map.count
+    x64.movRegReg rbx, r8
   __il_cont#8:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
+  __rc_chk#7:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc lessEqual, __rc_ok#5
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]
+    x64.leaRegRdata rcx, [rip + __str_blob_40]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 168
@@ -323,7 +346,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#5:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot0

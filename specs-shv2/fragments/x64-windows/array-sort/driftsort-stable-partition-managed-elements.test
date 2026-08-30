@@ -279,34 +279,49 @@ func @main {
     x64.cmpRegReg rsi, rax
     x64.jcc greaterEqual, whileexit#11
   walk:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc greaterEqual, __rc_ok#32
+  __rc_panic#33:
+    x64.leaRegRdata rcx, [rip + __str_blob_117]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 200
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#32:
     x64.loadRegSlot rax, slot7
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg rsi, rax
-    x64.jcc aboveEqual, __im_slow#33
-  __im_load#34:
+    x64.jcc aboveEqual, __im_slow#37
+  __im_load#38:
     x64.loadRegSlot rax, slot7
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rcx + rsi*8 + 0]
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#45
-  __im_empty#35:
+    x64.jcc equal, critsplit#49
+  __im_empty#39:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, critsplit#46
-  __im_slow#33:
+    x64.jcc notEqual, critsplit#50
+  __im_slow#37:
     x64.loadRegSlot rcx, slot7
     x64.movRegReg rdx, rsi
     x64.callDirect __managed_get
-    x64.jmp __im_cont#32
-  critsplit#46:
+    x64.jmp __im_cont#36
+  critsplit#50:
     x64.movRegReg r8, rcx
     x64.movRegReg r10, rdx
-    x64.jmp __im_cont#32
-  critsplit#45:
+    x64.jmp __im_cont#36
+  critsplit#49:
     x64.movRegReg r8, rcx
     x64.movRegReg r10, rdx
-  __im_cont#32:
+  __im_cont#36:
     x64.storeSlotReg slot4, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#12
@@ -388,46 +403,61 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.cmpRegImm32 r13, 0
-    x64.jcc equal, critsplit#40
+    x64.jcc equal, critsplit#44
   labelWrong:
     x64.movRegImm32 r12, 0
     x64.jmp ifcont#15
-  critsplit#40:
+  critsplit#44:
     x64.loadRegSlot r12, slot0
   ifcont#15:
     x64.loadRegSlot rax, slot6
     x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, critsplit#41
+    x64.jcc lessEqual, critsplit#45
   hasPrev:
     x64.loadRegSlot rax, slot6
     x64.leaRegRegImm32 rdx, rax, -1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc greaterEqual, __rc_ok#34
+  __rc_panic#35:
+    x64.leaRegRdata rcx, [rip + __str_blob_118]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 200
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#34:
     x64.loadRegSlot rax, slot7
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#37
-  __im_load#38:
+    x64.jcc aboveEqual, __im_slow#41
+  __im_load#42:
     x64.loadRegSlot rax, slot7
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#47
-  __im_empty#39:
+    x64.jcc equal, critsplit#51
+  __im_empty#43:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, critsplit#48
-  __im_slow#37:
+    x64.jcc notEqual, critsplit#52
+  __im_slow#41:
     x64.loadRegSlot rcx, slot7
     x64.callDirect __managed_get
-    x64.jmp __im_cont#36
-  critsplit#48:
+    x64.jmp __im_cont#40
+  critsplit#52:
     x64.movRegReg r8, rcx
     x64.movRegReg r10, rsi
-    x64.jmp __im_cont#36
-  critsplit#47:
+    x64.jmp __im_cont#40
+  critsplit#51:
     x64.movRegReg r8, rcx
     x64.movRegReg r10, rsi
-  __im_cont#36:
+  __im_cont#40:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#17
   tryerr#18:
@@ -450,11 +480,11 @@ func @main {
     x64.loadRegSlot rcx, slot4
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegReg rax, rcx
-    x64.jcc lessEqual, critsplit#42
+    x64.jcc lessEqual, critsplit#46
   outOfOrder:
     x64.movRegImm32 rax, 0
     x64.jmp ifcont#20
-  critsplit#42:
+  critsplit#46:
     x64.loadRegSlot rax, slot2
   ifcont#20:
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
@@ -471,14 +501,14 @@ func @main {
     x64.setccReg greater, rcx
   scmerge:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#44
+    x64.jcc equal, critsplit#48
   unstable:
     x64.movRegImm32 rcx, 0
     x64.jmp ifcont#25
-  critsplit#44:
+  critsplit#48:
     x64.loadRegSlot rcx, slot1
     x64.jmp ifcont#25
-  critsplit#41:
+  critsplit#45:
     x64.loadRegSlot rax, slot1
     x64.loadRegSlot rcx, slot2
     x64.xchgRegReg rax, rcx

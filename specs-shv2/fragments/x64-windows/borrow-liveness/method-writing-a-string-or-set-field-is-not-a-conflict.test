@@ -114,12 +114,22 @@ func @Bag.seenCount {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
-    x64.leaRegRdata rcx, [rip + __witness_int.Hashable]
-    x64.leaRegRdata rcx, [rip + __witness_int.Equatable]
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
   __il_body:
-    x64.loadRegBaseDisp.word64 r8, [rax + 24]
+    x64.loadRegBaseDisp.word64 r8, [rcx + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg r8, rsi
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.callDirect Set.count
   __il_cont:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -154,18 +164,18 @@ func @main {
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, critsplit#10
+    x64.jcc equal, critsplit#12
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#11
+    x64.jcc notEqual, critsplit#13
   __im_slow:
     x64.callDirect __managed_get
     x64.jmp __im_cont
-  critsplit#11:
+  critsplit#13:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rsi
     x64.jmp __im_cont
-  critsplit#10:
+  critsplit#12:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rsi
   __im_cont:
@@ -183,7 +193,16 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Bag.note
   __il_body:
-    x64.loadRegBaseDisp.word64 r12, [r12 + 8]
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect String.byteLength
+    x64.movRegReg r12, r8
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r12, r13
   __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0

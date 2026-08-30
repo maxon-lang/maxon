@@ -189,6 +189,21 @@ func @main {
     x64.cmpRegImm32 rbx, 300
     x64.jcc greaterEqual, whileexit#6
   sendEach:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegSlot rax, slot4
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg rbx, rax
@@ -200,20 +215,20 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#19
+    x64.jcc equal, critsplit#21
   __im_empty:
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, critsplit#20
+    x64.jcc notEqual, critsplit#22
   __im_slow:
     x64.loadRegSlot rcx, slot4
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_get
     x64.movRegReg r12, r8
     x64.jmp __im_cont
-  critsplit#20:
+  critsplit#22:
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#19:
+  critsplit#21:
     x64.movRegReg r10, rcx
   __im_cont:
     x64.cmpRegImm32 r10, 0
@@ -409,7 +424,7 @@ func @Sink.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=__il_body] @__jumptable_12
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=__il_body] @__jumptable_13
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -458,7 +473,7 @@ func @Sink.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_13
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_14
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

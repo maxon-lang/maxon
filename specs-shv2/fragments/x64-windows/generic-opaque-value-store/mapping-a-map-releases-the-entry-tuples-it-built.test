@@ -29,18 +29,26 @@ func @envSize {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
   __il_body:
     x64.loadRegBaseDisp.word64 r8, [rcx + 32]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk#7:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg r8, rsi
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.callDirect Map.count
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-  __rc_chk:
+  __rc_chk#3:
     x64.cmpRegImm32 r8, 1000
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_32]
+    x64.leaRegRdata rcx, [rip + __str_blob_36]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -300,7 +308,7 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_33]
+    x64.leaRegRdata rcx, [rip + __str_blob_37]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136

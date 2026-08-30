@@ -69,9 +69,14 @@ func @main {
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegGlobal rax, __data_emptyTag
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
   __il_body:
-    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 r13, [rcx + 8]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
+    x64.callDirect String.byteLength
+    x64.movRegReg r13, r8
   __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0

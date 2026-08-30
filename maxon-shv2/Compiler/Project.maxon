@@ -2647,6 +2647,40 @@ end 'RangeCheckGuard'
 export type RangeCheckSite
 	export var value as ValueId
 	export var aliasName as ByteArray
+	// ⭐⭐ **WHICH FILE'S DECLARATION OF `aliasName` THIS SITE RESOLVED — the site's own answer, not a
+	// question left for the enforcer to re-ask.** `InsertRangeChecks` gets the BOUNDS by looking the name
+	// up again (`guardVerdict`), and a lookup takes a READER, so the site has to say which reader it meant.
+	// Recorded straight off the `RangedTypeAlias` the parser already resolved (`declFilePath`), so the
+	// re-lookup lands on that same declaration by construction rather than by agreement.
+	//
+	// ⛔⛔ **IT USED NOT TO EXIST, AND `processSite` SUPPLIED THE SITE'S OWN FUNCTION'S FILE INSTEAD, ON THE
+	// PREMISE THAT "every door here resolved its alias where it wrote it". THE ARM-SERVED DOOR BROKE THAT
+	// PREMISE AND NOTHING NOTICED.** `recordArmServedIndexRangeCheck` resolves `ElementIndex` in
+	// `stdlib/Array.maxon` — the CALLEE's file, because that is whose parameter it is — and then the name
+	// alone travelled, so the enforcer re-resolved it against the CALLING file and got whatever
+	// `RangedAliasRegistry.lookup` answers a stranger: the nameable tier, then bare last-wins.
+	//
+	// ⛔ **MEASURED 2026-08-30, and the wrong answer went in the worst direction — a user program's OWN
+	// FILE-PRIVATE alias decided what `stdlib/Array.maxon`'s `set` accepts**, which is the exact defect
+	// `lookup`'s nameable tier was built to close, reappearing at a door that never asked `lookup` the
+	// reader it meant. A program declaring `typealias ElementIndex = int(0 to 3)` for its own use had
+	// `a.set(9, value: 42)` on a 20-element array refused *"Value 9 is outside the range of 'ElementIndex'
+	// (int(0 to 3))"*. With no user declaration, `stdlib/Vector.maxon`'s twin won — sabotage-proven both
+	// ways: narrowing VECTOR's `ElementIndex` to `int(0 to 5)` refused an ARRAY index of 9, and narrowing
+	// ARRAY's own had no effect whatsoever on `Array.get`/`set`/`resize`.
+	//
+	// ⚠ **IT CHANGES NO OTHER DOOR'S ANSWER, AND THAT IS MEASURED RATHER THAN ARGUED.** The argument alone:
+	// every other site resolved through `lookup` with its own file as reader; whichever tier answered, the
+	// declaration it returned was recorded from `declFilePath`, and a contested name files EVERY declaration
+	// under `multiplyDeclared` — so re-asking with `declFilePath` hits that same declaration at the
+	// `readersOwnFile` tier, and an uncontested name has one declaration for either reader to find.
+	//
+	// ⭐ **THE MEASUREMENT (2026-08-30), because an argument of that shape is exactly what this project keeps
+	// finding to be wrong**: with the goldens minted against the CURED compiler, reverting `processSite`'s
+	// one line and re-running the whole suite reported **0 of 6987 compared goldens differ**. The emitted
+	// code of the entire corpus is byte-identical with and without this field; the only cases that move are
+	// the two that pin the defect (`typealias-file-scope/*contested-element-index*`).
+	export var aliasFilePath as FilePath
 	export var block as BlockId
 	export var maxonOpPos as BlockOpPos
 	export var stdOpPos as BlockOpPos
@@ -2654,8 +2688,8 @@ export type RangeCheckSite
 	export var column as ColumnNumber
 
 	// `stdOpPos` is not a parameter: it is the LOWERING's to write, and the parser has no way to know it.
-	export static function create(value ValueId, aliasName ByteArray, block BlockId, maxonOpPos BlockOpPos, line LineNumber, column ColumnNumber) returns RangeCheckSite
-		return Self{value: value, aliasName: aliasName, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, line: line, column: column}
+	export static function create(value ValueId, aliasName ByteArray, aliasFilePath FilePath, block BlockId, maxonOpPos BlockOpPos, line LineNumber, column ColumnNumber) returns RangeCheckSite
+		return Self{value: value, aliasName: aliasName, aliasFilePath: aliasFilePath, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, line: line, column: column}
 	end 'create'
 end 'RangeCheckSite'
 

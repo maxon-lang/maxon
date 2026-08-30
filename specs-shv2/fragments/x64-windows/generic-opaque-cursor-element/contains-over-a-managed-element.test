@@ -131,11 +131,20 @@ func @isLong {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
+    x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
   __il_cont:
-    x64.cmpRegImm32 rax, 5
+    x64.cmpRegImm32 r8, 5
     x64.setccReg greater, r8
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

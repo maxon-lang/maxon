@@ -25,13 +25,11 @@ func @findSlot {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, -1
-    x64.jcc less, __rc_panic#4
-    x64.jmp __rc_chk#5
-  __rc_chk#5:
+    x64.jcc less, __rc_panic
+  __rc_chk:
     x64.cmpRegImm32 rcx, 4095
-    x64.jcc greater, __rc_panic#4
-    x64.jmp __rc_ok#3
-  __rc_panic#4:
+    x64.jcc lessEqual, __rc_ok#3
+  __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -40,30 +38,14 @@ func @findSlot {
     x64.ret
   __rc_ok#3:
     x64.cmpRegImm32 rcx, 7
-    x64.jcc equal, found
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   found:
     x64.movRegImm32 r8, 3
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r8, rax, -1
-    x64.cmpRegImm32 r8, -1
-    x64.jcc less, __rc_panic#7
-    x64.jmp __rc_chk#8
-  __rc_chk#8:
-    x64.cmpRegImm32 r8, 4095
-    x64.jcc greater, __rc_panic#7
-    x64.jmp __rc_ok#6
-  __rc_panic#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.movRegImm r8, 18446744073709551615
   __rc_ok#6:
     x64.epilogue 32
     x64.popReg rbp
@@ -78,8 +60,7 @@ func @main {
     x64.movRegImm32 rcx, 9
     x64.callDirect findSlot
     x64.cmpRegImm32 r8, 0
-    x64.jcc greaterEqual, wronglyFound
-    x64.jmp ifcont
+    x64.jcc less, ifcont
   wronglyFound:
     x64.movRegImm32 r8, 1
     x64.epilogue 32

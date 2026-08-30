@@ -14,7 +14,7 @@ function build(n Count) returns Count
 	if seen != (n * (n - 1)) / 2 'sum'
 		return -1
 	end 'sum'
-	return m.count() as Count
+	return m.count()
 end 'build'
 
 function main() returns ExitCode
@@ -227,11 +227,21 @@ func @build {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
     x64.leaRegRdata rax, [rip + __witness_String.Equatable]
   __il_body:
-    x64.loadRegSlot rax, slot3
-    x64.loadRegBaseDisp.word64 rbx, [rax + 32]
+    x64.loadRegSlot rcx, slot3
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 32]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.movRegImm rcx, 4611686018427387904
+    x64.cmpRegReg rbx, rcx
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect Map.count
+    x64.movRegReg rbx, r8
   __il_cont:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __destruct_Map_String_Count

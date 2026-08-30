@@ -12,7 +12,7 @@ function main() returns ExitCode
 	var v = Vec3.create()
 	var got = v.part()
 	got.clear()
-	return ((got.length() as Int) + (10 * (v.count() as Int))) as ExitCode
+	return ((got.length() as Int) + (10 * v.count())) as ExitCode
 end 'main'
 ---
 ExitCode: 30
@@ -68,8 +68,10 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_clear
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.movRegImm32 rcx, 3
   __il_cont:
-    x64.leaRegRegImm32 r13, rax, 30
+    x64.imulRegRegImm32 rcx, rcx, 10
+    x64.leaRegRegReg r13, rax, rcx
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:

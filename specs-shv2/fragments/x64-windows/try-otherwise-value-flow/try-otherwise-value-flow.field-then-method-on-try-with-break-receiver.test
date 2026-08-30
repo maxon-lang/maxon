@@ -80,6 +80,19 @@ func @longestLen {
     x64.cmpRegReg r13, rax
     x64.jcc greaterEqual, whileexit
   scan:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok#8
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#8:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
     x64.jcc aboveEqual, __im_slow
@@ -89,20 +102,20 @@ func @longestLen {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, critsplit#17
+    x64.jcc equal, critsplit#19
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#18
+    x64.jcc notEqual, critsplit#20
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.jmp __im_cont
-  critsplit#18:
+  critsplit#20:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#17:
+  critsplit#19:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont:
@@ -113,7 +126,7 @@ func @longestLen {
     x64.callDirect String.count
     x64.cmpRegReg r8, r12
     x64.jcc greater, ifcont
-  critsplit#16:
+  critsplit#18:
     x64.movRegReg r8, r12
   ifcont:
     x64.leaRegRegImm32 r13, r13, 1
@@ -121,13 +134,13 @@ func @longestLen {
     x64.jmp whilehdr
   whileexit:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#11
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.jcc lessEqual, __rc_ok#10
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -136,7 +149,7 @@ func @longestLen {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_ok#10:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13

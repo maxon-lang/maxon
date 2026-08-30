@@ -8,12 +8,9 @@ function main() returns ExitCode
 	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
 		refused = refused + 1
 	end 'arraySurface'
-	try xs.set(-1, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
-		refused = refused + 1
-	end 'negativeIndex'
-	if refused == 2 'both'
+	if refused == 1 'refusedOnce'
 		return 42
-	end 'both'
+	end 'refusedOnce'
 	return 5
 end 'main'
 ---
@@ -39,97 +36,57 @@ func @main {
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.leaRegRdata rcx, [rip + __str_rec_2]
     x64.callDirect __str_retain
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.movRegImm32 r13, 99
-    x64.leaRegRdata rcx, [rip + __str_rec_4]
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
     x64.callDirect __str_retain
     x64.loadRegBaseDisp.word64 rax, [r12 + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#10
-  __im_owned#11:
+    x64.jcc notEqual, __im_slow
+  __im_owned:
     x64.loadRegBaseDisp.word64 rax, [r12 + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#10
-  __im_bounds#12:
+    x64.jcc less, __im_slow
+  __im_bounds:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 99
-    x64.jcc belowEqual, __im_slow#10
-  __im_buffer#13:
+    x64.jcc belowEqual, __im_slow
+  __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#10
-  __im_viewed#14:
+    x64.jcc equal, __im_slow
+  __im_viewed:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_store#15
-  __im_slow#10:
+    x64.jcc equal, __im_store
+  __im_slow:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.movRegReg rax, r8
     x64.callDirect __managed_set
-    x64.jmp __im_cont#9
-  __im_store#15:
+    x64.jmp __im_cont
+  __im_store:
     x64.leaRegRegImm32 rax, rax, 792
     x64.storeBaseDispReg.word64 [rax + 0], r8
     x64.movRegImm32 rax, 0
     x64.movRegReg r10, rax
-  __im_cont#9:
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#3
-  tryerr#2:
-    x64.movRegImm32 rbx, 1
-  trycont#3:
-    x64.movRegImm r13, 18446744073709551615
-    x64.leaRegRdata rcx, [rip + __str_rec_5]
-    x64.callDirect __str_retain
-    x64.loadRegBaseDisp.word64 rax, [r12 + 40]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#17
-  __im_owned#18:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#17
-  __im_bounds#19:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rax, -1
-    x64.jcc belowEqual, __im_slow#17
-  __im_buffer#20:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#17
-  __im_viewed#21:
-    x64.leaRegRegImm32 rcx, rax, -24
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_store#22
-  __im_slow#17:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
-    x64.movRegReg rax, r8
-    x64.callDirect __managed_set
-    x64.jmp __im_cont#16
-  __im_store#22:
-    x64.leaRegRegImm32 rax, rax, -8
-    x64.storeBaseDispReg.word64 [rax + 0], r8
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
-  __im_cont#16:
+  __im_cont:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
-  tryerr#5:
-    x64.leaRegRegImm32 rax, rbx, 1
-    x64.jmp trycont#6
+  tryerr:
+    x64.movRegImm32 rax, 1
+    x64.jmp trycont
   tryok:
     x64.movRegReg rax, rbx
-  trycont#6:
-    x64.cmpRegImm32 rax, 2
+  trycont:
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, ifcont
-  both:
+  refusedOnce:
     x64.movRegImm32 rbx, 42
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref

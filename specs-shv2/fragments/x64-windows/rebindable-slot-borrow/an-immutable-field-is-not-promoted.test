@@ -88,6 +88,20 @@ func @Frozen.total {
     x64.cmpRegReg r13, r14
     x64.jcc greaterEqual, forexit
   walk:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
     x64.jcc aboveEqual, __im_slow
@@ -97,20 +111,20 @@ func @Frozen.total {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, critsplit#12
+    x64.jcc equal, critsplit#14
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#13
+    x64.jcc notEqual, critsplit#15
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.jmp __im_cont
-  critsplit#13:
+  critsplit#15:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#12:
+  critsplit#14:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont:
@@ -156,7 +170,7 @@ func @main {
     x64.cmpRegReg r12, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
