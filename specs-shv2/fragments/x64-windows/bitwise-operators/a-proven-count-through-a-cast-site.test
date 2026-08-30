@@ -36,19 +36,6 @@ func @main {
     x64.cmpRegImm32 rdx, 8
     x64.jcc greaterEqual, forexit#4
   lowBits:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#14
-  __rc_chk#15:
-    x64.cmpRegImm32 rdx, 63
-    x64.jcc lessEqual, __rc_ok#13
-  __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#13:
     x64.movRegImm32 rsi, 1
     x64.movRegReg rcx, rdx
     x64.shlRegCl rsi, rsi
@@ -73,18 +60,18 @@ func @main {
   boundary:
     x64.imulRegRegImm32 rcx, rdx, 63
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#17
-  __rc_chk#18:
+    x64.jcc less, __rc_panic
+  __rc_chk:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc lessEqual, __rc_ok#16
-  __rc_panic#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok#16:
+  __rc_ok:
     x64.movRegImm32 rsi, 1
     x64.shlRegCl rsi, rsi
     x64.leaRegRegReg rax, rax, rsi

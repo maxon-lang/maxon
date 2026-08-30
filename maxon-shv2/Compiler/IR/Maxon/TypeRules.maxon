@@ -1596,6 +1596,28 @@ export function rangeIsUnsignedMaxUpper(low ParsedInt, high ParsedInt) returns b
 	return high == UnsignedFullUpperPattern and rangeIsUnsigned(low)
 end 'rangeIsUnsignedMaxUpper'
 
+// ⭐⭐ **DOES AN *INCLUSIVE* COUNTED LOOP'S TOP BOUND MAKE ITS STEP WRAP INSTEAD OF ITS TEST FAIL? (EC7)**
+// `for i in a to b` runs the body AT `b`, steps past it, and tests again — so at the top of the domain the
+// test reads, that step wraps to the domain's BOTTOM, the test passes, and the loop never leaves. The
+// counter then takes values no interval over `[a, b]` contains, which is why `Parser.mintCountedBodyCounter`
+// states no interval for such a loop rather than one that stops being true after a wrap.
+//
+// ⚠⚠ **THERE ARE TWO TOPS, BECAUSE THE TEST HAS TWO READINGS — AND REFUSING ONLY THE SIGNED ONE WAS A
+// MEASURED WRONG ANSWER (EC7 review).** `Parser.comparisonSignedness` picks a signedness valid for both
+// operands, so `i64.max` is the top under the SIGNED reading and `u64.max` — riding as the same `-1` pattern
+// this file's unsigned-upper shape is recognized by — is the top under the UNSIGNED one. MEASURED with only
+// `i64.max` refused: `for i in ((0 - 5) as int(0 to u64.max)) to u64.max` compiled its test as `jcc above`,
+// walked past `-1` into `0, 1, …`, and an `as int(-5 to -1)` inside the body was elided against the interval
+// `[-5, -1]` — a value outside its declared range, no panic, exit 0, where every compiler without the
+// elision panics on the sixth trip.
+//
+// ⚠ The EXCLUSIVE form needs no such rule and it is not an oversight: `upto` stops the first time the test
+// fails, which it does at `bound` itself under either reading, so its counter never reaches a step that
+// wraps.
+export function inclusiveTopBoundWraps(bound ParsedInt) returns bool
+	return bound == i64.max or bound == UnsignedFullUpperPattern
+end 'inclusiveTopBoundWraps'
+
 // Does the LOWER bound need a runtime compare?
 //
 // INTEGER: only when it is above the smallest i64 — a `low == i64.min` can never be violated.
@@ -1726,17 +1748,38 @@ export function rangeCoversRange(target RangedTypeAlias, source RangedTypeAlias)
 		return floatOrderKey(target.low) <= floatOrderKey(source.low) and floatOrderKey(target.high) >= floatOrderKey(source.high)
 	end 'float'
 
+	return rangeCoversIntBounds(target, low: source.low, high: source.high)
+end 'rangeCoversRange'
+
+// ⭐⭐ **THE INTEGER HALF OF THE CONTAINMENT ABOVE, ASKED WHERE THE SOURCE IS AN INTERVAL NOTHING
+// NAMES (EC7).** A counted `for i in a upto b` gives its counter a range the program never wrote down as a
+// typealias, so there is no `RangedTypeAlias` to hand `rangeCoversRange` — only two bounds. The arithmetic
+// is identical and lives here once; `rangeCoversRange` is this function plus the float and cross-domain
+// forks, which are the only parts an ALIAS adds.
+//
+// ⚠ **A FLOAT TARGET IS REFUSED HERE WHERE `rangeCoversRange` ACCEPTS IT, AND THE DIVERGENCE IS THE
+// PREMISE, NOT THE ARITHMETIC.** That function's cross-domain arm answers `true` for every int source
+// because *"the declared float alias is the full `float(f64.min to f64.max)` in every use"* — a statement
+// about the aliases the corpus DECLARES, which a nameless interval is not covered by. Under a genuinely
+// narrow `float(0.0 to 1.0)` the claim is false (a counter reaching 10 converts to `10.0`, outside it), so
+// the interval that names nothing declines rather than inheriting a premise it cannot check. It costs an
+// elision on a shape nothing in the corpus writes.
+export function rangeCoversIntBounds(target RangedTypeAlias, low ParsedInt, high ParsedInt) returns bool
+	if aliasIsFloat(target) 'aFloatTarget'
+		return false
+	end 'aFloatTarget'
+
 	let targetIsUnsignedMaxUpper = rangeIsUnsignedMaxUpper(target.low, high: target.high)
-	if targetIsUnsignedMaxUpper != rangeIsUnsignedMaxUpper(source.low, high: source.high) 'mixedRepresentation'
+	if targetIsUnsignedMaxUpper != rangeIsUnsignedMaxUpper(low, high: high) 'mixedRepresentation'
 		return false
 	end 'mixedRepresentation'
 
 	if targetIsUnsignedMaxUpper 'bothUnbounded'
-		return target.low <= source.low
+		return target.low <= low
 	end 'bothUnbounded'
 
-	return target.low <= source.low and target.high >= source.high
-end 'rangeCoversRange'
+	return target.low <= low and target.high >= high
+end 'rangeCoversIntBounds'
 
 // ⭐⭐ **THE SAME CONTAINMENT, ASKED WHERE THE SOURCE MAY NAME NO ALIAS AT ALL — what a range-check DOOR
 // holds, and the one thing that decides whether its runtime guard is provably dead (A4f).** Every door

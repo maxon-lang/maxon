@@ -907,3 +907,428 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+
+### A COUNTED LOOP'S COUNTER CARRIES A RANGE, AND A GUARD IT COVERS IS DEAD (EC7)
+
+`for r in 0 upto 64` steps its counter through `0 … 63` and nothing else. That is a fact about every
+value the body ever sees, so a range check the counter reaches — an `as` cast, a `return`, a field or
+element store, or the entry guard of a callee that gets inlined here — **cannot fail**, and the
+compiler does not emit it.
+
+⚠ **IT IS AN INTERVAL, NOT A TYPE.** The counter's written type is still the bare `int` its bounds were
+written at: nothing NAMES `0 … 63`, so `r as RegNum` is **not** an *unneeded cast* (E3010 quotes two
+declared aliases and there is only one here), and a counter that happens to exclude zero does **not**
+make `n / r` an infallible divide. Only the questions about whether a runtime GUARD can fail read it.
+
+**Both bounds must be constants the compiler can fold** — a literal, or an immutable top-level `let`.
+`for r in 0 upto xs.count()` proves nothing and every guard under it stands.
+
+**The interval is the one the BODY runs on**, which is `[a, b-1]` for `upto` and `[a, b]` for `to`. A
+loop that runs no trip states no interval, and an inclusive loop whose top is `i64.max` states none
+either: its step wraps to `i64.min` rather than ever failing the test.
+
+
+<!-- test: range-check-panic.a-counted-loop-counter-proves-a-cast -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The counter of `0 upto 64` is in `0 … 63`, which is exactly `RegNum` — so the cast's cascade is not
+emitted, and the cast is still not an E3010 (an interval names no alias to have repeated).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 upto 64 'scan'
+    let g = r as RegNum
+    total = total + g
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=2016
+```
+
+
+<!-- test: range-check-panic.a-counted-loop-one-past-the-alias-still-panics -->
+<!-- targets: x64-windows, x64-linux -->
+⚠ **THE DISCRIMINATING CASE FOR THE EXCLUSIVE ARITHMETIC.** One more trip and the counter reaches 64,
+which `RegNum` does not admit — so the guard stays and fires. A rule that took the interval as
+`[0, b-2]`, or that compared it the other way round, would print `2080` here instead.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 upto 65 'scan'
+    let g = r as RegNum
+    total = total + g
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-counted-loop-one-past-the-alias-still-panics.test:8: Range check failed: value outside typealias 'RegNum'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.an-inclusive-counted-loop-at-its-top-bound-is-proven -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+`to` includes its bound, so `0 to 63` is the same interval `0 upto 64` is — the same 2016, and the
+same elision.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 to 63 'scan'
+    let g = r as RegNum
+    total = total + g
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=2016
+```
+
+
+<!-- test: range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-still-panics -->
+<!-- targets: x64-windows, x64-linux -->
+⚠ **THE DISCRIMINATING CASE FOR THE INCLUSIVE ARITHMETIC**, and it is the one that would go silently
+wrong if `to` were read as `upto`: under `[0, 63]` the guard would be elided and this would print
+`2080` rather than panicking at 64.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 to 64 'scan'
+    let g = r as RegNum
+    total = total + g
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-still-panics.test:8: Range check failed: value outside typealias 'RegNum'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.a-runtime-loop-bound-proves-nothing -->
+<!-- targets: x64-windows, x64-linux -->
+A bound the compiler cannot fold states no interval, however obvious the value is at run time — so
+the guard stands and fires at 64.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 upto opaque(100) 'scan'
+    let g = r as RegNum
+    total = total + g
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-runtime-loop-bound-proves-nothing.test:12: Range check failed: value outside typealias 'RegNum'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.an-empty-counted-loop-proves-nothing -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+A loop that runs no trip has no interval to state. Nothing is elided and nothing runs; the committed
+fragment carries the guard that survives.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 5 upto 5 'none'
+    let g = r as RegNum
+    total = total + g
+  end 'none'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=0
+```
+
+
+<!-- test: range-check-panic.an-inclusive-counted-loop-to-i64-max-keeps-its-guard -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⚠ An inclusive loop ending at `i64.max` never fails its own test — the step WRAPS to `i64.min`, which
+`NonNeg` does not admit — so no interval is stated and the guard stays. No answer can show that (the
+wrap is 2^63 trips away): what records it is the committed fragment, which still carries the cascade.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonNeg = int(0 to i64.max)
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 to i64.max 'forever'
+    let g = r as NonNeg
+    total = total + g
+    break
+  end 'forever'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=0
+```
+
+
+<!-- test: range-check-panic.a-counted-loop-counter-proves-a-callees-parameter -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+A narrowed PARAMETER's guard stands at the callee's entry, in front of every caller — until the callee
+is inlined here, where there is exactly one caller and it already knows the argument is in range. The
+spliced cascade is then not copied at all.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function weigh(table Integer, regNum RegNum) returns Integer
+  return table + regNum
+end 'weigh'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 upto 64 'scan'
+    total = total + weigh(1, regNum: r)
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```stdout
+total=2080
+```
+
+
+<!-- test: range-check-panic.a-counted-loop-past-a-callees-parameter-still-panics -->
+<!-- targets: x64-windows, x64-linux -->
+⚠ The negative control for the inlined cascade, and it pins the FRAME as well as the panic: the
+counter is not inside `RegNum`, the cascade is copied as it always was, and the slow arm re-issues the
+real call — so the trace still names `weigh`, at `weigh`'s own parameter line.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function weigh(table Integer, regNum RegNum) returns Integer
+  return table + regNum
+end 'weigh'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 upto 100 'scan'
+    total = total + weigh(1, regNum: r)
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-counted-loop-past-a-callees-parameter-still-panics.test:5: Range check failed: value outside typealias 'RegNum'
+Stack trace:
+  in weigh
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.a-ranged-parameter-proves-a-callees-parameter -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The second proof a call site can hold: the argument is one of THIS function's own narrowed
+parameters, whose entry cascade dominates every call it makes. `twice` keeps its own guard — it is
+still called from anywhere — and both inlined copies of `weigh`'s lose theirs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function weigh(table Integer, regNum RegNum) returns Integer
+  return table + regNum
+end 'weigh'
+
+function twice(table Integer, reg RegNum) returns Integer
+  return weigh(table, regNum: reg) + weigh(table, regNum: reg)
+end 'twice'
+
+function main() returns ExitCode
+  print("t={twice(1, reg: 7)}\n")
+  return 0
+end 'main'
+```
+```stdout
+t=16
+```
+
+
+<!-- test: range-check-panic.a-wider-parameter-does-not-prove-a-narrower-one -->
+<!-- targets: x64-windows, x64-linux -->
+⚠ The negative control for that second proof: `Wide` admits values `RegNum` does not, so the caller's
+own guard proves nothing about the callee's and the spliced cascade stays. Both frames are in the
+trace, which is what says the panic is still the callee's.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+typealias Wide = int(0 to 1000)
+
+function weigh(table Integer, regNum RegNum) returns Integer
+  return table + regNum
+end 'weigh'
+
+function twice(table Integer, reg Wide) returns Integer
+  return weigh(table, regNum: reg) + weigh(table, regNum: reg)
+end 'twice'
+
+function main() returns ExitCode
+  print("t={twice(1, reg: 200)}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-wider-parameter-does-not-prove-a-narrower-one.test:6: Range check failed: value outside typealias 'RegNum'
+Stack trace:
+  in weigh
+  in twice
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.an-inclusive-counted-loop-past-the-unsigned-top-still-panics -->
+<!-- targets: x64-windows, x64-linux -->
+⚠⚠ **THE DISCRIMINATING CASE FOR THE TOP BOUND, AND IT WAS A MEASURED WRONG ANSWER.** A `to` loop runs the
+body AT its bound, steps past it and tests again — so at the top of the domain the test READS, the step wraps
+to that domain's bottom and the loop never leaves. There are two tops, because `emitCompare` picks a
+signedness valid for both operands: this counter is declared over `int(0 to u64.max)`, so the test compiles
+UNSIGNED, walks past `-1` into `0, 1, …`, and the interval `[-5, -1]` stops being true on the sixth trip.
+With only the SIGNED top refused this printed `n=7 last=1` and exited 0; the guard belongs here and fires.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Big = int(0 to u64.max)
+typealias Neg = int(-5 to -1)
+
+function main() returns ExitCode
+  var n = 0 as Integer
+  var last = 0 as Integer
+  for i in ((0 - 5) as Big) to u64.max 'wrap'
+    let g = i as Neg
+    last = g
+    n = n + 1
+    if n > 6 'enough'
+      break
+    end 'enough'
+  end 'wrap'
+  print("n={n} last={last}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.an-inclusive-counted-loop-past-the-unsigned-top-still-panics.test:10: Range check failed: value outside typealias 'Neg'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.a-counted-divisor-is-still-a-throwing-divide -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⛔ **THE RED-GATE CONTROL FOR ONE OF THE THREE WITHHOLDS.** `safety.md`'s escape hatch is stated in terms of
+*a ranged TYPE whose range excludes 0*, and a counted loop's interval is not one — so `100 / i` still throws
+and still needs its `try`. Fold the interval into `divisorProof` and the divide becomes a bare `binOp`, at
+which point this `try` has no call to apply to and the program stops compiling (E2015). Verified by making
+that edit and watching this case go red.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+  var t = 0 as Integer
+  for i in 1 upto 10 'l'
+    t = t + try (100 / i) otherwise 0
+  end 'l'
+  print("t={t}\n")
+  return 0
+end 'main'
+```
+```stdout
+t=281
+```
+
+
+<!-- test: range-check-panic.a-merge-fed-by-a-counted-loop-denotes-no-alias -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⛔ **THE RED-GATE CONTROL FOR THE THIRD WITHHOLD.** `x` is an `if`-continuation merge — one of the four that
+MAY lift a phi's withheld alias claim — and one of its edges is a counted counter whose interval lies inside
+`Small`. Letting `edgeProvesAlias` read the interval would lift that claim, putting the merge's DECLARED name
+back into circulation, and `x as Small` would become E3010: an interval that names nothing would have refused
+a program every other compiler accepts. Verified by making that edit and watching this case go red.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+
+function main() returns ExitCode
+  var t = 0 as Integer
+  for r in 0 upto 5 'l'
+    var x = 1 as Small
+    if r > 2 'high'
+      x = r
+    end 'high' else 'low'
+      x = 1
+    end 'low'
+    t = t + (x as Small)
+  end 'l'
+  print("t={t}\n")
+  return 0
+end 'main'
+```
+```stdout
+t=10
+```

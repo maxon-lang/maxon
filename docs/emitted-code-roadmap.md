@@ -1468,27 +1468,23 @@ structural cure is a commutativity bit on `TargetOpMeta` read off the operand mo
 array-indexing program — where x64's idiom is TWO: `cmp idx, len` / `jae slow`, because an UNSIGNED
 compare catches `idx < 0` and `idx >= len` at once. Filed here rather than taken.
 
-### ⭐⭐ RE-PRIORITIZED 2026-08-29, AFTER ALL TEN ROWS LANDED
+### ⭐⭐ RE-PRIORITIZED 2026-08-29 — `A1`/`EC7` IS NOW CLOSED; `A2` IS THE TOP ROW
 
 The original Tier 2/3 ordering is superseded. Three things re-ranked it, all measured:
 `EC2`'s profile of the stage-2 self-compile, `EC19`'s copy census, and two probes taken today.
 
-**`A1` · `EC7` — a proven-ranged counter still pays its callee's guard. THE TOP ROW, and it is the
-one that fell off the end.** `EC7` has sat ⬜ FREE since 2026-08-26. Its own text claims
-`regMaskContains`'s four hottest call sites are in `augmentValue`/`tightRegisterSet` at **37% of the
-shv2-emitted profile** — and `EC2`'s profile, taken two rows later for an unrelated purpose,
-independently measures those two functions at **35.6%** (`augmentValue` 25.7% + `tightRegisterSet`
-9.9%). ⇒ **the largest measured concentration in the compiler's own emitted code, confirmed twice.**
-Probe (`temp/codegen-probe/ec7.maxon`, a `RegNum`-parameter callee reached from `for r in 0 upto 64`):
-
-```
-  forhdr:    cmp r13,64 ; jcc ge,forexit
-  __il_body: cmp r13,0  ; jcc less,__il_slow   ← DEAD: the counter is provably 0..63
-  __rc_chk:  cmp r13,63 ; jcc le,__rc_ok       ← DEAD
-  __il_slow: … callDirect weigh                ← and the slow arm RE-ISSUES THE CALL,
-  __rc_ok:   lea rax,rbx,r13 ; mov r8,rax        so EC5's inlining is defeated on this shape
-```
-**4 of the loop's 11 instructions are a provably-dead guard**, and the fast arm it guards is 2.
+**`A1` · `EC7`** — ✅ **CLOSED 2026-08-29. THE LARGEST SINGLE-ROW WIN OF THIS WORKSTREAM:
+self-compile −13.3%, and `augmentValue` 30.96% → 20.27% of the profile.** Both layers landed. The
+probe's loop went 11 instructions → **6**, its guard, its call-bearing slow arm and its whole frame
+gone; `ec7.maxon` 63 ops → 27. Combined `augmentValue` + `tightRegisterSet` **38.85% → 28.77%**,
+which in absolute samples is **102% of the entire run's reduction** — everything else is flat.
+⭐ **Layer 1 alone measured ZERO on the probe, and that is structural, not a shortfall**: the guard
+there is the *callee's* entry cascade that `EC5`'s inliner copies in, which the parser's doors never
+see. Layer 1 is the **proof supply** — without it layer 2 reaches only the 3 parameter-forwarding
+sites, not the 4 hot Hall-loop ones. ⛔ Review found a real wrong answer and it was reproduced before
+being fixed: the inclusive-bound refusal covered `i64.max` but not `u64.max`, and the loop test can
+run UNSIGNED — a counted loop walked past `-1` into `0, 1, …` and elided a cast that should panic.
+Cured in one place (`TypeRules.inclusiveTopBoundWraps`) and pinned.
 
 **`A2` · The bounds guard is 7 instructions where x64's idiom is 2.** `EC19`'s census named this and
 under-counted it. Measured today (`temp/codegen-probe/guard.maxon`): `cmp`/`setcc`/`cmp`/`setcc`/

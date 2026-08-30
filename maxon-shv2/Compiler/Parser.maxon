@@ -2380,6 +2380,13 @@ let sharedEmptyTopLevelBorrowSubjects = VarInfoMap.create()
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
 let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
 
+// The counted-loop interval column of a function with no `for i in <const> upto|to <const>` loop in it —
+// `sharedEmptyInstanceAliasNames`' pattern and its invariant, with the same two roles: the field's initial
+// value AND the copy-on-write anchor `recordProvenIntRange` replaces before its first write. A `Parser` is
+// built per function-bearing declaration, so an unconditional `create()` in the constructor would be one map
+// per function in the program (`ValueDeclaredAliasMap`'s measured reason).
+let sharedEmptyProvenIntRanges = ProvenIntRangeMap.create()
+
 // The `paramSites` column of a function no parameter of which is a ranged alias — which is most of them.
 //
 // ⭐ **IT IS NOW ONLY EVER READ, AND THAT IS A STRONGER PROPERTY THAN THE ONE THIS COMMENT USED TO
@@ -11779,6 +11786,12 @@ export type Parser
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	var valueDeclaredAlias as ValueDeclaredAliasMap
+	// ⭐⭐ **THE INTERVAL A COUNTED LOOP PROVED FOR EACH OF ITS COUNTERS (EC7)** — see `ProvenIntRange` for
+	// what an interval nothing NAMES may and may not decide. Reset per function and SWAPPED across a closure
+	// body, exactly like the sibling value columns, and for their reason: its keys are ids in THIS function's
+	// SSA space. It is the ONE column of this family that also leaves the parser — `commitRangeChecks` hands
+	// it to `FunctionRangeChecks`, where `InlineLeaves` reads it back off the caller's own numbering.
+	var countedValueRanges as ProvenIntRangeMap
 	// ⭐⭐ **THE `.rdata` OP EACH CHARACTER-LITERAL VALUE WAS MATERIALIZED BY** — see `CharLiteralOpMap` for
 	// what an integer position does with it and why the op must be REPLACED rather than orphaned.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
@@ -12833,6 +12846,7 @@ export type Parser
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			valueExistentialInstance: sharedEmptyExistentialInstanceMap,
 			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
+			countedValueRanges: sharedEmptyProvenIntRanges,
 			charLiteralOps: sharedEmptyCharLiteralOps,
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
@@ -24296,6 +24310,7 @@ export type Parser
 		// Per-function for the identical reason: a value's declared ranged alias names an id in THIS
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
+		self.countedValueRanges = sharedEmptyProvenIntRanges
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
@@ -24627,14 +24642,18 @@ export type Parser
 		// gate reads `count()` (no allocation); only a function that actually constructs an instance packages a
 		// fresh map, every other filed entry carries the SHARED empty one.
 		let hasInstanceAliases = self.valueInstanceAlias.count() != 0
+		// EC7 rides the same channel and files on the same terms: a function whose only side data is a
+		// counted loop's interval still files an entry, because that interval is how this function's own
+		// CALL SITES are proved at the Std tier (`InlineLeaves`) — a fact nobody but this function can state.
+		let hasProvenRanges = self.countedValueRanges.count() != 0
 		// ⚠ A RANGED PARAMETER IS ENOUGH ON ITS OWN, even for a function with no site of its own: the entry is
 		// how this function's CALLERS learn what its parameters were declared as (`paramSites`) and where its own
 		// entry guard goes, and the caller's site names it by the name this map is keyed by.
-		if self.rangeCheckSites.isEmpty() and self.rangeCheckArgSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and self.rangeCheckParamSites.isEmpty() and not hasInstanceAliases 'noSideData'
+		if self.rangeCheckSites.isEmpty() and self.rangeCheckArgSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and self.rangeCheckParamSites.isEmpty() and not hasInstanceAliases and not hasProvenRanges 'noSideData'
 			return
 		end 'noSideData'
 		let instanceAliases = self.packagedInstanceAliases() if hasInstanceAliases else sharedEmptyInstanceAliasNames
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.rangeCheckSites, argSites: self.rangeCheckArgSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, paramSites: self.rangeCheckParamSites, valueInstanceAliases: instanceAliases))
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.rangeCheckSites, argSites: self.rangeCheckArgSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, paramSites: self.rangeCheckParamSites, valueInstanceAliases: instanceAliases, provenValueRanges: self.countedValueRanges))
 	end 'commitRangeChecks'
 
 	// Package the parser's per-value instance-alias provenance (ValueId ⇒ interned alias id, file-local) into
@@ -25801,6 +25820,7 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
+		self.countedValueRanges = sharedEmptyProvenIntRanges
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -30252,6 +30272,67 @@ export type Parser
 		return try self.phiAliasUnprovenMarks.get(value) otherwise panic("phiAliasIsUnproven: v{value} has no merge-alias slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'phiAliasIsUnproven'
 
+	// ⭐⭐ **RECORD THE INTERVAL A COUNTED LOOP PROVES FOR ITS COUNTER (EC7)** — see `ProvenIntRange` for
+	// what an interval nothing NAMES may and may not decide, and `mintCountedBodyCounter` for why the value
+	// it is recorded against is the BODY's block-arg rather than the loop header's phi.
+	function recordProvenIntRange(value ValueId, low ParsedInt, high ParsedInt)
+		// COPY-ON-WRITE off the shared empty, exactly as `recordValueDeclaredAliasName` does and for its
+		// reason: a function with no counted loop never allocates one.
+		if self.countedValueRanges is sharedEmptyProvenIntRanges 'stillShared'
+			self.countedValueRanges = ProvenIntRangeMap.create()
+		end 'stillShared'
+		self.countedValueRanges.upsert(value, value: ProvenIntRange.create(low, high: high))
+	end 'recordProvenIntRange'
+
+	// ⭐ **DOES THE INTERVAL A COUNTED LOOP PROVED FOR `value` LIE INSIDE `target`?** The map probe and the
+	// one containment, spelled here so the joiner below reads as the two sentences it is. A function with no
+	// counted loop answers off the shared empty map and allocates nothing.
+	function countedRangeCovers(value ValueId, target RangedTypeAlias) returns bool
+		let proven = try self.countedValueRanges.get(value) otherwise return false
+		return rangeCoversIntBounds(target, low: proven.low, high: proven.high)
+	end 'countedRangeCovers'
+
+	// ⭐⭐ **IS `value` PROVABLY INSIDE `target`? — THE WHOLE OF EVERY RUNTIME GUARD'S DEATH TEST, AND THE
+	// ONE PLACE THE TWO KINDS OF PROOF ARE JOINED.** A value proves its range two ways and only two: it
+	// DENOTES a declared alias whose range the destination covers (the induction
+	// `rangeCoversDenotedRange`'s header states), or a counted loop proved an interval for it that nothing
+	// names (EC7). Both answers mean the same thing to a guard — the compare cannot fail — so they are
+	// joined once, and no door reaches a verdict of its own.
+	//
+	// ⚠⚠ **THE JOIN IS DELIBERATELY NOT MADE INSIDE `valueDenotedAlias`, AND THE LINE IS: A NAMELESS
+	// INTERVAL IS NOT A DECLARED TYPE.** That function has FIVE readers. Three of them ask about the type
+	// the program WROTE, not about the bounds a value happens to satisfy, and each would answer a DIFFERENT
+	// question if an interval were folded in:
+	//
+	//   • **E3010** (`reportUnneededCastBetween`) QUOTES both alias names — *"unneeded cast: 'A' already
+	//     fits in 'B'"* — and its own rule is that it *"fires only when BOTH ends are DECLARED ranged
+	//     typealiases"*, which is how both reference compilers gate it. An interval has no name to print
+	//     and no declaration to have repeated, and firing here would REFUSE a program every other compiler
+	//     accepts.
+	//   • **`divisorProof`** spends the range as `safety.md`'s escape hatch — *"a ranged type whose range
+	//     excludes 0 compiles to a bare divide"*. Reading an interval there would make `n / i` inside
+	//     `for i in 1 upto k` stop THROWING, so the `try` the program already wrote around it becomes
+	//     surplus: again a refusal, and this time of a program that compiles today.
+	//   • **`edgeProvesAlias`** does not spend the proof — it LIFTS a merge's withheld alias claim
+	//     (`recordMergeAliasProof`), which republishes that merge's DECLARED name to every reader including
+	//     the two above. An interval may not put a name into circulation that no edge declared.
+	//
+	// The other two readers are outside this joiner for reasons of their own, not for the line above's.
+	// `shiftCountIsProvenUnguarded` asks the SAME kind of question — can a runtime guard fire? — and reading
+	// the interval there is SOUND; it is left out because the win could not be told from build-to-build
+	// layout noise (its header carries all six timings). `emitPrimitiveClone` is unaffected either way: a
+	// receiver that denotes no ALIAS is handed back untouched, and an interval gives it no alias to shed.
+	//
+	// ⛔ **EACH WITHHOLD IS PINNED BY A CASE THAT GOES RED IF IT IS UNDONE**, because a rule this file merely
+	// asserts is one nothing checks (`specs-shv2/range-check-panic.md`):
+	// `a-counted-loop-counter-proves-a-cast` stops COMPILING if E3010 reads the interval,
+	// `a-counted-divisor-is-still-a-throwing-divide` stops compiling if `divisorProof` does (its `try` becomes
+	// an E2015 over a bare `binOp`), and `a-merge-fed-by-a-counted-loop-denotes-no-alias` stops compiling if
+	// `edgeProvesAlias` does (the merge's declared name comes back into circulation and its `as` is E3010).
+	function valueIsProvablyInRange(value ValueId, target RangedTypeAlias) returns bool
+		return rangeCoversDenotedRange(target, source: self.valueDenotedAlias(value)) or self.countedRangeCovers(value, target: target)
+	end 'valueIsProvablyInRange'
+
 	// The instance alias NAME `value` came from (`WrapperA`), or `EmptySourceText` when it has none — a
 	// `self` receiver, a value merged across branches, or any non-instance value (P1.6-C).
 	function instanceAliasNameOfValue(value ValueId) returns ByteArray
@@ -30910,7 +30991,7 @@ export type Parser
 	function returnGuardIsDead(returned ValueId, declaredNameId TypeNameId) returns bool
 		return match self.declaredAliasOfNameId(declaredNameId) 'returnAlias'
 			undeclared gives false
-			declared(alias) gives rangeCoversDenotedRange(alias, source: self.valueDenotedAlias(returned))
+			declared(alias) gives self.valueIsProvablyInRange(returned, target: alias)
 		end 'returnAlias'
 	end 'returnGuardIsDead'
 
@@ -37706,6 +37787,13 @@ export type Parser
 		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
 		var step = self.newBlock(func, label: b"forstep", line: loopLabelTok.line)
 		var exit = self.newBlock(func, label: b"forexit", line: forTok.line)
+		// ⭐ **THE COUNTER THE BODY SEES** — the header phi itself for every form but one; a block-arg of its
+		// own for a counted range over constant bounds, which is what lets that loop's interval be recorded
+		// against a value rather than against a program point. See `mintCountedBodyCounter`.
+		var bodyCounter = indexPhi
+		if src.isRange and not src.isCharacterRange 'aCountedIntegerRange'
+			bodyCounter = self.mintCountedBodyCounter(body, header: header, start: source, limit: src.limit, inclusive: src.rangeInclusive, indexPhi: indexPhi, tag: indexTag, nameId: indexNameId)
+		end 'aCountedIntegerRange'
 		self.emitCondBranch(header, cond: cond, thenId: body.id, elseId: exit.id, ifTok: forTok)
 
 		// ⭐⭐ **THE PER-TRIP FRAME, AND IT EXISTS FOR THE STRING FORM ALONE.** A range's loop variable is the
@@ -37740,7 +37828,7 @@ export type Parser
 		// — declaring it would make an ordinary `_ = f()` discard statement inside the body a write to a
 		// `let`.
 		self.currentBlock = body
-		var loopValue = indexPhi
+		var loopValue = bodyCounter
 		var graphemeEnd = indexPhi
 		// ⭐ **A CHARACTER RANGE MINTS ITS ELEMENT FROM THE COUNTER**, where a String mints it from a byte
 		// range — two producers of the SAME owned per-trip Character, which is why the ownership below is
@@ -37930,6 +38018,72 @@ export type Parser
 		self.closeBlock(forMark)
 		return self.currentBlock
 	end 'parseForStatement'
+
+	// ⭐⭐ **THE COUNTER THE BODY OF A COUNTED RANGE LOOP SEES — A VALUE OF ITS OWN, SO THAT THE INTERVAL THE
+	// LOOP PROVES IS A FACT ABOUT A VALUE AND NOT ABOUT A PROGRAM POINT (EC7).**
+	//
+	// ⚠⚠ **THE HEADER PHI IS THE WRONG VALUE TO RECORD AN INTERVAL AGAINST, AND BY EXACTLY ONE.** The phi
+	// takes every value the test is APPLIED to, which includes the one that FAILS it: `for r in 0 upto 64`
+	// steps the phi to 64 and exits there, so the phi is in `[0, 64]` while every trip of the body runs on a
+	// value in `[0, 63]`. Recording `[0, 63]` against the phi would be a claim that is false in the one block
+	// the phi is also live in, and the readers of the column (`valueIsProvablyInRange` at the parse,
+	// `InlineLeaves` at the Std tier) ask about a VALUE with no program point in hand. A block-arg on the
+	// BODY is the same number reached only through the edge the test PASSED on, so its interval is true
+	// wherever it is live — which is what a per-value column is entitled to assume.
+	//
+	// ⭐ **AND IT COSTS NOTHING EMITTED.** A block-arg whose every incoming edge carries one value IS that
+	// value, and `elimTrivialBlockArgs` folds it back into `indexPhi` — at pass 9, two passes AFTER
+	// `inlineLeaves` has spent the fact and long before any register is chosen.
+	//
+	// ⚠ **BOTH BOUNDS MUST BE IN THE PARSER'S CONST VIEW, WHICH IS NOT THE SAME AS BEING LITERALS.** A
+	// module-level immutable `let` folds (`for r in 0 upto RegisterFileSize`, this rung's own headline shape);
+	// `for i in 0 upto xs.count()` does not, and proves nothing.
+	//
+	// ⚠ **THREE REFUSALS, EACH A DIFFERENT WAY THE INTERVAL WOULD BE A LIE — none of them a rounding:**
+	//   • an EMPTY range runs no trip, so there is no interval to state. Refusing it is also what keeps the
+	//     arithmetic below in range: an exclusive range is non-empty exactly when `low < limit`, which puts
+	//     `limit` strictly above `i64.min` and so makes `limit - 1` a subtraction that cannot wrap.
+	//   • an INCLUSIVE range ending at the TOP OF A DOMAIN never fails its test: the step WRAPS to that
+	//     domain's bottom and the loop runs on for ever, so the interval would be false from the trip after
+	//     the wrap. `TypeRules.inclusiveTopBoundWraps` owns which bounds those are, and there are TWO of
+	//     them because the test has two readings — its header carries the wrong answer that measured it.
+	//   • a CHARACTER range's body value is a MINTED `Character` and not the counter (`__char_from_cp`), so
+	//     the counter would carry an interval nothing in the body can spend — declined at the call site,
+	//     where the two range kinds are already told apart.
+	//
+	// ⚠ **SIGNEDNESS IS NOT A CASE FOR THE ARITHMETIC, WHICH IS SIGNED THROUGHOUT — BUT IT IS ONE FOR THE
+	// TOP BOUND, AND THAT DISTINCTION IS WHAT THIS PARAGRAPH GOT WRONG ONCE.** The loop test runs at a
+	// signedness valid for both operands, so it may be UNSIGNED. For ENTERING and for the SET OF VALUES the
+	// arithmetic below is safe under either reading: where the two orderings disagree about a bound one of
+	// them makes the loop EMPTY (a vacuous interval over-approximates, the safe direction), and where they
+	// agree the counter steps through the identical pattern sequence and both stop at the identical pattern.
+	// For LEAVING they do not agree, and that is the third refusal's job: each reading has its own top, past
+	// which the step wraps rather than the test failing.
+	// ⚠ `tag`/`nameId` are the HEADER PHI's, handed in rather than re-derived from `start`: the body counter
+	// IS the header phi one edge later, so a second derivation of its type would be one fact written twice —
+	// and the one that could drift is the one nothing compares.
+	function mintCountedBodyCounter(body IrBlock, header IrBlock, start ValueId, limit ValueId, inclusive bool, indexPhi ValueId, tag ValueTypeTag, nameId TypeNameId) returns ValueId
+		if not self.constIsKnown(start) or not self.constIsKnown(limit) 'boundsAreNotBothConstant'
+			return indexPhi
+		end 'boundsAreNotBothConstant'
+
+		let low = self.constOf(start)
+		let bound = self.constOf(limit)
+		if inclusive 'closedRange'
+			if low > bound or inclusiveTopBoundWraps(bound) 'statesNoInterval'
+				return indexPhi
+			end 'statesNoInterval'
+		end 'closedRange' else 'halfOpenRange'
+			if low >= bound 'runsNoTrip'
+				return indexPhi
+			end 'runsNoTrip'
+		end 'halfOpenRange'
+
+		let counter = self.mintPhi(body, tag: tag, nameId: nameId)
+		self.recordBranchEdge(header, targetId: body.id, argIds: singletonArgs(indexPhi))
+		self.recordProvenIntRange(counter, low: low, high: bound if inclusive else bound - 1)
+		return counter
+	end 'mintCountedBodyCounter'
 
 	// ⭐ **THE PREHEADER'S "DID THE FACTORY GIVE US A CURSOR?" BRANCH (W3)** — the taken edge is the ordinary
 	// loop entry recorded by the caller, the other lands in a fresh block that carries NOTHING and rejoins past
@@ -45444,6 +45598,25 @@ export type Parser
 	// (`1 shl 36`). Both are pinned by `bitwise-operators.md`'s `a-merged-count-is-not-proven-*` cases,
 	// which go RED on this line alone (sabotage-proved: restoring `declaredAliasOfValue` fails exactly
 	// those two, at their `'shl'` assertion, and nothing else in the suite).
+	// ⛔⛔ **A COUNTED LOOP'S INTERVAL IS DELIBERATELY *NOT* READ HERE, AND WHAT KEEPS IT OUT IS THAT NOTHING
+	// COULD MEASURE IT (EC7).** `1 shl i` inside `for i in 0 upto 64` is a count provably in `0 … 63` that
+	// denotes no alias, so the arm below answers `undeclared` for it and the whole `(count and -64) != 0`
+	// saturation is emitted for a case that cannot happen. Reading EC7's interval here is SOUND and deletes
+	// those seven ops. It was built and timed, and the reading came back inside the noise:
+	//
+	//   • WITH the join, the self-compile read **71.9 / 71.9 s**; without it, from the closest sibling
+	//     build, **71.0 / 71.0 s** — +1.3%, and 92% of the movement in `phase:regalloc` (`--metrics`).
+	//   • ⚠ **AND TWO LOGICALLY IDENTICAL COMPILERS, differing only in ~15 lines of comment and one
+	//     retired private method, read 68.5 / 68.8 s against those same 71.0 / 71.0 s — 3.4%.** That is
+	//     the compiler's own code LAYOUT moving under an unrelated edit, and it is larger than the effect
+	//     under study. All six runs were interleaved in one session and each pair is reproducible to 0.3 s;
+	//     the spread is between builds, not within one.
+	//
+	// ⇒ The instrument cannot resolve this at the size it comes in, and a win that cannot be shown is not
+	// one to land on top of a row that is already measured at −13%. It stays out until a program that
+	// actually pays for counted shift counts exists to measure it on — the corpus's are few and cold.
+	// `specs-shv2/bitwise-operators.md`'s `a-counted-loop-count-is-not-proven` pins the saturation that
+	// survives, so the decision is a committed fragment rather than a paragraph.
 	function shiftCountIsProvenUnguarded(count ValueId) returns bool
 		return match self.valueDenotedAlias(count) 'count'
 			// A bare `int`, a loop counter, an arithmetic result, a merge nothing proved: none states any
@@ -46932,7 +47105,7 @@ export type Parser
 	// **+3,848 `phase:parse` allocations at rung 5, doubling per rung**, for a question whose answer was
 	// `undeclared` at every one of those sites.
 	function recordRangedTargetSite(value ValueId, target RangedTypeAlias, line LineNumber, column ColumnNumber)
-		if rangeCoversDenotedRange(target, source: self.valueDenotedAlias(value)) 'provablyInRange'
+		if self.valueIsProvablyInRange(value, target: target) 'provablyInRange'
 			return
 		end 'provablyInRange'
 
@@ -68276,6 +68449,7 @@ export type Parser
 		let savedValueInstanceAlias = self.valueInstanceAlias
 		let savedValueExistentialInstance = self.valueExistentialInstance
 		let savedValueDeclaredAlias = self.valueDeclaredAlias
+		let savedCountedValueRanges = self.countedValueRanges
 		// ⛔⛔ **THE CHARACTER-LITERAL OP MAP SWAPS WITH ITS SIBLINGS, AND IT WAS RESET WITHOUT BEING SAVED
 		// (BATCH23 review).** It was added to the RESET below and to `parseFunction`'s two resets, but not to
 		// this save/restore pair — so a closure erased the ENCLOSING function's filed op indices, and its own
@@ -68458,6 +68632,7 @@ export type Parser
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
+		self.countedValueRanges = sharedEmptyProvenIntRanges
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -68693,6 +68868,7 @@ export type Parser
 		self.valueInstanceAlias = savedValueInstanceAlias
 		self.valueExistentialInstance = savedValueExistentialInstance
 		self.valueDeclaredAlias = savedValueDeclaredAlias
+		self.countedValueRanges = savedCountedValueRanges
 		self.charLiteralOps = savedCharLiteralOps
 		self.stringBytesViewOps = savedStringBytesViewOps
 		self.iterationLockedBindings = savedIterationLockedBindings

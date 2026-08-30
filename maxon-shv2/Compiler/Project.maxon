@@ -2745,6 +2745,36 @@ export typealias RangeCheckReturnSiteArray = Array with RangeCheckReturnSite
 // would be the same channel written twice.
 export typealias ValueInstanceAliasNameMap = Map with (ValueId, ByteArray)
 
+// ⭐⭐ **A CLOSED INTEGER INTERVAL A VALUE IS PROVEN TO LIE IN, THAT NOTHING NAMES (EC7).** The counter of a
+// `for i in a upto b` whose bounds are compile-time constants is in `[a, b-1]` throughout the loop body, and
+// no `typealias` in the program says so — the value's own type is the bare `int` the bounds were written at.
+//
+// ⚠ **IT IS DELIBERATELY NOT A `RangedTypeAlias` WITH AN EMPTY NAME.** Half of what a `RangedTypeAlias`
+// carries is a DECLARATION — the name, the declaring file, the position E3061 anchors on, the visibility
+// `visibleFrom` resolves by — and every one of those would be a lie here. The two rules stated in terms of
+// the type the program WROTE therefore cannot see this: E3010 (*"unneeded cast: 'A' already fits in 'B'"*,
+// which quotes both names) and `safety.md`'s *"a ranged type whose range excludes 0 compiles to a bare
+// divide"*. What CAN see it is every rule about whether a runtime GUARD can fail, because that is a question
+// about the value's bounds and not about its spelling.
+//
+// `low`/`high` are INCLUSIVE and stored as the raw 64-bit patterns `ParsedInt` holds, exactly as
+// `RangedTypeAlias`' bounds are, so one containment (`TypeRules.rangeCoversIntBounds`) answers for both.
+export type ProvenIntRange
+	export var low as ParsedInt
+	export var high as ParsedInt
+
+	export static function create(low ParsedInt, high ParsedInt) returns ProvenIntRange
+		return Self{low: low, high: high}
+	end 'create'
+end 'ProvenIntRange'
+
+// ⭐ Per-function map from a value's function-local `ValueId` to the interval above. SPARSE — one entry per
+// counted-loop counter, and empty (the shared map) for every function that has none, which is most of them.
+// It rides `FunctionRangeChecks` for `ValueInstanceAliasNameMap`'s reason: that is the ONE per-function side
+// table the parser fills and `mergeArtifact` copies whole, and ValueIds pass through `LowerMaxonToStd`
+// VERBATIM, so the Std tier reads the parser's own numbering with no remap.
+export typealias ProvenIntRangeMap = Map with (ValueId, ProvenIntRange)
+
 // ⭐⭐ **ONE NARROWED-RANGE PARAMETER OF A FUNCTION — AND IT IS A SITE, NOT MERELY A PUBLICATION (A1f).**
 // It began as `paramAliasNames`, a name per parameter that no check in the declaring function read: the
 // pre-erasure alias each PARAMETER was declared with, captured where `returnAliasName` is and for the
@@ -2779,6 +2809,41 @@ end 'RangeCheckParamSite'
 
 export typealias RangeCheckParamSiteArray = Array with RangeCheckParamSite
 
+// ⭐⭐ **ONE ENTRY CASCADE `InsertRangeChecks` ACTUALLY EMITTED FOR A NARROWED PARAMETER (EC7)** — the
+// `RangeCheckParamSite` above says a guard is OWED; this says where the guard IS. Nothing recorded that
+// until this row, and without it a cascade is indistinguishable from a hand-written `if`/`panic` the moment
+// it reaches the Std tier: both are a compare, a conditional branch and a block that panics.
+//
+// ⭐ **IT CARRIES THE RESOLVED `alias`, NOT ITS NAME.** `guardRangedParam` holds the resolved declaration
+// already (`guardVerdict` unwrapped it to decide the guard at all), and its reader — `InlineLeaves`, deep
+// in the Std tier — has no file path to resolve a name against and must not acquire one: which range a name
+// denotes is the CALLEE's file's answer, and re-resolving it in the caller's frame is exactly the defect
+// `guardRangedParam`'s header records against `utf16LeadSurrogate`.
+//
+// `headBlockId` is the block the cascade's first compare stands in and `okBlockId` the block its in-range
+// edge lands on. So an inliner that can prove the argument sends every edge into `headBlockId` to
+// `okBlockId` instead, and copies none of `ownedBlockIds` — the ok block is the body and is copied as
+// always.
+module type RangeCheckParamGuard
+	export var index as ParamCount
+	export var alias as RangedTypeAlias
+	export var headBlockId as BlockId
+	export var okBlockId as BlockId
+	// Every block this cascade OWNS — the head plus the `__rc_chk`s and the `__rc_panic` behind it, and NOT
+	// the `__rc_ok` continuation, which holds the body. A reader that declines the cascade declines exactly
+	// these, and it may not derive them for itself: "reachable from the head and not from the ok block" is a
+	// second CFG walk that would have to model a block with no terminator op falling through PHYSICALLY, and
+	// that is the modelling `docs/emitted-code-roadmap.md` files as a latent bug. This list is enumerated by
+	// the one place that cannot get it wrong — the emitter, out of the ids it minted.
+	export var ownedBlockIds as BlockIdArray
+
+	export static function create(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray) returns RangeCheckParamGuard
+		return Self{index: index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds}
+	end 'create'
+end 'RangeCheckParamGuard'
+
+module typealias RangeCheckParamGuardArray = Array with RangeCheckParamGuard
+
 // Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
 // function's file); `returnAliasName` is EMPTY unless the function returns a ranged INT alias.
 export type FunctionRangeChecks
@@ -2801,9 +2866,11 @@ export type FunctionRangeChecks
 	// P1.6-C — see `ValueInstanceAliasNameMap`. Empty for a function that constructs no generic instance,
 	// which is every function outside the generics corpus.
 	export var valueInstanceAliases as ValueInstanceAliasNameMap
+	// EC7 — see `ProvenIntRangeMap`. Empty for a function with no counted loop over constant bounds.
+	export var provenValueRanges as ProvenIntRangeMap
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, valueInstanceAliases ValueInstanceAliasNameMap) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, valueInstanceAliases: valueInstanceAliases}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, valueInstanceAliases ValueInstanceAliasNameMap, provenValueRanges ProvenIntRangeMap) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramSites: paramSites, valueInstanceAliases: valueInstanceAliases, provenValueRanges: provenValueRanges}
 	end 'create'
 end 'FunctionRangeChecks'
 

@@ -129,6 +129,12 @@ export typealias GlobalAliasValueSet = Set with ValueId
 // Never mutated.
 let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
 
+// ⭐ The `paramGuards` column of a function `InsertRangeChecks` emitted no parameter cascade for — which is
+// every function in the module bar the handful declaring a narrowed parameter. Shared for
+// `sharedEmptyGlobalAliasValues`' reason and with its invariant: it is never mutated, because the one
+// operation that would write to it (`recordParamGuard`) REPLACES the field first.
+let sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
+
 // The per-function counter that names lifted NON-CAPTURING closure literals (P1.5-A2a). A count with
 // no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
 // the ranged-type convention rather than pinned to a false ceiling.
@@ -568,6 +574,13 @@ export type IrFunction
 	// `Parser.borrowFactsOf` is the copy-on-write. Empty for a Std-phase function: the tier that reads
 	// it is upstream.
 	export var borrowFacts as BorrowFacts
+	// ⭐⭐ **THE ENTRY CASCADES `InsertRangeChecks` EMITTED FOR THIS FUNCTION'S NARROWED PARAMETERS (EC7)** —
+	// see `RangeCheckParamGuard`. EMPTY until that pass runs, and empty afterwards for every function with no
+	// narrowed parameter; it therefore survives `shallowCopy`/`relocateFunction` as the shared empty by
+	// construction, since every relocation happens at or before the lowering and this column is filled after
+	// it. Read by `InlineLeaves`, which is the only pass that can prove a cascade dead from OUTSIDE the
+	// function it stands in.
+	export var paramGuards as RangeCheckParamGuardArray
 
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
@@ -630,7 +643,8 @@ export type IrFunction
 			writesThroughParamMask: 0,
 			immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
 			assignsIntoAnExistingAggregate: false,
-			borrowFacts: sharedEmptyBorrowFacts
+			borrowFacts: sharedEmptyBorrowFacts,
+			paramGuards: sharedEmptyParamGuards
 		}
 	end 'create'
 
@@ -685,7 +699,8 @@ export type IrFunction
 			writesThroughParamMask: 0,
 			immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
 			assignsIntoAnExistingAggregate: false,
-			borrowFacts: sharedEmptyBorrowFacts
+			borrowFacts: sharedEmptyBorrowFacts,
+			paramGuards: sharedEmptyParamGuards
 		}
 	end 'createFromStd'
 
@@ -734,7 +749,12 @@ export type IrFunction
 			writesThroughParamMask: src.writesThroughParamMask,
 			immutableGlobalAliasValues: src.immutableGlobalAliasValues,
 			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
-			borrowFacts: src.borrowFacts
+			borrowFacts: src.borrowFacts,
+			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
+			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by
+			// `InsertRangeChecks`, which runs after the last of them. A copy that carried it would carry
+			// BLOCK IDS into a function whose blocks the copy has yet to be given.
+			paramGuards: sharedEmptyParamGuards
 		}
 	end 'shallowCopy'
 
@@ -756,6 +776,16 @@ export type IrFunction
 	// per-slot data it needs. No Std/backend pass reads `scope`, so resetting
 	// it frees the internal `vars` map + frame stacks while leaving a valid
 	// (empty) Scope in place.
+	// Record one emitted parameter cascade. COPY-ON-WRITE off the shared empty, exactly as the parser's
+	// value columns are and for their reason: the overwhelming majority of functions declare no narrowed
+	// parameter and must not pay an allocation to say so.
+	export function recordParamGuard(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray)
+		if self.paramGuards is sharedEmptyParamGuards 'stillShared'
+			self.paramGuards = RangeCheckParamGuardArray.create()
+		end 'stillShared'
+		self.paramGuards.push(RangeCheckParamGuard.create(index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds))
+	end 'recordParamGuard'
+
 	export function releaseScope()
 		self.scope.reset()
 	end 'releaseScope'

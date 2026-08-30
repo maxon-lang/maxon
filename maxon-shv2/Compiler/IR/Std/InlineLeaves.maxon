@@ -94,6 +94,9 @@ let InlineBodyLabel = b"__il_body"
 
 typealias SiteCount = int(0 to u64.max)
 
+// How many parameter cascades one callee carries — its arity at most, and one in nearly every case.
+typealias GuardCount = int(0 to u64.max)
+
 // The shared empties a `LeafInliner` starts with and NEVER writes to — `seedSiteBuffers` replaces them
 // with real arrays at the first site, and `valueIds` replaces the minter at the first splice. This pass
 // constructs one inliner per FUNCTION in the module and the overwhelming majority of functions hold no
@@ -104,6 +107,15 @@ typealias SiteCount = int(0 to u64.max)
 let sharedEmptySitePositions = BlockOpPosArray.create()
 let sharedEmptySiteCallees = FuncIndexArray.create()
 let sharedUnseededLeafMinter = ValueMinter.create(0)
+
+// ⭐ The two columns a splice that declines NOTHING never writes to — which is nearly every splice in the
+// module, since a callee with a narrowed parameter is a handful of them. Shared for the three empties
+// above's reason and with their invariant: `DeclinedGuards.decline` REPLACES both fields before its first
+// write, so neither is ever mutated. MEASURED on the scale ladder before they existed: **+34,575
+// `phase:inlineLeaves` allocations at rung 5, doubling per rung** — two arrays per splice, for a plan
+// almost every splice answers `false` from.
+let sharedEmptyDeclineColumn = BoolArray.create()
+let sharedEmptyForwardColumn = BlockIdArray.create()
 
 // --- what ONE op of a candidate body means for the leaf rule ---
 enum LeafOpRole
@@ -424,10 +436,18 @@ type InlineLeafStats
 	export var sitesRefusedBySize as SiteCount
 	export var sitesRefusedBySizeWithinLargerBudget as SiteCount
 	export var selfCallSites as SiteCount
+	// EC7 — how many spliced parameter cascades this compile proved dead and did not copy. Reported for
+	// `ReportedLargerLeafBudget`'s reason: it is the number the row is graded on, and it should come from the
+	// compile being asked about rather than be re-derived from a corpus later.
+	export var declinedParamGuards as SiteCount
 
 	export static function create() returns InlineLeafStats
-		return Self{inlinedSites: 0, sitesRefusedByPanicRule: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0}
+		return Self{inlinedSites: 0, sitesRefusedByPanicRule: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, declinedParamGuards: 0}
 	end 'create'
+
+	export function noteDeclinedParamGuard()
+		self.declinedParamGuards = self.declinedParamGuards + 1
+	end 'noteDeclinedParamGuard'
 
 	export function noteInlined()
 		self.inlinedSites = self.inlinedSites + 1
@@ -449,8 +469,107 @@ type InlineLeafStats
 	end 'noteSizeRefusal'
 end 'InlineLeafStats'
 
-// ⭐ The three columns ONE splice derives from its callee's block set, held together because every step
-// of the splice reads at least two of them.
+// ⭐⭐ **WHICH OF THE CALLEE'S PARAMETER CASCADES *THIS* CALL SITE PROVES DEAD (EC7) — AND THE TWO SHAPES
+// THE SPLICE NEEDS THAT ANSWER IN.**
+//
+// A narrowed parameter's entry cascade stands in front of EVERY caller, which is what makes it emittable at
+// all (`InsertRangeChecks.guardRangedParams`). Inlined, it is no longer in front of every caller — it is in
+// front of ONE, and that one may already know the argument is in range. Declining it here is the only place
+// that fact can be spent: the callee cannot see it and the caller cannot reach into the callee.
+//
+// ⚠ **THE BLOCKS ARE `InsertRangeChecks`' ENUMERATION, NOT A WALK OF OUR OWN** — see
+// `RangeCheckParamGuard.ownedBlockIds` for why re-deriving them from the CFG would mean modelling a
+// terminator-less block's physical fall-through, which is a known-shaky corner of this tier.
+type DeclinedGuards
+	// Callee `BlockId` -> is this block part of a cascade this site declined? Such a block is copied by
+	// NEITHER walk, exactly as a panic block is not — and this is asked FIRST, ahead of the panic test,
+	// because a declined cascade's `__rc_panic` is one of its blocks.
+	var declined as BoolArray
+	// Callee `BlockId` -> where control goes instead when the cascade beginning at this block is declined;
+	// every other id maps to itself. Written only for a declined cascade's HEAD.
+	var forward as BlockIdArray
+	// The callee's block-id space — held rather than spent at construction, because the columns are seeded
+	// only if something is actually declined.
+	var blockIdSpace as BlockId
+	// The number of cascades, which BOUNDS the forwarding chase below: cascades chain (the k-th guard
+	// splits the (k-1)-th's `__rc_ok`), so a declined guard's continuation can itself be a declined head.
+	var guardCount as GuardCount
+	// ⭐ Has anything been declined? It is ALSO the seeded bit for the two columns, and they are one fact:
+	// the columns are written in exactly one place and it is the first decline.
+	export var anyDeclined as bool
+
+	// ⚠ `export` for ONE reader that is not a method: `sharedDeclinesNothing`, a module-level `let`, which
+	// a file-private constructor may not initialize.
+	export static function create(blockIdSpace BlockId, guardCount GuardCount) returns DeclinedGuards
+		return Self{declined: sharedEmptyDeclineColumn, forward: sharedEmptyForwardColumn, blockIdSpace: blockIdSpace, guardCount: guardCount, anyDeclined: false}
+	end 'create'
+
+	function decline(guard RangeCheckParamGuard)
+		if not self.anyDeclined 'stillShared'
+			self.seedColumns()
+			self.anyDeclined = true
+		end 'stillShared'
+
+		try self.forward.set(guard.headBlockId, value: guard.okBlockId) otherwise panic("DeclinedGuards.decline: cascade head {guard.headBlockId} is outside the callee's block-id space")
+		for blockId in guard.ownedBlockIds 'eachOwnedBlock'
+			try self.declined.set(blockId, value: true) otherwise panic("DeclinedGuards.decline: cascade block {blockId} is outside the callee's block-id space")
+		end 'eachOwnedBlock'
+	end 'decline'
+
+	// COPY-ON-WRITE off the two shared empties, at the first decline and nowhere else. `forward` is seeded
+	// to the IDENTITY so that "this block is not forwarded" needs no second column to say so.
+	function seedColumns()
+		var declineColumn = BoolArray.create()
+		declineColumn.resize(self.blockIdSpace)
+		self.declined = declineColumn
+		var forwardColumn = BlockIdArray.create()
+		forwardColumn.resize(self.blockIdSpace)
+		for id in 0 upto self.blockIdSpace 'eachBlockId'
+			try forwardColumn.set(id, value: id) otherwise panic("DeclinedGuards.seedColumns: forwardColumn.set OOB at {id} inside the space it was just resized to")
+		end 'eachBlockId'
+		self.forward = forwardColumn
+	end 'seedColumns'
+
+	export function isDeclined(calleeBlockId BlockId) returns bool
+		if not self.anyDeclined 'noColumnToRead'
+			return false
+		end 'noColumnToRead'
+
+		return try self.declined.get(calleeBlockId) otherwise panic("DeclinedGuards.isDeclined: callee block id {calleeBlockId} is outside the {self.declined.count()}-block id space this plan was built over")
+	end 'isDeclined'
+
+	// Where control ends up entering, following as many declined cascades as chain off `id`. The chase is
+	// BOUNDED by the cascade count and panics rather than spinning: `forward` is written only at heads and
+	// only ever forward along one chain, so a cycle would mean the record is not the chain it claims to be —
+	// and the cost of believing it would be a splice branching into a block it never copied.
+	export function entryFrom(id BlockId) returns BlockId
+		if not self.anyDeclined 'noColumnToRead'
+			return id
+		end 'noColumnToRead'
+
+		var target = id
+		for _ in 0 upto self.guardCount + 1 'chase'
+			let next = try self.forward.get(target) otherwise panic("DeclinedGuards.entryFrom: block id {target} is outside the {self.forward.count()}-block id space this plan was built over")
+			if next == target 'settled'
+				return target
+			end 'settled'
+
+			target = next
+		end 'chase'
+
+		panic("DeclinedGuards.entryFrom: the forwarding chain from block {id} is longer than the {self.guardCount} cascade(s) that can be on it — a cascade's `__rc_ok` has been recorded as its own head")
+	end 'entryFrom'
+end 'DeclinedGuards'
+
+// ⭐ THE ONE PLAN EVERY SPLICE INTO A CALLEE WITH NO NARROWED PARAMETER ANSWERS FROM — which is the
+// overwhelming majority of them. `sharedUnseededLeafMinter`'s pattern and its invariant: `decline` is the
+// only thing that writes to a plan, and `declinedGuards` hands this one back exactly when the loop that
+// would call it has nothing to iterate. Its `blockIdSpace`/`guardCount` are 0 and unread, because both
+// columns and the chase are gated on `anyDeclined`, which is false here for ever.
+let sharedDeclinesNothing = DeclinedGuards.create(0, guardCount: 0)
+
+// ⭐ The columns ONE splice derives from its callee's block set, held together because every step of the
+// splice reads at least two of them.
 type SpliceBlocks
 	// Callee `BlockId` → the caller `BlockId` a target resolves to: a COPIED block's fresh id, or — for a
 	// panic block — the splice's single slow arm.
@@ -463,13 +582,18 @@ type SpliceBlocks
 	// up positionally with the same skip rather than by a second id lookup.
 	export var copiedRefs as BlockRefArray
 	export var hasPanicBlock as bool
+	// EC7 — the cascades this site declined. It rides here so the MINT walk and the COPY walk skip the same
+	// blocks off the same column rather than each re-deciding it; that pairing is positional
+	// (`copiedRefs`), and two answers to "is this block copied?" would silently pair a body with the wrong
+	// fresh block.
+	export var guards as DeclinedGuards
 
-	static function create(blockIdSpace BlockId) returns SpliceBlocks
+	static function create(blockIdSpace BlockId, guards DeclinedGuards) returns SpliceBlocks
 		var blockSubst = BlockIdArray.create()
 		blockSubst.resize(blockIdSpace)
 		var isPanic = BoolArray.create()
 		isPanic.resize(blockIdSpace)
-		return Self{blockSubst: blockSubst, isPanic: isPanic, copiedRefs: BlockRefArray.create(), hasPanicBlock: false}
+		return Self{blockSubst: blockSubst, isPanic: isPanic, copiedRefs: BlockRefArray.create(), hasPanicBlock: false, guards: guards}
 	end 'create'
 
 	export function targetOf(calleeBlockId BlockId) returns BlockId
@@ -526,10 +650,11 @@ function inlineWithNameIndex(project Project, module StdModule, byName FunctionN
 	let sizeRefusals = stats.sitesRefusedBySize
 	let sizeRefusalsAtLargerBudget = stats.sitesRefusedBySizeWithinLargerBudget
 	let selfCalls = stats.selfCallSites
+	let declinedGuards = stats.declinedParamGuards
 	let calleesPanicRefused = plan.panicWithStoreCount
 	let calleesSizeRefused = plan.tooManyOpsCount
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
-	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {panicRefusals} refused-by-panic-rule ({calleesPanicRefused} callee(s)), {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s)")
+	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {panicRefusals} refused-by-panic-rule ({calleesPanicRefused} callee(s)), {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {declinedGuards} spliced parameter cascade(s) declined as provably dead")
 end 'inlineWithNameIndex'
 
 // Per-caller splicer: owns the function it rewrites plus the fresh-ValueId counter every copied body
@@ -749,7 +874,7 @@ type LeafInliner
 		end 'arity'
 
 		let subst = self.buildValueColumn(calleeFunc, calleeIndex: calleeIndex, args: args)
-		let blocks = self.mintCopiedBlocks(calleeFunc)
+		let blocks = self.mintCopiedBlocks(calleeFunc, guards: self.declinedGuards(calleeFunc, args: args))
 		// ⭐ THE SLOW ARM — one per splice, minted only when the callee has a panic block to redirect.
 		// A panic block always HAS a predecessor (it is a guard's `condBranch` target, or a user
 		// `panic(…)`'s own block), so this cannot mint an arm nothing branches to; and were it ever to,
@@ -796,6 +921,82 @@ type LeafInliner
 		return subst
 	end 'buildValueColumn'
 
+	// ⭐⭐ **THE CASCADES THIS SITE DECLINES.** Empty for every callee with no narrowed parameter, which is
+	// almost all of them — and that empty `paramGuards` list is what keeps the cost off the common splice:
+	// the loop below runs zero times and no proof is asked.
+	function declinedGuards(calleeFunc IrFunction, args ValueIdArray) returns DeclinedGuards
+		if calleeFunc.paramGuards.isEmpty() 'noNarrowedParameter'
+			return sharedDeclinesNothing
+		end 'noNarrowedParameter'
+
+		var declined = DeclinedGuards.create(calleeFunc.nextBlockId, guardCount: calleeFunc.paramGuards.count())
+		for guard in calleeFunc.paramGuards 'eachGuard'
+			if not self.callerProvesArg(args, guard: guard) 'notProvenHere'
+				continue
+			end 'notProvenHere'
+
+			declined.decline(guard)
+			self.stats.noteDeclinedParamGuard()
+		end 'eachGuard'
+		return declined
+	end 'declinedGuards'
+
+	// ⭐⭐ **DOES *THIS* FRAME ALREADY KNOW THE ARGUMENT IS IN THE CALLEE'S RANGE? — THE TWO PROOFS, AND
+	// THERE ARE EXACTLY TWO.** Both are compared with the containment every range door in the compiler
+	// already uses (`TypeRules`), so this pass reaches no verdict of its own and cannot come to disagree
+	// with the guard it is declining.
+	function callerProvesArg(args ValueIdArray, guard RangeCheckParamGuard) returns bool
+		let arg = try args.get(guard.index) otherwise panic("LeafInliner.callerProvesArg: a callee guarding parameter {guard.index} is called from '{String.from(self.func.name)}' with {args.count()} argument(s) — the arity check has already refused a mismatch")
+		return self.callerParamProves(arg, alias: guard.alias) or self.countedLoopProves(arg, alias: guard.alias)
+	end 'callerProvesArg'
+
+	// **PROOF ONE: THE ARGUMENT IS ONE OF THIS FUNCTION'S OWN NARROWED PARAMETERS.** Its cascade stands at
+	// this function's entry, which dominates every call the body makes, so the value in hand has already
+	// passed a range — and if that range lies inside the callee's, the callee's cascade cannot fail either.
+	// This is the shape EC6's survey measured at 3 of `regMaskContains`' 14 sites (`hintIsTakeable`
+	// forwarding a `RegNum` parameter to two more calls, and `assertOneCallClobber`).
+	//
+	// ⚠ **A REASSIGNED PARAMETER IS EXCLUDED, AND IT IS NOT A CORNER CASE.** `reassignedParamMask` names
+	// the parameters that arrive as a CELL ADDRESS (PBR-2): the range describes what the cell HOLDS, the
+	// body may store a new value into it, and the entry guard reads THROUGH the cell rather than checking
+	// the pointer (`GuardedOperand.pointeeOf`). The id would still match here, and matching it would spend
+	// a proof about the cell's arriving contents on whatever the body last wrote into it.
+	//
+	// ⚠ A LINEAR SCAN over this function's own cascades, which is one per narrowed parameter and never
+	// more than its arity — the bound `entryGuardAlreadyCovers` and `paramAliasOf` already carry.
+	function callerParamProves(arg ValueId, alias RangedTypeAlias) returns bool
+		if arg >= self.func.paramCount 'notAParameterOfThisFrame'
+			return false
+		end 'notAParameterOfThisFrame'
+		if maskHasParam(self.func.reassignedParamMask, param: arg) 'arrivesAsACellAddress'
+			return false
+		end 'arrivesAsACellAddress'
+
+		for ownGuard in self.func.paramGuards 'eachOwnGuard'
+			if ownGuard.index == arg 'thisParameter'
+				return rangeCoversRange(alias, source: ownGuard.alias)
+			end 'thisParameter'
+		end 'eachOwnGuard'
+
+		return false
+	end 'callerParamProves'
+
+	// **PROOF TWO: A COUNTED LOOP PROVED AN INTERVAL FOR IT (EC7 layer 1).** `for r in 0 upto
+	// RegisterFileSize` gives its counter a range nothing NAMES, which the parser records against this
+	// function's own `ValueId` numbering and `LowerMaxonToStd` carries across verbatim (that pass does not
+	// renumber). It is the proof the four hottest `regMaskContains` sites need and the one no declared type
+	// can supply — the counter's written type is the bare `int` its bounds were written at.
+	//
+	// ⚠ **THE PROBE IS MADE HERE, BEHIND A CALLEE THAT ACTUALLY GUARDS A PARAMETER**, and not hoisted into
+	// the per-caller constructor: a `LeafInliner` is built for every function in the module and nearly none
+	// of them splices anything that guards anything, so a probe up there would be one map lookup per
+	// function for an answer almost nobody spends.
+	function countedLoopProves(arg ValueId, alias RangedTypeAlias) returns bool
+		let checks = try self.project.rangeChecks.get(self.func.name) otherwise return false
+		let proven = try checks.provenValueRanges.get(arg) otherwise return false
+		return rangeCoversIntBounds(alias, low: proven.low, high: proven.high)
+	end 'countedLoopProves'
+
 	function calleeEntryBlockId(calleeFunc IrFunction) returns BlockId
 		let entryRef = try calleeFunc.blockRefs.get(0) otherwise panic("LeafInliner.calleeEntryBlockId: '{String.from(calleeFunc.name)}' has no entry block, which `scanLeafBody` refuses")
 		let entry = try self.module.blocks.get(entryRef) otherwise panic("LeafInliner.calleeEntryBlockId: entry blockRef {entryRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
@@ -807,18 +1008,30 @@ type LeafInliner
 	//
 	// A panic block's column entry stays 0 until `mintSlowArm` fills it; nothing reads it in between,
 	// because the ops that name it are copied afterwards.
-	function mintCopiedBlocks(calleeFunc IrFunction) returns SpliceBlocks
-		var blocks = SpliceBlocks.create(calleeFunc.nextBlockId)
+	function mintCopiedBlocks(calleeFunc IrFunction, guards DeclinedGuards) returns SpliceBlocks
+		var blocks = SpliceBlocks.create(calleeFunc.nextBlockId, guards: guards)
+		let entryId = guards.entryFrom(self.calleeEntryBlockId(calleeFunc))
 		for i in 0 upto calleeFunc.blockRefs.count() 'eachBlock'
 			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("LeafInliner.mintCopiedBlocks: blockRefs.get OOB at {i}")
 			let calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("LeafInliner.mintCopiedBlocks: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
+			// ⭐ **A DECLINED CASCADE'S BLOCKS ARE NOT COPIED, AND THIS IS ASKED AHEAD OF THE PANIC TEST**
+			// (EC7): its `__rc_panic` is one of them, and a slow arm minted to catch a panic nothing can
+			// reach would be a dead block holding a REAL CALL — enough to keep the callee alive through
+			// dead-function elimination and to give this frame outgoing-argument space for a call that
+			// never runs.
+			if guards.isDeclined(calleeBlock.id) 'insideADeclinedCascade'
+				continue
+			end 'insideADeclinedCascade'
 			if self.blockHoldsAPanic(calleeBlock, calleeFunc: calleeFunc) 'panicBlock'
 				blocks.hasPanicBlock = true
 				try blocks.isPanic.set(calleeBlock.id, value: true) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 				continue
 			end 'panicBlock'
 
-			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if i == 0 else calleeBlock.label)
+			// The label marks the block the splice ENTERS, which is the callee's entry only while no cascade
+			// in front of it was declined — `__il_body` is a claim about this copy, not about the callee, so
+			// it follows the entry rather than position 0.
+			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label)
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("LeafInliner.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
 			blocks.copiedRefs.push(freshRef)
@@ -826,8 +1039,34 @@ type LeafInliner
 			// where its ops were written. `addBlock` pushed an empty entry, parallel to `blocks`.
 			self.carryBlockSourceInfo(calleeBlockRef, to: freshRef)
 		end 'eachBlock'
+
+		self.mapDeclinedCascadeHeads(calleeFunc, blocks: blocks, guards: guards)
 		return blocks
 	end 'mintCopiedBlocks'
+
+	// ⭐⭐ **EVERY EDGE INTO A DECLINED CASCADE'S HEAD LANDS ON THE BLOCK THAT CASCADE WOULD HAVE PASSED
+	// CONTROL TO, and it is spelled as a `blockSubst` entry rather than as a rewrite of the edges.** The
+	// substitution column is what `remapStdOpForClone` reads for every terminator it clones AND what
+	// `targetOf` answers the splice's own entry branch from — so writing the redirect there redirects both,
+	// and there is no list of edge kinds to keep in step.
+	//
+	// The cascade's OTHER blocks keep the `0` a resized column starts with, and nothing reads it: a
+	// `__rc_chk` is named only by its cascade's head or by the `__rc_chk` before it, and the `__rc_panic`
+	// only by those — every one of them declined, and none of them copied.
+	function mapDeclinedCascadeHeads(calleeFunc IrFunction, blocks SpliceBlocks, guards DeclinedGuards)
+		if not guards.anyDeclined 'nothingDeclined'
+			return
+		end 'nothingDeclined'
+
+		for guard in calleeFunc.paramGuards 'eachGuard'
+			if not guards.isDeclined(guard.headBlockId) 'stillEmitted'
+				continue
+			end 'stillEmitted'
+
+			let landing = guards.entryFrom(guard.okBlockId)
+			try blocks.blockSubst.set(guard.headBlockId, value: blocks.targetOf(landing)) otherwise panic("LeafInliner.mapDeclinedCascadeHeads: cascade head {guard.headBlockId} of '{String.from(calleeFunc.name)}' is outside its own block-id space")
+		end 'eachGuard'
+	end 'mapDeclinedCascadeHeads'
 
 	// ⭐⭐ **THE PANIC REDIRECT.** One block per splice that re-issues the ORIGINAL call — same callee,
 	// same argument values, a fresh result — and branches to the continuation carrying it. Every panic
@@ -898,6 +1137,9 @@ type LeafInliner
 		for i in 0 upto calleeFunc.blockRefs.count() 'eachBlock'
 			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("LeafInliner.copyBodies: blockRefs.get OOB at {i}")
 			let calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("LeafInliner.copyBodies: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
+			if blocks.guards.isDeclined(calleeBlock.id) 'insideADeclinedCascade'
+				continue
+			end 'insideADeclinedCascade'
 			if blocks.isPanicBlock(calleeBlock.id) 'panicBlock'
 				continue
 			end 'panicBlock'

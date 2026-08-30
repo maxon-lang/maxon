@@ -65,11 +65,9 @@ func @probe {
     x64.storeSlotReg slot0, xmm6
     x64.storeSlotReg slot1, xmm7
     x64.cmpRegImm32 rcx, -1000000000
-    x64.setccReg less, rax
     x64.jcc less, __rc_panic#2
   __rc_chk#3:
     x64.cmpRegImm32 rcx, 1000000000
-    x64.setccReg greater, rdx
     x64.jcc lessEqual, __rc_ok#1
   __rc_panic#2:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
@@ -84,22 +82,16 @@ func @probe {
     x64.movsdRegRip xmm6, [rip + __fconst_5]
     x64.movsdRegRip xmm7, [rip + __fconst_6]
   __il_body:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __il_slow
-  __rc_chk#10:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __il_slow
-  __rc_ok#9:
     x64.leaRegRegImm32 rax, rcx, 1
     x64.cmpRegImm32 rax, -1000000000
     x64.jcc less, __il_slow
-  __rc_chk#12:
+  __rc_chk#10:
     x64.cmpRegImm32 rax, 1000000000
-    x64.jcc lessEqual, __rc_ok#11
+    x64.jcc lessEqual, __rc_ok#9
   __il_slow:
     x64.callDirect work
     x64.jmp __il_cont
-  __rc_ok#11:
+  __rc_ok#9:
     x64.movRegReg r8, rax
   __il_cont:
     x64.mulsdRegReg xmm7, xmm7, xmm6

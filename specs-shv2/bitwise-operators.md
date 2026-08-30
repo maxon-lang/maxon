@@ -1587,3 +1587,35 @@ end 'main'
 ```exitcode
 42
 ```
+
+
+<!-- test: bitwise-operators.a-counted-loop-count-is-not-proven -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⛔⛔ **THE COUNT A COUNTED LOOP COULD PROVE AND DELIBERATELY DOES NOT — AND THIS FRAGMENT IS THE DECISION
+(EC7).** `i` here is provably `0 … 63`, exactly the counts the instruction takes as written, but it DENOTES
+no alias — its written type is the bare `int` its bounds were written at — so `shiftCountIsProvenUnguarded`
+answers `undeclared` for it and the whole `(count and -64) != 0` saturation is emitted for a case that cannot
+happen.
+
+EC7 gives that counter an interval, and reading it here is SOUND and deletes those seven ops. It was built
+and TIMED, and the reading came back INSIDE THE NOISE: with the join the self-compile read **71.9 / 71.9 s**
+against **71.0 / 71.0 s** without it — but two LOGICALLY IDENTICAL compilers, differing only in comments and
+one retired private method, read **68.5 / 68.8 s** against that same 71.0. The compiler's own code layout
+moves further under an unrelated edit than the elision does. The corpus's counted shift counts are few and
+cold, so nothing here can settle it; it stays out until a program that pays for them exists, and the
+saturation below is what says so — a paragraph nobody checks would not.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+  var t = 0 as Integer
+  for i in 0 upto 64 'l'
+    t = t + (1 shl i)
+  end 'l'
+  print("t={t}\n")
+  return 0
+end 'main'
+```
+```stdout
+t=-1
+```

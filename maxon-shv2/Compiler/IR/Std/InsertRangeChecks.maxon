@@ -429,7 +429,7 @@ type RangeCheckEmitter
 	function processSite(site RangeCheckSite, filePath FilePath)
 		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
+			guard(alias) then _ = self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
 		end 'verdict'
 	end 'processSite'
 
@@ -518,9 +518,86 @@ type RangeCheckEmitter
 		let paramValue = rangedParamValue(site)
 		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then self.emitGuardAt(self.guardSiteAt(entryId, stdOpPos: self.func.paramCount), operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
+			guard(alias) then self.emitParamGuard(site, alias: alias, entryId: entryId, filePath: filePath)
 		end 'verdict'
 	end 'guardRangedParam'
+
+	// ⭐⭐ **THE CASCADE, AND THE RECORD OF WHERE IT LANDED (EC7).** A parameter guard is the ONE guard this
+	// pass emits that a LATER pass can prove dead, because it is the one whose premise belongs to somebody
+	// else: the caller. `InlineLeaves` splices this body into a frame that may already know the argument is
+	// in range — from its own entry guard, or from a counted loop's interval — and a cascade it can identify
+	// is a cascade it can decline to copy. Identifying it is what nothing recorded before this row: once
+	// emitted, a guard is a compare, a branch and a panicking block, which is also what a hand-written
+	// `if x < 0 'bad' panic(…) end` is.
+	//
+	// ⚠ **THE HEAD IS READ BEFORE THE EMIT AND THE OK BLOCK AFTER IT, and neither is `entryId`.** A second
+	// ranged parameter's cascade splits the FIRST one's `__rc_ok` (`guardSiteAt` resolves a site to its
+	// block's current chain END), so the k-th guard's head is the (k-1)-th's ok block and only the first
+	// one's head is the entry. Recording `entryId` for all of them would tell the inliner that every cascade
+	// begins where control enters, and it would skip the first guard's compare while jumping into the
+	// second's.
+	//
+	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt` hands back
+	// the head it was given, which is how that says so without a flag.
+	function emitParamGuard(site RangeCheckParamSite, alias RangedTypeAlias, entryId BlockId, filePath FilePath)
+		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount)
+		let headId = guardSite.block.id
+		self.requireGuardHeadHoldsOnlyParams(guardSite)
+		// ⭐ **THE ID SPACE BEFORE AND AFTER IS WHAT ENUMERATES THE CASCADE'S OWN BLOCKS.** Everything
+		// `emitGuardAt` mints — the `__rc_ok` continuation, the `__rc_panic`, one `__rc_chk` per extra bound
+		// — goes through `IrModule.addBlock`, which hands out `func.nextBlockId` and bumps it. So the ids in
+		// `[firstMintedId, nextBlockId)` are exactly this guard's, in one subtraction and with no second
+		// list to keep in step with the three places that mint them.
+		let firstMintedId = self.func.nextBlockId
+		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
+		if ok.id == headId 'bothBoundsElided'
+			return
+		end 'bothBoundsElided'
+
+		var owned = BlockIdArray.create()
+		owned.push(headId)
+		for mintedId in firstMintedId upto self.func.nextBlockId 'eachMintedBlock'
+			if mintedId != ok.id 'notTheContinuation'
+				owned.push(mintedId)
+			end 'notTheContinuation'
+		end 'eachMintedBlock'
+		self.func.recordParamGuard(site.index, alias: alias, headBlockId: headId, okBlockId: ok.id, ownedBlockIds: owned)
+	end 'emitParamGuard'
+
+	// ⛔⛔ **THE OPS THE CASCADE'S HEAD KEEPS MUST BE `param` OPS AND NOTHING ELSE — AND SINCE EC7 A BREACH
+	// IS A DELETION RATHER THAN A MISPLACEMENT.** `guardSiteAt` anchors at `paramCount`, which is exactly
+	// past the incoming-register captures `LowerMaxonToStd.emitParams` appends before any body op, so the
+	// head this split leaves holds precisely those. `InlineLeaves` DECLINES to copy that head when it can
+	// prove the cascade dead, and a `param` op is the one op a splice does not need copied (it becomes the
+	// call's argument). Anything ELSE that ever ends up in front of the guard would previously have been a
+	// guard placed one op late; it is now an op the splice silently drops. This says so where the assumption
+	// is made instead of leaving it to the shape of another pass.
+	//
+	// ⚠ It walks only the guard's OWN prefix (`site.position`), which is `paramCount` for the first cascade
+	// in a block and 0 for every chained one — the k-th guard splits the (k-1)-th's continuation, which was
+	// minted empty. So the cost is one arity-bounded walk per guarded function, not per op.
+	function requireGuardHeadHoldsOnlyParams(site GuardSite)
+		for pos in 0 upto site.position 'eachPrefixOp'
+			let opIdx = try site.block.opRefs.get(pos) otherwise panic("requireGuardHeadHoldsOnlyParams: block {site.block.id} of '{String.from(self.func.name)}' has no op at position {pos}, inside the prefix `guardSiteAt` resolved")
+			match self.opAtIndex(opIdx) 'op'
+				const to ret then self.refuseNonParamAheadOfAGuard(pos)
+				param then break 'op'
+				call to osSetEvent then self.refuseNonParamAheadOfAGuard(pos)
+			end 'op'
+		end 'eachPrefixOp'
+	end 'requireGuardHeadHoldsOnlyParams'
+
+	// The refusal both non-`param` arms share — ONE message, because they say one thing.
+	function refuseNonParamAheadOfAGuard(pos BlockOpPos)
+		panic("requireGuardHeadHoldsOnlyParams: op {pos} of '{String.from(self.func.name)}'s entry block stands AHEAD of its parameter guard and is not a `param` op — the guard is anchored at `paramCount` on the premise that the first `paramCount` ops are the incoming-register captures, and `InlineLeaves` drops that whole block when it declines the cascade")
+	end 'refuseNonParamAheadOfAGuard'
+
+	// Every op read on this pass's mutating paths goes through here, for `InlineLeaves.opAtIndex`'s reason:
+	// a `self.module.ops.get(...)` written inline BORROWS `module`, and this pass appends ops and blocks to
+	// it in the next breath — which the self-compile refuses and the bootstrap does not.
+	function opAtIndex(opIdx OpIndex) returns StdOp
+		return try self.module.ops.get(opIdx) otherwise panic("RangeCheckEmitter.opAtIndex: op index {opIdx} named by a block of '{String.from(self.func.name)}' is not in module.ops")
+	end 'opAtIndex'
 
 	// Is this parameter an address or a value? `reassignedParamMask` is the ABI's own answer — the same bit
 	// `LowerMaxonToStd` types the slot from and `transferFuncs` shapes the callee's signature with — so this
@@ -627,7 +704,7 @@ type RangeCheckEmitter
 
 			match self.retBlockOf(site) 'ret'
 				notFound then break 'ret'
-				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain)
+				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -704,14 +781,20 @@ type RangeCheckEmitter
 	// Split the site's block, emit the panic block, thread the compare cascade between them, and extend
 	// `chain` onto the continuation so the NEXT guard on this path lands after this one (see `GuardChain`
 	// for why only an alias-named site has a chain to extend).
-	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain)
+	//
+	// ⭐ **IT HANDS BACK THE BLOCK THE IN-RANGE PATH CONTINUES IN**, which is the guard's `__rc_ok` when one
+	// was emitted and the site's own head block when both bounds elided — the true answer in either case, not
+	// a presence flag wearing a block's clothes. Two of the three callers have no use for it; `emitParamGuard`
+	// is the one that does, because *where the cascade ends* is half of the record `InlineLeaves` needs to
+	// skip it (EC7).
+	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain) returns IrBlock
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
 		if checks.isEmpty() 'noBoundNeeded'
 			// Both bounds elide (a signed range whose only stored bound is a negative upper) — nothing to
 			// guard. Matches the bootstrap's both-elided path, which returns the value unchecked. Nothing was
 			// split, so the chain end is where it was.
-			return
+			return site.block
 		end 'noBoundNeeded'
 
 		// ⚠ **THE SPLIT ADVANCES THE CHAIN INSIDE ITSELF, BEFORE `emitPanicBlock`, AND THE ORDER IS
@@ -725,6 +808,7 @@ type RangeCheckEmitter
 		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
 		let panicBlock = self.emitPanicBlock(message)
 		self.emitCascade(site.block, value: compared, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
+		return ok
 	end 'emitGuardAt'
 
 	// ⭐⭐ **THE VALUE THE CASCADE ACTUALLY COMPARES — see `GuardedOperand` for why a parameter can be a
