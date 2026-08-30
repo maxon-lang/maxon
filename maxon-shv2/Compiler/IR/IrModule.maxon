@@ -82,6 +82,16 @@ export type IrModule uses Op
 	// question of the machine has a byte-identical import table.
 	export var usesCpuCount as bool = false
 
+	// ⭐ **DOES THIS MODULE ASK TO BE PUT AT BACKGROUND PRIORITY?** Set once by the driver from
+	// `RuntimeUsage.usesBackgroundPriority`, and read in exactly one place — the PE writer's OPTIONAL
+	// TRAILING IMPORT BAND, which is where `SetPriorityClass` and `GetPriorityClass` live. `usesCpuCount`'s
+	// sibling one producer over: the bits answer one question between them (*does this image reference the
+	// imports at the end of `IatSlot`*), and the band is emitted when ANY of them says yes.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that never asks
+	// to be de-prioritised has a byte-identical import table.
+	export var usesBackgroundPriority as bool = false
+
 	// ⭐ **DOES THIS MODULE ASK HOW MUCH CPU TIME ITS OWN THREAD HAS USED?** Set once by the driver from
 	// `RuntimeUsage.usesThreadCpuTicks`, and read in exactly one place — the PE writer's OPTIONAL TRAILING
 	// IMPORT BAND, which is where `QueryThreadCycleTime` lives. `usesCpuCount`'s twin one producer over: the

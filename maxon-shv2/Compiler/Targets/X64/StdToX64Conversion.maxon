@@ -282,6 +282,15 @@ let AllProcessorGroups = 0xFFFF
 // a hand-written 0xFFFFFFFFFFFFFFFE is sixteen digits nothing checks.
 let CurrentThreadPseudoHandle = 0 - 2
 
+// `GetCurrentProcess()`'s pseudo-handle, `(HANDLE)-1`. Like the thread one above it is a CONSTANT rather
+// than a handle to open or close, so materializing it inline costs neither an import nor a close.
+let CurrentProcessPseudoHandle = 0 - 1
+
+// `BELOW_NORMAL_PRIORITY_CLASS`. Deliberately NOT `IDLE_PRIORITY_CLASS`: idle work can be starved for as
+// long as anything else wants the CPU, and the harnesses that ask for this bound how long they will wait —
+// so a long starve would surface as a HARNESS failure rather than as the busy machine it actually is.
+let BelowNormalPriorityClass = 0x4000
+
 // The two WriteFile outgoing stack SLOTS `__print_string`'s frame reserves, past the shadow space:
 // slot 0 = the 5th argument `lpOverlapped` (NULL), slot 1 = a scratch DWORD `lpNumberOfBytesWritten`
 // points at (WriteFile writes the count there; it must be a valid pointer, not NULL). These are SLOT
@@ -1006,7 +1015,7 @@ type StdToX64Lowering
 			atomicCas to currentThreadToken gives 0
 			// G1: `TlsAlloc` takes none, `TlsSetValue` and `SetEvent` take two and one — all register-only under
 			// Win64 — and the `gs:` slot read is a single inline load that makes no call at all.
-			tlsAlloc to osSetEvent gives 0
+			tlsAlloc to osEnterBackgroundPriority gives 0
 			const to param gives 0
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
@@ -1257,7 +1266,7 @@ type StdToX64Lowering
 				// F2: the two atomics and the thread token are value-producing body ops, never terminators.
 				atomicCas to currentThreadToken then break 'term'
 				// G1: the TLS ops and the event signal are body ops, never terminators — nothing to fuse.
-				tlsAlloc to osSetEvent then break 'term'
+				tlsAlloc to osEnterBackgroundPriority then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1359,7 +1368,7 @@ type StdToX64Lowering
 				// G1: three of the four are import calls and clobber flags; the `gs:` slot read declares
 				// `clobbersFlags: false` and so cannot be the last flag-writer either. None is the compare, so the
 				// scan stops — declining to fuse is always safe.
-				tlsAlloc to osSetEvent then break 'isTheCompare'
+				tlsAlloc to osEnterBackgroundPriority then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1566,6 +1575,7 @@ type StdToX64Lowering
 			tlsSetValue(indexId, valueId) then self.lowerTlsSetValue(indexId, valueId: valueId, dstBlock: dstBlock)
 			tlsSlotLoad(resultId, tebOffsetId) then self.lowerTlsSlotLoad(resultId, tebOffsetId: tebOffsetId, dstBlock: dstBlock)
 			osSetEvent(handleId) then self.lowerOsSetEvent(handleId, dstBlock: dstBlock)
+			osEnterBackgroundPriority(resultId) then self.lowerOsEnterBackgroundPriority(resultId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1633,7 +1643,7 @@ type StdToX64Lowering
 			// F2: all three are value-producing body ops. The arm64 CAS/RMW retry loop BRANCHES, but it does so
 			// inside one macro-op's encoder, never between IR blocks — the same division `memFill` states above.
 			atomicCas to currentThreadToken then panic("lowerStdToX64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
-			tlsAlloc to osSetEvent then panic("lowerStdToX64: a TLS op or an event signal appeared as a block terminator (lowering bug — none of the four is a terminator)")
+			tlsAlloc to osEnterBackgroundPriority then panic("lowerStdToX64: a TLS op, an event signal or the priority door appeared as a block terminator (lowering bug — none of them is a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -3322,6 +3332,31 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryThreadCycleTime)))
 	end 'lowerOsThreadCpuTicks'
 
+	// ⭐⭐ **`osEnterBackgroundPriority(result)` ⇒ `SetPriorityClass((HANDLE)-1, 0x4000)` THEN
+	// `GetPriorityClass((HANDLE)-1)`** — two `iatCall`s, and the second one is the answer.
+	//
+	// ⚠ **THE `BOOL` FROM THE SET IS DISCARDED AND THE ANSWER COMES FROM A FRESH READ.** That is not
+	// redundancy: capturing RAX after the SET would report the value we asked for, which a lowering that
+	// called nothing could report equally well. Reading it back makes the result a fact about the process
+	// rather than about this function's intentions — MEASURED, where removing the SET moves the answer from
+	// 16384 to 32.
+	//
+	// ⛔ **THAT MEASUREMENT ONLY SHOWS UP FROM A NORMAL-PRIORITY PARENT.** Under `spec-test` the harness has
+	// already de-prioritised itself and the test binary inherits it, so the same sabotage passes 2/2. Any
+	// edit here owes the hand check in `specs-shv2/process-background-priority.md`, not a suite run.
+	//
+	// ⭐ Setting a priority class needs no privilege in the LOWERING direction (only RAISING above normal
+	// can be refused), so the SET cannot silently fail here and the READ cannot disagree with it.
+	function lowerOsEnterBackgroundPriority(resultId ValueId, dstBlock IrBlock)
+		self.requireWin64Import("osEnterBackgroundPriority")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: CurrentProcessPseudoHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: BelowNormalPriorityClass))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetPriorityClass)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: CurrentProcessPseudoHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetPriorityClass)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsEnterBackgroundPriority'
+
 	// ⭐ **THE x64-WINDOWS GATE FOR EVERY OP THAT LOWERS TO A WIN32 IMPORT, ASKED ONCE.** All of them are
 	// x64-windows only, and `SemanticCheck.requireTargetSupportsCallee` refuses such a program at its own
 	// source span (E3104) long before lowering — so this is the backstop for a compiler bug that got one
@@ -4156,7 +4191,7 @@ type StdToX64Lowering
 			// F2: nor is an atomic or a thread-token read.
 			atomicCas to currentThreadToken gives false
 			// G1: nor is a TLS op or an event signal.
-			tlsAlloc to osSetEvent gives false
+			tlsAlloc to osEnterBackgroundPriority gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -4314,7 +4349,7 @@ type StdToX64Lowering
 			osCommitPages to osReservePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a page reserve or commit, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			memFill panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `memFill`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			atomicCas to currentThreadToken panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an atomic or a thread-token read, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			tlsAlloc to osSetEvent panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a TLS op or an event signal, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			tlsAlloc to osEnterBackgroundPriority panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a TLS op, an event signal or the priority door, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

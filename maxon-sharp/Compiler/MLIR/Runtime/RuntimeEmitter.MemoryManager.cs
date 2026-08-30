@@ -1674,6 +1674,21 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // maxon_enter_background_priority() -> i64
+  //
+  // Drops this process to background priority and answers what the OS then
+  // reports. Backs `__Builtins.enterBackgroundPriority()`. The answer is a
+  // Windows priority class or a POSIX nice value depending on the lane, and
+  // the two are not comparable — see IEmitterBackend.EnterBackgroundPriority,
+  // which also carries the thread-inheritance contract this leans on.
+  // =========================================================================
+  public void EmitEnterBackgroundPriority() {
+    _b.FunctionStart("maxon_enter_background_priority", 0, 0x20);
+    _b.EnterBackgroundPriority(VReg.Scratch0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
   // maxon_current_process_id() -> i64 (OS process ID, zero-extended)
   //
   // Windows: GetCurrentProcessId. POSIX: getpid. The returned value is

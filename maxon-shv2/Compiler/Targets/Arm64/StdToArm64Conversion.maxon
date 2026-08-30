@@ -567,7 +567,7 @@ type StdToArm64Lowering
 			atomicCas to currentThreadToken gives 0
 			// G1: the three TLS ops and the event signal are x64-windows only and are REFUSED below rather than
 			// lowered, so no frame is reserved for arguments that will never be marshalled here.
-			tlsAlloc to osSetEvent gives 0
+			tlsAlloc to osEnterBackgroundPriority gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -759,6 +759,14 @@ type StdToArm64Lowering
 			// (Darwin's is `pthread_getspecific` + a libc this lane does not link), so a lowering here would be
 			// untested dead code no test could reach.
 			tlsAlloc to osSetEvent then panic("lowerStdToArm64: the per-OS-thread storage ops and the event signal are x64-windows only — the multi-M scheduler substrate is x64-windows-gated at this rung")
+			// ⚠ ITS OWN ARM, NOT THE SCHEDULER'S. This op is x64-windows-only for a reason that has nothing to do
+			// with the multi-M substrate above: it lowers to `SetPriorityClass`/`GetPriorityClass`, and serving
+			// arm64-macos means `setpriority`/`getpriority` instead. ⭐ A lane added here also owes the THREAD
+			// INHERITANCE question, which the two platforms answer differently — Darwin scopes nice to the
+			// PROCESS, Linux scopes it to the THREAD — so a Linux lane must re-answer what a Darwin one may
+			// assume. `SemanticCheck.calleeNeedsWin32Substrate` refuses `__proc_bg_priority` at the call's own
+			// span by the `__proc_` prefix (E3104), so reaching here at all is a compiler bug.
+			osEnterBackgroundPriority then panic("lowerStdToArm64: `osEnterBackgroundPriority` is x64-windows only at this rung — serving arm64-macos means setpriority/getpriority, and a lane that adds it also owes the per-thread-vs-per-process nice question")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -822,7 +830,7 @@ type StdToArm64Lowering
 			// encoder — never between IR blocks, exactly as the fill ladder above.
 			atomicCas to currentThreadToken then panic("lowerStdToArm64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			// G1: none of the four terminates a block; two produce a value and two are void side effects.
-			tlsAlloc to osSetEvent then panic("lowerStdToArm64: a TLS op or an event signal appeared as a block terminator (lowering bug — none of the four is a terminator)")
+			tlsAlloc to osEnterBackgroundPriority then panic("lowerStdToArm64: a TLS op, an event signal or the priority door appeared as a block terminator (lowering bug — none of them is a terminator)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

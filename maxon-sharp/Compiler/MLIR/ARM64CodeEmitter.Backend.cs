@@ -711,6 +711,41 @@ public partial class ARM64CodeEmitter {
         _e.EmitMovRegReg(destReg, ARM64Register.X2);
     }
 
+    /// <summary>PRIO_PROCESS — setpriority/getpriority's "who is a process id" selector.</summary>
+    private const long PrioProcess = 0L;
+
+    /// <summary>The nice value background work runs at. POSIX nice runs the OPPOSITE direction to a
+    /// Windows priority class — larger is lower — which is why nothing converts between the two. Not
+    /// 19 (the maximum) for the same reason Windows does not use IDLE: a starve long enough to trip a
+    /// caller's timeout gets reported as a harness bug rather than as a busy machine.</summary>
+    private const long BackgroundNiceValue = 10L;
+
+    public void EnterBackgroundPriority(VReg dest) {
+      // setpriority(PRIO_PROCESS, 0, 10). `who = 0` means THIS process, and on Darwin nice is scoped
+      // to the process — which is what discharges the inheritance contract on this lane, covering
+      // threads created before and after. ⚠ That is a DARWIN property, not a POSIX one: on Linux nice
+      // is per-thread, so a Linux lane owes real work here. See IEmitterBackend.EnterBackgroundPriority.
+      _e.EmitMovRegImm(ARM64Register.X0, PrioProcess);
+      _e.EmitMovRegImm(ARM64Register.X1, 0);
+      _e.EmitMovRegImm(ARM64Register.X2, BackgroundNiceValue);
+      _e.EmitCallImport("setpriority");
+
+      // Read back rather than reporting the value we just wrote — a lowering that called nothing must
+      // not be able to answer like one that worked. Only RAISING nice is unprivileged, and raising is
+      // all this does, so the write cannot be silently refused.
+      _e.EmitMovRegImm(ARM64Register.X0, PrioProcess);
+      _e.EmitMovRegImm(ARM64Register.X1, 0);
+      _e.EmitCallImport("getpriority");
+
+      // getpriority answers a signed int in W0 and nice is legitimately negative (-20..19), so the
+      // upper half of X0 must be SIGN-extended, not left as the ABI happens to leave it.
+      _e.EmitWord(0x93407C00); // SXTW X0, W0
+
+      var destReg = R(dest);
+      if (destReg != ARM64Register.X0)
+        _e.EmitMovRegReg(destReg, ARM64Register.X0);
+    }
+
     public void GetCurrentProcessId(VReg dest) {
       // POSIX getpid() returns a pid_t (32-bit). Zero-extends naturally
       // into X0 for the caller's i64 result.

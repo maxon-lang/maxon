@@ -4897,6 +4897,19 @@ let BuiltinsSchedMaxActiveWorkersName = b"__Builtins.schedMaxActiveWorkers"
 let CpuCountArity = 0 as ParamCount
 let SchedMaxActiveWorkersArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.enterBackgroundPriority()` — THE ONLY INTRINSIC THAT CHANGES THE PROCESS RATHER THAN
+// REPORTING ON IT.** Everything in the band above asks a question; this one answers a question it first
+// made true. It lowers to `__proc_bg_priority`, which is why it is refused off x64-windows by the `__proc_`
+// prefix rather than by anything written here — this file only routes the name.
+//
+// ⚠ **ITS ANSWER'S UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT** (a Windows priority CLASS against a
+// POSIX NICE value, running in opposite directions). `StdOp.osEnterBackgroundPriority` owns that fact.
+let BuiltinsEnterBackgroundPriorityName = b"__Builtins.enterBackgroundPriority"
+
+// It takes NOTHING. Its own constant rather than sharing one, for `CurrentProcessIdArity`'s rule: the
+// number is a fact about THIS intrinsic's contract, not about its neighbours'.
+let EnterBackgroundPriorityArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedStealCount()` — THE THIRD SCHEDULER QUERY (W212), and the only way a program can
 // observe that WORK STEALING happened.** It answers the sum of every processor's steal counter, which is 0
 // on the one-processor default and rises the moment a second M takes work off a busy peer's ring. Its one
@@ -72299,6 +72312,14 @@ export type Parser
 			if callee.equals(BuiltinsSchedMaxActiveWorkersName) 'schedMaxActiveWorkers'
 				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedMaxActiveWorkersName, runtimeName: SchedMaxActiveWorkersName, arity: SchedMaxActiveWorkersArity, calleeTok: anchor)
 			end 'schedMaxActiveWorkers'
+
+			// ⭐ **THE PRIORITY DOOR**, through the same argumentless-integer emit as the queries above even
+			// though it is not a query: its answer is an `int` and it takes nothing, and what differs — that
+			// it CHANGES this process before reporting on it — is not visible at this tier and is not this
+			// file's. See `ProcessRuntime.ProcessBackgroundPriorityName`.
+			if callee.equals(BuiltinsEnterBackgroundPriorityName) 'enterBackgroundPriority'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsEnterBackgroundPriorityName, runtimeName: ProcessBackgroundPriorityName, arity: EnterBackgroundPriorityArity, calleeTok: anchor)
+			end 'enterBackgroundPriority'
 
 			// ⭐ **THE THIRD SCHEDULER QUERY (W212)**, beside the one it is the counterpart of: that one says how
 			// many worker Ms ever ran, this one says whether they ever took work off each other. Same door

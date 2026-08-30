@@ -31,13 +31,6 @@ internal sealed record TestRunOptions(
 ///   silent green this command exists to prevent.
 /// </summary>
 internal static class TestExecutor {
-  /// <summary>
-  /// Cores left free for everything else on the box — the OS, an IDE, background work. Tests are IO
-  /// and compile bound rather than CPU-saturating per worker, so leaving more than this idles the
-  /// machine and wastes wall time.
-  /// </summary>
-  private const int ReservedProcessors = 2;
-
   /// <summary>What a shard reports when the launcher drained no output to attribute.</summary>
   private const string NoOutputCapturedText =
     "the process exited but its output never finished draining, so nothing could be attributed";
@@ -51,11 +44,38 @@ internal static class TestExecutor {
     "still running when the process hit its deadline, and was killed";
 
   /// <summary>
-  /// How many workers a test harness uses when nobody said. THE definition — the spec-test runner
-  /// takes it from here too, so the two harnesses in this process cannot divide one machine by
-  /// different rules.
+  /// How many workers a test harness uses when nobody said: THE WHOLE MACHINE. THE definition — the
+  /// spec-test runner takes it from here too, so the two harnesses in this process cannot divide one
+  /// machine by different rules.
   /// </summary>
-  public static int DefaultWorkers => Math.Max(1, Environment.ProcessorCount - ReservedProcessors);
+  /// <remarks>
+  /// ⭐ MEASURED — this whole suite on one host (6 physical / 12 logical), all at below-normal priority,
+  /// runs INTERLEAVED and alternating so run order cannot masquerade as an effect:
+  ///   6 workers  90.5 s, 91.3 s                  (mean 90.9)
+  ///   10 workers 86.2 s, 84.2 s                  (mean 85.2)
+  ///   12 workers 82.2 s, 83.9 s, 85.2 s, 82.9 s  (mean 83.5)
+  /// Throughput RISES with worker count and plateaus at the top: undersubscribing to the PHYSICAL count
+  /// costs ~8%, and there is no oversubscription cliff to protect against. This used to reserve two
+  /// cores; the reserve bought nothing measurable and the whole machine is at worst equal.
+  ///
+  /// ⛔⛔ AN EARLIER VERSION OF THIS COMMENT CLAIMED 12 WORKERS COST 15% (95.4 s), AND THAT WAS AN
+  /// ARTIFACT — a single un-interleaved sample, and the only one taken immediately after a
+  /// `dotnet build`. A cold start, not contention; it did not reproduce once under alternation.
+  /// ⇒ DO NOT trust an unrepeated wall-clock reading here, and never compare one taken right after a
+  /// rebuild against one taken warm: this suite's spread is a few percent and a cold start is bigger.
+  ///
+  /// ⚠ SIZING FOR THROUGHPUT IS ONLY CORRECT BECAUSE THE RUN IS DE-PRIORITISED.
+  /// <see cref="HostPriority"/> owns keeping the box usable, and it costs nothing measurable: at a fixed
+  /// 10 workers, dropping to below-normal moved the suite 82.8 s → 83.1 s. Reserving cores for politeness
+  /// INSTEAD would cost throughput (the 6-worker row) and still not yield to a foreground process,
+  /// because the OS time-slices rather than holding a core aside. Two knobs, two questions — the
+  /// politeness one is not here, and must not be reintroduced here.
+  ///
+  /// The floor is not dead code even though <see cref="Environment.ProcessorCount"/> is documented to
+  /// be at least 1: a zero would reach `Math.Min(workers, …)` and spawn NO threads, which is a silent
+  /// hang rather than a loud failure.
+  /// </remarks>
+  public static int DefaultWorkers => Math.Max(1, Environment.ProcessorCount);
 
   /// <summary>One process launch's worth of work: which file it belongs to, and which tests it runs.</summary>
   private sealed record Shard(int FileIndex, IReadOnlyList<int> TestIndices);

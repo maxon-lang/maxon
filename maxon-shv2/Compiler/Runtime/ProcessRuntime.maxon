@@ -1,20 +1,26 @@
-// Runtime/ProcessRuntime.maxon — the RUNNING image's own path.
+// Runtime/ProcessRuntime.maxon — the RUNNING image, asked about and acted on.
 //
-// ⭐ **WHAT IT SERVES — TWO `__Builtins` INTRINSICS THAT ASK THE RUNNING IMAGE ABOUT ITSELF.**
-// `stdlib/Process.maxon`'s `executablePath()` bottoms out in `__Builtins.executablePath()`, and
-// `Compiler/TreeLock.maxon`'s lock token bottoms out in `__Builtins.currentProcessId()` — with no stdlib
-// wrapper over the second, because a declaration whose whole body is one intrinsic call is the thin wrapper
-// the house rules forbid and neither reference compiler declares one. Nothing else in the language reaches
-// either entry point. The bootstrap declares both (`2-Parser.cs:11265-11267` and `:12238-12243`) with the
-// same arities, result types and ownership, so the SURFACE here is the reference's; only the implementation
-// differs.
+// ⭐ **WHAT IT SERVES — THREE `__Builtins` INTRINSICS ABOUT THE RUNNING PROCESS.**
+// `stdlib/Process.maxon`'s `executablePath()` bottoms out in `__Builtins.executablePath()`;
+// `Compiler/TreeLock.maxon`'s lock token bottoms out in `__Builtins.currentProcessId()`; and
+// `Main.runSpecTest` calls `__Builtins.enterBackgroundPriority()` before it spawns a worker pool. Only the
+// first has a stdlib wrapper: a declaration whose whole body is one intrinsic call is the thin wrapper the
+// house rules forbid. Nothing else in the language reaches these entry points. The bootstrap declares all
+// three (`2-Parser.cs:11265-11267`, `:12238-12243`, and the `enterBackgroundPriority` entry beside
+// `cpuCount`) with the same arities and result types, so the SURFACE here is the reference's; only the
+// implementation differs.
 //
-// ⚠ **THE TWO ARE INSTALLED ON SEPARATE `RuntimeUsage` BITS, NOT ON ONE `__proc_` BIT**, for the reason the
+// ⚠ **THE THIRD ONE IS NOT A QUESTION, AND IT IS THE ONLY ONE IN THIS FILE THAT IS NOT.** The first two
+// report; `enterBackgroundPriority` CHANGES the process and then reports, which is why its answer is a
+// read-back rather than an echo of what it wrote — see `StdOp.osEnterBackgroundPriority`.
+//
+// ⚠ **EACH IS INSTALLED ON ITS OWN `RuntimeUsage` BIT, NOT ON ONE SHARED `__proc_` BIT**, for the reason the
 // console/process SPLIT itself exists (`Compiler.maxon`'s install block: *"each on its OWN bit, so a program
 // that reads stdin carries no path walk"*). A pid is three machine instructions and touches no memory; the
 // path walk is a doubling retry loop that drags in `usesHeap` AND `usesManagedMemory` — i.e. the WHOLE
 // managed-memory runtime, installed as one closure. Keyed together, `__Builtins.currentProcessId()` alone
-// would have pulled all of that into a program that allocates nothing.
+// would have pulled all of that into a program that allocates nothing — and the same now holds for
+// `__proc_bg_priority`, which is likewise a handful of instructions that touch no memory.
 //
 // ⭐ **HOST-ONLY BY THE R4 RULING (2026-07-30), AND FOR A REASON OF ITS OWN ON TOP.** `x64-windows` is real;
 // every other target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` via
@@ -39,9 +45,13 @@
 // `scanRuntimeUsage` reads to set `usesProcessIntrospection`, and the one `SemanticCheck` reads for E3104.
 let ProcessRuntimePrefix = b"__proc_"
 
-// ⭐ **THE TWO ENTRY POINTS.**
+// ⭐ **THE THREE ENTRY POINTS.**
 export let ProcessExecutablePathName = b"__proc_exe_path"
 export let ProcessCurrentPidName = b"__proc_pid"
+// ⭐ **THE THIRD, AND THE PREFIX PROMISE COLLECTED A SECOND TIME.** It joins the `__proc_` band, so
+// `SemanticCheck.calleeNeedsWin32Substrate` refuses it on every non-x64-windows target with no edit there —
+// exactly as `__proc_pid` did when it arrived. See `isProcessRuntimeCallee`.
+export let ProcessBackgroundPriorityName = b"__proc_bg_priority"
 
 // The first buffer the walk asks for is `ManagedDirectoryRuntime.MaxPathBytes` — the same `MAX_PATH` the
 // `GetCurrentDirectoryA` walk starts at, READ from there rather than re-spelled here (W5 review), because
@@ -169,7 +179,29 @@ function buildProcessCurrentPid(module StdModule)
 	module.functions.push(func)
 end 'buildProcessCurrentPid'
 
-// ⚠ **ONE GUARD PER ENTRY, NOT ONE FOR THE FILE.** See the header: the two entries cost wildly different
+// ⭐⭐ **`__proc_bg_priority() -> i64`** — drop this process to background scheduling priority and answer
+// what the OS then reports, and, like `__proc_pid`, the whole body is the op.
+//
+// ⭐ **WHY A PROCESS-WIDE CALL AND NOT A PER-THREAD OR PER-CHILD ONE.** A child inherits the priority class
+// on Windows and the nice value under POSIX, so ONE call at a harness's startup covers every worker
+// subprocess it spawns AND every test binary those workers launch. A per-child variant would be the same
+// fact spelled once per spawn site, and would miss the threads this process runs itself.
+//
+// ⚠ **THE ANSWER IS A SECOND READING, NOT AN ECHO** — see `StdOp.osEnterBackgroundPriority`, which owns
+// that argument and the measurement behind it.
+function buildProcessBackgroundPriority(module StdModule)
+	var func = IrFunction.createFromStd(ProcessBackgroundPriorityName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let priority = ids.mint()
+	module.appendOp(entry, op: StdOp.osEnterBackgroundPriority(priority))
+	module.setTerminator(entry, op: StdOp.ret(priority))
+
+	module.functions.push(func)
+end 'buildProcessBackgroundPriority'
+
+// ⚠ **ONE GUARD PER ENTRY, NOT ONE FOR THE FILE.** See the header: the three entries cost wildly different
 // amounts and a program almost always wants exactly one of them.
 export function installProcessRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesExecutablePath 'executablePath'
@@ -179,6 +211,10 @@ export function installProcessRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesProcessId 'processId'
 		buildProcessCurrentPid(module)
 	end 'processId'
+
+	if usage.usesBackgroundPriority 'backgroundPriority'
+		buildProcessBackgroundPriority(module)
+	end 'backgroundPriority'
 end 'installProcessRuntime'
 
 // Every callee this file installs — what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows
@@ -190,7 +226,7 @@ end 'installProcessRuntime'
 // no edit here: `specs-shv2/process-id.md:rejected-on-wasm` pins the E3104 it earns by prefix alone.
 //
 // ⚠ **`scanRuntimeUsage` DOES NOT READ THIS ONE**, and used to: it now asks for each entry by NAME, because
-// the two entries are installed on separate bits (see the header). A prefix is the right test for "may this
+// the entries are installed on separate bits (see the header). A prefix is the right test for "may this
 // target run it at all" — one answer for the family — and the wrong test for "must this program carry it",
 // which is per entry point.
 export function isProcessRuntimeCallee(callee ByteArray) returns bool

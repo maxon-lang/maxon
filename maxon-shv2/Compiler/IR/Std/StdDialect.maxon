@@ -1374,6 +1374,24 @@ export union StdOp
 	// `SpawnWorker`), and the bootstrap's own comment records the bug that a stale register in this slot
 	// caused — `__sched_worker_loop` handed a stack pointer as its P*. A second `osThreadCreateWithArg` op
 	// would be this one plus a constant, which is the thin-wrapper rule in op form.
+	// ⭐⭐ **SCHEDULING PRIORITY — THE CONTRACT EVERY THREAD THIS OP MINTS INHERITS, AND THE ONE PLACE IT
+	// CAN BE STATED.** This op is the ONLY way an emitted program acquires an OS thread, at exactly two
+	// sites: `GtRuntime.buildIoInit`'s completion thread and `SchedRuntime.emitSchedWakeOrSpawn`'s worker M.
+	// So a thread born here runs at whatever priority `__proc_bg_priority` last set for the process — and on
+	// x64-windows, the only lane that lowers either, that holds with NOTHING EMITTED HERE, because
+	// `SetPriorityClass` sets a PROCESS class covering threads created before and after it.
+	//
+	// ⚠ **THAT IS A WINDOWS PROPERTY, NOT A UNIVERSAL ONE, AND THE LINUX LANES ARE THE ONES IT BREAKS ON.**
+	// POSIX splits: Darwin scopes `nice` to the PROCESS (so arm64-macos would inherit the same way), but
+	// LINUX scopes it to the THREAD — a thread already running keeps its old value, and a new one inherits
+	// only its CREATOR's. ⇒ **A Linux lane that lowers `osEnterBackgroundPriority` owes work HERE as well**,
+	// making the M adopt the priority at its own birth rather than assuming the process call reached it.
+	// It cannot forget: that lane must delete the refusal in `StdToArm64Conversion` / `StdToWasm`, whose
+	// panic text names this obligation.
+	//
+	// ⚠ shv2 reaches neither site today — `emitSchedWakeOrSpawn` has had no producer since EC10, and
+	// `buildIoInit` is lazy — so this is a contract written down BEFORE it can be tested, deliberately, at
+	// the seam that will still be the only one the day `spawn` gives the tier its producer back.
 	osThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 	// `osLockInit(lockPtr)` = `InitializeCriticalSection(lockPtr)`. One VALUE operand (the CRITICAL_SECTION region), no result.
 	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
@@ -2292,6 +2310,42 @@ export union StdOp
 	// the worker loop — would put the scheduler's newest logic in the one form that gets no register
 	// allocation and no frame checking.
 	osSetEvent(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The PROCESS-PRIORITY door behind `__Builtins.enterBackgroundPriority()` ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osSetEvent`, per the band-append invariant every entry
+	// above states: a mid-band insert is silently swallowed by a `… to X` range arm. Its `category: system`
+	// places it logically in the system band, independent of this tail position.
+	//
+	// `osEnterBackgroundPriority(result)` = "put THIS process at background scheduling priority, and put the
+	// priority the OS then reports in `result`". NO operands and ONE def — `osGetPid`'s direct-return shape,
+	// because both the request and the answer are scalars the API hands back rather than writing through a
+	// pointer.
+	//
+	// ⭐⭐ **IT IS ONE OP FOR TWO CALLS, AND THE SECOND CALL IS THE POINT.** The obvious shape is a `void`
+	// "set" op, and it would be untestable: nothing a spec could name would change. `scavengeMemory`'s
+	// header settles that question the same way — an effect with no observable consequence is one no case
+	// can discriminate. So this op SETS and then READS BACK, and the answer is the read, never the value
+	// just written.
+	//
+	// ⛔⛔ **BUT THE READ-BACK IS ONLY DISCRIMINATING FROM A NORMAL-PRIORITY PARENT, AND THE SUITE IS NOT
+	// ONE.** MEASURED 2026-08-30 with the `SetPriorityClass` emit deleted: run from a normal shell the
+	// answer drops 16384 → 32 and the sabotage is obvious, but run UNDER `spec-test` it stays 16384 and the
+	// cases pass 2/2 — because `Main.runSpecTest` de-prioritises the harness before spawning workers and a
+	// child INHERITS the class, so the test binary is already at 16384 before its first instruction.
+	// `specs-shv2/process-background-priority.md` carries the table and the hand procedure that owns this
+	// question; do not read a green suite as evidence that the write happens.
+	//
+	// ⚠ **THE UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT**, exactly as `osThreadCpuTicks`'s is: a
+	// Windows priority CLASS (`BELOW_NORMAL_PRIORITY_CLASS` = 0x4000) against a POSIX NICE value (10). The
+	// two scales even run in opposite directions — larger is LOWER priority under POSIX — so a caller
+	// compares against its own platform's constant and never across.
+	//
+	// ⭐ x64-WINDOWS ONLY at this rung, and it needs no `SemanticCheck` edit to say so: its entry point is
+	// `ProcessRuntime.ProcessBackgroundPriorityName`, which wears the `__proc_` prefix that
+	// `calleeNeedsWin32Substrate` already refuses on every other target with E3104. That is the promise
+	// `isProcessRuntimeCallee`'s header makes — a third entry point is covered by construction — being
+	// collected for the second time. Full call-barrier metadata: it IS two indirect calls once lowered.
+	osEnterBackgroundPriority(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2591,7 +2645,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		//     occurrences; they are not a rewrite subject at any tier of this compiler.
 		//   • everything else — terminators, calls, memory and the OS band define call returns, kernel
 		//     answers and addresses, none of which is an arithmetic shape at all.
-		div to osSetEvent then operands.recordNeither()
+		div to osEnterBackgroundPriority then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -2677,7 +2731,7 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 	match op 'l'
 		const to globalAddr then load.recordNotALoad()
 		loadIndirect(resultId, addrId, offset, valueType) then load.recordLoad(resultId, address: addrId, displacement: offset, readType: valueType)
-		storeIndirect to osSetEvent then load.recordNotALoad()
+		storeIndirect to osEnterBackgroundPriority then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3011,6 +3065,9 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		tlsSetValue(index, value) then insertUsePair(referenced, a: index, b: value)
 		tlsSlotLoad(_, tebOffset) then referenced.insert(tebOffset)
 		osSetEvent(handle) then referenced.insert(handle)
+		// The priority door takes NO operands — it asks the OS to change this process and then asks what it
+		// became, exactly as `osCpuCount` asks a question rather than reading a value.
+		osEnterBackgroundPriority then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -3218,6 +3275,7 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		tlsSetValue gives DefinedValueLookup.none
 		tlsSlotLoad(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osSetEvent gives DefinedValueLookup.none
+		osEnterBackgroundPriority(resultId) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -3447,6 +3505,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		tlsSetValue(index, value) gives StdOp.tlsSetValue(remappedValue(index, subst: subst), valueId: remappedValue(value, subst: subst))
 		tlsSlotLoad(resultId, tebOffset) gives StdOp.tlsSlotLoad(resultId, tebOffsetId: remappedValue(tebOffset, subst: subst))
 		osSetEvent(handle) gives StdOp.osSetEvent(remappedValue(handle, subst: subst))
+		osEnterBackgroundPriority(resultId) gives StdOp.osEnterBackgroundPriority(resultId)
 	end 'r'
 end 'remapStdOpUses'
 
@@ -3618,7 +3677,7 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		osCommitPages to osReservePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `scanLeafBody` refuses a callee for")
 		atomicCas(resultId, addrId, expectedId, replacementId) then return StdOp.atomicCas(clonedValue(resultId, subst: valueSubst), addrId: addrId, expectedId: expectedId, replacementId: replacementId)
 		atomicRmw(resultId, addrId, operandId, opcode) then return StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: addrId, operandId: operandId, opcode: opcode)
-		currentThreadToken to osSetEvent then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` thread or TLS primitive, which `scanLeafBody` refuses a callee for")
+		currentThreadToken to osEnterBackgroundPriority then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -3860,7 +3919,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		branch(targetBlockId) then out.push(targetBlockId)
 		ret to osFreePages then break 'term'
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
-		witnessCall to osSetEvent then break 'term'
+		witnessCall to osEnterBackgroundPriority then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 

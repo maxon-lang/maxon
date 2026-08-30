@@ -12544,6 +12544,29 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + "(no OS-thread concept) treat the result as 1.\n\n"
       + "`__Builtins.cpuCount() returns int`",
       "maxon_cpu_count", [], true),
+    // Lowering THIS process's scheduling priority, so a long fan-out (a test suite, a batch
+    // compile) stops making the machine unusable while it runs. Children inherit it — the priority
+    // CLASS on Windows, the nice value under POSIX — so one call at startup covers every worker
+    // process and every binary they launch, which is why there is no per-child variant.
+    //
+    // It ANSWERS the priority read back from the OS rather than returning void, for the reason
+    // scavengeMemory answers a byte count: a void here would leave the whole mechanism with no
+    // consequence any spec could name. The read-back is a SECOND, INDEPENDENT reading — a bounds
+    // assertion alone would pass against a lowering that never called SetPriorityClass at all.
+    //
+    // ⚠ THE UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT, exactly as threadCpuTicks's is:
+    // Windows answers a priority CLASS (BELOW_NORMAL_PRIORITY_CLASS = 0x4000), POSIX answers a
+    // NICE value (10). They are different scales with different directions; compare against the
+    // platform's own constant, never against each other.
+    ["enterBackgroundPriority"] = RuntimeCallIntrinsic(
+      "Lowers THIS process to background scheduling priority and returns the priority the OS "
+      + "reports for it afterwards. Processes spawned later inherit it (priority class on Windows, "
+      + "nice value on POSIX), so one call covers a whole worker pool. The returned value is "
+      + "PLATFORM-DEFINED and the platforms do not agree - Windows answers a priority class "
+      + "(BELOW_NORMAL_PRIORITY_CLASS = 16384), POSIX answers a nice value (10) - so compare it "
+      + "against the constant for the platform you are on, never across platforms.\n\n"
+      + "`__Builtins.enterBackgroundPriority() returns int`",
+      "maxon_enter_background_priority", [], true),
     ["schedMaxActiveWorkers"] = RuntimeCallIntrinsic(
       "Returns the high-water mark of concurrently-active green-thread worker Ms "
       + "(OS threads) observed since process start, clamped to at least 1. Grows as "

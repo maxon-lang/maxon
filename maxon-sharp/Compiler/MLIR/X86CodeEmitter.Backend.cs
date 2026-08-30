@@ -602,6 +602,38 @@ public partial class X86CodeEmitter {
         _e.EmitMovRegReg(destReg, X86Register.Rax);
     }
 
+    /// <summary>The GetCurrentProcess() pseudo-handle, (HANDLE)-1. Like the thread one above it is a
+    /// constant rather than a handle to open or close, so materializing it inline costs no import.</summary>
+    private const long CurrentProcessPseudoHandle = -1L;
+
+    /// <summary>BELOW_NORMAL_PRIORITY_CLASS. Deliberately not IDLE_PRIORITY_CLASS: idle work can be
+    /// starved for as long as anything else wants the CPU, and the harnesses that call this bound how
+    /// long they will wait, so a long starve would be reported as a HARNESS failure rather than as the
+    /// busy machine it actually is.</summary>
+    private const long BelowNormalPriorityClass = 0x4000L;
+
+    public void EnterBackgroundPriority(VReg dest) {
+      // SetPriorityClass sets a PROCESS class, which is what discharges the inheritance contract on
+      // this lane: it applies to threads created before AND after this call, so the IOCP completion
+      // thread that __io_init started from _start — before main ever ran — is covered too, and no
+      // worker M needs to do anything at its own birth. See IEmitterBackend.EnterBackgroundPriority.
+      _e.EmitMovRegImm(X86Register.Rcx, CurrentProcessPseudoHandle);
+      _e.EmitMovRegImm(X86Register.Rdx, BelowNormalPriorityClass);
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "SetPriorityClass");
+
+      // The BOOL return is ignored, and the ANSWER is a fresh GetPriorityClass instead. That is not
+      // belt-and-braces: returning the constant we just tried to write would report success from a
+      // lowering that never called anything, which is exactly the failure a spec must be able to see.
+      _e.EmitMovRegImm(X86Register.Rcx, CurrentProcessPseudoHandle);
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "GetPriorityClass");
+
+      // GetPriorityClass answers a DWORD; the 32-bit write zero-extends into RAX. It answers 0 only
+      // on failure, which this call site cannot provoke — the handle is a compile-time constant.
+      var destReg = R(dest);
+      if (destReg != X86Register.Rax)
+        _e.EmitMovRegReg(destReg, X86Register.Rax);
+    }
+
     public void GetCurrentProcessId(VReg dest) {
       // GetCurrentProcessId() returns a DWORD (process ID). Zero-extends
       // into RAX naturally for the caller's i64 result.

@@ -372,6 +372,23 @@ export enum IatSlot
 	// themselves, and cost a program with no green threads nothing at all.
 	TlsAlloc
 	TlsSetValue
+	// ⭐⭐ **THE TWO PROCESS-PRIORITY IMPORTS.** APPENDED AFTER `TlsSetValue` for the reason every entry above
+	// states: every existing slot INDEX, and hence every emitted `iatCall` relocation, is unchanged. kernel32
+	// again, so they add no import DIRECTORY entry (see `ImportDll`), and they are the LAST kernel32 slots —
+	// the `ws2_32` note below still bounds this append.
+	//
+	// ⭐⭐ **TWO IMPORTS FOR ONE OP, AND THE SECOND IS WHAT MAKES THE FIRST TESTABLE.** `SetPriorityClass`
+	// alone would leave the op answering the value it just tried to write, which a lowering that called
+	// nothing could also answer; `GetPriorityClass` makes the result a genuine second reading. The HANDLE
+	// both take costs no third import: `GetCurrentProcess()` is the pseudo-handle `(HANDLE)-1`, a
+	// compile-time constant the lowering materializes inline, exactly as `QueryThreadCycleTime` does with
+	// `GetCurrentThread` = `-2`.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// four, the attached-subprocess two, the machine query and the thread-CPU read do: a program that never
+	// asks to be de-prioritised should not pay two IAT thunks and two Hint/Name records for the privilege.
+	SetPriorityClass
+	GetPriorityClass
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -398,7 +415,7 @@ end 'IatSlot'
 // which would point its thunk at another library's Hint/Name entry.
 function slotDll(slot IatSlot) returns ImportDll
 	return match slot 'dll'
-		ExitProcess to TlsSetValue gives ImportDll.kernel32
+		ExitProcess to GetPriorityClass gives ImportDll.kernel32
 		WSAStartup to closesocket gives ImportDll.ws2_32
 	end 'dll'
 end 'slotDll'
@@ -459,7 +476,7 @@ end 'iatSlotIndex'
 // producer added later must extend the range (or fail this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
-		GetEnvironmentVariableA to TlsSetValue gives true
+		GetEnvironmentVariableA to GetPriorityClass gives true
 		ExitProcess to GetModuleFileNameA gives false
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
@@ -1094,7 +1111,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// TLS pair lives in this band too — so a green-thread program needs the whole band, exactly as a traced or
 	// spawning one does. A program with no green threads is unaffected, which is what keeps a non-async
 	// binary byte-identical across this rung.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority
 	let sockets = codeResult.stdModule.usesSockets
 	let idata = buildImportSection(idataRva, optionalImports: optionalImports, sockets: sockets)
 	let idataSize = idata.data.count()

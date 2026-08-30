@@ -718,7 +718,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		atomicCas to currentThreadToken then break 'k'
 		// G1: the multi-M substrate names no wasm function and needs no import table entry — it is REFUSED at
 		// emission (below), so it contributes nothing to collect here.
-		tlsAlloc to osSetEvent then break 'k'
+		tlsAlloc to osEnterBackgroundPriority then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1336,6 +1336,9 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		tlsSetValue then break 'def'
 		tlsSlotLoad(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osSetEvent then break 'def'
+		// The priority door would answer an i64 like every other machine word. It is refused at emission on
+		// this lane, so — exactly as for the TLS pair above — this arm exists only to keep the local map TOTAL.
+		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 	end 'def'
 end 'recordDefValtype'
 
@@ -1561,7 +1564,7 @@ type WasmFuncEmitter
 			osCommitPages to osReservePages then panic("emitStraightLineTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitStraightLineTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas to currentThreadToken then panic("emitStraightLineTerminator: an atomic or a thread-token read is a body op, never a terminator")
-			tlsAlloc to osSetEvent then panic("emitStraightLineTerminator: a TLS op or an event signal is a body op, never a terminator")
+			tlsAlloc to osEnterBackgroundPriority then panic("emitStraightLineTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1651,7 +1654,7 @@ type WasmFuncEmitter
 			osCommitPages to osReservePages then panic("emitDispatcherTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitDispatcherTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas to currentThreadToken then panic("emitDispatcherTerminator: an atomic or a thread-token read is a body op, never a terminator")
-			tlsAlloc to osSetEvent then panic("emitDispatcherTerminator: a TLS op or an event signal is a body op, never a terminator")
+			tlsAlloc to osEnterBackgroundPriority then panic("emitDispatcherTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1812,6 +1815,11 @@ type WasmFuncEmitter
 			// answers a constant here rather than reading anything — but a constant is the RIGHT answer for an
 			// identity and a WRONG one for storage, which would silently hand every reader the same slot.
 			tlsAlloc to osSetEvent then panic("emitBodyOp: the per-OS-thread storage ops and the event signal are x64-windows only — a WASI component has one thread and no kernel event object")
+			// ⚠ ITS OWN ARM, and its refusal is STRONGER than "not yet" — the shape `process-id.md` records for
+			// the pid. A WASI component has no process and no scheduler priority at all, so a lowering here
+			// could not be incomplete, only a pretence: it would report success for something that never
+			// happened. Refused at the call's own span with E3104 by the `__proc_` prefix, so this is a backstop.
+			osEnterBackgroundPriority then panic("emitBodyOp: `osEnterBackgroundPriority` is x64-windows only — a WASI component has no process and no scheduler priority, so there is nothing here to lower it to")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3175,7 +3183,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osCommitPages to osReservePages then panic("decideDispatcher: a page reserve or commit is a body op, never a terminator")
 		memFill then panic("decideDispatcher: a `memFill` is a body op, never a terminator")
 		atomicCas to currentThreadToken then panic("decideDispatcher: an atomic or a thread-token read is a body op, never a terminator")
-		tlsAlloc to osSetEvent then panic("decideDispatcher: a TLS op or an event signal is a body op, never a terminator")
+		tlsAlloc to osEnterBackgroundPriority then panic("decideDispatcher: a TLS op, an event signal or the priority door is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

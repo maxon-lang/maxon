@@ -148,6 +148,10 @@ internal static class TestCommand {
     var resolvedTarget = target ?? CompileTarget.Default;
     if (resolvedTarget.Unsupported is { } unsupported) return Usage(unsupported.Format());
 
+    // Before any worker thread or child process exists, so both inherit it. The same call the
+    // spec-test path makes, for the same reason — see HostPriority.
+    HostPriority.EnterBackground();
+
     return Execute(new Settings(
       path ?? Directory.GetCurrentDirectory(), filters, workers ?? TestExecutor.DefaultWorkers,
       isolate, bailAfter, timeoutMs, list, json, showTiming, color,

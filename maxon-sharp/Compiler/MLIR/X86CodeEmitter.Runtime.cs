@@ -77,6 +77,7 @@ public partial class X86CodeEmitter {
     rawRt.EmitCurrentTimeNanos();
     rawRt.EmitCurrentUnixTimeSeconds();
     rawRt.EmitThreadCpuTicks();
+    rawRt.EmitEnterBackgroundPriority();
     rawRt.EmitCurrentProcessId();
     // DebugStream functions are emitted from 4-X86CodeEmitter.cs
     EmitNetTcpConnect();

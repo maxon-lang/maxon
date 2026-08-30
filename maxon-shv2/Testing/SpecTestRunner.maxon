@@ -801,8 +801,12 @@ end 'runProcess'
 // this comment claimed it was. `threadCpuTicks` is not an instruction count: on Windows it is TSC
 // cycles accrued while the thread was ON A CORE (`QueryThreadCycleTime`), so it removes idle and
 // preemption but still ABSORBS the slowdown contention causes — an SMT sibling, a shared L3, memory
-// bandwidth. The same suite that reads ~676e9 at the default twelve workers reads 407,531,292,437 at
+// bandwidth. The same suite that reads ~676e9 at TWELVE workers reads 407,531,292,437 at
 // `--workers=1`: identical work, 1.66x the ticks, purely from running twelve-up.
+//
+// ⚠ Twelve was the DEFAULT when that pair was measured and is not any more — `defaultWorkerCount()`
+// now asks the machine (`SpecWorkerPool`), so on this host the default is ten. The reading above is
+// still a reading AT TWELVE; it is the ratio that carries, not the count.
 //
 // ⇒ TWO NUMBERS ARE COMPARABLE ONLY AT THE SAME WORKER COUNT, which is why the reported line states
 // the count it was measured at. Read a default run against a default run; a `--workers=1` figure
@@ -2744,7 +2748,8 @@ end 'overlayErrorText'
 // actually takes: every one of them asserts a diagnostic only a private stdlib can produce, so an
 // ignored override would show up as eleven reds and not as a silent pass.
 //
-// ⚠ **ISOLATION, in a suite that runs 12 workers over ONE tree.** The overlay root is
+// ⚠ **ISOLATION, in a suite that runs a POOL of workers over ONE tree** (`defaultWorkerCount()` of
+// them, which asks the machine rather than naming a number). The overlay root is
 // `<tempDir>/<test.name>.stdlib`, and every term of that is already private: `tempDir` is per SPEC
 // (`specTempDirFor`), one worker owns a spec for its whole duration, and a spec's tests run strictly
 // sequentially inside it. Two cases cannot share the path even in one spec, because the test's own name

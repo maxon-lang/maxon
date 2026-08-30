@@ -370,6 +370,12 @@ export type RuntimeUsage
 	// have carried the doubling path walk, the heap runtime AND the whole managed-memory runtime (installed
 	// as one closure) to link against nothing.
 	export var usesProcessId as bool
+
+	// The program asks to be put at BACKGROUND scheduling priority (`__Builtins.enterBackgroundPriority` ⇒
+	// `__proc_bg_priority`). Its OWN bit rather than sharing `usesProcessId`'s, on this file's standing rule:
+	// a prefix answers "may this target run it", a bit answers "must this program carry it", and the three
+	// `__proc_` entries cost nothing alike.
+	export var usesBackgroundPriority as bool
 	// The program marks a CPU-PARALLEL CHECKPOINT (`__Builtins.parallelBoundary` ⇒ `__parallel_boundary`).
 	// Its own bit, and the CHEAPEST one here to justify: the entry point's whole body is a void return, so it
 	// declares no transitive dependency at all — not the heap, not the scheduler, not the leak gate. Folded
@@ -437,7 +443,7 @@ export type RuntimeUsage
 	export var usesSlabArena as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -680,10 +686,11 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
 	end 'consoleStdin'
-	// ⚠ **BY NAME, NOT BY THE `__proc_` PREFIX, AND THE PREFIX WAS WHAT THIS ASKED BEFORE G17.** The two
+	// ⚠ **BY NAME, NOT BY THE `__proc_` PREFIX, AND THE PREFIX WAS WHAT THIS ASKED BEFORE G17.** The
 	// entries in that family cost nothing alike: `__proc_exe_path` is a doubling retry loop whose answer is
-	// an `Array` record built one tier down, and `__proc_pid` is a single call op. A prefix test would have
-	// made the cheap one declare the expensive one's whole transitive closure — see `usesProcessId`.
+	// an `Array` record built one tier down, while `__proc_pid` and `__proc_bg_priority` are a single call
+	// op each. A prefix test would have made the cheap ones declare the expensive one's whole transitive
+	// closure — see `usesProcessId`.
 	if callee.equals(ProcessExecutablePathName) 'executablePath'
 		usage.usesExecutablePath = true
 		usage.usesHeap = true
@@ -692,6 +699,11 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(ProcessCurrentPidName) 'processId'
 		usage.usesProcessId = true
 	end 'processId'
+	// Like the pid and unlike the executable path, its whole body is one op: it declares nothing beside
+	// itself, no heap and no managed memory.
+	if callee.equals(ProcessBackgroundPriorityName) 'backgroundPriority'
+		usage.usesBackgroundPriority = true
+	end 'backgroundPriority'
 	// The CPU-parallel checkpoint. It declares NOTHING beside itself — the entry point's body is a void
 	// return — which makes it the one arm here with no second line, and that is a fact about the code rather
 	// than an omission (`ParallelBoundaryRuntime`).

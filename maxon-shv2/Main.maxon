@@ -446,6 +446,22 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return runPersistentWorker(specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 	end 'isPoolWorker'
 
+	// ⭐⭐ **GET OUT OF THE WAY BEFORE SATURATING THE MACHINE.** A full suite runs a pool of compiling
+	// subprocesses and will use every core it is given; at NORMAL priority that makes the box unusable
+	// while it runs. Below-normal costs nothing on an idle machine — MEASURED at 82.8 s against 83.1 s on
+	// the bootstrap's suite at a fixed worker count, inside the noise — because a de-prioritised process
+	// still gets every idle core. What it buys is that a foreground process preempts the pool instantly.
+	//
+	// ⚠ **AFTER THE WORKER BRANCH, AND THAT IS THE POINT: A WORKER MUST NOT CALL THIS.** Children inherit
+	// the priority class, so the one call here reaches every worker this dispatcher spawns AND every test
+	// binary those workers launch. Calling it again in a worker would be the same fact applied twice.
+	//
+	// ⚠ The answer is DISCARDED here and that is not a swallowed failure: on this lane the only documented
+	// way to fail is an invalid handle, and the handle is a compile-time constant. What the value is FOR is
+	// `specs-shv2/process-background-priority.md`, which asserts it to tell a working lowering from one that
+	// did nothing — a question a caller cannot ask about itself.
+	__Builtins.enterBackgroundPriority()
+
 	// Whether the binaries this run is ABOUT to draw conclusions from are older than the tree they
 	// were built from, asked before anything is selected. A stale binary reports a verdict about code
 	// that is not here — a false red, or the same lie as a false green — so the honest answer is to
@@ -864,7 +880,7 @@ function printUsage()
 	print("                                verdict measures somebody else's uptime rather than this\n")
 	print("                                compiler; a default run NAMES every one it left out.\n")
 	print("  --workers=<n>                 (spec-test) Run the suite on <n> persistent worker\n")
-	print("                                subprocesses (default {DefaultWorkerCount}). 1 is this same pool with one\n")
+	print("                                subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one\n")
 	print("                                worker in it, NOT a serial path — every worker count must\n")
 	print("                                print BYTE-IDENTICAL output, and that invariance is the\n")
 	print("                                pool's sharpest gate.\n")
@@ -1016,7 +1032,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: DefaultWorkerCount, workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, badOption: "", withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, badOption: "", withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —

@@ -1332,6 +1332,11 @@ class Program {
       }
     }
 
+    // Before any worker thread or child process exists, so the compilation this process does itself and
+    // every test binary it launches both inherit it. See HostPriority for why priority rather than a
+    // smaller pool, and why the parent rather than the job object.
+    HostPriority.EnterBackground();
+
     // Process-wide because the flag it drives (`Compiler.DebugInfo`) is [ThreadStatic] and the runner
     // compiles on worker threads, so the value has to be reachable from the static that (re)sets those
     // flags on every compile. Set here, once, before any runner exists.

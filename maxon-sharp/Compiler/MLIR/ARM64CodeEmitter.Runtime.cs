@@ -576,6 +576,7 @@ public partial class ARM64CodeEmitter {
     rawRt.EmitCurrentTimeNanos();
     rawRt.EmitCurrentUnixTimeSeconds();
     rawRt.EmitThreadCpuTicks();
+    rawRt.EmitEnterBackgroundPriority();
     rawRt.EmitCurrentProcessId();
     // DebugStream functions are emitted from 4-ARM64CodeEmitter.cs
     EmitMaxonFileSize();

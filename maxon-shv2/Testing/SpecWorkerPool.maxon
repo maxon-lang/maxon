@@ -493,7 +493,46 @@ typealias JobWeight = int(0 to u64.max)
 // so an answer that comes back out of order still lands in its place.
 typealias PlanIndex = int(0 to u64.max)
 
-export let DefaultWorkerCount = 12 as WorkerCount
+// ⭐⭐ **HOW MANY WORKERS WHEN NOBODY SAID: THE WHOLE MACHINE — AND IT USED TO BE THE LITERAL `12`.**
+// That number was measured on an 8-core arm64-macOS host (this file's own timeout analysis says so), so
+// it was a 12-worker pool on 8 cores there and only right by accident here. Asking the machine is what
+// makes it right on both.
+//
+// ⭐ **NOTHING IS HELD BACK, AND THAT IS MEASURED.** On the bootstrap's suite (the same shape of work: a
+// pool of compiling subprocesses), 6-physical / 12-logical host, below-normal priority, runs INTERLEAVED
+// and alternating so run order cannot masquerade as an effect: 6 workers 90.9 s mean, 10 workers 85.2 s,
+// 12 workers 83.5 s. Throughput RISES with worker count and plateaus at the top — undersubscribing to the
+// PHYSICAL count costs ~8%, and there is no oversubscription cliff. A reserve of 2 was tried and bought
+// nothing measurable.
+//
+// ⛔⛔ **AN EARLIER READING SAID 12 WORKERS COST 15%, AND IT WAS A COLD START.** One un-interleaved
+// sample, taken right after a rebuild, read 95.4 s and never reproduced under alternation. ⇒ a wall-clock
+// number here is worth nothing unrepeated, and worth less still if it is the first run after a build.
+//
+// ⚠ **SIZING FOR THROUGHPUT IS ONLY CORRECT BECAUSE THE RUN IS DE-PRIORITISED.** Keeping the box usable
+// is `__Builtins.enterBackgroundPriority()`'s job (see `Main.runSpecTest`), and it costs nothing
+// measurable; reserving slots for politeness INSTEAD would cost throughput (the 6-worker row) and still
+// not yield to a foreground process, because the OS time-slices rather than holding a core aside.
+//
+// ⚠ **NOT A CONSTANT ANY MORE, WHICH COSTS EVERY INVOCATION ONE `GetActiveProcessorCount`** — it is
+// reached through `MaxonArgs.create()`, which every command builds, so the machine query and its
+// optional-band import are now in the compiler's own binary rather than only in a program that asks. One
+// call at startup against a suite that runs for minutes; the alternative is a default nobody can resolve
+// without knowing which command is running.
+//
+// The floor is not decorative even though `__Builtins.cpuCount()` is clamped to at least 1 by the
+// runtime: that clamp lives in builder-built Std and nothing here PROVES it, while `WorkerCount` starts
+// at 1 because a pool of no workers runs nothing. The guard is what carries the count into the type.
+export function defaultWorkerCount() returns WorkerCount
+	let reported = __Builtins.cpuCount()
+	if reported < 1 'unreported'
+		return 1 as WorkerCount
+	end 'unreported'
+
+	// No cast: the guard above has already proved `reported >= 1`, which is `WorkerCount`'s own range,
+	// and E3010 refuses a cast that re-states what the compiler knows.
+	return reported
+end 'defaultWorkerCount'
 
 // The largest pool `--workers=` will accept. Not a technical limit — it is the point past which
 // the request is more plausibly a typo than an intent, and every worker is a real OS process.

@@ -712,6 +712,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		tlsSetValue then break 'result'
 		tlsSlotLoad(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osSetEvent then break 'result'
+		// The priority door defines the class `GetPriorityClass` answers in EAX — an integer, so a GPR,
+		// exactly as `osCpuCount` classes `GetActiveProcessorCount`'s.
+		osEnterBackgroundPriority(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1080,7 +1083,7 @@ export type ScaledIndexFolds
 			const to globalAddr then break 'mem'
 			loadIndirect(_, addrId, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
 			storeIndirect(addrId, _, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
-			osAllocPages to osSetEvent then break 'mem'
+			osAllocPages to osEnterBackgroundPriority then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 

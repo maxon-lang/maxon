@@ -346,6 +346,28 @@ public interface IEmitterBackend {
   void GetThreadCpuTicks(VReg dest, int scratchSlot);
 
   /// <summary>
+  /// Lower THIS process to background scheduling priority, and leave in <paramref name="dest"/> the
+  /// priority the OS reports for it afterwards — a real second reading, not the value just written,
+  /// so a caller can tell a working lowering from one that did nothing.
+  /// ⚠ THE UNIT IS PLATFORM-DEFINED AND THE PLATFORMS DO NOT AGREE: a Windows priority CLASS
+  /// (BELOW_NORMAL_PRIORITY_CLASS = 0x4000) against a POSIX NICE value (10). They run in opposite
+  /// directions and nothing converts between them.
+  ///
+  /// ⭐ THE INHERITANCE CONTRACT EVERY THREAD-CREATING SITE IN THIS RUNTIME DEPENDS ON: after this
+  /// call, an OS thread the runtime creates — a worker M via <see cref="SpawnWorker"/>, the IOCP
+  /// completion thread, a subprocess drain/feed thread — runs at this priority too. Each platform
+  /// discharges that differently and MUST say how in its implementation:
+  ///   • Windows: SetPriorityClass sets a PROCESS class, so it covers threads created before AND
+  ///     after the call. Nothing extra is emitted, and nothing needs to be.
+  ///   • macOS: Darwin scopes nice to the PROCESS, so the same holds.
+  ///   • ⚠ Linux, if this backend ever gains that lane: nice is PER-THREAD there. A thread already
+  ///     running when this is called keeps its old value, and only threads created afterwards
+  ///     inherit it. That lane owes real work here — it cannot inherit the two answers above.
+  /// Clobbers Arg0..Arg1 and Scratch0.
+  /// </summary>
+  void EnterBackgroundPriority(VReg dest);
+
+  /// <summary>
   /// Get current process ID into dest register (zero-extended).
   /// Windows: GetCurrentProcessId.
   /// macOS / POSIX: getpid.
@@ -371,6 +393,13 @@ public interface IEmitterBackend {
   /// macOS: pthread_create with __sched_worker_loop as entry point.
   /// Stores the thread handle in p->osThreadHandle (offset 0x40).
   /// Clobbers Arg0..Arg5.
+  ///
+  /// ⭐ SCHEDULING PRIORITY: an M born here runs at the process's current priority, and on BOTH lanes
+  /// this backend emits, that is true with nothing emitted here — Windows scopes a priority CLASS to
+  /// the process and Darwin scopes NICE to the process, so both cover threads created before and after
+  /// <see cref="EnterBackgroundPriority"/> is called. ⚠ THAT IS A PROPERTY OF THESE TWO PLATFORMS, NOT
+  /// A PROPERTY OF THIS CALL: under Linux nice is PER-THREAD, so a Linux lane would have to make the M
+  /// adopt the priority at its own birth. <see cref="EnterBackgroundPriority"/> owns the full contract.
   /// </summary>
   void SpawnWorker(VReg p);
 
