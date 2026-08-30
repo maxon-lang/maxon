@@ -1318,7 +1318,7 @@ also flags a not-yet-owned buffer rather than reporting a capacity it does not h
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
 	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
-	let notMine = 0 - 1
+	let notMine = -1
 	let asView = sub.capacity()
 	try sub.set(0, value: 99) otherwise panic("index 0 is in bounds")
 	let afterWrite = sub.capacity()
@@ -1716,10 +1716,10 @@ function main() returns ExitCode
 	vClear.clear()
 
 	var vPop = try src.slice(1, endIndex: 5) otherwise return 2
-	let popped = try vPop.pop() otherwise 0 - 1
+	let popped = try vPop.pop() otherwise -1
 
 	var vRemove = try src.slice(2, endIndex: 6) otherwise return 3
-	let removed = try vRemove.remove(0) otherwise 0 - 1
+	let removed = try vRemove.remove(0) otherwise -1
 
 	var vInsert = try src.slice(0, endIndex: 3) otherwise return 4
 	vInsert.insert(1, value: 99)
@@ -1734,7 +1734,7 @@ function main() returns ExitCode
 	// Not one of those writes may have reached the shared source.
 	var k = 0
 	while k < 8 'check'
-		if (try src.get(k) otherwise 0 - 1) != k 'mismatch'
+		if (try src.get(k) otherwise -1) != k 'mismatch'
 			return 7
 		end 'mismatch'
 		k = k + 1

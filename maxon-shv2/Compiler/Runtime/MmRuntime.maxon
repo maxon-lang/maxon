@@ -834,12 +834,12 @@ end 'emitFieldAddr'
 // other exists.
 export function emitAlignUp(module StdModule, block IrBlock, value ValueId, width ParsedInt, ids ValueMinter) returns ValueId
 	if width < 1 or (width and (width - 1)) != 0 'widthNotAPowerOfTwo'
-		panic("emitAlignUp: a width of {width} is not a positive power of two, so `0 - {width}` is not the mask that clears its low bits")
+		panic("emitAlignUp: a width of {width} is not a positive power of two, so `-{width}` is not the mask that clears its low bits")
 	end 'widthNotAPowerOfTwo'
 
 	let bias = emitConst(module, block: block, value: width - 1, ids: ids)
 	let raised = emitBin(module, block: block, a: value, b: bias, opcode: StdBinOpcode.add, ids: ids)
-	let mask = emitConst(module, block: block, value: 0 - width, ids: ids)
+	let mask = emitConst(module, block: block, value: -width, ids: ids)
 	return emitBin(module, block: block, a: raised, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitAlignUp'
 
@@ -1292,7 +1292,7 @@ end 'closeCountedLoop'
 
 // `byteCount and -8` — how many of `byteCount`'s bytes a run of WHOLE machine words covers. Derived from the
 // word size rather than written as a `-8` beside it: the mask and the step of the word loop are one fact.
-let WholeWordsMask = 0 - (MachineWordBytes as ParsedInt)
+let WholeWordsMask = -(MachineWordBytes as ParsedInt)
 
 // The step of a counted loop that advances ONE item per trip — one byte, one element, one slot. Named
 // because `closeCountedLoop`'s step is a WIDTH everywhere else in this family (a word copy steps eight), so

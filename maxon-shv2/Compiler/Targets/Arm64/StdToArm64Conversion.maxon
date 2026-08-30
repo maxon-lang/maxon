@@ -989,7 +989,7 @@ type StdToArm64Lowering
 	// TRUNCATING toward zero — the `z`, which is why it is right for `trunc()`).
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstRef BlockRef)
 		if stdTypeIsFloat(operandType) != stdUnaryOperandIsFloat(opcode) 'domain'
-			panic("lowerUnaryOp: no arm64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`), and an f64 negate in particular flips the sign bit (a different instruction), not the integer `neg`; nothing lowers to one yet (negative floats are reached through `0.0 - x`)")
+			panic("lowerUnaryOp: no arm64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`); an f64 negate in particular is `fneg` (a sign-bit flip, the `fneg` instruction), never the integer `neg`")
 		end 'domain'
 
 		let dest = TargetVReg.virtual(resultId)
@@ -1010,6 +1010,9 @@ type StdToArm64Lowering
 			// this opcode: x64 has to synthesize the sign-bit clear (`TargetOp.absF64RegReg`), arm64 asks
 			// the hardware for it.
 			abs then self.emit(dstRef, op: TargetOp.arm64Fabs(dest, src: src))
+			// `fneg` is its own instruction here too — the sign-bit FLIP beside `fabs`'s clear, and again
+			// where x64 has to synthesize (`TargetOp.negF64RegReg`) and arm64 asks the hardware.
+			fneg then self.emit(dstRef, op: TargetOp.arm64Fneg(dest, src: src))
 			// The BIT REINTERPRETATION (`float.hash`) — `FMOV Xd, Dn`, the general↔vector transfer
 			// form, NOT the `FMOV Dd, Dn` the shared `movRegReg` emits. Same 64 bits, other file.
 			bitcastF64ToI64 then self.emit(dstRef, op: TargetOp.arm64FmovGprFp(dest, src: src))

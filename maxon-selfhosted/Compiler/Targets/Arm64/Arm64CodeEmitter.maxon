@@ -80,7 +80,7 @@ let ARM64_FRAME_PAIR_INDEX_MAX = 504
 // STP X29, X30, [SP, #-frameSize]! (pre-indexed, 64-bit). Caller must ensure
 // frameSize <= ARM64_FRAME_PAIR_INDEX_MAX — beyond that the imm7 field overflows.
 export function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
-	let imm7 = (0 - frameSize) / 8 and 0x7F
+	let imm7 = (-frameSize) / 8 and 0x7F
 	let insn = 0xA9800000 or (imm7 shl 15) or (30 shl 10) or (31 shl 5) or 29
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitStpPreIndex'
@@ -1983,28 +1983,28 @@ function arm64EmitMemzeroOp(code ByteArray, dstSlot VarSlot, lenSlot VarSlot)
 	arm64EmitCondBranchOffset(code, cond: ARM64_COND_HS, imm19: (loopTop - code.count()) / 4)
 	// len >= 64 on entry, so [end-64, end) is always inside the region. No remainder
 	// test — re-zeroing is cheaper than branching.
-	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_END, startOffset: 0 - ARM64_MEMZERO_LOOP_STRIDE, count: 4)
+	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_END, startOffset: -ARM64_MEMZERO_LOOP_STRIDE, count: 4)
 	let bDoneFromLoop = code.count()
 	arm64EmitBranchOffset(code, imm26: 0)
 
 	// --- 32..63 ---
 	arm64PatchCondBranchToHere(code, site: bN32, cond: ARM64_COND_LO)
 	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_DST, startOffset: 0, count: 2)
-	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_END, startOffset: 0 - 32, count: 2)
+	arm64EmitStpZeroRun(code, baseReg: ARM64_MEMZERO_END, startOffset: -32, count: 2)
 	let bDoneFromN32 = code.count()
 	arm64EmitBranchOffset(code, imm26: 0)
 
 	// --- 16..31 ---
 	arm64PatchCondBranchToHere(code, site: bN16, cond: ARM64_COND_LO)
 	arm64EmitStpZeroPair(code, baseReg: ARM64_MEMZERO_DST, offset: 0)
-	arm64EmitStpZeroPair(code, baseReg: ARM64_MEMZERO_END, offset: 0 - 16)
+	arm64EmitStpZeroPair(code, baseReg: ARM64_MEMZERO_END, offset: -16)
 	let bDoneFromN16 = code.count()
 	arm64EmitBranchOffset(code, imm26: 0)
 
 	// --- 8..15: one qword from each end (STUR for the negative displacement) ---
 	arm64PatchCondBranchToHere(code, site: bN8, cond: ARM64_COND_LO)
 	arm64EmitStrRegOffset(code, rt: ARM64_XZR, baseReg: ARM64_MEMZERO_DST, offset: 0)
-	arm64EmitStur(code, rt: ARM64_XZR, baseReg: ARM64_MEMZERO_END, offset: 0 - 8)
+	arm64EmitStur(code, rt: ARM64_XZR, baseReg: ARM64_MEMZERO_END, offset: -8)
 	let bDoneFromN8 = code.count()
 	arm64EmitBranchOffset(code, imm26: 0)
 

@@ -1346,7 +1346,7 @@ function opIsCondBranch(op TargetOp) returns bool
 		movRegImm to divideReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to movqXmmGpr gives false
+		andRegReg to negF64RegReg gives false
 		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
 		// (`arm64Cbz`/`arm64Cbnz`) — are the twins of `jcc`: each carries only the THEN edge, paired
 		// with an `arm64Branch` terminator for the else edge. `arm64Ret`/`arm64Branch` and the ALU band
@@ -1377,6 +1377,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		leaRegBaseIndexScale to arm64AddLsl gives false
 		// EC18: the high multiply is a body op, not a branch.
 		imulHighReg gives false
+		// arm64 `fneg` is a body op, not a branch.
+		arm64Fneg gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1404,7 +1406,7 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 		jcc to divideReg gives UnconditionalBranchTarget.none
 		pushReg to popReg gives UnconditionalBranchTarget.none
 		storeSlotReg to loadRegSlot gives UnconditionalBranchTarget.none
-		andRegReg to movqXmmGpr gives UnconditionalBranchTarget.none
+		andRegReg to negF64RegReg gives UnconditionalBranchTarget.none
 		arm64Ret gives UnconditionalBranchTarget.none
 		arm64Branch(target) gives UnconditionalBranchTarget.blockId(target)
 		arm64CondBranch to arm64Fcsel gives UnconditionalBranchTarget.none
@@ -1431,6 +1433,7 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 		leaRegBaseIndexScale to arm64AddLsl gives UnconditionalBranchTarget.none
 		// EC18: the high multiply is a body op, not a branch.
 		imulHighReg gives UnconditionalBranchTarget.none
+		arm64Fneg gives UnconditionalBranchTarget.none
 	end 'check'
 end 'unconditionalBranchTargetOf'
 
@@ -1476,7 +1479,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			movRegImm to divideReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
-			andRegReg to movqXmmGpr then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			andRegReg to negF64RegReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			// The arm64 terminators: `arm64Branch` names the (unconditional / else) target, `arm64Ret`
 			// names none — the exact mirror of `jmp`/`ret`. The conditional branches
 			// (`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`) are BODY ops paired with an `arm64Branch`
@@ -1498,6 +1501,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			leaRegBaseIndexScale to arm64AddLsl then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a scaled-index address or access body op as its terminator")
 			imulHighReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
+			arm64Fneg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a float negate body op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -3116,7 +3120,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			prologue to movRegImm32 then break 'capture'
 			movReg32Reg32 to popReg then break 'capture'
 			storeSlotReg to loadRegSlot then break 'capture'
-			andRegReg to movqXmmGpr then break 'capture'
+			andRegReg to negF64RegReg then break 'capture'
 			arm64Ret to arm64Fcsel then break 'capture'
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none
 			// is an entry param capture — skipped exactly like every other non-`movRegReg` op here.
@@ -3142,6 +3146,8 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			leaRegBaseIndexScale to arm64AddLsl then break 'capture'
 			// EC18: not a `movRegReg`, so never an entry param capture.
 			imulHighReg then break 'capture'
+			// arm64 `fneg` is not a `movRegReg`, so never an entry param capture.
+			arm64Fneg then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3829,7 +3835,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// splitter spill a value to a stack SLOT here?", and a `.data` store answers no: it writes a
 		// global at a link-time address, not a `SpillSlot` this function's frame owns. Claiming a slot
 		// for it would hand the allocator a spill record for a value it never spilled.
-		andRegReg to movqXmmGpr gives OpSlotRole.touchesNoSlot
+		andRegReg to negF64RegReg gives OpSlotRole.touchesNoSlot
 		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
 		// carries a spill store — `touchesNoSlot` is unreachable this rung AND correct.
 		arm64Ret to arm64Fcsel gives OpSlotRole.touchesNoSlot
@@ -3866,6 +3872,8 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		leaRegBaseIndexScale to arm64AddLsl gives OpSlotRole.touchesNoSlot
 		// EC18: the high multiply touches no memory at all — its operands and its whole product are registers.
 		imulHighReg gives OpSlotRole.touchesNoSlot
+		// arm64 `fneg` touches registers only.
+		arm64Fneg gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

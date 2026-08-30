@@ -16,7 +16,7 @@ function shrWordBy(value Word, n Small) returns Word
 end 'shrWordBy'
 
 function below(step Num) returns Small
-	return (0 - step) as Small
+	return (-step) as Small
 end 'below'
 
 function main() returns ExitCode
@@ -25,7 +25,7 @@ function main() returns ExitCode
 	if shlBy(1, n: negative) != 0 'shl'
 		return 1
 	end 'shl'
-	if shrBy(0 - 4, n: negative) != 0 - 1 'shrSign'
+	if shrBy(-4, n: negative) != -1 'shrSign'
 		return 2
 	end 'shrSign'
 	if shrWordBy(u64.max, n: negative) != 0 'shrZeroFill'
@@ -33,7 +33,7 @@ function main() returns ExitCode
 	end 'shrZeroFill'
 
 	// The in-range end of the same alias, so the case cannot pass by refusing the whole type.
-	if shlBy(1, n: below(0 - 5)) != 32 'shlInRange'
+	if shlBy(1, n: below(-5)) != 32 'shlInRange'
 		return 4
 	end 'shlInRange'
 
@@ -144,6 +144,31 @@ func @shrWordBy {
     x64.ret
 }
 
+func @below {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg r8, rcx
+    x64.negReg r8, rcx
+    x64.cmpRegImm32 r8, -1
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 5
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -151,8 +176,21 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
+    x64.movRegImm32 rcx, 1
   __il_body#11:
-    x64.movRegImm rbx, 18446744073709551615
+    x64.movRegReg rax, rcx
+    x64.negReg rax, rcx
+    x64.cmpRegImm32 rax, -1
+    x64.jcc less, __il_slow#14
+  __rc_chk#13:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc lessEqual, __rc_ok#12
+  __il_slow#14:
+    x64.callDirect below
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont#10
+  __rc_ok#12:
+    x64.movRegReg rbx, rax
   __il_cont#10:
     x64.movRegImm32 rax, 1
   __il_body#15:
@@ -259,9 +297,22 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#6:
-    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm rcx, 18446744073709551611
   __il_body#31:
-    x64.movRegImm32 rdx, 5
+    x64.movRegReg rax, rcx
+    x64.negReg rax, rcx
+    x64.cmpRegImm32 rax, -1
+    x64.jcc less, __il_slow#34
+  __rc_chk#33:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc lessEqual, __rc_ok#32
+  __il_slow#34:
+    x64.callDirect below
+    x64.movRegReg rdx, r8
+    x64.jmp __il_body#35
+  __rc_ok#32:
+    x64.movRegReg rdx, rax
   __il_body#35:
     x64.cmpRegImm32 rdx, -1
     x64.jcc less, __il_slow#38
@@ -269,21 +320,22 @@ func @main {
     x64.cmpRegImm32 rdx, 5
     x64.jcc lessEqual, __rc_ok#36
   __il_slow#38:
-    x64.movRegReg rcx, rax
+    x64.movRegReg rcx, rbx
     x64.callDirect shlBy
     x64.jmp __il_cont#29
   __rc_ok#36:
+    x64.movRegReg rax, rdx
+    x64.andRegImm32 rax, rdx, -64
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.sarRegImm8 rax, rcx, 63
     x64.movRegReg rcx, rdx
-    x64.andRegImm32 rcx, rdx, -64
-    x64.movRegReg rsi, rcx
-    x64.negReg rsi, rcx
-    x64.orRegReg rsi, rsi, rcx
-    x64.sarRegImm8 rsi, rsi, 63
-    x64.movRegReg rcx, rdx
-    x64.shlRegCl rax, rax
-    x64.notReg rsi, rsi
-    x64.andRegReg rax, rax, rsi
-    x64.movRegReg r8, rax
+    x64.shlRegCl rbx, rbx
+    x64.notReg rax, rax
+    x64.andRegReg rbx, rbx, rax
+    x64.movRegReg r8, rbx
   __il_cont#29:
     x64.cmpRegImm32 r8, 32
     x64.jcc equal, ifcont#8

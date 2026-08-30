@@ -2022,7 +2022,7 @@ function applyValueToPressure(liveness LivenessResult, pressure PressureIndex, v
 	let class = liveness.classOf(v)
 	var sign = 1 as PressureDelta
 	if not adding 'withdrawing'
-		sign = 0 - sign
+		sign = -sign
 	end 'withdrawing'
 	let useSites = index.useCount(v)
 
@@ -4885,7 +4885,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
-		andRegReg to movqXmmGpr gives false
+		andRegReg to negF64RegReg gives false
 		// The arm64 band. `arm64MovImm` IS the arm64 constant materialization (the `movz`/`movk` ladder),
 		// so it is rematerializable exactly as x64's `movRegImm`/`movRegImm32` are — `constDefInfo` reads
 		// its immediate and `freshConstOp` re-emits a fresh `arm64MovImm`. Every other arm64 op reads a
@@ -4923,6 +4923,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// EC18: the high multiply DEFINES NOTHING EXPLICIT — its product lands in the implicit RAX/RDX
 		// pair — and it reads a register besides. `divideReg`'s answer, for both halves of the reason.
 		imulHighReg gives false
+		// arm64 `fneg` reads a register. Not rematerializable.
+		arm64Fneg gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -5734,7 +5736,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		movRegImm32(_, value) gives (value, false)
 		arm64MovImm(_, value) gives (value, true)
 		prologue to jcc panic("constDefInfo: def is not a constant materialization")
-		movRegReg to movqXmmGpr panic("constDefInfo: def is not a constant materialization")
+		movRegReg to negF64RegReg panic("constDefInfo: def is not a constant materialization")
 		arm64Ret to arm64Cbnz panic("constDefInfo: def is not a constant materialization")
 		arm64Prologue to arm64Fcsel panic("constDefInfo: def is not a constant materialization")
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not const materializations —
@@ -5758,6 +5760,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		leaRegBaseIndexScale to arm64AddLsl panic("constDefInfo: def is not a constant materialization")
 		// `opIsConstMaterialization` answers false, so this never reaches here; named rather than swallowed.
 		imulHighReg panic("constDefInfo: def is not a constant materialization")
+		arm64Fneg panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -5899,6 +5902,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// SSE band, past `minMaxSdRegReg`) and each rebuilds its OWN variant.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		movqXmmGpr(dest, src) then return TargetOp.movqXmmGpr(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		// f64 NEGATE — one def, one use, both substitutable, like `absF64RegReg` below.
+		negF64RegReg(dest, src) then return TargetOp.negF64RegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// f64 ABS — one def, one use, both substitutable, like the converts. Its two-address REUSE is
 		// the operand model's business, not this rename's.
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
@@ -6009,6 +6014,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale)
 		// EC18 — one register operand to substitute, exactly as `divideReg` has.
 		imulHighReg(src) then return TargetOp.imulHighReg(substituteVReg(src, from: from, to: to))
+		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 	end 'rewrite'
 end 'substituteValueInOp'
 

@@ -678,7 +678,7 @@ end 'gtMorestackXmmSlotDisp'
 
 // The ferried entry-rsp word sits one machine word below the system-stack top (`[systemStackTop - 8]`), and rsp
 // is positioned there before the pushes begin.
-let MorestackFerryDisp = (0 - StackWordBytes) as Imm32
+let MorestackFerryDisp = -StackWordBytes as Imm32
 
 // The `+8 rsp` that skips the ferried entry-rsp slot after the GPR pops, before switching to the new GT stack.
 let MorestackFerrySkipBytes = StackWordBytes as Imm32
@@ -993,10 +993,10 @@ end 'emitGtStackGuard'
 // Frame locals (rbp-relative) and the GQCS 5th-argument stack slot (rsp-relative). The frame is 0x50 bytes: with the
 // `push rbp` it lands RSP 16-aligned at every `call` (entry RSP ≡ 8 mod 16; push rbp ⇒ 0; sub 0x50 ⇒ 0).
 let IoLoopFrameBytes = 0x50 as StackSize
-let IoLoopBytesLocalDisp = (0 - 0x08) as Imm32  // lpNumberOfBytesTransferred out-param
-let IoLoopKeyLocalDisp = (0 - 0x10) as Imm32  // lpCompletionKey out-param (unused)
-let IoLoopOverlappedLocalDisp = (0 - 0x18) as Imm32  // lpOverlapped out-param → the completing GT's OVERLAPPED
-let IoLoopGtLocalDisp = (0 - 0x20) as Imm32  // the recovered GT pointer, spilled across the Win32/enqueue calls
+let IoLoopBytesLocalDisp = -0x08 as Imm32  // lpNumberOfBytesTransferred out-param
+let IoLoopKeyLocalDisp = -0x10 as Imm32  // lpCompletionKey out-param (unused)
+let IoLoopOverlappedLocalDisp = -0x18 as Imm32  // lpOverlapped out-param → the completing GT's OVERLAPPED
+let IoLoopGtLocalDisp = -0x20 as Imm32  // the recovered GT pointer, spilled across the Win32/enqueue calls
 
 // ⭐ **THE WAKE DEBT `__sched_publish_locked` ANSWERED (SV1)** — 1 when a GREEN THREAD was published, so a
 // `__sched_wake_or_spawn` is owed after the release. It is a FRAME LOCAL rather than a register because
@@ -1006,7 +1006,7 @@ let IoLoopGtLocalDisp = (0 - 0x20) as Imm32  // the recovered GT pointer, spille
 //
 // ⚠ rbp-0x28 is rsp+0x28 in this 0x50 frame, one slot above the outgoing-argument region
 // (`win64OutgoingArgDisp(0)` = rsp+0x20, eight bytes wide), so it collides with nothing.
-let IoLoopWakeLocalDisp = (0 - 0x28) as Imm32
+let IoLoopWakeLocalDisp = -0x28 as Imm32
 let IoLoopInfiniteTimeout = 0xFFFFFFFF  // INFINITE
 
 // The completion loop's own forward/backward branch targets, resolved against a LOOP-LOCAL fixup list + offset map

@@ -26781,14 +26781,30 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private static long ParseNegatedIntegerLiteral(Token token) {
     var text = token.Value.Replace("_", "");
     try {
-      return -long.Parse(text);
+      ulong magnitude;
+      if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        magnitude = Convert.ToUInt64(text[2..], 16);
+      else if (text.StartsWith("0b", StringComparison.OrdinalIgnoreCase))
+        magnitude = Convert.ToUInt64(text[2..], 2);
+      else if (text.StartsWith("0o", StringComparison.OrdinalIgnoreCase))
+        magnitude = Convert.ToUInt64(text[2..], 8);
+      else
+        magnitude = ulong.Parse(text);
+
+      // 9223372036854775808 (2^63) overflows long but -9223372036854775808 is exactly long.MinValue
+      if (magnitude == 1UL << 63) return long.MinValue;
+      return -checked((long)magnitude);
     } catch (OverflowException) {
-      // 9223372036854775808 overflows long but -9223372036854775808 is exactly long.MinValue
-      if (ulong.TryParse(text, out var uval) && uval == (ulong)long.MaxValue + 1)
-        return long.MinValue;
       throw new CompileError(ErrorCode.ParserLiteralOverflow,
         $"Integer literal '-{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
         token.Line, token.Column);
+    } catch (FormatException) {
+      throw MalformedNumericLiteral(token);
+    } catch (ArgumentException) {
+      // Convert.ToUInt64 raises this rather than FormatException for an empty or non-radix digit
+      // run ('0x' with nothing after it), so the radix path needs its own arm to reach the same
+      // diagnostic the decimal path does — mirrors ParseIntegerLiteral's same arm.
+      throw MalformedNumericLiteral(token);
     }
   }
 

@@ -386,6 +386,10 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		sqrtsdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		roundsdRegReg(d, s, _) gives physRegBit(d) or physRegBit(s)
 		absF64RegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		// The sign-bit FLIP — its two XMM operands are counted like `absF64RegReg`'s. Its scratch xmm5
+		// (the op's `implicitDefs`) is caller-saved under both ABIs and never pushed, so it contributes
+		// nothing here, exactly as the jump table's r10/r11 do not.
+		negF64RegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		// The BIT REINTERPRETATION. Its GPR DEST can be colored into a callee-saved register
 		// (rbx/r12–r15), so a miss here is the real-miscompile trap `leaRegRdata` documents below,
 		// not a missed optimization: the prologue would never save that register and the function
@@ -465,6 +469,8 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// are caller-saved and are not part of this scan (which is about callee-saved registers the
 		// coloring used), while `src` is an ordinary coloured register that can land in rbx/r12-r15.
 		imulHighReg(src) gives physRegBit(src)
+		// arm64-only, 0 for the reason every other arm64 arm above gives.
+		arm64Fneg gives 0
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -597,7 +603,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		jmp to divideReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to movqXmmGpr gives false
+		andRegReg to negF64RegReg gives false
 		// Unreachable this rung (arm64 uses Arm64PrologueEpilogue, wave 1). `gives` cannot host a
 		// `panic`; wave 1 answers `arm64Ret` true here when it wires the arm64 return block.
 		arm64Ret to arm64Fcsel gives false
@@ -621,5 +627,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		leaRegBaseIndexScale to arm64AddLsl gives false
 		// EC18: the high multiply is a body op, never a `ret`.
 		imulHighReg gives false
+		// arm64 `fneg` is a body op, never a `ret`.
+		arm64Fneg gives false
 	end 'check'
 end 'blockEndsWithReturn'

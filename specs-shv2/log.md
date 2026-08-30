@@ -160,7 +160,7 @@ whole construction. The retraction and this case arrived together for that reaso
 <!-- test: positive-infinity -->
 ```maxon
 function main() returns ExitCode
-	let positiveInfinity = 0.0 - Math.log(0.0)
+	let positiveInfinity = -Math.log(0.0)
 	print("{Math.log(positiveInfinity)}\n")
 	return 0
 end 'main'

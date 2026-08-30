@@ -207,7 +207,7 @@ there is nothing here for it to drift from.
 <!-- test: log10.positive-infinity -->
 ```maxon
 function main() returns ExitCode
-	let positiveInfinity = 0.0 - Math.log(0.0)
+	let positiveInfinity = -Math.log(0.0)
 	print("{Math.log10(positiveInfinity)}\n")
 	return 0
 end 'main'

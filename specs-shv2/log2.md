@@ -143,7 +143,7 @@ function main() returns ExitCode
 	// Check difference is negligible
 	var abs_diff = log2_result - log_result
 	if abs_diff < 0.0 'abs'
-		abs_diff = 0.0 - abs_diff
+		abs_diff = -abs_diff
 	end 'abs'
 	
 	if abs_diff < 0.000001 'pass'
@@ -231,7 +231,7 @@ wrong number, it runs until it is killed, exactly as `log`'s does. Two functions
 <!-- test: log2.positive-infinity -->
 ```maxon
 function main() returns ExitCode
-	let positiveInfinity = 0.0 - Math.log(0.0)
+	let positiveInfinity = -Math.log(0.0)
 	print("{Math.log2(positiveInfinity)}\n")
 	return 0
 end 'main'

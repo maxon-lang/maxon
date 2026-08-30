@@ -1,0 +1,63 @@
+// Test: negating-nan-flips-its-sign-bit
+function main() returns ExitCode
+	let quietNan = __Builtins.bitsToFloat(0x7FF8000000000000)
+	if Math.hasNegativeSignBit(quietNan) 'arrivedNegative'
+		return 1
+	end 'arrivedNegative'
+	let negated = -quietNan
+	if not Math.hasNegativeSignBit(negated) 'signBitNotFlipped'
+		return 2
+	end 'signBitNotFlipped'
+	if negated == negated 'notANan'
+		return 3
+	end 'notANan'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 9221120237041090560
+    x64.movqXmmGpr xmm0, rax
+  __il_body#8:
+    x64.movqGprXmm rax, xmm0
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg less, rax
+  __il_cont#7:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#2
+  arrivedNegative:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.negF64RegReg xmm0, xmm0
+  __il_body#10:
+    x64.movqGprXmm rax, xmm0
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg less, rax
+  __il_cont#9:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#4
+  signBitNotFlipped:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.ucomisdRegReg xmm0, xmm0
+    x64.jcc parity, ifcont#6
+  fordered:
+    x64.jcc notEqual, ifcont#6
+  notANan:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

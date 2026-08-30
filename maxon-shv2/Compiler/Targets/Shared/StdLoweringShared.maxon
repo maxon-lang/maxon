@@ -173,7 +173,7 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 		// to reach here without swallowing both conversions on the way. Stating `xmm` outright is also
 		// the stronger claim — these are f64 → f64 by definition (`stdUnaryOperandIsFloat`), so the
 		// class does not depend on `operandType` at all.
-		floor to abs gives RegClass.xmm
+		floor to fneg gives RegClass.xmm
 		// ⚠ The BITCAST is the THIRD shape this table has to answer for, and the only one whose
 		// operand and result differ in FILE without differing in BITS: `bitcastF64ToI64` moves an
 		// f64's pattern into a GPR unchanged. `operandType` is the f64 SOURCE, so — exactly as for
@@ -209,10 +209,10 @@ export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 		ceil then return FloatRoundMode.towardPositive
 		round then return FloatRoundMode.nearestTiesToEven
 		neg to fpToSi then panic("floatRoundModeFor: Std unary opcode {opcode.name} performs no rounding — only floor/ceil/round lower to a rounding instruction (`roundsd` on x64, `frint` on arm64), and the isels route only those three here")
-		// ONE arm for the two math intrinsics that are not roundings: the reason is identical (each has
-		// its own lowering, which is not a `roundsd`/`frint` mode) and only the instructions differ, so
-		// the message names both rather than the same sentence being written twice.
-		sqrt to abs then panic("floatRoundModeFor: `{opcode.name}` has no rounding mode — `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`) and `abs` clears the sign bit (a `psllq`/`psrlq` pair on x64, `fabs` on arm64); an isel asking either for its rounding has routed it to the wrong op")
+		// ONE arm for the three float ops past the roundings: the reason is identical (each has its own
+		// lowering, which is not a `roundsd`/`frint` mode) and only the instructions differ, so the
+		// message names all three rather than the same sentence being written three times.
+		sqrt to fneg then panic("floatRoundModeFor: `{opcode.name}` has no rounding mode — `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`), `abs` clears the sign bit (a `psllq`/`psrlq` pair on x64, `fabs` on arm64) and `fneg` flips it (`negF64RegReg` on x64, `fneg` on arm64); an isel asking any of them for its rounding has routed it to the wrong op")
 		// ONE arm for BOTH bitcasts, and this is the one table where spanning them is right: a
 		// reinterpretation computes no number IN EITHER DIRECTION, so the answer does not depend on
 		// which file the bits are moving to. The arms that DO depend on the direction — the operand

@@ -13,12 +13,14 @@ IEEE-754 has **two** zeros, and `-0.0` is the one with the sign bit set. They co
 EQUAL to each other, so `==` can never tell them apart — but they are not
 interchangeable: `1.0 / -0.0` is `-inf` while `1.0 / 0.0` is `+inf`.
 
-That makes `-0.0` the one literal for which "negate the value" and "set the sign bit" give
-different answers, and the reason a leading `-` on a float literal is folded INTO the
-literal (`Parser.parseNegatedNumericLiteral`, via `negatedFloatBits`) rather than compiled
-as an operator over it. Float negation over a non-literal is still `0.0 - x`, which x64
-spells with the `subsd` already in the instruction set; `0.0 - 0.0` is `+0.0`, so a literal
-`-0.0` compiled that way silently lost its sign.
+That makes a zero the one value for which "subtract from zero" and "flip the sign bit" give
+different answers: `0.0 - 0.0` is `+0.0`, while negation is a SIGN-BIT FLIP and answers `-0.0`.
+Maxon's `-` is the flip, everywhere it can appear. A leading `-` on a float literal is folded INTO
+the literal (`Parser.parseNegatedFloatLiteral`, via `negatedFloatBits`); `-x` over a variable, a
+parameter or a top-level constant is a genuine negation (`MaxonUnaryOp.fneg` — arm64 `fneg`, wasm
+`f64.neg`, and on x64 an `xorpd` against a sign mask, `TargetOp.negF64RegReg`). Until 2026-08-30 the
+variable form was compiled as `0.0 - x`, so `let z = 0.0; print("{-z}")` printed `0.0` and
+`Json.parse("-0")` answered `+0.0`; the cases below pin the flip at every entrance.
 
 ## Tests
 
@@ -76,11 +78,11 @@ end 'main'
 42
 ```
 
-### Negating a float VARIABLE is still an arithmetic negation
+### Negating a float VARIABLE flips its sign bit
 
-`-x` over a value the compiler cannot see is `0.0 - x`, which is correct for every input
-except a positive zero — the trade x64 makes to avoid materializing a sign-bit mask in
-`.rdata`. Pinned here so the literal fold above is not mistaken for a change to it.
+`-x` over a value the compiler cannot see is a genuine negation, not `0.0 - x`. For every input
+but a zero the two agree, which is why the ordinary case below was green under both spellings;
+the zero cases after it are the ones that tell them apart, and they are what `0.0 - x` failed.
 
 <!-- test: negating-a-float-variable -->
 ```maxon
@@ -92,4 +94,107 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+A positive zero negated is a NEGATIVE zero, and negating that gives the positive one back. The
+sign is read two ways: through `print`, whose float formatter is sign-bit based, and through
+`Math.hasNegativeSignBit`, which is `__Builtins.floatToBits` — the print-independent instrument.
+Under `0.0 - x` both prints said `0.0` and the bit was never set.
+
+<!-- test: negating-a-zero-variable -->
+```maxon
+function main() returns ExitCode
+	let z = 0.0
+	let negated = -z
+	print("{negated}\n")
+	print("{-negated}\n")
+	if not Math.hasNegativeSignBit(negated) 'signBitNotSet'
+		return 1
+	end 'signBitNotSet'
+	if Math.hasNegativeSignBit(-negated) 'signBitNotCleared'
+		return 2
+	end 'signBitNotCleared'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-0.0
+0.0
+```
+
+Negation flips the sign bit of EVERY pattern, a NaN's included — IEEE-754's `negate`, which the
+standard itself distinguishes from `subtraction(0, x)`. A NaN prints without a sign, so the bit
+is the only way to observe it.
+
+<!-- test: negating-nan-flips-its-sign-bit -->
+```maxon
+function main() returns ExitCode
+	let quietNan = __Builtins.bitsToFloat(0x7FF8000000000000)
+	if Math.hasNegativeSignBit(quietNan) 'arrivedNegative'
+		return 1
+	end 'arrivedNegative'
+	let negated = -quietNan
+	if not Math.hasNegativeSignBit(negated) 'signBitNotFlipped'
+		return 2
+	end 'signBitNotFlipped'
+	if negated == negated 'notANan'
+		return 3
+	end 'notANan'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+The compile-time evaluator makes the same flip: `-` over a float CONSTANT reference is folded to
+`negatedFloatBits` of it, so a top-level `let` and a body agree about one line of source. (It was
+`0.0 - x` while the body was, and folded `-Zero` to `+0.0`.)
+
+<!-- test: const-negation-of-a-float-constant -->
+```maxon
+let Zero = 0.0
+let NegatedZero = -Zero
+
+function main() returns ExitCode
+	print("{NegatedZero}\n")
+	print("{-NegatedZero}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-0.0
+0.0
+```
+
+A value spelled with a ranged float alias reaches the same op through `numberTagOf` — the door
+that resolves a declared alias to its domain — so the flip does not depend on how the operand was
+declared.
+
+<!-- test: negation-through-a-ranged-float-alias -->
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+function negate(x Real) returns float
+	return -x
+end 'negate'
+
+function main() returns ExitCode
+	print("{negate(0.0)}\n")
+	print("{negate(-2.5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-0.0
+2.5
 ```

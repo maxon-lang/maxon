@@ -1462,7 +1462,7 @@ end 'rangeIsUnsigned'
 // The i64 pattern an unsigned `u64.max` upper bound rides as — named so the `-1`-means-
 // `u64.max` reinterpretation is not a bare literal (see RangedTypeAlias, and the sentinel case
 // in specs/ranged-typealias.md).
-let UnsignedFullUpperPattern = (0 - 1) as ParsedInt
+let UnsignedFullUpperPattern = -1 as ParsedInt
 
 // The unsigned-decimal spelling of that same sentinel, for display. `ParsedInt` is a signed i64
 // with no unsigned-render helper, and `u64.max` is the only writable bound that stores negative
@@ -1968,7 +1968,7 @@ end 'rawByteFillNarrowElementMessage'
 // reason, because stating the byte-slot one here would be false.
 export function rawByteWriteSlotDomainMessage(member String, elementDisplay String, slotBytes ElementStride) returns String
 	if slotBytes < 0 'aSubByteFieldSharesItsByteWithItsNeighbours'
-		return "'{member}' writes a RAW BYTE at a byte OFFSET, and the element {elementDisplay} is SUB-BYTE PACKED at {0 - slotBytes} bit(s) — it has no byte of its own, so one raw byte spans this element and the several after it. Store through the `Array` surface's `set`, which writes one element's bits and range-checks the value against it"
+		return "'{member}' writes a RAW BYTE at a byte OFFSET, and the element {elementDisplay} is SUB-BYTE PACKED at {-slotBytes} bit(s) — it has no byte of its own, so one raw byte spans this element and the several after it. Store through the `Array` surface's `set`, which writes one element's bits and range-checks the value against it"
 	end 'aSubByteFieldSharesItsByteWithItsNeighbours'
 
 	let slotValueSet = formatRangeDisplay(SlotUnsignedMin, high: slotUnsignedMax(slotBytes as ByteOffset), isFloat: false)
@@ -2307,7 +2307,7 @@ end 'foldFloatBinOp'
 // an integer is a parser bug, not a fold to decline.
 export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns FoldedInt
 	return match op 'o'
-		neg gives FoldedInt.folded(0 - operand)
+		neg gives FoldedInt.folded(-operand)
 		bitNot gives FoldedInt.folded(not operand)
 		logicalNot gives FoldedInt.notFoldable
 		// The CONVERSIONS never fold, and neither arm is an omission.
@@ -2330,7 +2330,9 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// `sqrt`/`floor`/`ceil`/`round`/`abs` on IEEE bit patterns at compile time — a real thing to
 		// want, and not something a `ParsedInt` column that cannot say which entries are bit patterns
 		// may do. (`abs` alone WOULD be a pure bit operation on that pattern, but the column's
-		// ambiguity is what forbids it, not the arithmetic.)
+		// ambiguity is what forbids it, not the arithmetic.) `fneg` is `abs`'s case exactly — a bit
+		// FLIP rather than a bit clear — and is refused for the same reason; a `-K` over a float
+		// constant is folded by `evalConstUnary`'s own float arm instead.
 		//
 		// `floatToBits` is refused for `abs`'s reason and no other, and it is the sharpest case of it:
 		// its fold WOULD BE THE IDENTITY — a float operand's `ParsedInt` already IS the bit pattern this
@@ -2645,9 +2647,11 @@ end 'operandsAreInterfaceRef'
 // ⭐ **WHAT A FLOAT ZERO IS, AS BITS** — IEEE-754 `+0.0`, whose encoding is all 64 bits clear.
 //
 // It lives beside `BoolTrueValue`/`BoolFalseValue` because it is the same kind of fact: the one
-// place a Maxon value of a given type becomes the number the compiler carries for it. Its single
-// reader is `Parser.emitFloatNegation`, which spells `-x` as `0.0 - x` — so the zero that
-// negation subtracts from and the bit pattern a float literal carries are one constant, not two.
+// place a Maxon value of a given type becomes the number the compiler carries for it. Its reader is
+// `Parser.emitAliasFreeCopy`, which spells a float copy as `v - 0.0` (an exact identity on every
+// input, signed zeroes included) — so the zero it subtracts and the bit pattern a float literal carries
+// are one constant, not two. Negation does NOT read it: `-x` is a sign-bit flip (`MaxonUnaryOp.fneg`),
+// because `0.0 - (+0.0)` is `+0.0`.
 export let FloatZeroBits = 0 as ParsedInt
 
 // The type a `binOp` yields. The ARITHMETIC family (`+`/`-`/`*`/`/`/`mod`) promotes (see

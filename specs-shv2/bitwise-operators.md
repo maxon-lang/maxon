@@ -71,7 +71,7 @@ A bare `int` is a signed 64-bit integer, so `shr` sign-propagates by default:
 ```maxon
 var a = 16
 var b = a shr 2       // 4       — a non-negative value fills with zeros either way
-var c = (0 - 8) shr 1 // -4, not 9223372036854775804
+var c = (-8) shr 1 // -4, not 9223372036854775804
 ```
 
 **Maxon's unsigned type is a ranged alias whose low bound is 0.** `int(0 to u64.max)` is Maxon's
@@ -111,7 +111,7 @@ and that is legal, not an error:
 let a = 1
 let b = a shl 64      // 0 — every bit shifted out
 let c = a shl 100     // 0
-let d = (0 - 1) shr 100  // -1 — a sign-filling shift leaves the sign
+let d = (-1) shr 100  // -1 — a sign-filling shift leaves the sign
 let e = 8 shr 100        // 0
 ```
 
@@ -257,11 +257,11 @@ below, which is the same sentence's OTHER half and which shv2 got wrong for exac
 one went unpinned.
 ```maxon
 function main() returns ExitCode
-	let neg = 0 - 8
-	if neg shr 60 != 0 - 1 'sixtyWrong'
+	let neg = -8
+	if neg shr 60 != -1 'sixtyWrong'
 		return 1
 	end 'sixtyWrong'
-	if neg shr 1 != 0 - 4 'oneWrong'
+	if neg shr 1 != -4 'oneWrong'
 		return 2
 	end 'oneWrong'
 	return 42
@@ -295,10 +295,10 @@ function shiftRight(value Num, distance ShiftBits) returns Num
 end 'shiftRight'
 
 function main() returns ExitCode
-	if shiftRight(0 - 8, distance: 60) != 0 - 1 'rangedDistance'
+	if shiftRight(-8, distance: 60) != -1 'rangedDistance'
 		return 1
 	end 'rangedDistance'
-	if shiftRight(0 - 1, distance: 63) != 0 - 1 'allSign'
+	if shiftRight(-1, distance: 63) != -1 'allSign'
 		return 2
 	end 'allSign'
 	if shiftRight(8, distance: 2) != 2 'nonNegative'
@@ -421,7 +421,7 @@ moves every bit out leaves the sign behind. `x shr 63` already IS the sign, whic
 compiler saturates the COUNT here rather than selecting the result.
 ```maxon
 function main() returns ExitCode
-	if (0 - 1) shr 100 != 0 - 1 'negWrong'
+	if (-1) shr 100 != -1 'negWrong'
 		return 1
 	end 'negWrong'
 	if 8 shr 100 != 0 'posWrong'
@@ -506,13 +506,13 @@ function main() returns ExitCode
 	if shiftLeft(7, count: 3) != 56 'shlInRange'
 		return 2
 	end 'shlInRange'
-	if shiftRight(0 - 1, count: 100) != 0 - 1 'shrNegPastWidth'
+	if shiftRight(-1, count: 100) != -1 'shrNegPastWidth'
 		return 3
 	end 'shrNegPastWidth'
 	if shiftRight(8, count: 100) != 0 'shrPosPastWidth'
 		return 4
 	end 'shrPosPastWidth'
-	if shiftRight(0 - 8, count: 1) != 0 - 4 'shrInRange'
+	if shiftRight(-8, count: 1) != -4 'shrInRange'
 		return 5
 	end 'shrInRange'
 	return 42
@@ -546,7 +546,7 @@ function shiftLeft(value Num, count Num) returns Num
 end 'shiftLeft'
 
 function main() returns ExitCode
-	let bad = 0 - 1
+	let bad = -1
 	return shiftLeft(4, count: bad)
 end 'main'
 ```
@@ -880,18 +880,18 @@ function shrPastWidth(v Num) returns Num
 end 'shrPastWidth'
 
 function main() returns ExitCode
-	if shrConst(0 - 8) != 0 - 1 'foldedCount'
+	if shrConst(-8) != -1 'foldedCount'
 		return 1
 	end 'foldedCount'
-	if shrDynamic(0 - 8, d: 60) != 0 - 1 'dynamicCount'
+	if shrDynamic(-8, d: 60) != -1 'dynamicCount'
 		return 2
 	end 'dynamicCount'
 
 	// A sign-filling shift saturates to the SIGN, not to 0: `x shr 63` already IS the sign.
-	if shrPastWidth(0 - 8) != 0 - 1 'foldedPastWidth'
+	if shrPastWidth(-8) != -1 'foldedPastWidth'
 		return 3
 	end 'foldedPastWidth'
-	if shrDynamic(0 - 8, d: 100) != 0 - 1 'dynamicPastWidth'
+	if shrDynamic(-8, d: 100) != -1 'dynamicPastWidth'
 		return 4
 	end 'dynamicPastWidth'
 
@@ -1008,20 +1008,20 @@ end 'shrBy'
 function main() returns ExitCode
 	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
 	// answer needs all 64.
-	let narrow = 0 - 8 as I32
-	if narrow shl 29 != shlBy(0 - 8, d: 29) 'signedFoldVsEmitted'
+	let narrow = -8 as I32
+	if narrow shl 29 != shlBy(-8, d: 29) 'signedFoldVsEmitted'
 		return 1
 	end 'signedFoldVsEmitted'
-	if narrow shl 29 != 0 - 4294967296 'signedValue'
+	if narrow shl 29 != -4294967296 'signedValue'
 		return 2
 	end 'signedValue'
 
 	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
 	// `shr 33` would have quietly become `shr 1`.
-	if narrow shr 33 != shrBy(0 - 8, d: 33) 'signedCountFoldVsEmitted'
+	if narrow shr 33 != shrBy(-8, d: 33) 'signedCountFoldVsEmitted'
 		return 3
 	end 'signedCountFoldVsEmitted'
-	if narrow shr 33 != 0 - 1 'signedCountValue'
+	if narrow shr 33 != -1 'signedCountValue'
 		return 4
 	end 'signedCountValue'
 
@@ -1039,7 +1039,7 @@ function main() returns ExitCode
 
 	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
 	// agree with it rather than merely with each other.
-	let plain = 0 - 8 as Num
+	let plain = -8 as Num
 	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
 		return 8
 	end 'rangedAgreesWithPlain'
@@ -1122,7 +1122,7 @@ function main() returns ExitCode
 	if sourceKeepsItsOwnType(u64.max) != 16 'sourceKeeps'
 		return 1
 	end 'sourceKeeps'
-	if castToSigned(u64.max) != 0 - 1 'toSigned'
+	if castToSigned(u64.max) != -1 'toSigned'
 		return 2
 	end 'toSigned'
 	return 42
@@ -1174,13 +1174,13 @@ function main() returns ExitCode
 	if shlBy(1, n: low) != 1 'shlZero'
 		return 1
 	end 'shlZero'
-	if shlBy(1, n: high) != 0 - 9223372036854775807 - 1 'shlTop'
+	if shlBy(1, n: high) != -9223372036854775807 - 1 'shlTop'
 		return 2
 	end 'shlTop'
-	if shrBy(0 - 8, n: low) != 0 - 8 'shrZero'
+	if shrBy(-8, n: low) != -8 'shrZero'
 		return 3
 	end 'shrZero'
-	if shrBy(0 - 8, n: high) != 0 - 1 'shrTop'
+	if shrBy(-8, n: high) != -1 'shrTop'
 		return 4
 	end 'shrTop'
 	if shrWordBy(u64.max, n: low) != u64.max 'shrWordZero'
@@ -1233,7 +1233,7 @@ function main() returns ExitCode
 	if shlBy(7, n: past) != 0 'shl'
 		return 1
 	end 'shl'
-	if shrBy(0 - 1, n: past) != 0 - 1 'shrSign'
+	if shrBy(-1, n: past) != -1 'shrSign'
 		return 2
 	end 'shrSign'
 	if shrWordBy(u64.max, n: past) != 0 'shrZeroFill'
@@ -1314,7 +1314,7 @@ function main() returns ExitCode
 	if shlLowByte(bits(10)) != 204800 'tenBits'
 		return 1
 	end 'tenBits'
-	if shlTopByte(bits(56)) != 0 - 72057594037927936 'topByte'
+	if shlTopByte(bits(56)) != -72057594037927936 'topByte'
 		return 2
 	end 'topByte'
 	if shrLowByte(bits(3)) != 25 'shrByte'
@@ -1354,7 +1354,7 @@ function main() returns ExitCode
 		let n = (i * 63) as Bits
 		top = top + (1 shl n)
 	end 'boundary'
-	if top != 0 - 9223372036854775807 'topSum'
+	if top != -9223372036854775807 'topSum'
 		return 2
 	end 'topSum'
 
@@ -1401,7 +1401,7 @@ function shrWordBy(value Word, n Small) returns Word
 end 'shrWordBy'
 
 function below(step Num) returns Small
-	return (0 - step) as Small
+	return (-step) as Small
 end 'below'
 
 function main() returns ExitCode
@@ -1410,7 +1410,7 @@ function main() returns ExitCode
 	if shlBy(1, n: negative) != 0 'shl'
 		return 1
 	end 'shl'
-	if shrBy(0 - 4, n: negative) != 0 - 1 'shrSign'
+	if shrBy(-4, n: negative) != -1 'shrSign'
 		return 2
 	end 'shrSign'
 	if shrWordBy(u64.max, n: negative) != 0 'shrZeroFill'
@@ -1418,7 +1418,7 @@ function main() returns ExitCode
 	end 'shrZeroFill'
 
 	// The in-range end of the same alias, so the case cannot pass by refusing the whole type.
-	if shlBy(1, n: below(0 - 5)) != 32 'shlInRange'
+	if shlBy(1, n: below(-5)) != 32 'shlInRange'
 		return 4
 	end 'shlInRange'
 
@@ -1467,8 +1467,8 @@ function main() returns ExitCode
 	if 1 shl n != 0 'shl'
 		return 2
 	end 'shl'
-	let negative = 0 - 4
-	if negative shr n != 0 - 1 'shrSign'
+	let negative = -4
+	if negative shr n != -1 'shrSign'
 		return 3
 	end 'shrSign'
 
@@ -1522,8 +1522,8 @@ function main() returns ExitCode
 	if 1 shl n != 0 'shl'
 		return 2
 	end 'shl'
-	let negative = 0 - 4
-	if negative shr n != 0 - 1 'shrSign'
+	let negative = -4
+	if negative shr n != -1 'shrSign'
 		return 3
 	end 'shrSign'
 

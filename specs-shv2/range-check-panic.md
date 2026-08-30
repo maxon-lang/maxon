@@ -234,7 +234,7 @@ function check(n Natural) returns Natural
 end 'check'
 
 function neg(n Integer) returns Integer
-  return 0 - n
+  return -n
 end 'neg'
 
 function main() returns ExitCode
@@ -1276,6 +1276,9 @@ to that domain's bottom and the loop never leaves. There are two tops, because `
 signedness valid for both operands: this counter is declared over `int(0 to u64.max)`, so the test compiles
 UNSIGNED, walks past `-1` into `0, 1, …`, and the interval `[-5, -1]` stops being true on the sixth trip.
 With only the SIGNED top refused this printed `n=7 last=1` and exited 0; the guard belongs here and fires.
+⚠ `(0 - 5) as Big` is spelled as a SUBTRACTION on purpose: a written `-5` is refused at a declared lower
+bound of 0 before the program runs (E3005), and this case pins the RUNTIME guard — the counter has to
+arrive negative through arithmetic, not through a literal the parser marks.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Big = int(0 to u64.max)

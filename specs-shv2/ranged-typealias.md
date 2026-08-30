@@ -648,7 +648,7 @@ function remainder(bits Integer, halfRadix HalfRadix) returns Integer
 end 'remainder'
 
 function main() returns ExitCode
-	let n = ident(0 - 20)
+	let n = ident(-20)
 	print("q={quotient(n, halfRadix: 3)} r={remainder(n, halfRadix: 3)}\n")
 	return 0
 end 'main'
@@ -684,7 +684,7 @@ end 'remainder'
 
 function main() returns ExitCode
 	let a = ident(100) as Small
-	let b = ident(0 - 3) as NegativeOnly
+	let b = ident(-3) as NegativeOnly
 	print("q={quotient(a, b: b)} r={remainder(a, b: b)}\n")
 	return 0
 end 'main'
@@ -715,7 +715,7 @@ function quotient(w MachineWord, halfRadix HalfRadix) returns MachineWord
 end 'quotient'
 
 function main() returns ExitCode
-	let w = ident(0 - 1) as MachineWord
+	let w = ident(-1) as MachineWord
 	print("{quotient(w, halfRadix: 8)} {w / 8}\n")
 	return 0
 end 'main'
@@ -754,7 +754,7 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function main() returns ExitCode
-	let w = ident(0 - 1) as MachineWord
+	let w = ident(-1) as MachineWord
 
 	// The operand is a CALL RESULT — a value no binding shares.
 	let s = ident(8) as Small
@@ -766,7 +766,7 @@ function main() returns ExitCode
 	print("q={try (w / b) otherwise 999} r={try (w mod b) otherwise 999}\n")
 
 	// ⚠ And `a` itself must be UNTOUCHED by that mint: it is still a plain signed `int`.
-	print("a={ident(0 - 20) / 3}\n")
+	print("a={ident(-20) / 3}\n")
 
 	let e = ident(8) as ExitCode
 	print("q={try (w / e) otherwise 999}\n")
@@ -820,7 +820,7 @@ function remainder(byteOffset Imm32) returns Integer
 end 'remainder'
 
 function main() returns ExitCode
-	let offset = ident(0 - 65) as Imm32
+	let offset = ident(-65) as Imm32
 	print("q={quotient(offset)} r={remainder(offset)}\n")
 	return 0
 end 'main'
@@ -849,11 +849,11 @@ function magnitude(imm Imm32) returns Integer
 	if imm >= 0 'nonNeg'
 		return imm
 	end 'nonNeg'
-	return 0 - imm
+	return -imm
 end 'magnitude'
 
 function main() returns ExitCode
-	let offset = ident(0 - 64) as Imm32
+	let offset = ident(-64) as Imm32
 	let units = (offset / 8) as Imm32
 	print("units={units}\n")
 	print("magnitude={magnitude(units)}\n")
@@ -903,7 +903,7 @@ function widen(v Integer) returns Integer
 end 'widen'
 
 function main() returns ExitCode
-	let offset = ident(0 - 65) as Imm32
+	let offset = ident(-65) as Imm32
 	let q = offset / 8
 	let r = offset mod 8
 	if offset < 0 'neg'
@@ -936,7 +936,7 @@ function widen(v Integer) returns Integer
 end 'widen'
 
 function main() returns ExitCode
-	let offset = ident(0 - 65) as Imm32
+	let offset = ident(-65) as Imm32
 	let difference = offset - 1
 	if offset < 0 'neg'
 		print("difference={widen(difference)}\n")
@@ -1925,7 +1925,7 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function narrow() returns BelowMinusOne
-	return ident(0 - 1)
+	return ident(-1)
 end 'narrow'
 
 function main() returns ExitCode
@@ -1957,12 +1957,12 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function pick() returns NegativeOnly
-	return ident(0 - 100)
+	return ident(-100)
 end 'pick'
 
 function main() returns ExitCode
-	let a = ident(0 - 1) as NegativeOnly
-	let b = ident(0 - 50) as NegativeOnly
+	let a = ident(-1) as NegativeOnly
+	let b = ident(-50) as NegativeOnly
 	print("a={a} b={b} c={pick()}\n")
 	return 0
 end 'main'

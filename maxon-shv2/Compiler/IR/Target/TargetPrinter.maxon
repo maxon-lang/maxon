@@ -635,7 +635,7 @@ end 'moduleTargetCpu'
 // holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
 function opIsArm64Band(op TargetOp) returns bool
 	return match op 'p'
-		prologue to movqXmmGpr gives false
+		prologue to negF64RegReg gives false
 		arm64Ret to arm64Fcsel gives true
 		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
 		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
@@ -649,9 +649,9 @@ function opIsArm64Band(op TargetOp) returns bool
 		// The stack-argument pair IS arm64-specific (see their dialect header for why x64 needs no op).
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives true
 		// The arm64 halves of the two bit reinterpretations, so a module holding either IS arm64. Their
-		// x64 twins `movqGprXmm`/`movqXmmGpr` both sit inside the leading `prologue to movqXmmGpr` arm
+		// x64 twins `movqGprXmm`/`movqXmmGpr` both sit inside the leading `prologue to negF64RegReg` arm
 		// and are correctly `false` there — that range's endpoint is the x64 band's last member and it
-		// MOVED when `movqXmmGpr` was appended to it.
+		// MOVED when `movqXmmGpr`, then `negF64RegReg`, were appended to it.
 		arm64FmovGprFp gives true
 		arm64FmovFpGpr gives true
 		// SHARED by both CPUs, like `storeSlotReg`/`loadRegSlot` — not an arm64-band op.
@@ -672,6 +672,8 @@ function opIsArm64Band(op TargetOp) returns bool
 		// EC18's high multiply is x64's one-operand `imul` — no arm64 form of it exists in this dialect
 		// (AArch64 spells the same value as `SMULH`, which nothing emits yet).
 		imulHighReg gives false
+		// `fneg` is arm64's own instruction (x64 spells the flip as `negF64RegReg`).
+		arm64Fneg gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -779,6 +781,10 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		// semantic here — each answers with its second source on a NaN — so a fragment that showed only
 		// the destination could not catch a swap.
 		minMaxSdRegReg(dest, lhs, rhs, kind) gives "{kind.name}sd {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
+		// The sign-bit FLIP prints its OPERATION for `absF64RegReg`'s reason: it assembles to a
+		// `pcmpeqd`/`psllq`/`xorpd` triple, and what a golden must pin is that `fneg` reached the x64
+		// backend as one two-address op over these two vregs — not the encoder's expansion.
+		negF64RegReg(dest, src) gives "negF64RegReg {vregName(dest)}, {vregName(src)}"
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// Each arm64 operand prints through `arm64VregName` (its `RegNum` mapped to an arm64 register
@@ -914,6 +920,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		// Prints its ONE explicit operand, exactly as `divideReg` does — RAX and RDX are the op's implicit
 		// masks and a golden that spelled them would be showing the model rather than the instruction.
 		imulHighReg(src) gives "imulHighReg {vregName(src)}"
+		arm64Fneg(dest, src) gives "fneg {arm64VregName(dest)}, {arm64VregName(src)}"
 	end 'op'
 end 'formatTargetOp'
 

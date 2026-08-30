@@ -159,7 +159,7 @@ end 'main'
 let NEGATIVE = -42
 
 function main() returns ExitCode
-	return 0 - NEGATIVE
+	return -NEGATIVE
 end 'main'
 ```
 ```exitcode

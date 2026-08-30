@@ -350,7 +350,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function negate(x Integer) returns Integer
-	return 0 - x
+	return -x
 end 'negate'
 
 function main() returns ExitCode

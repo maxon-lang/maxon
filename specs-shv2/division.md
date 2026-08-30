@@ -371,7 +371,7 @@ function remainder(n Integer, d BelowMinusOne) returns Integer
 end 'remainder'
 
 function main() returns ExitCode
-	return (remainder(0 - 13, d: -5) + 45) as ExitCode
+	return (remainder(-13, d: -5) + 45) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -476,7 +476,7 @@ function ident(v Any64) returns Any64
 end 'ident'
 
 function main() returns ExitCode
-	let w = ident(0 - 1) as Word
+	let w = ident(-1) as Word
 	let d = ident(3) as Word
 	print("q={try (w / d) otherwise 0}\n")
 	print("r={try (w mod d) otherwise 0}\n")
@@ -512,7 +512,7 @@ function ident(v Any64) returns Any64
 end 'ident'
 
 function main() returns ExitCode
-	let big = ident(0 - 1) as NonZeroWord
+	let big = ident(-1) as NonZeroWord
 	print("r={5 mod big}\n")
 	print("q={5 / big}\n")
 	return 0

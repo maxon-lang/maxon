@@ -720,7 +720,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 		result = result * factor
 	end 'applyExp'
 	if negative 'applyNeg'
-		result = 0.0 - result
+		result = -result
 	end 'applyNeg'
 	return result
 end 'numberFromBytes'
@@ -1033,6 +1033,13 @@ function writeNumber(n JsonFloat, out ByteArray)
 		let asInt = trunc(n)
 		let backToFloat = asInt as JsonFloat
 		if backToFloat == n 'isInt'
+			// `-0.0 == 0.0`, so the integral shortcut cannot see a negative zero's sign and would emit `0`,
+			// losing what `numberFromBytes` just preserved for `-0`. RFC 8259's grammar admits `-0`
+			// (`[ minus ] int`), so the sign is written back as the one character it is.
+			if asInt == 0 and Math.hasNegativeSignBit(n) 'negativeZero'
+				writeBytes(out, src: "-0".toByteArray())
+				return
+			end 'negativeZero'
 			let s = "{asInt}"
 			writeBytes(out, src: s.toByteArray())
 			return

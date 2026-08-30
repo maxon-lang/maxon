@@ -268,6 +268,9 @@ let opF64ConvertI64S = 0xB9
 // so the x64 backend clears the sign bit itself (`TargetOp.absF64RegReg`). Here it is one byte, as
 // arm64's `fabs` is one word — x64 is the outlier, not wasm.
 let opF64Abs = 0x99
+// `f64.neg` (0x9A) — the sign-bit FLIP beside `f64.abs`'s clear, `StdUnaryOpcode.fneg`'s one
+// instruction here. As with `abs`, x64 is the target that has to synthesize it (`TargetOp.negF64RegReg`).
+let opF64Neg = 0x9A
 let opF64Ceil = 0x9B
 let opF64Floor = 0x9C
 let opF64Nearest = 0x9E
@@ -710,6 +713,10 @@ export type WasmBody
 	export function f64Abs()
 		self.buf.push(opF64Abs)
 	end 'f64Abs'
+
+	export function f64Neg()
+		self.buf.push(opF64Neg)
+	end 'f64Neg'
 
 	// The BIT REINTERPRETATION (f64 in, i64 out, same bits) — see the opcode's comment for why it is
 	// beside the conversions and not one of them.

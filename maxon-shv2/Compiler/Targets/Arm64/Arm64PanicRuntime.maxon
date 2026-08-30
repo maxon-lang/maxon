@@ -384,7 +384,7 @@ function buildArm64WalkFramesChunk() returns FunctionCodeChunk
 	asm.placeLabel(loop)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCounter)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: done)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: 0 - 1)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: -1)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCounter)
 
 	// A null frame pointer ends the chain.
@@ -396,7 +396,7 @@ function buildArm64WalkFramesChunk() returns FunctionCodeChunk
 
 	// text_offset = (return_addr - 1) - text_base, then `0 <= text_offset < __symtable - mrt_start`.
 	// Signed compares at both ends: a return address BELOW the image reads negative.
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: 0 - ReturnAddrSymbolBias)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: -ReturnAddrSymbolBias)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotTextBase)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: 0)

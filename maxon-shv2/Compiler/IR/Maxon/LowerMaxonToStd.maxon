@@ -258,6 +258,7 @@ function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 		round then return StdUnaryOpcode.round
 		sqrt then return StdUnaryOpcode.sqrt
 		abs then return StdUnaryOpcode.abs
+		fneg then return StdUnaryOpcode.fneg
 		// The reinterpretation — still a 1:1 rename. It is spelled separately from BOTH bands above
 		// for the reason `stdUnaryOperandIsFloat` gives it its own arm: it leaves the float domain
 		// (so it is not an intrinsic) without converting (so it is not a conversion).
@@ -279,9 +280,10 @@ end 'maxonUnaryOpToStdOpcode'
 //     integer, converts a type to ITSELF, and there is no instruction for it. `Parser.promoteToFloat`
 //     returns early on a value already in the float domain, and `Parser.emitTrunc` answers
 //     `trunc(int)` with the operand itself rather than an op.
-//   • a MATH INTRINSIC (`floor`/`ceil`/`round`/`sqrt`/`abs`) is f64 → f64, so it must be handed a FLOAT —
-//     `Parser.emitMathIntrinsic` promotes an integer argument before emitting the op, which is what
-//     makes `sqrt(16)` answer 4 rather than reaching an instruction that has no integer form.
+//   • a MATH INTRINSIC (`floor`/`ceil`/`round`/`sqrt`/`abs`) or the sign flip `fneg` is f64 → f64, so it
+//     must be handed a FLOAT — `Parser.emitMathIntrinsic` promotes an integer argument before emitting
+//     the op, which is what makes `sqrt(16)` answer 4 rather than reaching an instruction that has no
+//     integer form, and `Parser.parseUnary` emits `fneg` only past its `tagIsFloat` test.
 //
 // It reads `operandType`, which is the SOURCE and — on the conversions — never the result. That is
 // the one fact StdUnaryOpcode's header exists to hammer, and the one that would send a value to the

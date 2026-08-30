@@ -541,9 +541,10 @@ function assertArm64CallClobbers(pool RegMask)
 end 'assertArm64CallClobbers'
 
 // ⭐⭐ **EVERY MACRO-OP WHOSE ENCODER WRITES FIXED REGISTERS, AGAINST THE `implicitDefs` LITERAL THAT IS
-// WHAT KEEPS A LIVE VALUE OUT OF THEM.** Three families now answer here — the jump tables (r10/r11 on x64,
-// x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3) and F2's arm64 LL/SC atomics
-// (x16/x17) — and they share ONE guard because they share one hazard, stated once: the inline
+// WHAT KEEPS A LIVE VALUE OUT OF THEM.** Four families now answer here — the jump tables (r10/r11 on x64,
+// x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), F2's arm64 LL/SC atomics
+// (x16/x17) and the x64 f64 negate's mask register (xmm5) — and they share ONE guard because they share
+// one hazard, stated once: the inline
 // `TargetOpMeta` literal is what `forbidOperandsFromImplicit` and the liveness clobber census read, the
 // ENCODER is what actually writes those registers, and a drift between the two is a silent miscompile — a
 // live value coloured onto a register the encoder then destroys. It was two byte-identical helpers and two
@@ -566,6 +567,9 @@ end 'assertEncoderScratchMasks'
 function assertX64EncoderScratchMasks()
 	assertEncoderScratchMask(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "x64JumpTable", expected: regMaskOf(X64Register.r10) or regMaskOf(X64Register.r11), hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.x64MemFill(0), name: "x64MemFill", expected: x64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
+	// The f64 negate's mask register is ALLOCATABLE (xmm5 is a float argument register), so this is the
+	// fill ladder's case rather than the jump table's: the declaration genuinely reserves it at the op.
+	assertEncoderScratchMask(TargetOp.negF64RegReg(TargetVReg.virtual(0), src: TargetVReg.virtual(0)), name: "negF64RegReg", expected: x64NegF64ScratchMask(), hazard: "the operand, or a value live across the negate, could be colored onto the XMM the sign-mask build clobbers")
 end 'assertX64EncoderScratchMasks'
 
 function assertArm64EncoderScratchMasks()
@@ -1342,7 +1346,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// the operand model — so it covers every one of them without an arm here.
 		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
 		// none of them a move, so no two of their operands want the same register.
-		andRegReg to movqXmmGpr then break 'hint'
+		andRegReg to negF64RegReg then break 'hint'
 		// The arm64 band carries NO copy hint: arm64 is 3-ADDRESS (no ALU op is a move, none has a
 		// two-address reuse to bias). The arm64 moves that DO carry a fixed-register hint — the param
 		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
@@ -1379,6 +1383,8 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// Its RAX/RDX constraints are IMPLICIT MASKS, which `forbidOperandsFromImplicit` enforces; a hint
 		// is a preference and would be the weaker statement of a fact the masks already make absolutely.
 		imulHighReg then break 'hint'
+		// arm64 `fneg` is 3-address like the rest of its band: not a move, nothing to coalesce.
+		arm64Fneg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -2243,6 +2249,9 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// with nothing here having to know that.
 		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		movqXmmGpr(dest, src) then return TargetOp.movqXmmGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		// f64 NEGATE colors its two XMM operands exactly as `absF64RegReg` below does; the REUSE def and
+		// the scratch clobber are the operand model's and the metadata's statements respectively.
+		negF64RegReg(dest, src) then return TargetOp.negF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		// f64 ABS colors its two XMM operands like any other pair. That it is a REUSE def rather than a
 		// plain one is the OPERAND MODEL's statement, already honoured by the time coloring runs, so
 		// nothing here has to know the two will land in one register.
@@ -2361,6 +2370,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
 		// EC18 — one register operand to colour, exactly as `divideReg` has.
 		imulHighReg(src) then return TargetOp.imulHighReg(colorVRegWith(src, alloc: alloc))
+		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

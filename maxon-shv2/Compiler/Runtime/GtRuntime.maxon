@@ -6822,7 +6822,7 @@ function buildSubpSpawnCore(module StdModule)
 	let req = 0 as ValueId
 	let initResult = ids.mint()
 	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
-	let negOne = emitConst(module, block: entry, value: 0 - 1, ids: ids)
+	let negOne = emitConst(module, block: entry, value: -1, ids: ids)
 	// ⭐⭐ **THE LAZY CREATION RUNS UNDER THE RUN-QUEUE LOCK (G2), AND ONLY THE CREATION DOES.** Test-then-
 	// allocate-then-store is a read-modify-write: two Ms both observing the null word would both
 	// `__slab_alloc` a 64-slot region and one of the two would be lost, along with every handle a caller had
@@ -7071,7 +7071,7 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 	// handle. `InputSource.file` and `OutputDestination.file` are public corpus surface, so this was reachable
 	// from `Configuration` alone. Failing HERE also means the reason a caller reads is `CreateFileA`'s — "the
 	// file is not there" — rather than whatever `CreateProcessA` would have said about it afterwards.
-	let invalidHandle = emitConst(module, block: openArm, value: 0 - 1, ids: ids)
+	let invalidHandle = emitConst(module, block: openArm, value: -1, ids: ids)
 	let openFailed = emitCmp(module, block: openArm, a: opened, b: invalidHandle, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(openArm, op: StdOp.condBranch(openFailed, thenBlockId: whenFailed.id, elseBlockId: openOk.id))
 
@@ -7508,7 +7508,7 @@ function buildSubpWriteLine(module StdModule)
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
 	// A handle naming no live child answers the same non-zero this entry answers for a broken pipe.
-	let badRc = emitConst(module, block: badHandle, value: 0 - 1, ids: ids)
+	let badRc = emitConst(module, block: badHandle, value: -1, ids: ids)
 	module.setTerminator(badHandle, op: StdOp.ret(badRc))
 
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: badHandle)
@@ -7605,7 +7605,7 @@ function buildSubpWait(module StdModule)
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
 	// A handle naming no live child answers -1, which is `__gt_subp_wait_exit`'s failure answer for the
 	// identical reading — this entry is that one without a deadline.
-	let badRc = emitConst(module, block: badHandle, value: 0 - 1, ids: ids)
+	let badRc = emitConst(module, block: badHandle, value: -1, ids: ids)
 	module.setTerminator(badHandle, op: StdOp.ret(badRc))
 
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: badHandle)

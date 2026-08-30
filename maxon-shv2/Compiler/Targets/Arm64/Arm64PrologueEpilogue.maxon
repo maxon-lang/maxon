@@ -148,6 +148,8 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				// EC18: the high multiply names no frame fact either — one coloured register operand and an
 				// implicit RAX/RDX pair. (x64-only; it cannot appear in an arm64 program at all.)
 				imulHighReg then break 'o'
+				// `fneg` names no frame fact — two coloured FP registers.
+				arm64Fneg then break 'o'
 			end 'o'
 		end 'eachOp'
 
@@ -311,6 +313,8 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// EC18: x64-only, and answered through the same shared derivation as the other x64 forms rather
 		// than a second hand-written list.
 		imulHighReg gives arm64MaskFromOperands(op, buf: buf)
+		// `fneg`'s two FP operands, through the same shared derivation as every other register op.
+		arm64Fneg gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -361,7 +365,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 	end 'noTerm'
 	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("blockEndsWithArm64Return: terminator not in module.ops")
 	return match op 'check'
-		prologue to movqXmmGpr gives false
+		prologue to negF64RegReg gives false
 		arm64Ret gives true
 		// Extended past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`, x64-linux
 		// `x64Syscall`): none is `arm64Ret`, so the block does not end in an arm64 return (and none ever
@@ -385,5 +389,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		leaRegBaseIndexScale to arm64AddLsl gives false
 		// EC18: the high multiply is a body op, never an `arm64Ret`.
 		imulHighReg gives false
+		// `fneg` is a body op, never an `arm64Ret`.
+		arm64Fneg gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

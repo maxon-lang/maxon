@@ -3,7 +3,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function readAt(a IntArray, i Int) returns Int
-	return try a.managed.get(i) otherwise 0 - 7
+	return try a.managed.get(i) otherwise -7
 end 'readAt'
 
 function main() returns ExitCode
@@ -13,19 +13,19 @@ function main() returns ExitCode
 	a.push(33)
 
 	let n = a.count()
-	if readAt(a, i: 0 - n) != 0 - 7 'minusCount'
+	if readAt(a, i: -n) != -7 'minusCount'
 		return 1
 	end 'minusCount'
-	if readAt(a, i: 0 - n - 1) != 0 - 7 'belowThat'
+	if readAt(a, i: -n - 1) != -7 'belowThat'
 		return 2
 	end 'belowThat'
-	if readAt(a, i: 1 - n) != 0 - 7 'minusTwo'
+	if readAt(a, i: 1 - n) != -7 'minusTwo'
 		return 3
 	end 'minusTwo'
 	if readAt(a, i: n - 1) != 33 'lastStillReadable'
 		return 4
 	end 'lastStillReadable'
-	if readAt(a, i: n) != 0 - 7 'atLength'
+	if readAt(a, i: n) != -7 'atLength'
 		return 5
 	end 'atLength'
 	if a.count() != 3 'countUnchanged'
@@ -103,8 +103,8 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.subRegReg rdx, rdx, r12
+    x64.movRegReg rdx, r12
+    x64.negReg rdx, r12
     x64.movRegReg rcx, rbx
     x64.callDirect readAt
     x64.cmpRegImm32 r8, -7
@@ -120,8 +120,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#2:
-    x64.movRegImm32 rax, 0
-    x64.subRegReg rax, rax, r12
+    x64.movRegReg rax, r12
+    x64.negReg rax, r12
     x64.leaRegRegImm32 rdx, rax, -1
     x64.movRegReg rcx, rbx
     x64.callDirect readAt

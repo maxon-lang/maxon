@@ -339,7 +339,7 @@ function isCaptureMove(op TargetOp) returns bool
 	return match op 'm'
 		movRegReg(dst, src) gives vregIsVirtual(dst) and vregIsPhysical(src)
 		prologue to movRegImm32 gives false
-		movReg32Reg32 to movqXmmGpr gives false
+		movReg32Reg32 to negF64RegReg gives false
 		arm64Ret to arm64Fcsel gives false
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none is a
 		// call-result capture move — the same `false` every non-`movRegReg` op gets here.
@@ -362,6 +362,8 @@ function isCaptureMove(op TargetOp) returns bool
 		leaRegBaseIndexScale to arm64AddLsl gives false
 		// EC18: the high multiply is not a `movRegReg`, so it is not a call-result capture move.
 		imulHighReg gives false
+		// arm64 `fneg` is not a `movRegReg`, so it is not a call-result capture move.
+		arm64Fneg gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -492,7 +494,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		pushReg to popReg then return false
 		storeSlotReg to loadRegSlot then return false
 		// None of the data-section band is a register-to-register move, so none can be a self-move.
-		andRegReg to movqXmmGpr then return false
+		andRegReg to negF64RegReg then return false
 		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
 		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
 		arm64Ret to arm64Fcsel then return false
@@ -517,7 +519,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// numbering is one space that a GPR and an FP register cannot collide; the hazard would be real
 		// under v1's TWO-enum design, where `x3` and `d3` are both 3. x64 is the same shape (GPRs 0..15,
 		// XMMs 16..31), which is why its `movqGprXmm` twin needs nothing here and is correctly answered
-		// `false` by the `andRegReg to movqXmmGpr` arm above — which covers its inbound twin `movqXmmGpr`
+		// `false` by the `andRegReg to negF64RegReg` arm above — which covers its inbound twin `movqXmmGpr`
 		// too, that arm's endpoint being the x64 band's last member.
 		//
 		// The arm is not optional: `arm64FmovFpGpr` is the LAST union member, so no range covers it and
@@ -533,6 +535,8 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		leaRegBaseIndexScale to arm64AddLsl then return false
 		// EC18: not a move at all, so never a physical self-move.
 		imulHighReg then return false
+		// arm64 `fneg` is not a move at all, so never a physical self-move.
+		arm64Fneg then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -805,7 +809,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 		movRegImm to divideReg then panic("retargetTerminatorOp: non-terminator op as terminator")
 		pushReg to popReg then panic("retargetTerminatorOp: pushReg/popReg reached as a terminator — they are body ops inserted post-regalloc")
 		storeSlotReg to loadRegSlot then panic("retargetTerminatorOp: a spill/reload reached as a terminator — the splitter inserts them as body ops, never as terminators")
-		andRegReg to movqXmmGpr then panic("retargetTerminatorOp: non-terminator op as terminator")
+		andRegReg to negF64RegReg then panic("retargetTerminatorOp: non-terminator op as terminator")
 		// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
 		// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
 		// branches, ALU, frame, call ops — is not a terminator here.
@@ -828,6 +832,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return retargetJumpTableArm64(module, opIdx: opIdx, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget)
 		leaRegBaseIndexScale to arm64AddLsl then panic("retargetTerminatorOp: a scaled-index address or access is a body op, not a terminator — it names no block")
 		imulHighReg then panic("retargetTerminatorOp: a high multiply is a body op, not a terminator — it names no block")
+		arm64Fneg then panic("retargetTerminatorOp: a float negate is a body op, not a terminator — it names no block")
 	end 'term'
 end 'retargetTerminatorOp'
 

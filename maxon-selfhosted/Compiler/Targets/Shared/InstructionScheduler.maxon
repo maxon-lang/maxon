@@ -522,7 +522,7 @@ type ScheduleState
 		let pressureDelta = self.estimatePressureDelta(opIdx)
 		let critPath = try criticalPathLen.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
 		let latency = try latencies.get(opIdx) otherwise panic("scoreHighPressure: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
-		return (0 - pressureDelta) * 1000000 - critPath * 1000 - latency
+		return -pressureDelta * 1000000 - critPath * 1000 - latency
 	end 'scoreHighPressure'
 
 	// Low-pressure mode score: longest critical path wins, then highest
@@ -531,7 +531,7 @@ type ScheduleState
 	function scoreLowPressure(opIdx SchedInt) returns SchedInt
 		let critPath = try criticalPathLen.get(opIdx) otherwise panic("scoreLowPressure: opIdx from readySet is a valid op index but criticalPathLen.get({opIdx}) failed")
 		let latency = try latencies.get(opIdx) otherwise panic("scoreLowPressure: opIdx from readySet is a valid op index but latencies.get({opIdx}) failed")
-		return (0 - critPath) * 1000 - latency
+		return -critPath * 1000 - latency
 	end 'scoreLowPressure'
 
 	// Estimate the register pressure change if this op were scheduled now.

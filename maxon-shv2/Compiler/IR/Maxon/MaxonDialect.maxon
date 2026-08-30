@@ -799,6 +799,30 @@ export enum MaxonUnaryOp
 	round
 	sqrt
 	abs
+	// ⭐⭐ **FLOAT NEGATION IS A SIGN-BIT FLIP, AND IT IS ITS OWN OP — `abs`'s twin.** `abs` CLEARS bit 63;
+	// this FLIPS it, and like `abs` it computes nothing else, so `-(+0.0)` is `-0.0`, `-(-0.0)` is `+0.0`,
+	// `-inf` mirrors and a NaN keeps its payload with its sign reversed — IEEE-754's `negate`, which the
+	// standard itself says "is not the same as subtraction(0, x)".
+	//
+	// ⛔ **IT REPLACED `0.0 - x`, AND THE DIFFERENCE IS EXACTLY ONE INPUT.** Until 2026-08-30 the parser
+	// spelled a non-literal `-x` over a float as `literal 0.0` + `binOp sub` — v1's port, kept because x64
+	// has no XMM negate and `subsd` was already in the band — on the stated grounds that "nothing in the
+	// language can yet observe a zero's sign". `print` then landed, `Json.parse("-0")` answered `+0.0`,
+	// and `let z = 0.0; print("{-z}")` printed `0.0`. Only the RUN-time path was wrong: a negated LITERAL
+	// was already folded into its bits (`negatedFloatBits`), so `-0.0` printed right while `-z` did not —
+	// the shape of one rule written down twice.
+	//
+	// ⚠ `neg` STAYS THE INTEGER NEGATE. The two are different instructions on every target (two's
+	// complement against a bit flip), `stdUnaryOperandIsFloat` keys the domain off the OPCODE, and a
+	// `neg` that meant both would make every reader consult the operand type a second time. The parser
+	// already knows which it has (`parseUnary` branches on `tagIsFloat`), so it says so here.
+	//
+	// arm64 `fneg` and wasm `f64.neg` ARE this operation; x64 has no single instruction for it and builds
+	// the mask in a scratch XMM — `TargetOp.negF64RegReg`, the sign-flip twin of `absF64RegReg`. Inserted
+	// at the END of the math band, beside `abs`, so every range over this enum that reached `abs` was
+	// re-read: `foldIntUnaryOp` refuses it for `abs`'s reason and `unaryOpProducesACallResult` answers
+	// false, both through the ranges they already had.
+	fneg
 	// ⭐ **NOT ARITHMETIC AND NOT A CONVERSION — a REINTERPRETATION.** `floatToBits` reads an f64 and
 	// answers the i64 its 64 bits already spell, computing nothing: `trunc` asks what NUMBER a float
 	// names, this asks what its ENCODING is. It is a unary op for the same shape reason the five

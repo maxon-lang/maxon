@@ -1158,3 +1158,38 @@ end 'main'
 {"name":"a\"b","size":2.5,"done":false,"items":[1,null]}
 a"b 2
 ```
+
+<!-- test: stdlib-whitelist.json-negative-zero-round-trips -->
+`-0` is a legal JSON number (`[ minus ] int`) and a distinct double from `0`, so it must survive a
+round trip in BOTH directions. The parse half is `numberFromBytes`'s `result = -result`, which until
+2026-08-30 compiled as `0.0 - result` and answered `+0.0`; the serialize half is `writeNumber`'s
+integral shortcut, which cannot see the sign through `==` and has to ask `Math.hasNegativeSignBit`.
+`0` and `-0.5` ride along as the controls on either side of the shortcut.
+```maxon
+function main() returns ExitCode
+	let negativeZero = try Json.parse("-0") otherwise 'parseNegativeZero'
+		panic("Json.parse rejected -0")
+	end 'parseNegativeZero'
+	if not Math.hasNegativeSignBit(negativeZero.get(negativeZero.root).numberValue) 'signLost'
+		return 1
+	end 'signLost'
+	print("{Json.stringify(negativeZero)}\n")
+	let positiveZero = try Json.parse("0") otherwise 'parsePositiveZero'
+		panic("Json.parse rejected 0")
+	end 'parsePositiveZero'
+	print("{Json.stringify(positiveZero)}\n")
+	let negativeHalf = try Json.parse("-0.5") otherwise 'parseNegativeHalf'
+		panic("Json.parse rejected -0.5")
+	end 'parseNegativeHalf'
+	print("{Json.stringify(negativeHalf)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-0
+0
+-0.5
+```

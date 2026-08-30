@@ -260,7 +260,7 @@ let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT �
 let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
 let IocpNoCompletionKey = 0x0  // CreateIoCompletionPort CompletionKey for an associate
 let IocpNoConcurrentThreads = 0x0  // CreateIoCompletionPort NumberOfConcurrentThreads for an associate
-let IocpInvalidHandleValue = 0 - 1  // CreateIoCompletionPort FileHandle = INVALID_HANDLE_VALUE (-1) creates a new port
+let IocpInvalidHandleValue = -1  // CreateIoCompletionPort FileHandle = INVALID_HANDLE_VALUE (-1) creates a new port
 let IocpSingleConcurrentThread = 1  // NumberOfConcurrentThreads for a fresh port (the one completion thread)
 let FileSkipCompletionPortOnSuccess = 1  // SetFileCompletionNotificationModes — a SYNC read posts no IOCP packet
 let CreateEventManualReset = 0x0  // CreateEventA bManualReset = FALSE → AUTO-reset (one wait consumes one signal)
@@ -280,7 +280,7 @@ let AllProcessorGroups = 0xFFFF
 // `CurrentThreadPseudoHandle`). Spelled as an arithmetic negation rather than as a transcribed
 // two's-complement pattern, which is `IocpInvalidHandleValue`'s idiom in this same band and for its reason:
 // a hand-written 0xFFFFFFFFFFFFFFFE is sixteen digits nothing checks.
-let CurrentThreadPseudoHandle = 0 - 2
+let CurrentThreadPseudoHandle = -2
 
 // `GetCurrentProcess()`'s pseudo-handle, `(HANDLE)-1`. Like the thread one above it is a CONSTANT rather
 // than a handle to open or close, so materializing it inline costs neither an import nor a close.
@@ -1978,16 +1978,14 @@ type StdToX64Lowering
 	//   • `logicalNot` — `xor dest, 1`: a bool is 0/1, so flipping bit 0 negates it. Using
 	//     the integer `not` here would make `not true` == -2, which still reads as TRUE in
 	//     every condition — a silent miscompile, and the reason these are two opcodes.
-	// ⚠ A FLOAT NEGATE IS NOT `neg`, AND IT DOES NOT ARRIVE HERE. `neg` is an integer two's
-	// complement; negating an f64 means flipping its SIGN BIT (`xorpd` against a sign mask), which
-	// is a different instruction and needs a `.rdata` mask constant. Nothing produces one yet:
-	// `-x` on a float would, and the Maxon tier does not fold it to a `unaryOp(neg)` over an f64
-	// — the spec corpus reaches negative floats through `0.0 - x` instead. This panics rather than
-	// emitting an integer `neg` on a float register, which the class check would catch anyway, but
-	// later and further from the cause.
+	// ⚠ A FLOAT NEGATE IS NOT `neg`, AND IT NEVER ARRIVES AS ONE. `neg` is an integer two's complement;
+	// negating an f64 means flipping its SIGN BIT, which is a different instruction and its own Std
+	// opcode, `fneg` — lowered below to `negF64RegReg`, the `xorpd`-against-a-mask op. This panics
+	// rather than emitting an integer `neg` on a float register, which the class check would catch
+	// anyway, but later and further from the cause.
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstBlock IrBlock)
 		if stdTypeIsFloat(operandType) != stdUnaryOperandIsFloat(opcode) 'domain'
-			panic("lowerUnaryOp: no x64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`), and an f64 negate in particular flips the sign bit (`xorpd` against a .rdata mask), not the integer `neg`; nothing lowers to one yet (negative floats are reached through `0.0 - x`)")
+			panic("lowerUnaryOp: no x64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`); an f64 negate in particular is `fneg` (a sign-bit flip, `negF64RegReg`), never the integer `neg`")
 		end 'domain'
 
 		let dest = TargetVReg.virtual(resultId)
@@ -2019,6 +2017,10 @@ type StdToX64Lowering
 			// pair. `TargetOp.absF64RegReg` carries the whole argument, including why shv2 does not use
 			// the `andpd`-against-an-`.rdata`-mask both reference compilers emit.
 			abs then self.targetModule.appendOp(dstBlock, op: TargetOp.absF64RegReg(dest, src: src))
+			// The sign-bit FLIP, `abs`'s twin: SSE2 has no XMM negate either, so this too is a synthesized
+			// two-address op — `xorpd` against a mask the encoder builds in a scratch XMM.
+			// `TargetOp.negF64RegReg` carries the whole argument.
+			fneg then self.targetModule.appendOp(dstBlock, op: TargetOp.negF64RegReg(dest, src: src))
 			// The BIT REINTERPRETATION (`float.hash`). `movq r64, xmm` moves the SAME 64 bits across
 			// the file boundary — it is not a convert, so there is no rounding and no value change.
 			// `dest` is GPR-classed and `src` XMM-classed, each from its own value's Std type
@@ -2049,8 +2051,8 @@ type StdToX64Lowering
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: imm))
 			// `a - imm` is `lea dest, [base - imm]`, a NEGATIVE displacement. `foldConstOperands`
 			// only emits a `sub` immediate for |imm| <= i32.max, so `-imm` always fits Imm32; the
-			// checked cast documents that the range-widened `0 - imm` cannot overflow here.
-			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: (0 - imm) as Imm32))
+			// checked cast documents that the range-widened `-imm` cannot overflow here.
+			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: -imm as Imm32))
 			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegRegImm32(dest, src: base, imm: imm))
 			// The word ALU immediate forms are two-address (`and dest, imm` modifies dest in
 			// place), UNLIKE the `lea`/`imul` forms above whose destination is independent of

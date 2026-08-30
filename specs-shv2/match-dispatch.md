@@ -377,16 +377,16 @@ end 'band'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if band(0 - 5000) == 1 'a'
+	if band(-5000) == 1 'a'
 		n = n + 1
 	end 'a'
-	if band(0 - 100) == 1 'b'
+	if band(-100) == 1 'b'
 		n = n + 1
 	end 'b'
-	if band(0 - 99) == 2 'c'
+	if band(-99) == 2 'c'
 		n = n + 1
 	end 'c'
-	if band(0 - 1) == 2 'd'
+	if band(-1) == 2 'd'
 		n = n + 1
 	end 'd'
 	if band(0) == 3 'e'

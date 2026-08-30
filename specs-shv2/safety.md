@@ -507,7 +507,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let n = ident(i64.min)
-	let d = ident(0 - 1)
+	let d = ident(-1)
 	let r = try (n mod d) otherwise 77
 	print("r={r}\n")
 	return 0
@@ -594,9 +594,9 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function main() returns ExitCode
-	let d = ident(0 - 1)
+	let d = ident(-1)
 	let a = try (ident(100) mod d) otherwise 77
-	let b = try (ident(0 - 7) mod d) otherwise 77
+	let b = try (ident(-7) mod d) otherwise 77
 	let c = try (ident(0) mod d) otherwise 77
 	print("a={a} b={b} c={c}\n")
 	return 0
@@ -687,7 +687,7 @@ function remainder(n Integer, d BelowMinusOne) returns Integer
 end 'remainder'
 
 function main() returns ExitCode
-	print("r={remainder(0 - 13, d: -5)}\n")
+	print("r={remainder(-13, d: -5)}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -810,7 +810,7 @@ function remainder(n Integer, d BelowMinusOne) returns Integer
 end 'remainder'
 
 function main() returns ExitCode
-	let bad = ident(0 - 1)
+	let bad = ident(-1)
 	return remainder(i64.min, d: bad)
 end 'main'
 ```
@@ -981,7 +981,7 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function main() returns ExitCode
-	let bad = ident(0 - 1)
+	let bad = ident(-1)
 	let d = bad as BelowMinusOne
 	let r = i64.min mod d
 	print("r={r}\n")
@@ -1061,7 +1061,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let n = ident(i64.min)
-	let d = ident(0 - 1)
+	let d = ident(-1)
 	print("before\n")
 	let q = try (n / d) otherwise 77
 	print("q={q}\n")

@@ -1131,7 +1131,7 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 		// the same answer: they sit PAST `fpToSi`, so the arm that computes it cannot be extended to
 		// reach them without swallowing both conversions. `f64` outright is also the stronger claim —
 		// they are f64 → f64 by definition (`stdUnaryOperandIsFloat`).
-		floor to abs gives WasmValType.f64
+		floor to fneg gives WasmValType.f64
 		// ⚠ The BITCAST is the only op here whose operand and result differ in CLASS without the
 		// value changing: `i64.reinterpret_f64` reads an f64 local and writes an i64 one. Recording
 		// it as f64 (which `wasmValTypeOf(operandType)` would) puts the result in the wrong local
@@ -2072,9 +2072,9 @@ type WasmFuncEmitter
 			logicalNot then self.emitLogicalNotExpr(operand)
 			siToFp then self.emitSiToFp(operand, operandType: operandType)
 			fpToSi then self.emitFpToSi(operand, operandType: operandType)
-			// The MATH INTRINSICS. Each is ONE native wasm instruction over the same f64 operand, so
-			// the operand push and the domain check are written once and only the opcode differs.
-			floor to abs then self.emitMathIntrinsic(operand, operandType: operandType, opcode: opcode)
+			// The MATH INTRINSICS and the sign flip. Each is ONE native wasm instruction over the same f64
+			// operand, so the operand push and the domain check are written once and only the opcode differs.
+			floor to fneg then self.emitMathIntrinsic(operand, operandType: operandType, opcode: opcode)
 			bitcastF64ToI64 then self.emitBitcastF64ToI64(operand, operandType: operandType)
 			bitcastI64ToF64 then self.emitBitcastI64ToF64(operand, operandType: operandType)
 		end 'op'
@@ -2105,16 +2105,17 @@ type WasmFuncEmitter
 		self.body.i64TruncF64S()
 	end 'emitFpToSi'
 
-	// f64 → f64 — the five MATH INTRINSICS. Unlike the conversions above, `operandType` here is BOTH
-	// the source and the result: these stay inside the float domain, which is what
-	// `stdUnaryOperandIsFloat` says and what the valtype table records (`floor to abs` → f64).
+	// f64 → f64 — the five MATH INTRINSICS and the sign flip `fneg`. Unlike the conversions above,
+	// `operandType` here is BOTH the source and the result: these stay inside the float domain, which is
+	// what `stdUnaryOperandIsFloat` says and what the valtype table records (`floor to fneg` → f64).
 	//
 	// ⚠ `round` is `f64.nearest`, which is TIES TO EVEN — `round(2.5)` is 2. The three native
 	// backends' instructions agree; there is no correction layer on any of them.
 	//
-	// ⭐ ALL FIVE ARE ONE INSTRUCTION HERE, INCLUDING `abs` — which is what makes wasm the target that
-	// shows x64's `abs` gap for what it is. `f64.abs` clears the sign bit natively; SSE2 has no scalar
-	// equivalent, so only the x64 isel has to synthesize it (`TargetOp.absF64RegReg`).
+	// ⭐ ALL SIX ARE ONE INSTRUCTION HERE, INCLUDING `abs` AND `fneg` — which is what makes wasm the
+	// target that shows x64's sign-bit gap for what it is. `f64.abs` clears the sign bit natively and
+	// `f64.neg` flips it; SSE2 has no scalar equivalent of either, so only the x64 isel has to synthesize
+	// them (`TargetOp.absF64RegReg`, `TargetOp.negF64RegReg`).
 	function emitMathIntrinsic(operand ValueId, operandType StdType, opcode StdUnaryOpcode)
 		requireF64(operandType, what: "math intrinsic source")
 		self.pushOperandAt(operand, targetVt: WasmValType.f64)
@@ -2124,7 +2125,8 @@ type WasmFuncEmitter
 			round then self.body.f64Nearest()
 			sqrt then self.body.f64Sqrt()
 			abs then self.body.f64Abs()
-			neg to fpToSi then panic("emitMathIntrinsic: Std unary opcode {opcode.name} is not a math intrinsic — `emitUnaryOp` routes only floor/ceil/round/sqrt/abs here")
+			fneg then self.body.f64Neg()
+			neg to fpToSi then panic("emitMathIntrinsic: Std unary opcode {opcode.name} is not a math intrinsic — `emitUnaryOp` routes only floor/ceil/round/sqrt/abs/fneg here")
 			// ONE arm for both directions: a reinterpretation computes nothing whichever way the bits
 			// travel, and `emitUnaryOp` routes each to its own emitter.
 			bitcastF64ToI64 to bitcastI64ToF64 then panic("emitMathIntrinsic: `{opcode.name}` computes nothing — it reinterprets the operand's bits, and `emitUnaryOp` routes it to `emitBitcastF64ToI64`/`emitBitcastI64ToF64`")
@@ -2158,8 +2160,8 @@ type WasmFuncEmitter
 		self.body.f64ReinterpretI64()
 	end 'emitBitcastI64ToF64'
 
-	// Integer negate as `0 - operand` (wasm has no unary negate), at the MACHINE WORD like every other
-	// integer op. The operand is coerced rather than pushed bare: the frontend can leave it a
+	// Integer negate as `0 - operand` (wasm has no INTEGER unary negate — `f64.neg` exists and is
+	// `fneg`'s), at the MACHINE WORD like every other integer op. The operand is coerced rather than pushed bare: the frontend can leave it a
 	// different width — `-r` on an `ExitCode` lives in an i32 — same gap as a mixed-width binOp, and
 	// it faults the same way (`i64.sub` over an i32) without the coercion.
 	function emitNegExpr(operand ValueId, operandType StdType)

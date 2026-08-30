@@ -983,6 +983,46 @@ export union TargetOp
 	// before that the control/misc band that every `leaRegFunc to x64Syscall` arm claims. Every
 	// `andRegReg to …` range arm was re-read and extended when this landed.
 	movqXmmGpr(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// ⭐⭐ **f64 NEGATE — THE SECOND OP IN THIS DIALECT THAT IS NOT A SINGLE MACHINE INSTRUCTION**, and
+	// `absF64RegReg`'s twin: that CLEARS the IEEE-754 sign bit, this FLIPS it, which is negation for every
+	// f64 pattern — ±0, ±inf and NaN included (`StdUnaryOpcode.fneg`). It is what a source `-x` over a
+	// float lowers to; until 2026-08-30 that was `0.0 - x`, which is `+0.0` for a positive zero.
+	//
+	// ⚠⚠ **A SIGN FLIP HAS NO IN-PLACE SHIFT TRICK.** `abs` shifts the bit out and back with one register
+	// and no constant; a FLIP needs a mask, and both textbook homes for one are the ones `absF64RegReg`
+	// rules out — `.rdata` has no 16-byte alignment (`xorpd xmm, m128` faults) and the isel cannot mint a
+	// second vreg. What the dialect DOES have is `implicitDefs`: the way `cqo` owns RDX and `x64JumpTable`
+	// owns r10/r11, this op owns ONE scratch XMM, and the encoder builds the mask there:
+	//
+	//     pcmpeqd xmm5, xmm5   (66 0F 76 /r)      ; all ones
+	//     psllq   xmm5, 63     (66 0F 73 /6 ib)   ; 0x8000000000000000 in both lanes
+	//     xorpd   dest, xmm5   (66 0F 57 /r)      ; flip bit 63 — the high lane is don't-care
+	//
+	// **xmm5 (RegNum 21, bit 0x200000)** because it is caller-saved under BOTH ABIs shv2 emits for —
+	// Win64 preserves xmm6–15 and SysV nothing — so the prologue never saves it on this op's account, and
+	// it is the LAST float argument register, so it displaces the fewest live values. The clobber does the
+	// two things the jump table's does: `forbidOperandsFromImplicit` keeps `dest` off xmm5, and the
+	// liveness clobber census keeps every value live ACROSS the negate off it. `assertEncoderScratchMasks`
+	// holds this literal equal to the encoder's `x64NegF64ScratchMask()`, and the encoder panics if `dest`
+	// ever resolves to the scratch — a drift is an allocator bug, never a silent miscompile. The mask
+	// build reads nothing, so the critical path is the one `xorpd`; the cost paid is that
+	// `SplitLiveRanges.opIsFixedRegisterPoint` now answers true at a negate (a tie-break in its peak
+	// ranking only).
+	//
+	// Rejected: `movq r, x; btc r, 63; movq x, r` — the same one scratch, in the other file, with two
+	// domain crossings on the critical path; and `-0.0 - x` through `subsd`, which is IEEE-exact on every
+	// non-NaN input but is still a subtraction wearing a negation's name, and needs the constant's vreg
+	// the isel cannot mint.
+	//
+	// **ONE OP, NOT THREE, BECAUSE THE TARGET TIER IS SSA** — `absF64RegReg`'s argument verbatim: the
+	// dialect names the OPERATION, the encoder owns the byte sequence. TWO-ADDRESS like `abs`: the `xorpd`
+	// works in place, so `dest` must ARRIVE holding `src` — a REUSE def, and the allocator supplies the
+	// copy when `src` outlives the op. It writes no flags and is not rematerializable.
+	//
+	// APPENDED AT THE END OF THE x64 SSE BAND — past `movqXmmGpr`, exactly where every float op before it
+	// went and for the reason their comments give. Every `… to movqXmmGpr` range arm was re-read and
+	// extended to `… to negF64RegReg` when this landed.
+	negF64RegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x200000}
 	// --- arm64-macOS SCALAR-CORE band (USER RULING 2026-07-17) ---
 	//
 	// APPENDED AT THE END OF THE UNION, one contiguous band, per the band-append invariant every
@@ -1676,6 +1716,15 @@ export union TargetOp
 	// states at `andRegReg`: every range arm over `TargetOp` in the passes stops at or before the
 	// current tail, so an op inserted anywhere else would be silently swallowed by one of them.
 	imulHighReg(src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x5}
+	// `FNEG Dd, Dn` (0x1E614000) — f64 negate, `StdUnaryOpcode.fneg`'s one instruction here, and the
+	// arm64 half of the asymmetry `negF64RegReg` records: arm64 HAS the instruction, so this is an
+	// ordinary 2-address PLAIN def (`dest` independent of `src`, no seed copy, no scratch) exactly like
+	// `arm64Fabs`, and none of the x64 mask reasoning reaches here.
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `imulHighReg`, per the band-append invariant — NOT beside
+	// `arm64Fabs` in the arm64 float band, where every `arm64Ret to arm64Fcsel` range arm would have
+	// swallowed it silently. Each of those matches gained an explicit `arm64Fneg` arm instead.
+	arm64Fneg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

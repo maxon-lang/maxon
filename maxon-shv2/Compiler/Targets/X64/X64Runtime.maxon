@@ -326,7 +326,7 @@ type X64RuntimeAsm
 		if offset > self.slotAreaBytes 'outOfFrame'
 			panic("X64RuntimeAsm.slotDisp: slot {index} needs {offset} bytes but the frame reserved only {self.slotAreaBytes} — `beginFunction` was asked for too few slots")
 		end 'outOfFrame'
-		return (0 - offset) as Imm32
+		return -offset as Imm32
 	end 'slotDisp'
 end 'X64RuntimeAsm'
 
@@ -661,7 +661,7 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(lookupDone)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), wide: true)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0 - 1)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: -1)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: unknown)
 
 	// name_ptr = symtable + best (nameOffset is relative to the table's start)
@@ -733,7 +733,7 @@ function buildWalkFramesChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 0 - 1)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -1)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
 
 	// A null frame pointer ends the chain — `mrt_start`'s saved rbp is whatever the loader
@@ -761,7 +761,7 @@ function buildWalkFramesChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
 
 	// text_offset = (return_addr - 1) - text_base
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 0 - ReturnAddrSymbolBias)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -ReturnAddrSymbolBias)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	emitTextBoundsGuard(asm, offsetReg: X64Register.rax, scratchA: X64Register.rdx, scratchB: X64Register.r8, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: done)

@@ -4793,10 +4793,11 @@ end 'maxonReturnTypeNameId'
 // and leaves the other 63 alone, which is negation for every float including zero and infinity.
 let FloatSignBit = i64.min as ParsedInt
 
-// `-<float literal>` — the bits of the literal's negation. THE one spelling of a float's sign flip,
-// shared by the declaration sweep (a field default has no code to emit into and must be a NUMBER by
-// the time the layout is hashed), the range-bound reader, and the expression parser's negated-literal
-// fold (`parseNegatedNumericLiteral`). A body's `-x` over a non-literal is still `emitFloatNegation`.
+// `-<float literal>` — the bits of the literal's negation. THE one spelling of a float's sign flip at
+// COMPILE time, shared by the declaration sweep (a field default has no code to emit into and must be a
+// NUMBER by the time the layout is hashed), the range-bound reader, the expression parser's
+// negated-literal fold (`parseNegatedFloatLiteral`) and the const evaluator's `-K`. A body's `-x` over a
+// non-literal is the same flip at RUN time, `MaxonUnaryOp.fneg` — so a zero keeps its sign either way.
 function negatedFloatBits(bits ParsedInt) returns ParsedInt
 	return bits xor FloatSignBit
 end 'negatedFloatBits'
@@ -42964,8 +42965,10 @@ export type Parser
 		throw ParseError.expectedExpression(expressionOperandDisplayText(firstTok), line: firstTok.line, column: firstTok.column)
 	end 'emitPatternValue'
 
-	// The value after a pattern's `-`: a negated int, or `0.0 - x` for a float. Any other token
-	// after `-` has no numeric meaning to negate.
+	// The value after a pattern's `-`: a negated int, or a negated float LITERAL — the same sign-bit
+	// fold the expression path applies (`parseNegatedFloatLiteral`), so a `-0.0` pattern carries the
+	// sign bit rather than the `+0.0` that `0.0 - 0.0` computes. Any other token after `-` has no
+	// numeric meaning to negate.
 	function emitNegatedPatternValue(minusTok Token) returns ValueId throws ParseError
 		if self.at(TokenKind.intLiteral) 'negInt'
 			let tok = try self.consume(TokenKind.intLiteral)
@@ -42974,8 +42977,7 @@ export type Parser
 		end 'negInt'
 
 		if self.at(TokenKind.floatLiteral) 'negFloat'
-			let base = try self.parseFloatLiteral()
-			return try self.emitFloatNegation(base, opTok: minusTok)
+			return try self.parseNegatedFloatLiteral(minusTok)
 		end 'negFloat'
 
 		let operandTok = self.current()
@@ -43120,10 +43122,11 @@ export type Parser
 	// the one float decoder every other bound uses and sign-flipped by the one `negatedFloatBits`.
 	//
 	// ⚠ **IT IS NOT `floatConstIsKnown` ON THE EMITTED VALUE, AND THAT DISTINCTION WAS A LIVE HOLE.** A
-	// negated float pattern is emitted as `0.0 - x` through `emitBinOp`, and `recordBinOpFold` folds only
-	// INTEGER results — so no negated float bound is ever a known float constant, and a check written
-	// against the value silently passed `-1.0 to -1.0` while refusing `1.0 to 1.0`. The tokens say what
-	// the author wrote whether or not the emitter folded it.
+	// negated float pattern used to be emitted as `0.0 - x` through `emitBinOp`, and `recordBinOpFold`
+	// folds only INTEGER results — so no negated float bound was ever a known float constant, and a check
+	// written against the value silently passed `-1.0 to -1.0` while refusing `1.0 to 1.0`. The pattern is
+	// ONE literal now (`parseNegatedFloatLiteral`), and the tokens still say what the author wrote whether
+	// or not the emitter folded it — so this reader has no reason to go back to the value.
 	//
 	// ⚠ **ANY OTHER SHAPE IS AN INVARIANT BREAK, NOT A CASE TO SKIP.** `comparableOperands` ends
 	// `tagIsFloat(left) == tagIsFloat(right)` (`IR/Maxon/TypeRules.maxon`), so an int, char, bool or string
@@ -46160,7 +46163,7 @@ export type Parser
 	function emitGuardedShift(lhs ValueId, count ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
 		let range = SourceRange.ofToken(opTok)
 
-		let outOfRangeBits = self.emitLiteral(0 - ShiftCountBits, valueType: MaxonType.integer, range: range)
+		let outOfRangeBits = self.emitLiteral(-ShiftCountBits, valueType: MaxonType.integer, range: range)
 		let bitsAboveCount = try self.emitBinOp(count, rhs: outOfRangeBits, op: MaxonBinOp.bitAnd, opTok: opTok)
 		let negatedBits = self.emitUnaryOp(bitsAboveCount, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
 		let signCarrier = try self.emitBinOp(bitsAboveCount, rhs: negatedBits, op: MaxonBinOp.bitOr, opTok: opTok)
@@ -46491,7 +46494,9 @@ export type Parser
 			//     reader was asking it. Now the expression parser asks the same decoder.
 			//   • `-0.0` compiled to `0.0 - 0.0`, which IEEE-754 says is `+0.0`. A sign flip is
 			//     `negatedFloatBits`, and the declaration/range-bound paths always spelled it that way;
-			//     only the expression path went through `emitFloatNegation` and lost the zero's sign.
+			//     the expression path went through a subtract-from-zero and lost the zero's sign. (A
+			//     non-literal `-x` now flips the bit at run time too — `MaxonUnaryOp.fneg`, below — so
+			//     the fold here is an op saved, not the only correct spelling.)
 			//
 			// It also costs one op fewer for every negative literal, which is why the emitted code for
 			// `let x = -5` changes from `mov 5; neg` to a single negative immediate.
@@ -46514,8 +46519,12 @@ export type Parser
 			// The DECODE is paid only past that refusal, for `emitBinOp`'s stated reason: a rejected
 			// program must leave no ops behind. Every non-enum value passes through untouched, so the
 			// integer arm below negates exactly what it negated before.
+			//
+			// ⭐ A float `-x` is `MaxonUnaryOp.fneg` — a SIGN-BIT FLIP, not `0.0 - x`. The subtract was
+			// wrong on exactly one input (`0.0 - (+0.0)` is `+0.0`), and `print` made that observable:
+			// `let z = 0.0; print("{-z}")` printed `0.0`. See the enum member for the trade it replaced.
 			if tagIsFloat(operandTag) 'float'
-				return try self.emitFloatNegation(self.floatBehindEnumValue(operand, anchor: opTok), opTok: opTok)
+				return self.emitUnaryOp(self.floatBehindEnumValue(operand, anchor: opTok), op: MaxonUnaryOp.fneg, resultTag: ValueTypeTag.float, range: SourceRange.ofToken(opTok))
 			end 'float'
 
 			// ⭐⭐ **THE NEGATION OF AN INTEGRAL VALUE IS AN `integer`, WHATEVER TYPE IT WAS SPELLED WITH —
@@ -48133,24 +48142,6 @@ export type Parser
 
 		return self.signatures.enumIsFloatBacked(self.internedName(self.valueNameId(value)))
 	end 'valueIsFloatBackedEnum'
-
-	// ⭐ **FLOAT NEGATION IS A SUBTRACT FROM ZERO**, and that is a PORT, not a shortcut — v1 says
-	// the same of its own parser ("Float negation is normally lowered by the parser as `0.0 - x`",
-	// LowerMaxonToStd.maxon:5964).
-	//
-	// x64 has NO `neg` for an XMM register. The hardware spelling of a sign flip is `xorpd`
-	// against a sign-bit mask that has to be materialized in rdata — a new opcode, a new constant,
-	// and a new relocation — whereas `subsd` is already in the band this rung landed. So `-x`
-	// costs nothing new, and `MaxonUnaryOp.neg` stays what it has always been: the INTEGER negate.
-	//
-	// ⚠ It differs from a true negation on exactly one input, and it is worth naming rather than
-	// discovering: `0.0 - (+0.0)` is `+0.0`, where `-(+0.0)` is `-0.0`. Nothing in the language
-	// can yet observe a zero's sign — that needs `print`, which is P1.2's — and v1 has shipped
-	// this trade for its whole life. `0.0 - nan` is `nan`, so the unordered case is unaffected.
-	function emitFloatNegation(operand ValueId, opTok Token) returns ValueId throws ParseError
-		let zero = self.emitLiteral(FloatZeroBits, valueType: MaxonType.float, range: SourceRange.ofToken(opTok))
-		return try self.emitBinOp(zero, rhs: operand, op: MaxonBinOp.sub, opTok: opTok)
-	end 'emitFloatNegation'
 
 	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The source
 	// range anchors on the operator token, mirroring emitBinOp.
@@ -71278,15 +71269,11 @@ export type Parser
 			end 'notANumber'
 
 			if tagIsFloat(operand.tag) 'float'
-				// A NON-literal float negation (a float const REFERENCE, or `-(expr)`) is `0.0 - x` — the
-				// subtract-from-zero the runtime's `emitFloatNegation` emits (x64 has no XMM negate),
-				// routed through the ONE float sub fold so the constant and the codegen cannot disagree.
-				// `-(0.0)` is therefore `+0.0`, exactly as `emitFloatNegation` and the bootstrap give it.
-				// A subtract never divides, so the fold never declines.
-				match foldFloatBinOp(MaxonBinOp.sub, lhs: FloatZeroBits, rhs: operand.payload) 'negated'
-					folded(value) then return ConstValue.create(value, tag: ValueTypeTag.float)
-					notFoldable then panic("evalConstUnary: foldFloatBinOp declined `0.0 - x` — only division declines, and negation is a subtraction")
-				end 'negated'
+				// A NON-literal float negation (a float const REFERENCE, or `-(expr)`) is the SAME sign-bit
+				// flip the literal arm above and the runtime's `MaxonUnaryOp.fneg` apply, so the constant and
+				// the codegen cannot disagree: `-(0.0)` is `-0.0` and `-(-Z)` is `Z` bit for bit. (It was
+				// `0.0 - x` while the runtime was, and folded `-Zero` to `+0.0`.)
+				return ConstValue.create(negatedFloatBits(operand.payload), tag: ValueTypeTag.float)
 			end 'float'
 
 			// ⭐ The mark `parseUnary`'s two integer neg arms make, made once here because this tier has ONE:
@@ -76204,8 +76191,7 @@ export type Parser
 	// because that is where the literal now starts.
 	function parseNegatedNumericLiteral(minusTok Token) returns ValueId throws ParseError
 		if self.at(TokenKind.floatLiteral) 'float'
-			let tok = try self.consume(TokenKind.floatLiteral)
-			return self.emitLiteral(negatedFloatBits(try self.floatLiteralBits(tok)), valueType: MaxonType.float, range: SourceRange.ofToken(minusTok))
+			return try self.parseNegatedFloatLiteral(minusTok)
 		end 'float'
 
 		let tok = try self.consume(TokenKind.intLiteral)
@@ -76214,6 +76200,14 @@ export type Parser
 		self.markWrittenNegative(result, value: value)
 		return result
 	end 'parseNegatedNumericLiteral'
+
+	// The float half of `parseNegatedNumericLiteral`, on its own because the match-pattern reader
+	// (`emitNegatedPatternValue`) wants exactly it and nothing of the int half: consume the literal and
+	// mint ONE literal op carrying `negatedFloatBits` of its bits — the sign flip, never `0.0 - x`.
+	function parseNegatedFloatLiteral(minusTok Token) returns ValueId throws ParseError
+		let tok = try self.consume(TokenKind.floatLiteral)
+		return self.emitLiteral(negatedFloatBits(try self.floatLiteralBits(tok)), valueType: MaxonType.float, range: SourceRange.ofToken(minusTok))
+	end 'parseNegatedFloatLiteral'
 
 	// ⭐ **THE ONE SITE THAT RECORDS "THE SOURCE WROTE A NEGATIVE NUMBER HERE"** — see
 	// `writtenNegativeLiterals` for what the mark decides. Both minting sites route through it, so the COW

@@ -333,7 +333,7 @@ export typealias ElementStride = int(-4 to 8)
 // producer of its FORM).
 export function elementStrideOf(packedBits PackedBitWidth, storageBytes ByteOffset) returns ElementStride
 	if packedBits != NotSubBytePacked 'subBytePacked'
-		return 0 - packedBits
+		return -packedBits
 	end 'subBytePacked'
 
 	return storageBytes as ElementStride
@@ -347,7 +347,7 @@ end 'elementStrideOf'
 // negative stride were a byte width.
 function elementsByteLen(count ParsedInt, stride ElementStride) returns ParsedInt
 	if stride < 0 'subBytePacked'
-		let bits = count * (0 - stride)
+		let bits = count * -stride
 		return (bits + (BitsPerByte - 1)) / BitsPerByte
 	end 'subBytePacked'
 
@@ -409,7 +409,7 @@ end 'constArrayBlobOf'
 
 function constantElementsImage(values ParsedIntArray, stride ElementStride) returns ByteArray
 	if stride < 0 'subBytePacked'
-		return packConstantElements(values, packedBits: (0 - stride) as PackedBitWidth)
+		return packConstantElements(values, packedBits: -stride as PackedBitWidth)
 	end 'subBytePacked'
 
 	var out = ByteArray.create()
@@ -465,7 +465,7 @@ let ByteMask = 0xFF as MachineWord
 // byte-strided run is the stride's to make and not a caller's.
 function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) returns ByteArray
 	var out = ByteArray.create()
-	out.resize(elementsByteLen(values.count(), stride: 0 - packedBits) as ElementCount)
+	out.resize(elementsByteLen(values.count(), stride: -packedBits) as ElementCount)
 
 	let fieldMask = (1 shl packedBits) - 1
 	for i in 0 upto values.count() 'eachElement'

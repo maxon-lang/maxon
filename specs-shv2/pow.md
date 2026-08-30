@@ -239,7 +239,7 @@ repeated-multiplication threshold, which is what drops it into the general path 
 ```maxon
 function main() returns ExitCode
 	let negInf = Math.log(0.0)
-	let inf = 0.0 - negInf
+	let inf = -negInf
 	let nan = Math.log(-1.0)
 	print("pow(nan,0)    {Math.pow(nan, exponent: 0.0)}\n")
 	print("pow(1,nan)    {Math.pow(1.0, exponent: nan)}\n")

@@ -542,11 +542,13 @@ end 'stdBinOpcodeIsFloatOnly'
 // Four of the five are ONE instruction on every target — x64 `sqrtsd` / `roundsd imm8`, arm64 `fsqrt` /
 // `frint{n,p,m}`, wasm `f64.{sqrt,nearest,ceil,floor}`.
 //
-// ⚠ `abs` IS THE EXCEPTION, ON x64 ONLY, and it is the one opcode in this enum a backend does have to
-// SYNTHESIZE. arm64 has `fabs` and wasm has `f64.abs`; SSE2 has no scalar float absolute value, so the
+// ⚠ `abs` IS THE EXCEPTION, ON x64 ONLY, and — with `fneg`, its sign-flipping twin appended after it —
+// one of the two opcodes in this enum a backend does have to SYNTHESIZE. arm64 has `fabs`/`fneg` and
+// wasm has `f64.abs`/`f64.neg`; SSE2 has neither a scalar float absolute value nor a negate, so the
 // x64 isel clears the sign bit with a `psllq`/`psrlq` pair (`TargetOp.absF64RegReg`, where the full
-// reasoning and the divergence from both reference compilers is recorded). That is a TARGET fact and
-// changes nothing here: the opcode is still f64 → f64, still non-trapping, still one operand.
+// reasoning and the divergence from both reference compilers is recorded) and flips it with an
+// `xorpd` against a mask built in a scratch XMM (`TargetOp.negF64RegReg`). That is a TARGET fact and
+// changes nothing here: each opcode is still f64 → f64, still non-trapping, still one operand.
 //
 // ⭐ `round` IS TIES-TO-EVEN (banker's rounding), which is what all three of those instruction
 // families do natively and what `specs/round.md` pins (`round(2.5)` is 2). It is NOT C's `round()`.
@@ -578,17 +580,23 @@ end 'stdBinOpcodeIsFloatOnly'
 // exactly one conversion in each direction.
 //
 // ⚠ APPENDED PAST THE MATH BAND, BOTH OF THEM, per the band-append invariant, and this enum's range arms are the
-// reason that matters: `stdUnaryOperandIsFloat` reads `fpToSi to abs`, `unaryResultClass` and
-// `unaryResultValType` read `floor to abs`, and the wasm isel dispatches `floor to abs` while the
-// arm64 and x64 isels dispatch `floor to round` (the ROUNDING sub-band alone — `sqrt` and `abs` are
-// each their own lowering). They do NOT all span the same members, so a member inserted anywhere
+// reason that matters: `stdUnaryOperandIsFloat` reads `fpToSi to fneg`, `unaryResultClass` and
+// `unaryResultValType` read `floor to fneg`, and the wasm isel dispatches `floor to fneg` while the
+// arm64 and x64 isels dispatch `floor to round` (the ROUNDING sub-band alone — `sqrt`, `abs` and `fneg`
+// are each their own lowering). They do NOT all span the same members, so a member inserted anywhere
 // before the band's end would be swallowed by some and not by others — misclassified at a subset of
 // sites, which is worse than at all of them. Every one of those arms was re-read when this landed.
 //
 // ⚠ `abs` JOINED THE MATH BAND AT ITS END, past `sqrt` and before `bitcastF64ToI64`, and that is why
-// every `… to sqrt` range above now reads `… to abs`: the band GREW, so the arms that describe the
+// every `… to sqrt` range above then read `… to abs`: the band GREW, so the arms that describe the
 // band name its new last member. Appending `abs` past `bitcastF64ToI64` instead would have left it
 // outside all four of them — a math intrinsic classified by the arms that answer for a reinterpretation.
+//
+// ⚠ `fneg` JOINED THE SAME WAY (2026-08-30), past `abs`, so those ranges now read `… to fneg`. It is
+// `abs`'s twin — a sign-bit FLIP where `abs` is a sign-bit CLEAR — and the op a source `-x` over a
+// float lowers to; before it that `-x` was `0.0 - x`, which is `+0.0` for a positive zero (see
+// `MaxonUnaryOp.fneg`). f64 → f64, non-trapping, one operand: the math band's shape exactly. Native on
+// arm64 (`fneg`) and wasm (`f64.neg`); synthesized on x64 (`TargetOp.negF64RegReg`), like `abs`.
 //
 // ⚠ THE TWO BITCASTS ARE NOT A "BAND" ANY RANGE MAY SPAN, though they sit adjacent and are inverses.
 // They DISAGREE about the one question the arms above ask — `stdUnaryOperandIsFloat` is `true` for
@@ -608,6 +616,7 @@ export enum StdUnaryOpcode
 	round
 	sqrt
 	abs
+	fneg
 	bitcastF64ToI64
 	bitcastI64ToF64
 end 'StdUnaryOpcode'
@@ -628,8 +637,9 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 		// `neg`/`bitNot`/`logicalNot` are integer/bool instructions, and `siToFp` reads the integer
 		// half of the conversion pair.
 		neg to siToFp gives false
-		// `fpToSi` reads the float half, and the five math intrinsics are f64 → f64.
-		fpToSi to abs gives true
+		// `fpToSi` reads the float half, and the five math intrinsics and the sign flip `fneg` are
+		// f64 → f64.
+		fpToSi to fneg gives true
 		// The BITCAST reads an f64 and writes a GPR. It gets its own arm rather than extending the
 		// range above, because that range's answer is "true" for two different reasons — `fpToSi`
 		// converts out of the float domain and the intrinsics stay inside it — and this is a third:

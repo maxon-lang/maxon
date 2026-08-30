@@ -164,26 +164,26 @@ function main() returns ExitCode
 	// ⚠ The `otherwise` value is NOT 0. An admitted out-of-bounds read returns whatever word sits
 	// before the buffer, and 0 is a value it could plausibly hold — a fallback the read can collide
 	// with is a case that would pass under the very rewrite it exists to refuse.
-	if (try a.managed.get(-1) otherwise 0 - 5) != 0 - 5 'negativeGet'
+	if (try a.managed.get(-1) otherwise -5) != -5 'negativeGet'
 		return 1
 	end 'negativeGet'
-	if (try a.managed.remove(-1) otherwise 0 - 5) != 0 - 5 'negativeRemove'
+	if (try a.managed.remove(-1) otherwise -5) != -5 'negativeRemove'
 		return 2
 	end 'negativeRemove'
 
 	try a.managed.swap(-1, 0) otherwise 'negativeSwap'
 		try a.managed.set(-1, value: 99) otherwise 'negativeSet'
-			if (try a.managed.get(-2) otherwise 0 - 5) != 0 - 5 'negativeGetAgain'
+			if (try a.managed.get(-2) otherwise -5) != -5 'negativeGetAgain'
 				return 3
 			end 'negativeGetAgain'
 			// Nothing above may have touched the array.
 			if a.count() != 3 'countUnchanged'
 				return 4
 			end 'countUnchanged'
-			if (try a.get(0) otherwise 0 - 5) != 10 'firstUnchanged'
+			if (try a.get(0) otherwise -5) != 10 'firstUnchanged'
 				return 5
 			end 'firstUnchanged'
-			if (try a.get(2) otherwise 0 - 5) != 30 'lastUnchanged'
+			if (try a.get(2) otherwise -5) != 30 'lastUnchanged'
 				return 6
 			end 'lastUnchanged'
 			return 0
@@ -213,7 +213,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function readAt(a IntArray, i Int) returns Int
-	return try a.managed.get(i) otherwise 0 - 7
+	return try a.managed.get(i) otherwise -7
 end 'readAt'
 
 function main() returns ExitCode
@@ -223,19 +223,19 @@ function main() returns ExitCode
 	a.push(33)
 
 	let n = a.count()
-	if readAt(a, i: 0 - n) != 0 - 7 'minusCount'
+	if readAt(a, i: -n) != -7 'minusCount'
 		return 1
 	end 'minusCount'
-	if readAt(a, i: 0 - n - 1) != 0 - 7 'belowThat'
+	if readAt(a, i: -n - 1) != -7 'belowThat'
 		return 2
 	end 'belowThat'
-	if readAt(a, i: 1 - n) != 0 - 7 'minusTwo'
+	if readAt(a, i: 1 - n) != -7 'minusTwo'
 		return 3
 	end 'minusTwo'
 	if readAt(a, i: n - 1) != 33 'lastStillReadable'
 		return 4
 	end 'lastStillReadable'
-	if readAt(a, i: n) != 0 - 7 'atLength'
+	if readAt(a, i: n) != -7 'atLength'
 		return 5
 	end 'atLength'
 	if a.count() != 3 'countUnchanged'
@@ -264,15 +264,15 @@ function main() returns ExitCode
 	a.push(2)
 
 	let top = 9223372036854775807
-	let bottom = (0 - 9223372036854775807) - 1
+	let bottom = (-9223372036854775807) - 1
 
-	if (try a.managed.get(top) otherwise 0 - 5) != 0 - 5 'topGet'
+	if (try a.managed.get(top) otherwise -5) != -5 'topGet'
 		return 1
 	end 'topGet'
-	if (try a.managed.get(bottom) otherwise 0 - 5) != 0 - 5 'bottomGet'
+	if (try a.managed.get(bottom) otherwise -5) != -5 'bottomGet'
 		return 2
 	end 'bottomGet'
-	if (try a.managed.remove(bottom) otherwise 0 - 5) != 0 - 5 'bottomRemove'
+	if (try a.managed.remove(bottom) otherwise -5) != -5 'bottomRemove'
 		return 3
 	end 'bottomRemove'
 	if a.count() != 2 'countUnchanged'
@@ -301,13 +301,13 @@ typealias IntArray = Array with Int
 
 function probe(a IntArray) returns Int
 	var hits = 0
-	if (try a.managed.get(0) otherwise 0 - 1) != 0 - 1 'zero'
+	if (try a.managed.get(0) otherwise -1) != -1 'zero'
 		hits = hits + 1
 	end 'zero'
-	if (try a.managed.get(1) otherwise 0 - 1) != 0 - 1 'one'
+	if (try a.managed.get(1) otherwise -1) != -1 'one'
 		hits = hits + 1
 	end 'one'
-	if (try a.managed.get(-1) otherwise 0 - 1) != 0 - 1 'negative'
+	if (try a.managed.get(-1) otherwise -1) != -1 'negative'
 		hits = hits + 1
 	end 'negative'
 	return hits
@@ -356,13 +356,13 @@ function main() returns ExitCode
 	end 'seed'
 
 	let n = a.count()
-	if (try a.get(n - 1) otherwise 0 - 1) != 40 'lastIn'
+	if (try a.get(n - 1) otherwise -1) != 40 'lastIn'
 		return 1
 	end 'lastIn'
-	if (try a.get(n) otherwise 0 - 1) != 0 - 1 'lengthOut'
+	if (try a.get(n) otherwise -1) != -1 'lengthOut'
 		return 2
 	end 'lengthOut'
-	if (try a.get(n + 1) otherwise 0 - 1) != 0 - 1 'pastLengthOut'
+	if (try a.get(n + 1) otherwise -1) != -1 'pastLengthOut'
 		return 3
 	end 'pastLengthOut'
 
@@ -371,7 +371,7 @@ function main() returns ExitCode
 		return 4
 	end 'lastInWrite'
 	try a.set(n, value: 55) otherwise 'lengthOutWrite'
-		if (try a.get(n - 1) otherwise 0 - 1) != 44 'writeLanded'
+		if (try a.get(n - 1) otherwise -1) != 44 'writeLanded'
 			return 5
 		end 'writeLanded'
 		if a.count() != 5 'countUnchanged'
@@ -418,7 +418,7 @@ function main() returns ExitCode
 	a.push(30)
 
 	// The BUFFER surface: caught, and the program keeps running.
-	if (try a.managed.get(launder(-1)) otherwise 0 - 5) != 0 - 5 'bufferThrows'
+	if (try a.managed.get(launder(-1)) otherwise -5) != -5 'bufferThrows'
 		return 1
 	end 'bufferThrows'
 	if a.count() != 3 'countUnchanged'

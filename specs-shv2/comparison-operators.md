@@ -331,7 +331,7 @@ end 'wide'
 function main() returns ExitCode
 	let three = wide(3 as Wide)
 
-	if three > 0 - 1 'aboveNegativeOne'
+	if three > -1 'aboveNegativeOne'
 		return 42
 	end 'aboveNegativeOne'
 	return 1
@@ -362,7 +362,7 @@ end 'signed'
 
 function main() returns ExitCode
 	let three = signed(3 as Signed)
-	let minusOne = signed(0 - 1)
+	let minusOne = signed(-1)
 
 	if three > minusOne 'ordered'
 		return 42
@@ -432,7 +432,7 @@ function findSlot(key Slot) returns Slot
 	if key == 7 'found'
 		return 3 as Slot
 	end 'found'
-	return 0 - 1
+	return -1
 end 'findSlot'
 
 function main() returns ExitCode

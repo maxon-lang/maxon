@@ -1759,7 +1759,7 @@ export type Parser
 				return ParamDefault.none
 			end 'overflow'
 			if consumedNegate 'applyNeg'
-				value = 0 - value
+				value = -value
 			end 'applyNeg'
 			return ParamDefault.intLiteral(value)
 		end 'isInt'
@@ -7073,7 +7073,7 @@ export type Parser
 
 	function f64MinBits() returns IntConstant
 		// 0xFFEFFFFFFFFFFFFF as a signed i64 — most-negative finite double.
-		return 0 - 4503599627370497
+		return -4503599627370497
 	end 'f64MinBits'
 
 	// Pick an upper bound for an int-backed enum's typealias range from the
@@ -7131,7 +7131,7 @@ export type Parser
 				reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(numToken.value)}' is outside the range of int", line: numToken.line, column: numToken.column, filePath: filePath)
 				return BoundResult.create(0, qualifier: "")
 			end 'negOverflow'
-			return BoundResult.create(0 - value, qualifier: "")
+			return BoundResult.create(-value, qualifier: "")
 		end 'isNeg'
 
 		if at(TokenKind.intLiteral) 'isLit'
@@ -7211,7 +7211,7 @@ export type Parser
 			reportLiteralOverflow(token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int")
 			throw ParserError.overflow
 		end 'intOverflow'
-		let signed = intValue if not negate else 0 - intValue
+		let signed = intValue if not negate else -intValue
 		return floatBitsFromInt(signed)
 	end 'parseFloatBoundBits'
 
@@ -8006,7 +8006,7 @@ export type Parser
 				return MatchPatternSpec.defaultPattern(litToken)
 			end 'overflow'
 			if negate 'applyNeg'
-				value = 0 - value
+				value = -value
 			end 'applyNeg'
 			// Range pattern: `INT to|upto (INT | max)`. Lookahead on the
 			// next token; if it isn't `to` / `upto` this stays a bare int
@@ -8338,7 +8338,7 @@ export type Parser
 				return MatchPatternSpec.intLiteral(loToken, value: loValue, displayName: loDisplay)
 			end 'overflow'
 			if negateUpper 'applyNegU'
-				hiValue = 0 - hiValue
+				hiValue = -hiValue
 			end 'applyNegU'
 			hiDisplay = "{hiValue}"
 		end 'isIntUpper'
@@ -21154,7 +21154,7 @@ function floatBitsFromInt(value BoundValue) returns BoundValue
 		return 0
 	end 'zero'
 	let isNeg = value < 0
-	let mag = value if not isNeg else 0 - value
+	let mag = value if not isNeg else -value
 	// Find leading-bit position. mag is positive non-zero in the i64 range,
 	// so the position is in [0, 62].
 	var pos = 0

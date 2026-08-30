@@ -235,9 +235,9 @@ function neighbourhood(d PosDivisor) returns WordArray
 	ns.push(anc)
 	ns.push(anc - 1)
 	ns.push(anc + 1)
-	ns.push(0 - anc)
-	ns.push(0 - anc - 1)
-	ns.push(0 - anc + 1)
+	ns.push(-anc)
+	ns.push(-anc - 1)
+	ns.push(-anc + 1)
 	return ns
 end 'neighbourhood'
 

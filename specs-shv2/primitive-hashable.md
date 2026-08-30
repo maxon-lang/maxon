@@ -223,7 +223,7 @@ values to hash equal, never unequal values to hash differently.
 ```maxon
 function main() returns ExitCode
 	let pos = 3.14
-	let neg = 0.0 - 3.14
+	let neg = -3.14
 	if neg.hash() != pos.hash() 'signMasked'
 		return 1
 	end 'signMasked'

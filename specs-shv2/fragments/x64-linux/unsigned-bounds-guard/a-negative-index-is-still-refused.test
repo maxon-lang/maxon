@@ -11,26 +11,26 @@ function main() returns ExitCode
 	// ⚠ The `otherwise` value is NOT 0. An admitted out-of-bounds read returns whatever word sits
 	// before the buffer, and 0 is a value it could plausibly hold — a fallback the read can collide
 	// with is a case that would pass under the very rewrite it exists to refuse.
-	if (try a.managed.get(-1) otherwise 0 - 5) != 0 - 5 'negativeGet'
+	if (try a.managed.get(-1) otherwise -5) != -5 'negativeGet'
 		return 1
 	end 'negativeGet'
-	if (try a.managed.remove(-1) otherwise 0 - 5) != 0 - 5 'negativeRemove'
+	if (try a.managed.remove(-1) otherwise -5) != -5 'negativeRemove'
 		return 2
 	end 'negativeRemove'
 
 	try a.managed.swap(-1, 0) otherwise 'negativeSwap'
 		try a.managed.set(-1, value: 99) otherwise 'negativeSet'
-			if (try a.managed.get(-2) otherwise 0 - 5) != 0 - 5 'negativeGetAgain'
+			if (try a.managed.get(-2) otherwise -5) != -5 'negativeGetAgain'
 				return 3
 			end 'negativeGetAgain'
 			// Nothing above may have touched the array.
 			if a.count() != 3 'countUnchanged'
 				return 4
 			end 'countUnchanged'
-			if (try a.get(0) otherwise 0 - 5) != 10 'firstUnchanged'
+			if (try a.get(0) otherwise -5) != 10 'firstUnchanged'
 				return 5
 			end 'firstUnchanged'
-			if (try a.get(2) otherwise 0 - 5) != 30 'lastUnchanged'
+			if (try a.get(2) otherwise -5) != 30 'lastUnchanged'
 				return 6
 			end 'lastUnchanged'
 			return 0

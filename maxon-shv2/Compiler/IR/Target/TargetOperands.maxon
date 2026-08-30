@@ -340,6 +340,10 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// commutative on a NaN, so `lhs` and `rhs` are not interchangeable (see
 		// `TargetOp.minMaxSdRegReg`). `kind` names no register, so the operand model is one arm for both.
 		minMaxSdRegReg(dest, lhs, rhs, _) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		// The sign-bit FLIP, `absF64RegReg`'s shape exactly: the `xorpd` works IN PLACE, so `dest` must
+		// arrive holding `src` — a REUSE def, not a plain one. Its scratch XMM rides the op's `implicitDefs`,
+		// not an operand slot.
+		negF64RegReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
 		// --- arm64 SCALAR-CORE band ---
 		//
 		// The COMPLETE operand model for the arm64 arms — the contract wave 1's encoder + allocator
@@ -503,6 +507,8 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// multiplicand (RAX) and both halves of the product (RAX, RDX) are IMPLICIT, declared as masks on
 		// the op rather than as operands, so the colorer sees the same shape it already sees for a divide.
 		imulHighReg(src) then pushUse(buf, vreg: src)
+		// `fneg` is a real 2-operand instruction — a PLAIN def beside `arm64Fabs`, for its reason.
+		arm64Fneg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 	end 'operands'
 end 'targetOpOperands'
 

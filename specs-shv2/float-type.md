@@ -368,7 +368,7 @@ function main() returns ExitCode
 	print("{a}\n")
 	print("{b}\n")
 	print("{a + b}\n")
-	print("{0.0 - a}\n")
+	print("{-a}\n")
 	print("{0.0}\n")
 	return 0
 end 'main'

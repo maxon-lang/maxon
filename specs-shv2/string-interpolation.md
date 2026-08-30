@@ -281,6 +281,32 @@ end 'main'
 Temp: -3.5
 ```
 
+### Signed Zero and Full Significance
+
+`-0.0` is a different double from `0.0` and prints with its sign. A value that needs all 17
+significant digits gets all 17: `0.1 + 0.2` is not `0.3`, and printing it as `0.3` would say it was.
+
+<!-- test: float-signed-zero-and-significance -->
+```maxon
+function main() returns ExitCode
+	let negativeZero = -0.0
+	print("{negativeZero}\n")
+	print("{0.0}\n")
+	print("{0.1 + 0.2}\n")
+	print("{1.0 / 3.0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-0.0
+0.0
+0.30000000000000004
+0.3333333333333333
+```
+
 ### Boolean True Interpolation
 
 <!-- test: bool-true -->
@@ -1175,7 +1201,7 @@ function main() returns ExitCode
 	print("{n:012b}\n")
 	// Space fill and the signed path share the same shift-and-fill code.
 	print("{n:8x}\n")
-	let neg = 0 - 42
+	let neg = -42
 	print("{neg:08d}\n")
 	return 0
 end 'main'
@@ -1203,7 +1229,7 @@ function main() returns ExitCode
 	// early and print only zero-padding.
 	let high = 1 shl 63
 	print("{high:016x}\n")
-	let allBits = 0 - 1
+	let allBits = -1
 	print("{allBits:x}\n")
 	let upper = 11 shl 60
 	print("{upper:X}\n")

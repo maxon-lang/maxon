@@ -1,6 +1,6 @@
 // Test: log10.positive-infinity
 function main() returns ExitCode
-	let positiveInfinity = 0.0 - Math.log(0.0)
+	let positiveInfinity = -Math.log(0.0)
 	print("{Math.log10(positiveInfinity)}\n")
 	return 0
 end 'main'
@@ -23,13 +23,10 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 72
-    x64.storeSlotReg slot3, xmm6
-    x64.movsdRegRip xmm6, [rip + __str_blob_24]
+    x64.prologue 56
     x64.movsdRegRip xmm0, [rip + __str_blob_24]
     x64.callDirect Math.log
-    x64.subsdRegReg xmm6, xmm6, xmm0
-    x64.movRegReg xmm0, xmm6
+    x64.negF64RegReg xmm0, xmm0
     x64.callDirect Math.log10
     x64.callDirect __float_toString
     x64.storeSlotReg slot0, r8
@@ -70,8 +67,7 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
-    x64.loadRegSlot xmm6, slot3
-    x64.epilogue 72
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

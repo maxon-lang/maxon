@@ -10,11 +10,11 @@ function magnitude(imm Imm32) returns Integer
 	if imm >= 0 'nonNeg'
 		return imm
 	end 'nonNeg'
-	return 0 - imm
+	return -imm
 end 'magnitude'
 
 function main() returns ExitCode
-	let offset = ident(0 - 64) as Imm32
+	let offset = ident(-64) as Imm32
 	let units = (offset / 8) as Imm32
 	print("units={units}\n")
 	print("magnitude={magnitude(units)}\n")
@@ -56,8 +56,8 @@ func @magnitude {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 r8, 0
-    x64.subRegReg r8, r8, rcx
+    x64.movRegReg r8, rcx
+    x64.negReg r8, rcx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -176,9 +176,8 @@ func @main {
     x64.loadRegSlot r13, slot0
     x64.jmp __il_cont
   ifcont:
-    x64.movRegImm32 rax, 0
-    x64.loadRegSlot rcx, slot0
-    x64.subRegReg rax, rax, rcx
+    x64.loadRegSlot rax, slot0
+    x64.negReg rax, rax
     x64.movRegReg r13, rax
   __il_cont:
     x64.movRegImm32 rcx, 21

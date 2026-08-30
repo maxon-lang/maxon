@@ -242,9 +242,14 @@ let OpcodeDivsd = 0x5E  // divsd xmm, xmm/m64 (F2 0F 5E /r)
 // quiet NaN rather than raising. It writes ZF/PF/CF and leaves OF=SF=AF=0 — see X64CondCode.
 let OpcodeUcomisd = 0x2E
 
-// xorpd xmm, xmm/m128 (66 0F 57 /r) — a 128-bit bitwise XOR, and the ONLY tool an XMM swap
-// has (there is no `xchg xmm, xmm`). See `emitRegRegSwap`.
+// xorpd xmm, xmm/m128 (66 0F 57 /r) — a 128-bit bitwise XOR: the ONLY tool an XMM swap has (there is
+// no `xchg xmm, xmm`, see `emitRegRegSwap`), and the last step of an f64 NEGATE (`encodeNegF64Reg`).
 let OpcodeXorpd = 0x57
+
+// pcmpeqd xmm, xmm/m128 (66 0F 76 /r) — compare dwords for equality. Against ITSELF it answers all
+// ones in every lane, which is how an f64 negate builds its sign mask in a register with no `.rdata`
+// constant to load (`encodeNegF64Reg`). SSE2, like the group-14 shifts below.
+let OpcodePcmpeqd = 0x76
 
 // cvtsi2sd xmm, r/m64 (F2 REX.W 0F 2A /r) — reg field = XMM dest, r/m = GPR source. REX.W is
 // what selects the 64-bit source; without it this converts a 32-bit int.
@@ -304,7 +309,7 @@ let OpcodeMovqRmXmm = 0x7E
 // which would move 32 bits and leave the resulting double's exponent and sign zeroed.
 let OpcodeMovqXmmRm = 0x6E
 
-// --- The GROUP-14 SSE shift-by-immediate pair: f64 ABSOLUTE VALUE (`specs/abs.md`) ---
+// --- The GROUP-14 SSE shift-by-immediate pair: f64 ABSOLUTE VALUE (`specs/abs.md`) and NEGATE ---
 //
 // `psllq xmm, imm8` is `66 0F 73 /6 ib` and `psrlq xmm, imm8` is `66 0F 73 /2 ib` — ONE opcode byte
 // whose meaning is chosen by the ModR/M reg field, exactly like the group-1/2/3/5 GPR forms above, and
@@ -325,6 +330,10 @@ let Grp14ExtPsllq = 6
 
 // The shift COUNT both halves of the sign-bit clear use: one bit, which is the sign bit's whole width.
 let SignBitShiftCount = 1 as ShiftCount
+
+// The sign bit's POSITION — what an all-ones lane is shifted left by to leave exactly bit 63 set, the
+// mask an f64 negate XORs against (`encodeNegF64Reg`).
+let SignBitPosition = 63 as ShiftCount
 
 // --- `roundsd`: the ONE three-byte opcode in this file (SSE4.1) ---
 //
@@ -782,6 +791,42 @@ function encodeAbsF64Reg(code ByteArray, reg X64Register)
 	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: reg, count: SignBitShiftCount)
 	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsrlq, reg: reg, count: SignBitShiftCount)
 end 'encodeAbsF64Reg'
+
+// The ONE register `encodeNegF64Reg` builds its sign mask in. xmm5: caller-saved under BOTH ABIs shv2
+// emits for (Win64 preserves xmm6–15, SysV nothing), so the prologue never saves it on this account, and
+// the LAST float argument register, so it displaces the fewest live values. It is ALLOCATABLE, which is
+// why `TargetOp.negF64RegReg` declares it on `implicitDefs` — the fill ladder's bargain, not the jump
+// table's — and `assertEncoderScratchMasks` holds that literal equal to `x64NegF64ScratchMask()` below.
+let NegF64MaskReg = X64Register.xmm5
+
+// The negate's clobber, as the allocator's currency — the ONE statement of which register the mask
+// build destroys (`TargetOp.negF64RegReg`'s inline literal is checked against it).
+export function x64NegF64ScratchMask() returns RegMask
+	return regMaskOf(NegF64MaskReg)
+end 'x64NegF64ScratchMask'
+
+// `-x` for an f64 already in `reg`: flip the sign bit. IN PLACE, on one register — the op is
+// two-address, so the allocator has already put the source there — against a mask built in
+// `NegF64MaskReg`: `pcmpeqd m, m` (all ones), `psllq m, 63` (bit 63 alone, both lanes), `xorpd reg, m`.
+// Why a mask register rather than the `.rdata` constant both reference compilers use, or a shift trick
+// like `abs`'s, is recorded in full on `TargetOp.negF64RegReg`. It is the second encoder in this file
+// that emits more than one instruction, for the SSA reason `encodeAbsF64Reg` gives.
+function encodeNegF64Reg(code ByteArray, reg X64Register)
+	assertNegF64OperandReg(reg)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePcmpeqd, dest: NegF64MaskReg, src: NegF64MaskReg, wide: false)
+	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: NegF64MaskReg, count: SignBitPosition)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: reg, src: NegF64MaskReg, wide: false)
+end 'encodeNegF64Reg'
+
+// The colored operand must not be the mask register — the encoder would overwrite it with the mask
+// before XORing. `TargetOp.negF64RegReg`'s `implicitDefs` forbids exactly this via
+// `forbidOperandsFromImplicit`, so a violation is an allocator bug, not a user one — the jump table's
+// `assertJumpTableIndexReg`, one register file over.
+function assertNegF64OperandReg(reg X64Register)
+	if reg == NegF64MaskReg 'aliasesMask'
+		panic("encodeNegF64Reg: the negate's operand was colored to xmm{regNumber(reg)}, the sign-mask scratch register — `negF64RegReg`'s implicitDefs (xmm5) must forbid the operand that register (`forbidOperandsFromImplicit`)")
+	end 'aliasesMask'
+end 'assertNegF64OperandReg'
 
 // One group-14 SSE shift-by-immediate (`66 0F 73 /ext ib`) — the opcode-extension form of an SSE
 // instruction, which is why it can ride neither `encodeSseRegReg` (whose reg field is a REGISTER) nor
@@ -1334,7 +1379,7 @@ end 'encodeMemFillQwordRun'
 function encodeMemFillOverlappingSpan(code ByteArray, spanBytes MachineWord)
 	let qwords = spanBytes / MemFillQwordBytes
 	encodeMemFillQwordRun(code, base: MemFillCursorReg, startDisp: 0, count: qwords)
-	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: 0 - (spanBytes as Imm32), count: qwords)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(spanBytes as Imm32), count: qwords)
 end 'encodeMemFillOverlappingSpan'
 
 // ⭐⭐ **THE FILL LADDER.** Fill `rcx` bytes at `rdi` with `fillByte`, choosing an instruction
@@ -1378,7 +1423,7 @@ function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: MemFillCountReg, imm: MemFillLoopStride)
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: MemFillCountReg, imm: MemFillLoopStride)
 	encodeJccBackward(code, cond: X64CondCode.aboveEqual, targetOffset: loopTop, what: PatchSite.x64MemFillRel32)
-	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: 0 - (MemFillLoopStride as Imm32), count: MemFillLoopStride / MemFillQwordBytes)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(MemFillLoopStride as Imm32), count: MemFillLoopStride / MemFillQwordBytes)
 	let doneFromLoop = encodeJmpPlaceholder(code)
 
 	// >= 256: `rep stosq` over the whole qword count, then one overlapping qword covering the 0..7 bytes the
@@ -1386,7 +1431,7 @@ function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
 	patchLocalForwardBranch(code, dispOffset: toRep, what: PatchSite.x64MemFillRel32)
 	encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: MemFillCountReg, count: MemFillQwordShift)
 	encodeRepStosq(code)
-	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: 0 - (MemFillQwordBytes as Imm32), count: 1)
+	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(MemFillQwordBytes as Imm32), count: 1)
 	let doneFromRep = encodeJmpPlaceholder(code)
 
 	patchLocalForwardBranch(code, dispOffset: toFourQwords, what: PatchSite.x64MemFillRel32)
@@ -2035,6 +2080,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// would be a second, redundant claim about a fact the allocator has already established, and
 		// the two could only ever disagree.
 		absF64RegReg(dest, _) then encodeAbsF64Reg(code, reg: resolveXmm(dest))
+		// The sign-bit FLIP: three instructions, `src` unused for `absF64RegReg`'s reason (a REUSE def —
+		// coloring has already made `dest` and `src` one register).
+		negF64RegReg(dest, _) then encodeNegF64Reg(code, reg: resolveXmm(dest))
 		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
@@ -2118,6 +2166,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// encoder the two divides use, at a different extension, which is the whole difference between
 		// the four one-operand forms this family has.
 		imulHighReg(src) then encodeGrp3Reg(code, ext: Grp3ExtImul, reg: resolveGpr(src))
+		arm64Fneg then panic("emitTargetOp: an arm64 `fneg` reached the x64 encoder — the arm64 backend encodes the arm64 band; x64 spells the flip as `negF64RegReg`")
 	end 'emit'
 end 'emitTargetOp'
 

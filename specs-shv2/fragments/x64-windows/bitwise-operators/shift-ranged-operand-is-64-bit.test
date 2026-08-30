@@ -14,20 +14,20 @@ end 'shrBy'
 function main() returns ExitCode
 	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
 	// answer needs all 64.
-	let narrow = 0 - 8 as I32
-	if narrow shl 29 != shlBy(0 - 8, d: 29) 'signedFoldVsEmitted'
+	let narrow = -8 as I32
+	if narrow shl 29 != shlBy(-8, d: 29) 'signedFoldVsEmitted'
 		return 1
 	end 'signedFoldVsEmitted'
-	if narrow shl 29 != 0 - 4294967296 'signedValue'
+	if narrow shl 29 != -4294967296 'signedValue'
 		return 2
 	end 'signedValue'
 
 	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
 	// `shr 33` would have quietly become `shr 1`.
-	if narrow shr 33 != shrBy(0 - 8, d: 33) 'signedCountFoldVsEmitted'
+	if narrow shr 33 != shrBy(-8, d: 33) 'signedCountFoldVsEmitted'
 		return 3
 	end 'signedCountFoldVsEmitted'
-	if narrow shr 33 != 0 - 1 'signedCountValue'
+	if narrow shr 33 != -1 'signedCountValue'
 		return 4
 	end 'signedCountValue'
 
@@ -45,7 +45,7 @@ function main() returns ExitCode
 
 	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
 	// agree with it rather than merely with each other.
-	let plain = 0 - 8 as Num
+	let plain = -8 as Num
 	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
 		return 8
 	end 'rangedAgreesWithPlain'

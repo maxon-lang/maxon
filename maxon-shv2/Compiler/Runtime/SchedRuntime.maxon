@@ -2352,11 +2352,7 @@ function buildSchedWorkerLoop(module StdModule)
 	// mislead a later enqueue's idle scan into clearing the flag and signalling a DEAD P's event — a wakeup
 	// delivered to nobody, and the GT that prompted it left unrun until some other M happened to look.
 	// v1 records exactly this and fixes it the same way.
-	// `-1` is built as `0 - 1` because `emitConst` takes a `ParsedInt`, which has no negative literal — the
-	// same reason every other negative immediate in this runtime is a subtraction from zero.
-	let exitZero = emitConst(module, block: exitBlock, value: 0, ids: ids)
-	let exitOne = emitConst(module, block: exitBlock, value: 1, ids: ids)
-	let negOne = emitBin(module, block: exitBlock, a: exitZero, b: exitOne, opcode: StdBinOpcode.sub, ids: ids)
+	let negOne = emitConst(module, block: exitBlock, value: -1, ids: ids)
 	let exitActiveAddr = ids.mint()
 	module.appendOp(exitBlock, op: StdOp.globalAddr(exitActiveAddr, label: SchedActiveWorkersLabel))
 	let priorOnExit = ids.mint()

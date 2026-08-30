@@ -375,6 +375,11 @@ let Arm64OpFmovFpFromGpr = 0x9E670000
 // instruction for; that asymmetry lives in `TargetOp.absF64RegReg` and reaches nothing here.
 let Arm64OpFsqrtD = 0x1E61C000
 let Arm64OpFabsD = 0x1E60C000
+// `FNEG Dd, Dn` 0x1E614000 — the same FP-to-FP 2-register form as `fabs` (opcode field 000010 where
+// `fabs` is 000001 and `fsqrt` 000011), and the instruction `StdUnaryOpcode.fneg` IS here. The word
+// matches `maxon-selfhosted`'s `arm64EmitFneg`. ⚠ Like `fabs`, it is an instruction x64 lacks; that
+// asymmetry lives in `TargetOp.negF64RegReg` and reaches nothing here.
+let Arm64OpFnegD = 0x1E614000
 let Arm64OpFrintDBase = 0x1E644000
 let Arm64FrintRmodeShift = 15
 let Arm64FrintRmodeNearest = 0  // frintn — to nearest, TIES TO EVEN
@@ -683,7 +688,7 @@ function arm64AddSubImmMagnitude(imm Imm32) returns MachineWord
 	if imm >= 0 'nonNeg'
 		return imm as MachineWord
 	end 'nonNeg'
-	return 0 - imm
+	return -imm
 end 'arm64AddSubImmMagnitude'
 
 // Whether a magnitude fits ONE imm12 field — plain, or shifted left by 12 with an empty low half.
@@ -814,7 +819,7 @@ function imm32ToWord(imm Imm32) returns MachineWord
 	if imm >= 0 'nonNeg'
 		return imm as MachineWord
 	end 'nonNeg'
-	return u64.max - (0 - imm) + 1
+	return u64.max - (-imm) + 1
 end 'imm32ToWord'
 
 // CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond) — one register set from the flags.
@@ -1317,7 +1322,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// --- x64-only SSE band ---
 		// The endpoint MOVED when `movqXmmGpr` was appended to the end of the x64 SSE band: this range
 		// means "the x64 float ops", and its last member is whichever one that band currently ends on.
-		addsdRegReg to movqXmmGpr then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
+		addsdRegReg to negF64RegReg then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
 		// `minsd`/`maxsd` are inside the range above; the arm64 spelling of `min`/`max` is `fcmp` +
 		// `fcsel`, not one op.
 		// --- arm64 band ---
@@ -1370,6 +1375,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// unchanged; only `frint`'s rounding rides an opcode field.
 		arm64Fsqrt(dest, src) then emitArm64Rr(code, opcode: Arm64OpFsqrtD, rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64Fabs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFabsD, rd: arm64FpField(dest), rn: arm64FpField(src))
+		arm64Fneg(dest, src) then emitArm64Rr(code, opcode: Arm64OpFnegD, rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64Frint(dest, src, mode) then emitArm64Rr(code, opcode: arm64FrintOpcode(mode), rd: arm64FpField(dest), rn: arm64FpField(src))
 		// `fcsel` is an ordinary FP 3-register form once its condition is folded into the opcode word,
 		// so it rides `emitArm64Rrr` unchanged — the same trick `arm64Frint` uses for its rounding mode.
@@ -1525,7 +1531,7 @@ end 'arm64EmitFillPairRun'
 function arm64EmitFillOverlappingSpan(code ByteArray, spanBytes MachineWord)
 	let pairs = spanBytes / Arm64MemFillPairBytes
 	arm64EmitFillPairRun(code, baseReg: Arm64MemFillCursor, startOffset: 0, count: pairs)
-	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: 0 - (spanBytes as Imm32), count: pairs)
+	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: -(spanBytes as Imm32), count: pairs)
 end 'arm64EmitFillOverlappingSpan'
 
 // ⭐⭐ **THE FILL LADDER, arm64.** The counterpart of `encodeX64MemFill` and the same shape — a size dispatch
@@ -1563,7 +1569,7 @@ function arm64EmitMemFill(code ByteArray, fillByte ParsedInt)
 	arm64EmitSubImmSigned(code, rd: Arm64MemFillCount, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
 	arm64EmitCmpImm(code, rn: Arm64MemFillCount, imm: Arm64MemFillLoopStride)
 	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCondBranch(code, cond: Arm64CondCode.hs), targetOffset: loopTop)
-	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: 0 - (Arm64MemFillLoopStride as Imm32), count: Arm64MemFillLoopStride / Arm64MemFillPairBytes)
+	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: -(Arm64MemFillLoopStride as Imm32), count: Arm64MemFillLoopStride / Arm64MemFillPairBytes)
 	let doneFromLoop = arm64EmitLocalBranch(code)
 
 	arm64PatchBranch19(code, codeOffset: toTwoPairs, targetOffset: code.count())
@@ -1578,7 +1584,7 @@ function arm64EmitMemFill(code ByteArray, fillByte ParsedInt)
 	// above cannot serve — hence the STR/STUR spelling, and hence `Arm64MemFillWordBytes` existing at all.
 	arm64PatchBranch19(code, codeOffset: toOneWord, targetOffset: code.count())
 	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: SpillSlotBytes)
-	arm64EmitUnscaledMem(code, opcode: Arm64OpSturX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillEnd, byteOffset: 0 - (Arm64MemFillWordBytes as Imm32))
+	arm64EmitUnscaledMem(code, opcode: Arm64OpSturX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillEnd, byteOffset: -(Arm64MemFillWordBytes as Imm32))
 	let doneFromOneWord = arm64EmitLocalBranch(code)
 
 	// 0..7: a byte loop. There is no whole word to anchor an overlap on, and this band is the rare one.
@@ -1898,7 +1904,7 @@ end 'arm64EmitStoreOutgoingArg'
 
 // STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
 function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
-	let imm7 = ((0 - frameSize) / 8) and Arm64PairImm7Mask
+	let imm7 = (-frameSize / 8) and Arm64PairImm7Mask
 	emitArm64Insn(code, insn: Arm64OpStpPreX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
 end 'arm64EmitStpPreIndex'
 
