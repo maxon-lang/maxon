@@ -1471,7 +1471,7 @@ compare catches `idx < 0` and `idx >= len` at once. Filed here rather than taken
 CLOSED as `A2` on 2026-08-29** (see its row below) — and the count was SEVEN, not six: the `or`'s own
 `cmp $0` is a seventh instruction, which is exactly why the fusion could not reach it.
 
-### ⭐⭐ RE-PRIORITIZED 2026-08-29 — `A1`/`EC7` AND `A2` ARE NOW CLOSED; `A3` IS THE TOP ROW
+### ⭐⭐ RE-PRIORITIZED 2026-08-29 — `A1`/`EC7` AND `A2` CLOSED, `A3` MEASURED AND DECLINED
 
 The original Tier 2/3 ordering is superseded. Three things re-ranked it, all measured:
 `EC2`'s profile of the stage-2 self-compile, `EC19`'s copy census, and two probes taken today.
@@ -1599,12 +1599,68 @@ dictionary`. `EmitCallShared` never had the bug because it ASKS each argument's 
 `ClassifyGprArgSources` + `PlaceGprArgs` pair, which deletes ~60 duplicated lines along with the
 crash. **A tail call with enough live arguments is not a rare shape and nothing in the tree had one.**
 
-**`A3` · `retainBorrowedPayload` — the rest of `EC2`, and a different rule.** `EC2`'s census finds
-**825 remaining refcount brackets; 801 acquire through `__mm_incref` from
-`Parser.retainBorrowedPayload`** — a managed payload bound out of a *borrowed union in a `match`
-arm*, retained unconditionally and dropped at the arm's exit. **197 in `targetOpOperands` alone**,
-the function `EC19` independently measures at 46% copies. A payload-binding rule, not a field-read
-rule.
+**`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
+acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row
+asked whether the `__mm_incref` around a managed payload bound out of a borrowed union in a `match` arm
+could be elided where the payload's only consumer is one call in the same statement — `EC2`'s rule, one
+door over. Three measurements answered it, in the order that made each one cheap.
+
+**1. The ceiling, measured before any rule was designed.** `retainBorrowedPayload` made an unconditional
+no-op (the maximal elision, unsound by construction) and self-compiled: **1,279,230 → 1,263,941 emitted ops
+(−1.20%), 151,062 → 145,904 `callDirect` (−3.41%, 5,158 calls), binary 9,224,484 → 9,155,876 B.** Timed
+A/B of the two stage-2 compilers on the SAME input, interleaved, three runs each: control
+**66,986 / 67,005 / 66,819 ms**, experiment **68,883 / 68,972 / 68,899 ms** — **+2.9%, i.e. SLOWER**, every
+run, which is the wrong sign for a change that only removes work and sits inside the ±3% build-to-build
+layout band `EC7` recorded. The profile says why: on the stage-2 self-compile `__mm_incref` is **0.71%** of
+in-text samples and `__mm_decref` **0.46%**, so **1.17% is the whole family's ceiling** and A3 owns only part
+of it. (`augmentValue` 19.40% + `tightRegisterSet` 8.27% is still where the time is; the allocation family
+— `__mm_alloc` 5.05%, `__managed_fill` 4.00%, `__managed_push` 3.57%, `__slab_alloc_box` 2.52%,
+`__managed_grow` 2.22%, `__managed_cow_detach` 1.58% — is **~19%**.)
+
+**2. The win is real, but it lives in a SHAPE the compiler is not.** A probe whose hot loop IS the row
+(`match` on a borrowed union, managed payload, arm body one call) goes from 23 emitted ops to 15 — the arm
+from 9 instructions to 2, and the frame loses both callee-saved registers the retained payload had to
+survive in — and runs **171 / 163 / 197 ms → 125 / 122 / 117 ms, −28%**. `EC14`'s lesson in one row:
+attribute the shape first, and the self-compile is not this shape.
+
+**3. ⛔⛔ THE RULE IS UNSOUND, AND THE CORPUS CANNOT SEE IT.** Under the maximal elision the whole suite is
+**6,954 passed / 0 failed / exit 0**. A green suite proves nothing here: the failure is a premature FREE,
+which is not a leak (the pair is balanced, so no over-release and no exit 101) and not a refusal. The
+discriminating program had to be built — `specs-shv2/union-managed-payload.md` ·
+`a-borrowed-payload-outlives-a-callee-that-frees-its-box`. Its arm is
+`filled(s) gives cell.replaceThenMeasure(s)`: **one call, one use, nothing else in the arm — exactly the
+shape the rule would admit** — and the callee reassigns the field holding the box, dropping the payload's
+last reference; the next allocation reuses the freed record through the slab free list. With the incref:
+`measured=62055`, agreeing with the bootstrap oracle. Without it: **`measured=1085102592571149903`, exit
+0** — a SILENT WRONG ANSWER, so an `exitcode` pin would not have caught it either. Its control (the same
+arm, a callee that frees nothing) is unchanged in both arms, which is what attributes the failure to the
+callee's release and not to the arm's shape, the payload's kind, or the fact that a call consumes it. Both
+are committed, so the elision now has a red gate.
+
+⭐ **The producer header's *"a dataflow pass shv2 does not have"* is STALE IN LETTER AND UNCHANGED IN
+SUBSTANCE.** shv2 now has `StdDominatorTree` (`EC13`), `IR/NaturalLoops.maxon` (`EC14`) and
+`collectFunctionValueUses` with a multiplicity column (`EC16`) — all **Std-tier**, while
+`retainBorrowedPayload` is a **parser** decision whose release is already committed to ops by the time that
+tier exists. But that sentence was never the safety argument. The safety argument is that shv2's release is
+STRUCTURAL, so an unconditional acquire is unconditionally balanced — untouched — and measurement 3 shows
+that **no amount of intraprocedural dataflow decides this one**, because the fact needed is whether an
+arbitrary callee releases the caller's box. v1 does not have that fact either (`InsertRefcounts` is
+whole-FUNCTION: CFG, RPO, dominators, liveness, escape sets, a param-ABI map), and shv2's borrow checker
+states the same limit outright — *"THROUGH A CALL: deliberately NOT modelled"* (`BorrowCheck.maxon`).
+
+⚠ **The two siblings are untouched, for the same reason a fortiori.** `retainBorrowedAggregate`
+(`var q = p`) and `retainThrownField` (#64) hand their reference to a binding that outlives a single
+statement by construction — a local for its whole scope, a thrown box across a frame boundary — so the
+"the only consumer is a call in this statement" premise is not even expressible for them.
+
+⭐ **WHAT THIS ROW POINTS AT INSTEAD, and it is a bigger and safer prize.** The bracket's cost is not the
+increment; it is that the increment is a CALL — two `mov`s, a `call`, and the callee-saved registers the
+live payload must then survive in (measurement 2's frame loses two `push`/`pop` pairs when the pair goes).
+`EC2` measured **refcount at 21.7% of all 150,851 calls** in the self-compile. `__mm_incref` is
+`emitAdjustRefcount` plus a compile-time-gated trace hook — a load, an add, a store — and
+`InlineManagedPrimitives` (`EC1`) is already the machinery for inlining a fast arm behind a call-bearing
+slow one. **Inlining the refcount primitives buys every one of these sites with no ownership change at
+all**, which is the half of this row that was never in question.
 
 **`B1` · Block reordering.** `EC11` collected the fall-throughs that already existed and explicitly
 did not create new ones. `EC15` then showed what reordering is worth by accident — deleting one block
@@ -1638,6 +1694,17 @@ source, so its producers are only the passes); `EC21` (interval match dispatch �
   by win.**
 - **arm64** owes a golden mint and carries real `EC16`/`EC18` codegen **never executed on that lane**.
   `EC18`'s `SMULH` is all that lane needs for its half of strength reduction.
+- ⛔⛔ **A LIVE USE-AFTER-FREE, FOUND BY `A3` AND NOT FIXED — `f(obj.managedField)` WHERE THE CALLEE FREES
+  THAT FIELD.** shv2 hands a managed field read straight to a call with no refcount at all
+  (`emitFieldLoad`: *"a receiver load, an argument, a chain hop are all transient and owe nothing"*), and
+  nothing checks that the callee leaves the field alone — `BorrowCheck`'s own header says the borrow set
+  *"does not compose THROUGH A CALL"*. **MEASURED 2026-08-30**: a `type Cell` with a managed `String` field
+  and `cell.replace(cell.s)`, where `replace` reassigns `self.s` and then reads its argument, **compiles
+  clean and exits 82 (`slabOsAllocFailed`) on shv2 — and runs CORRECTLY on the bootstrap oracle, exit 0.**
+  So it is a wrong answer against a runnable reference, not a divergence. `A3` was going to cite this route
+  as the precedent licensing its elision; the precedent is itself broken, which is why the row is filed
+  here instead. The match-payload spelling one door over is protected TODAY — by the retain `A3` proposed
+  removing (`a-borrowed-payload-outlives-a-callee-that-frees-its-box`). **Rank by risk, not by win.**
 - ⛔ **THE THREE NON-HOST GOLDEN LANES ARE STALE AND `A2` ADDED TO ONE OF THEM.** `specs-shv2/fragments/`
   holds four lanes and only `x64-windows` is ever re-minted here. **All three others hold ZERO
   `__im_slow`**, so they predate `EC1`'s inline-primitives pass entirely — `x64-linux` 6,403 fragments,

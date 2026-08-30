@@ -80,6 +80,16 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   frees the box. A moved-out slot is null and is skipped, so a payload is freed
   exactly once whether it was moved out, discarded, or left in place.
 
+- **THE RETAIN IS NOT A CONSERVATISM THAT A SINGLE-USE ARM COULD SKIP.** The standing
+  proposal against `retainBorrowedPayload` is that an arm whose body is one call, taking
+  the payload as one argument, borrows it no longer than an anonymous field read does —
+  and shv2 hands `f(obj.managedField)` to a call with no refcount at all. **Measured
+  false**: the callee can release the box between receiving the pointer and reading it,
+  and then the payload is gone. `a-borrowed-payload-outlives-a-callee-that-frees-its-box`
+  below is that program, and its control is the same arm with a callee that frees nothing.
+  ⛔ The elision produces a **silent wrong answer at exit 0**, so neither `exitcode` nor a
+  leak check sees it; the whole suite stayed green with the incref removed.
+
 Passing a managed-payload union across a call boundary as a *return value* is
 still the cross-call ownership ruling deferred beyond this rung; passing one as a
 **parameter** and binding its managed payload out is the retain above (D1b).
@@ -2852,4 +2862,102 @@ end 'main'
 ```
 ```stdout
 n=56 again=56
+```
+
+<!-- test: a-borrowed-payload-outlives-a-callee-that-frees-its-box -->
+⭐⭐ **THE RETAIN IS LOAD-BEARING, AND THIS IS THE PROGRAM THAT SAYS SO.** `retainBorrowedPayload`'s
+`__mm_incref` is unconditional, and the standing question is whether an arm that consumes its payload ONCE —
+as the single argument of the arm's one call — could skip it. **It cannot.** The arm here is
+`filled(s) gives cell.replaceThenMeasure(s)`: one call, one use, nothing else in the arm. The callee reassigns
+`self.slot`, which releases the box `s` was borrowed out of and drives the payload's refcount to zero; the
+`refill` allocation then reuses the freed record through the slab free list and the read comes back garbage.
+The binding's SECOND reference is the whole of what carries it across that call.
+⛔ **MEASURED BOTH WAYS.** With the incref: `measured=62055`, on shv2 and on the bootstrap oracle alike. With
+`retainBorrowedPayload` made a no-op, the same source through the same compiler prints
+`measured=1085102592571149903` **and still exits 0** — a silent wrong answer, neither a crash nor a leak, so an
+`exitcode` pin alone would not have caught it. Every other one of the suite's 6,954 cases stayed green under
+that elision; this is the one that does not.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Slot
+	filled(s String)
+	empty(n Integer)
+end 'Slot'
+
+type Cell
+	export var slot as Slot
+
+	static function create(slot Slot) returns Self
+		return Self{slot: slot}
+	end 'create'
+
+	// Frees the box its argument was borrowed out of, BEFORE reading the argument. The
+	// `refill` allocation is what makes the freed record's reuse observable rather than benign.
+	function replaceThenMeasure(borrowed String) returns Integer
+		self.slot = Slot.empty(7)
+		let refill = "a fresh allocation of its own, reusing the freed record"
+		return (borrowed.byteLength() * 1000 + refill.byteLength()) as Integer
+	end 'replaceThenMeasure'
+end 'Cell'
+
+function main() returns ExitCode
+	let cell = Cell.create(Slot.filled("the borrowed payload, long enough to be a real heap allocation"))
+	let measured = match cell.slot 'm'
+		filled(s) gives cell.replaceThenMeasure(s)
+		empty(n) gives n
+	end 'm'
+	print("measured={measured}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+measured=62055
+```
+
+<!-- test: the-same-arm-with-a-callee-that-frees-nothing -->
+⭐ **THE CONTROL FOR THE CASE ABOVE, AND THE CONTRAST IS THE DIAGNOSIS.** The identical program with the
+field reassignment taken out of the callee prints the same number with the retain and without it, so the
+discriminator is the callee's release of the box — not the arm's shape, not the payload's kind, and not the
+fact that a call is what consumes it. Pinned so that a future elision cannot be justified by *"the binding is
+used once, as an argument"*: that sentence is true of both programs and only one of them survives it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Slot
+	filled(s String)
+	empty(n Integer)
+end 'Slot'
+
+type Cell
+	export var slot as Slot
+
+	static function create(slot Slot) returns Self
+		return Self{slot: slot}
+	end 'create'
+
+	function measureOnly(borrowed String) returns Integer
+		let refill = "a fresh allocation of its own, reusing the freed record"
+		return (borrowed.byteLength() * 1000 + refill.byteLength()) as Integer
+	end 'measureOnly'
+end 'Cell'
+
+function main() returns ExitCode
+	let cell = Cell.create(Slot.filled("the borrowed payload, long enough to be a real heap allocation"))
+	let measured = match cell.slot 'm'
+		filled(s) gives cell.measureOnly(s)
+		empty(n) gives n
+	end 'm'
+	print("measured={measured}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+measured=62055
 ```
