@@ -125,6 +125,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | Jump-table dispatch | ◑ dense arms only | ✅ linear / table / **binary search** over intervals | ✅ |
 | Short-jump (rel8) relaxation | ❌ always rel32 | ❌ always rel32 | — |
 | Target-tier peephole | ❌ **no peephole pass at all** | ◑ `PeepholePass.cs` — 2 patterns, x64 only | ◑ |
+| **Unsigned bounds-check idiom** (`cmp`+`jae`) | ✅ `BoundsCompareOperandType` (A2) — one compare, all three lanes | ❌ two `setcc` + `or` + a general two-jump fusion | ❌ |
 
 **The headline:** on the classical-optimizer axis, the bootstrap is *not* the reference — it has no
 constant folding, no CSE, no inlining, no LICM either, and shv2 already beats it. **v1 is the
@@ -1466,9 +1467,11 @@ structural cure is a commutativity bit on `TargetOpMeta` read off the operand mo
 ⚠ **AND ONE THING THE CENSUS FOUND THAT IS NOT ABOUT COPIES AT ALL**: `EC1`'s bounds guard emits
 `cmp`/`setcc` twice, `or`, `cmp $0`, `jcc` — SIX instructions in the hottest loop of every
 array-indexing program — where x64's idiom is TWO: `cmp idx, len` / `jae slow`, because an UNSIGNED
-compare catches `idx < 0` and `idx >= len` at once. Filed here rather than taken.
+compare catches `idx < 0` and `idx >= len` at once. Filed here rather than taken. ✅ **TAKEN AND
+CLOSED as `A2` on 2026-08-29** (see its row below) — and the count was SEVEN, not six: the `or`'s own
+`cmp $0` is a seventh instruction, which is exactly why the fusion could not reach it.
 
-### ⭐⭐ RE-PRIORITIZED 2026-08-29 — `A1`/`EC7` IS NOW CLOSED; `A2` IS THE TOP ROW
+### ⭐⭐ RE-PRIORITIZED 2026-08-29 — `A1`/`EC7` AND `A2` ARE NOW CLOSED; `A3` IS THE TOP ROW
 
 The original Tier 2/3 ordering is superseded. Three things re-ranked it, all measured:
 `EC2`'s profile of the stage-2 self-compile, `EC19`'s copy census, and two probes taken today.
@@ -1486,12 +1489,115 @@ being fixed: the inclusive-bound refusal covered `i64.max` but not `u64.max`, an
 run UNSIGNED — a counted loop walked past `-1` into `0, 1, …` and elided a cast that should panic.
 Cured in one place (`TypeRules.inclusiveTopBoundWraps`) and pinned.
 
-**`A2` · The bounds guard is 7 instructions where x64's idiom is 2.** `EC19`'s census named this and
-under-counted it. Measured today (`temp/codegen-probe/guard.maxon`): `cmp`/`setcc`/`cmp`/`setcc`/
-`or`/`cmp`/`jcc`, where `cmp idx,len` + `jae` does it in two — an UNSIGNED compare catches `idx < 0`
-and `idx >= len` together, because a negative index wraps above any length. 24 sites in
-`fannkuch-redux` ≈ **7% of its user-code ops**; 6 in nbody. Every checked array access in every
-program, and the `or` it produces is what feeds two of the `critsplit` blocks below.
+**`A2` · The bounds guard is 7 instructions where x64's idiom is 2.** — ✅ **CLOSED 2026-08-29.
+`fannkuch-redux` runs −15.5% and the corpus loses 4.9% of its emitted ops; the compiler's own binary
+is 73,216 bytes smaller for the same source.** `EC19`'s census named this and under-counted it.
+Measured (`temp/codegen-probe/guard.maxon`): `cmp`/`setcc`/`cmp`/`setcc`/`or`/`cmp`/`jcc`, where
+`cmp idx,len` + `jae` does it in two — an UNSIGNED compare catches `idx < 0` and `idx >= len`
+together, because a negative index wraps above any length. 24 sites in `fannkuch-redux`, 6 in nbody,
+one in every checked `get`/`set`/`remove` in every program.
+
+⭐⭐ **THE GUARD'S OWN HEADER SAID WHY IT WAS TWO TESTS, AND THAT REASON HAD BEEN FALSIFIED UPSTREAM
+FOR TWO WEEKS.** `ManagedMemoryRuntime.emitIsNegative` read *"shv2's `StdCmpPred` has NO unsigned
+compare"*. **MEASURED FALSE**: X11 put signedness on a compare's `operandType` (`stdTypeIsUnsigned` /
+`unsignedStdTypeOf`, `LowerMaxonToStd.lowerCompare`) and all three backends read it — x64's
+`unsignedCondCodeForPred` (`jae`/`jb`), arm64's `arm64UnsignedCondForPred` (`hs`/`lo`), wasm's
+`i64.ge_u`. The sentence was narrowly true about the ENUM and false about the compiler, and it was the
+stated reason the guard cost seven instructions. Both guards now pass `operandType: StdType.u64`
+(`BoundsCompareOperandType`, one home) and the header is corrected.
+
+**Why seven and not five**: a `bitOr` is not a compare, so `StdToX64Conversion`'s
+`recordFusableCompare` could not fuse the branch on it and it paid its own `cmp $0`. One compare
+fuses, so the whole guard is `cmp`/`jae`. ⚠ **Two lanes were EXECUTED and the third was only READ**:
+x64 emits `cmpRegReg` + `jcc aboveEqual` (`temp/codegen-probe/guard.ir`) and wasm emits `i64.ge_u`
+(two of them in `guard.maxon`, disassembled with `wasm-tools`, suite green under wasmtime); arm64
+should be `cmp` / `cset hs` / `cbnz` — three, because that lane fuses no branch — but that is read off
+`arm64UnsignedCondForPred` and `arm64Cset`, NOT run, and arm64 already owes a golden mint on a Mac.
+
+⛔⛔ **THE PRECONDITION IS `length >= 0` AND IT IS THE WHOLE OF THE CORRECTNESS ARGUMENT** — for a
+negative limit the two readings are OPPOSITE, and the unsigned one ADMITS every index instead of
+refusing it. `BoundsCompareOperandType`'s header carries the argument in three parts: `length@8`
+carries no sentinel (`BufferOwnership`'s negatives live in `capacity@16` alone, at a type whose range
+stops at `-1`); every writer of `length@8` publishes a non-negative, the two that take the number
+from the user (`__managed_resize`, `__managed_set_length`) refusing a negative one first through
+`emitIsNegative`; and the ONE guard whose limit IS `capacity@16` — the inlined `__managed_mem_set` —
+now runs BEHIND `emitBufferNotOwned`. **That reorder is the row's only behavioural change**, it costs
+nothing (both refusals went to the same slow arm already), and it inverts an accident EC1's review had
+already had to correct this comment about once: under the SIGNED test a sentinel capacity refused
+everything, under the unsigned one it would admit everything.
+
+`scripts/emitted-code-count.py`, committed corpus, before → after:
+
+| | ops | `or` / `setcc` |
+|---|---|---|
+| nbody | 837 → **807** | 6 / 12 → **0 / 0** |
+| fannkuch-redux | 1698 → **1586** (−6.6%) | 24 / 39 → **0 / 0** |
+| guard | 89 → **84** | 1 / 2 → **0 / 0** |
+| TOTAL (10 programs) | 3005 → **2858** (−4.9%) | 31 / 54 → **0 / 1** |
+
+The one surviving `setcc` is `leaf.maxon`'s and is not a bounds guard; the `or` column is **zero
+across the whole corpus**.
+
+⭐ **EVERY `orRegReg` IN THE COUNTER'S TEN-PROGRAM CORPUS WAS THIS GUARD, AND ALL BUT ONE `setccReg`**
+— that is a statement about `scripts/emitted-code-count.py`'s corpus, not about the tree: 24 committed
+`x64-windows` fragments still carry an `orRegReg` after the re-mint, and they are the four sites below.
+It is nonetheless the answer to whether the bootstrap's general `or(cmp,cmp) → cond_br` two-jump fusion
+(`StandardToX86Conversion.cs:383-418`) is worth porting to shv2: **no**. A source census of shv2's
+emitted runtime leaves only four `or`-of-compares anywhere — `emitSliceRangeViolated`,
+`buildManagedMemSwap`'s `iBad || jBad`, `emitShiftArgumentIsNegative` and `SchedRuntime`'s work test —
+of which only the first is the same *shape*, and none is in a hot loop. A user's `or` never produces
+one at all: it short-circuits into blocks. ⚠ And shv2's own two-sided RANGE CHECK — the construct that
+makes the bootstrap's version fire constantly — is a CASCADE here, not an `or`
+(`InsertRangeChecks.maxon`), so the shape the bootstrap's pass exists for does not occur in shv2 at
+all. **The one thing worth taking from that pass is its `emitSliceRangeViolated`-shaped case, and even
+that is 6 instructions in a cold runtime body.**
+
+**TIMED A/B**, two compilers from one tree differing only in the two guard emitters, both built by the
+same bootstrap, runs interleaved, both printing identical output:
+
+| program | pre (ms) | post (ms) | | code size |
+|---|---|---|---|---|
+| `fannkuch-redux` — 24 guard sites | 9,893 / 9,845 / 9,868 | **8,338 / 8,347 / 8,314** | **−15.5%** | 28,881 → 28,369 B |
+| `nbody` — 6 sites, none in the hot loop | 10,082 / 10,127 / 10,137 | 10,056 / 10,046 / 10,035 | **−0.7%** | 76,070 → 75,558 B |
+| the compiler self-compiling | 155,425 / 155,490 | 155,933 / 155,956 | **0** | **9,297,700 → 9,224,484 B (−73,216)** |
+
+⭐ **AND THE COMPILER ITSELF ALLOCATES LESS, WHICH THE ROW DID NOT PREDICT.** The same two staged
+compilers, `scale-test` interleaved (`--repeat=1` twice, both arms byte-identical across their two
+runs so the allocation columns are exact): **allocations −0.27% at rung 0 falling to −0.16% at rung 5,
+bytes −0.15% → −0.07%, CPU flat inside its noise band**, and emitted `codeBytes` down a CONSTANT 992
+at every rung. The guard is now ONE Std op where it was four (`const`, `cmp`, `cmp`, `bitOr`), so
+there is less to build, lower, colour and encode. The constant 992 is the ladder's own shape, not the
+row's: `ScaleCorpus`'s array knob is straight-line, so a rung twice as big holds the same handful of
+checked accesses — the same corpus gap `EC14` filed. No trend row is logged; this is a control, not a
+dated reading against the log.
+
+⚠ **THE SELF-COMPILE IS AN HONEST ZERO IN TIME AND A REAL WIN IN SIZE**, and both halves are worth
+reading. Same source in both arms — only the codegen differs — so the 73 KB is exactly the five
+instructions per guard summed over the compiler, and the flat wall time says those guards are not
+where its time goes (`EC7` had already taken the ones in the Hall loops). fannkuch is the opposite
+shape and gets the whole win. ⇒ the spread across programs is `EC14`'s lesson again: attribute the
+shape before predicting the win.
+
+**GATES**: x64-windows **6,954 passed, 0 failed** (6,946 + 8 new) and wasm32-wasi **6,423 passed,
+0 failed** (6,415 + 8); **661 goldens re-minted** from ONE unfiltered run and re-verified at **0
+differing**; self-host **fixpoint stage-2 == stage-3, byte-identical (9,224,484 bytes)**, and the
+**whole suite passes UNDER stage-2 (6,954 / 0, 0 goldens differing)** — the half the fixpoint cannot
+stand in for. New
+`specs-shv2/unsigned-bounds-guard.md`, 8 cases. ⛔ Sabotage (`BoundsCompareOperandType = StdType.i64`,
+the one token that drops the negative half): **six of the eight go RED**, at exit 101, exit 1 ×2,
+exit 2 ×2 and **3221225477 — `0xC0000005`, an ACCESS VIOLATION**; the two that stay green are the two
+with no negative index in them.
+
+⛔⛔ **AND IT COULD NOT BE BUILT AT ALL UNTIL A BOOTSTRAP CRASH WAS FIXED — `maxon build maxon-shv2`
+DIED ON THE NEW GUARD.** Reducing `emitIndexOutOfRange` to `return emitCmp(module, block, a, b, pred,
+ids, operandType)` makes it a SEVEN-ARGUMENT TAIL CALL, and `RegisterManager.EmitTailCall`
+`EnsureInRegister`d every argument and then read `_valueToRegister[arg]` with an indexer — but
+ensuring argument N+1 ALLOCATES, allocation EVICTS the least-recently-used value to its stack home,
+and the value it evicts is argument 0. `E9001 … The given key '%5018818' was not present in the
+dictionary`. `EmitCallShared` never had the bug because it ASKS each argument's three possible homes
+(register, constant, stack home) instead of forcing all of them into one; the two are now one
+`ClassifyGprArgSources` + `PlaceGprArgs` pair, which deletes ~60 duplicated lines along with the
+crash. **A tail call with enough live arguments is not a rare shape and nothing in the tree had one.**
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`, and a different rule.** `EC2`'s census finds
 **825 remaining refcount brackets; 801 acquire through `__mm_incref` from
@@ -1532,6 +1638,29 @@ source, so its producers are only the passes); `EC21` (interval match dispatch �
   by win.**
 - **arm64** owes a golden mint and carries real `EC16`/`EC18` codegen **never executed on that lane**.
   `EC18`'s `SMULH` is all that lane needs for its half of strength reduction.
+- ⛔ **THE THREE NON-HOST GOLDEN LANES ARE STALE AND `A2` ADDED TO ONE OF THEM.** `specs-shv2/fragments/`
+  holds four lanes and only `x64-windows` is ever re-minted here. **All three others hold ZERO
+  `__im_slow`**, so they predate `EC1`'s inline-primitives pass entirely — `x64-linux` 6,403 fragments,
+  `arm64-macos` 4,161, `arm64-linux` 2,588, against `x64-windows`' 6,961 of which 677 carry one. And
+  **1,202 of `x64-linux`'s show `orRegReg`** — the pre-`A2` bounds guard, on the same backend, so
+  `A2` is one more reason they are stale rather than the first. Any run of a lane other than
+  `x64-windows` goes red on contact. This is the standing `block-label-not-identity-remint` debt;
+  recording it with numbers so it is not silently inherited a third time.
+- **The bootstrap's argument placement is now written down in TWO SHAPES**, which drifts worse than two
+  identical copies: `A2` factored x64's into `ClassifyGprArgSources` + `PlaceGprArgs`
+  (`RegisterManager.cs`) and `ARM64RegisterManager.cs:645-735` still holds the same algorithm inline —
+  same three-way classification, same "already in place" pass, same progress loop, same cycle break,
+  same constants-last. The lift is into `RegisterManagerBase` behind a `TargetRegisterFor(argIndex)`
+  hook, because AAPCS gives GPR and FP independent index spaces where Win64 shares the slot. Left out
+  of `A2` deliberately: it is a bootstrap change on a lane nothing here gates.
+- **`preGprPlacement` runs AFTER `ClassifyGprArgSources` and can allocate** (`RegisterManager.cs`, and
+  the same order in `ARM64RegisterManager.cs:661`) — its one implementation is `EmitIndirectCall`'s
+  `EnsureInRegister(callee)`. That is the SAME hazard `EmitTailCall`'s crash was, one call shape over:
+  an argument classified as "already in its own target register" whose register is then taken for the
+  callee is marked placed and never moved. **Pre-existing, not introduced here, and reachability NOT
+  established** — it needs an indirect call, register pressure, and the evicted value to be an
+  argument sitting in its own target. Hoisting the invoke above the classification looks like the
+  one-line cure and changes emitted code for every indirect call, so it belongs behind the C# suite.
 - **`EC19`'s ladder disagreement is still OPEN** — +1.45% emitted bytes at rung 5, attributed to
   `regalloc:splitting`, unexplained.
 - `W219` (a file-private `let` unified across files), and `E3092` cannot see a default argument's

@@ -34,9 +34,27 @@
 // Maxon `expandCastRangeChecks` for casts, a Std `insertRangeChecks` for returns) and the two copies have
 // drifted on unsigned handling. Here there is one.
 //
-// ⚠ SIGNED COMPARES, in a CASCADE. shv2's Std tier has no unsigned integer compare (`StdCmpPred` is
-// signed only) and no `setcc`, so a two-bound check is a CASCADE of fused `cmp`+`condBranch` — one block
-// per bound — not the bootstrap's `cmp`+`cmp`+`or` over materialized bools. A check usually branches to
+// ⚠ SIGNED COMPARES, in a CASCADE — and the CASCADE's reason and the SIGNED's reason are two different
+// facts, which this note used to run together. The cascade is because the Std tier has no `setcc`: a
+// bound's verdict can only be a `cmp` fused into a `condBranch`, one block per bound, never the
+// bootstrap's `cmp`+`cmp`+`or` over materialized bools.
+//
+// ⛔ **THE "SIGNED" HALF USED TO SAY "shv2's Std tier has NO UNSIGNED INTEGER COMPARE (`StdCmpPred` is
+// signed only)", AND THAT IS FALSE.** `StdCmpPred` carries no signedness either way; the compare's
+// `operandType` does, since upstream's X11 (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`), and
+// all three backends read it. What is true is that the checks below CHOOSE signed, and the choice is
+// deliberate — see the paragraph after next for the `int(N>0 to u64.max)` shape that depends on it.
+//
+// ⚠ **AND THAT MAKES A ONE-COMPARE FORM POSSIBLE FOR THE ORDINARY SHAPE, WHICH THIS PASS DOES NOT TAKE
+// AND WHICH IS FILED RATHER THAN ASSUMED.** For a range whose bounds are both representable,
+// `(value - lo) >u (hi - lo)` is the whole two-bound test in one unsigned compare — the same idiom
+// `ManagedMemoryRuntime.BoundsCompareOperandType` took for the array guard (row `A2`), which measured
+// 7 x64 instructions down to 2 there. It is NOT a comment-only change here: the subtraction is an extra
+// op, the `u64` relabelling has a precondition of its own (`hi - lo` must not wrap, which needs the
+// bound ARITHMETIC checked and not just the bounds), and the unsigned-max-upper shape below must be
+// exempted by name. Measure it before building it.
+//
+// A check usually branches to
 // the shared panic on violation; the one exception is the unsigned-max-upper shape's sign check, whose
 // TRUE edge is IN RANGE (see `RangeCheckEdge`). Signed compares give the same in/out verdict as the
 // bootstrap's for every ordinary range; for the `int(N>0 to u64.max)` shape they give the CORRECT

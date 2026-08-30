@@ -633,12 +633,18 @@ type PrimitiveInliner
 
 		let destroy = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
 		let managed = emitElementIsManaged(self.module, block: at, destroy: destroy, ids: self.valueIds())
-		at = self.guard(at, refused: managed, slow: frame.slow, next: InlineBoundsLabel)
+		at = self.guard(at, refused: managed, slow: frame.slow, next: InlineOwnedLabel)
 
-		at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineOwnedLabel)
-
+		// ⛔⛔ **OWNERSHIP IS ASKED BEFORE THE BOUND, AND THAT ORDER IS THE BOUND'S PRECONDITION (A2).** The
+		// `mem_set` limit is `capacity@16`, the ONE field that carries `BufferOwnership`'s negative sentinels,
+		// and `emitIndexOutOfRange` is a single UNSIGNED compare — which reads a negative limit as enormous and
+		// would ADMIT every index rather than refuse it. This guard refuses every negative capacity outright, so
+		// the bound below runs on one already proven non-negative. Both refusals go to the same slow arm, so the
+		// order costs nothing and buys the proof; see `BoundsCompareOperandType`'s part 3, which names this back.
 		let notOwned = emitBufferNotOwned(self.module, block: at, record: arr, ids: self.valueIds())
-		at = self.guard(at, refused: notOwned, slow: frame.slow, next: InlineBufferLabel)
+		at = self.guard(at, refused: notOwned, slow: frame.slow, next: InlineBoundsLabel)
+
+		at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineBufferLabel)
 
 		let buffer = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
 		let zeroBuf = emitConst(self.module, block: at, value: NoBufferAllocated, ids: self.valueIds())
@@ -726,25 +732,29 @@ type PrimitiveInliner
 		emitStrideDispatch(self.module, func: self.func, cur: cur, es: elementSize, wordArm: wordArm, byteArm: byteArm, otherArm: slow, ids: self.valueIds(), checkByteLabel: InlineStrideLabel)
 	end 'dispatchOnStride'
 
-	// The index bound, through `emitIndexOutOfRange` — the ONE home of "reject this index", which carries
-	// the NEGATIVE half with it (`StdCmpPred` is signed only, so `-1 >= 3` is false and a negative index
-	// would otherwise address before the buffer). The three entries differ only in the record field the
+	// The index bound, through `emitIndexOutOfRange` — the ONE home of "reject this index", which since A2 is
+	// a single UNSIGNED compare and carries the NEGATIVE half in it (a negative index reinterpreted as
+	// unsigned is above any non-negative length). The three entries differ only in the record field the
 	// limit is read from: `length@8` for the `Array` surface's `get`/`set`, `capacity@16` for the buffer's
 	// `mem_set`.
+	//
+	// ⛔ **THAT ONE UNSIGNED COMPARE REQUIRES A NON-NEGATIVE LIMIT, AND `capacity@16` IS THE ONE FIELD THAT
+	// CAN BE NEGATIVE.** `emitStoreArm` therefore emits `emitBufferNotOwned` BEFORE calling this; the reason
+	// is stated there and at `BoundsCompareOperandType`. `expandCheckedGet` needs nothing: its limit is
+	// `length@8`, which carries no sentinel at all.
 	//
 	// ⚠ `__managed_mem_set`'s runtime asks the same question as two separate tests (`emitIsNegative`, then
 	// `index >= capacity` inside `emitBufferAccessGuard`) rather than through this composition. The
 	// predicate is identical — a disjunction of the same two compares over the same two words — and asking
 	// it once here is the composition that already exists rather than a fourth spelling of it.
 	//
-	// ⚠ **A NON-OWNED RECORD LEAVES FOR THE SLOW ARM HERE, NOT AT `emitBufferNotOwned` ONE GUARD LATER, AND
-	// THIS LINE CLAIMED THE OPPOSITE UNTIL EC1's REVIEW.** Such a record carries a NEGATIVE `capacity@16`
-	// (the `BufferOwnership` encoding), and `index >= capacity` is therefore TRUE for every non-negative
-	// index while a negative index is caught by the other disjunct — so on the `mem_set` bound this test
-	// already refuses it, unconditionally. Nothing rests on which of the two refuses first (both go to the
-	// same slow arm, and the runtime detaches before it reads a capacity for real), but a reader deriving
-	// the ordering from the old sentence would be deriving it from something false. The `set` bound is
-	// `length@8`, which a view carries honestly, so THERE the refusal really is `emitBufferNotOwned`'s.
+	// ⚠ **A NON-OWNED RECORD NOW LEAVES FOR THE SLOW ARM AT `emitBufferNotOwned`, ONE GUARD EARLIER, ON BOTH
+	// BOUNDS.** It used to leave HERE on the `mem_set` bound, because a signed `index >= capacity` is TRUE for
+	// every non-negative index against a negative sentinel — an accident of the encoding that EC1's review
+	// already had to correct this comment about once. A2 made this test unsigned, which INVERTS that accident
+	// (a sentinel capacity reads as enormous and admits everything), so the ownership question is now asked
+	// first and answered by the one test that means to ask it. The `set` bound is `length@8`, which a view
+	// carries honestly, so THERE the refusal was always `emitBufferNotOwned`'s.
 	function guardIndexInRange(cur IrBlock, arr ValueId, index ValueId, limitOffset ByteOffset, slow IrBlock, next ByteArray) returns IrBlock
 		let limit = emitLoadField(self.module, block: cur, record: arr, offset: limitOffset, ids: self.valueIds())
 		let outOfRange = emitIndexOutOfRange(self.module, block: cur, index: index, length: limit, ids: self.valueIds())

@@ -70,14 +70,14 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow#20
-  __im_bounds:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc lessEqual, __im_slow#20
   __im_owned:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow#20
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, __im_slow#20
   __im_buffer:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
@@ -151,13 +151,8 @@ func @main {
     x64.jcc greaterEqual, whileexit
   sum:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 r13, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg r13, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#27
+    x64.jcc aboveEqual, __im_slow#27
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]

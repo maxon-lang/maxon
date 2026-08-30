@@ -2433,22 +2433,98 @@ export function emitElementIsManaged(module StdModule, block IrBlock, destroy Va
 	return emitCmp(module, block: block, a: destroy, b: trivial, pred: StdCmpPred.ne, ids: ids)
 end 'emitElementIsManaged'
 
-// `value < 0` — the SIGNED-negative test. ⚠ shv2's `StdCmpPred` has NO unsigned compare, so a negative user
-// index slips past every at-or-over-length bounds test (`index >= length` / `end > length`): signed, `-1 >= 3`
-// is FALSE and the index reads as "in bounds", then `buffer + index·elementSize` addresses BEFORE the buffer
-// (an OOB heap read/write). This explicit guard is the ONE home of "reject a negative index" — shared by
-// `emitIndexOutOfRange` (get/set/remove) and `buildManagedSlice`, so the fact is written once.
+// `value < 0` — the SIGNED-negative test. Since the two bounds guards below took the unsigned idiom, every
+// caller left is one with NO limit to compare the value against, and there are NINE: a length or a count on
+// its way to being PUBLISHED (`__managed_resize`, `__managed_set_length`, `__managed_mem_create`'s `count`),
+// an ARGUMENT that is not itself an index (`__managed_fill`'s `start` and `count`, a shift's `count`), the
+// slice range's two endpoints, and `emitBufferAccessGuard`'s byte offset — which keeps two tests for a
+// reason of its own, stated in its header.
+//
+// ⛔⛔ **THIS HEADER SAID "shv2's `StdCmpPred` HAS NO UNSIGNED COMPARE", AND THAT WAS THE STATED REASON THE
+// BOUNDS GUARD COST SEVEN INSTRUCTIONS. IT STOPPED BEING TRUE UPSTREAM.** Signedness rides on a compare's
+// `operandType` since X11 (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`,
+// `LowerMaxonToStd.lowerCompare`), and all three backends read it — x64's `unsignedCondCodeForPred`
+// (`jae`/`jb`), arm64's `arm64UnsignedCondForPred` (`hs`/`lo`) and wasm's `i64.ge_u`/`lt_u`. The sentence was
+// narrowly true about the ENUM — a `StdCmpPred` still carries no signedness, the `operandType` beside it does
+// — and false about the compiler, which is the class of comment this tree keeps paying for.
 function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: value, b: zero, pred: StdCmpPred.lt, ids: ids)
 end 'emitIsNegative'
 
+// ⭐⭐ **`u64` — THE ONE FACT THAT TURNS A BOUNDS GUARD FROM SEVEN INSTRUCTIONS INTO TWO, AND THE ONE
+// PRECONDITION IT COSTS.** Stated once, here, because the two guards below are its only readers and they must
+// not answer it differently.
+//
+// A bounds test is a DISJUNCTION under a signed compare (`index < 0 || index >= length`) and a SINGLE compare
+// under an unsigned one, because a negative index reinterpreted as unsigned is larger than any non-negative
+// length: `cmp index, length` + `jae` refuses both halves at once. That is x64's standard bounds-check idiom.
+// It is a RELABELLING and never a conversion (`unsignedStdTypeOf`'s header): both operands are already whole
+// machine words in this runtime's GPR-only internal ABI, which `emitCmp`'s own i64 default states, so the two
+// are compared AT THE SAME WIDTH — the mistake that header exists to prevent.
+//
+// ⛔⛔ **THE PRECONDITION IS `length >= 0`, IT IS LOAD-BEARING, AND BREAKING IT IS A SILENT OOB.** For a
+// NEGATIVE limit the two readings are OPPOSITE rather than merely different: signed, every index is
+// `>= length` and the guard refuses EVERYTHING; unsigned, the limit is enormous and the guard ADMITS
+// everything — a heap read or write past the end of the buffer, with no diagnostic. **This tree has already
+// paid that exact bill**: `__mf_read`'s capacity bound was useless because `emitBitsToBytes`' LOGICAL shift
+// turned `capacity = -1` into `0x1FFFFFFFFFFFFFFF`, and a 24-byte read into a 4-byte zero-copy view was
+// ACCEPTED and rewrote 20 bytes past the parent's allocation (`ManagedFileRuntime.__mf_read`'s header
+// carries the measurement).
+//
+// ⇒ **WHY EVERY LIMIT THAT REACHES THE TWO GUARDS BELOW IS NON-NEGATIVE**, in three parts:
+//
+//   1. **`length@8` CARRIES NO SENTINEL, BY THE ENCODING'S OWN RULE.** `BufferOwnership`'s negative values
+//      live in `capacity@16` ALONE and are declared at a type whose range stops at `-1`
+//      (`NotOwnedBufferCapacity`); `length@8` is a real element count for an owner, for a view's window, for
+//      an inline String and for an `.rdata` blob. `ManagedFileRuntime.buildManagedFileWrite`'s header states
+//      the same fact about the same field, for its own extent.
+//   2. **EVERY WRITER OF `length@8` PUBLISHES A NON-NEGATIVE.** ⚠ **AUDIT IT UNDER BOTH SPELLINGS**: the
+//      field also answers to `StringRuntime.StringLengthOffset`, which is `= ManagedRecordLengthOffset` and
+//      not a second number, so a grep for one name finds three writers the other's misses. The two that take
+//      the number from the USER refuse a negative one BEFORE publishing, both through `emitIsNegative` above:
+//      `__managed_resize` aborts (`RuntimeAbort.arrayNegativeResize`) and `__managed_set_length` throws
+//      `invalidLength`. Every other writer is DERIVED, and the derivations are of four kinds: a literal 0
+//      (`clear`); a sum or difference of non-negatives (`push`, `append`, and `remove`'s `length - 1` on a
+//      path its own bounds check has already proven holds an element); a bounds-checked window length
+//      (`slice`, the three clones, the `.rdata` const array's compile-time length); and a COUNT SOMETHING
+//      ELSE PRODUCED — `__console_read_stdin`'s bytes out of a ZEROED out-word whose high half a DWORD write
+//      cannot reach, the directory walk's own loop counter, the subprocess copy's `srcLen` parameter, and the
+//      String spellings' byte lengths. ⛔ That last kind is the one with no single mechanism behind it, and
+//      an earlier draft of this list wrongly attributed all three OS-fed counts to the out-word; a new writer
+//      of that kind owes its own argument rather than inheriting one. `ListRuntime`'s `count@16` is the
+//      easy shape: 0 at create, plus or minus one per link and unlink (`emitListCountDelta`), every unlink
+//      already bounds-checked.
+//   3. **`capacity@16` REACHES ONE OF THESE GUARDS, AND ONLY BEHIND AN OWNERSHIP TEST.**
+//      `InlineManagedPrimitives.guardIndexInRange` bounds the inlined `__managed_mem_set`'s index against
+//      `capacity@16` — the one limit here that CAN be a sentinel — so `emitStoreArm` asks
+//      `emitBufferNotOwned` (`capacity < 0`) FIRST and this guard runs on a capacity already proven
+//      non-negative. That ORDER is this precondition, established at the code; the note there names this one
+//      back, and the dependency is written down at both ends because nothing checks it.
+//
+// ⚠ **A NEW LIMIT MUST BE READ AGAINST THAT LIST**, exactly as a fifth `NotOwnedBufferCapacity` must be read
+// against `BufferOwnership`'s two exceptions. There is no compile error for getting it wrong, and the failure
+// is not a refusal — it is an admitted out-of-bounds access.
+let BoundsCompareOperandType = StdType.u64
+
 // A user index is OUT OF RANGE for a length-`length` array when it is NEGATIVE or at/above the length — the
-// ONE home of the "reject this index" test `__managed_get`/`__managed_set`/`__managed_remove` share, and (exported for
-// it) `ListRuntime.__list_get`, whose index is a position into a `count`-long chain: the same question over
-// the same two words, differing only in what the caller does with the answer. The
-// negative guard is OR-ed into the existing at-or-over-length test (both are 0/1 booleans, so the `bitOr` is
-// a 0/1 boolean the `condBranch` to the OOB block truth-tests directly).
+// ONE home of the "reject this index" test `__managed_get`/`__managed_set`/`__managed_remove`/
+// `__managed_mem_swap` share, along with the cursor's four fallible members (`emitCursorPositionOutOfRange`,
+// whose limit is the SOURCE record's `length@8`) and — exported for it — `ListRuntime.__list_get`, whose
+// index is a position into a `count`-long chain: the same question over the same two words, differing only
+// in what the caller does with the answer.
+//
+// ⭐⭐ **ONE UNSIGNED COMPARE ANSWERS BOTH HALVES OF THAT SENTENCE** (`A2`, 2026-08-29) — see
+// `BoundsCompareOperandType` above for the idiom and for the `length >= 0` precondition it rests on. It used
+// to be `emitIsNegative` OR-ed into a signed `index >= length`, which on x64 is
+// `cmp`/`setcc`/`cmp`/`setcc`/`or`/`cmp`/`jcc`: SEVEN instructions in the hottest loop of every
+// array-indexing program — and seven rather than five because a `bitOr` is not a compare, so the branch on it
+// could not fuse and paid its own `cmp $0`. A single compare CAN fuse, and does: the guard is now
+// `cmp index, length` + `jae` on x64, `cmp`/`cset`/`cbnz` on arm64 and `i64.ge_u` on wasm.
+//
+// ⚠ **IT STAYS A FUNCTION THOUGH ITS BODY IS NOW ONE CALL.** What its call sites share is the RULE — the
+// half-open end, the unsigned reading and the precondition — not the instruction; spelled out at each site,
+// the day one of them is written `gt` by accident is the day nothing says so.
 //
 // ⚠ **A BUFFER BYTE INDEX IS NOT ONE OF ITS CALLERS AND NEVER WAS** — `__managed_byte_at` bounds-checks through
 // `emitBufferAccessGuard`, not through this. That distinction survived W49 wave 7 unchanged, and it is worth
@@ -2456,9 +2532,7 @@ end 'emitIsNegative'
 // `__ManagedMemory.byteAt`: the String byte read moved to `__managed_byte_at`, and therefore to the BUFFER
 // guard, never to this one. `StringRuntime.__str_byte_at_or_panic` — which DID call this — is gone with it.
 export function emitIndexOutOfRange(module StdModule, block IrBlock, index ValueId, length ValueId, ids ValueMinter) returns ValueId
-	let negative = emitIsNegative(module, block: block, value: index, ids: ids)
-	let atOrOver = emitCmp(module, block: block, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
-	return emitBin(module, block: block, a: negative, b: atOrOver, opcode: StdBinOpcode.bitOr, ids: ids)
+	return emitCmp(module, block: block, a: index, b: length, pred: StdCmpPred.ge, ids: ids, operandType: BoundsCompareOperandType)
 end 'emitIndexOutOfRange'
 
 // ⭐ **THE CLOSED-END TWIN OF THE TEST ABOVE, AND THE ONE THING IT CHANGES IS THAT END.** An ELEMENT index
@@ -2473,23 +2547,25 @@ end 'emitIndexOutOfRange'
 // `emitInsertPositionOutOfRange` while `__list_insert` was its only caller, which made the name a statement
 // about that one member rather than about the question — and the second caller is not an insert.
 //
-// ⭐ **THE NEGATIVE DISJUNCT IS ALSO THE OVERFLOW GUARD FOR A COMPUTED BOUNDARY, WHICH IS WHY
-// `__managed_fill` CAN ASK ITS WINDOW'S END THROUGH THIS AND NOTHING ELSE.** `start + count` for two
-// NON-NEGATIVE operands lands in `[0, 2^64-2]`, so it either fits an `i64` or wraps into `[-2^63, -2]` —
-// never into a small positive number. A wrapped end is therefore NEGATIVE without exception, and this test
-// refuses it, where a bare `end > length` reads it as in range and the fill reports that it applied while
-// writing nothing (MEASURED: `mm.fill(1, count: i64.max, …)` on a length-3 buffer answered `applied` on
-// BOTH compilers).
+// ⭐ **IT IS ALSO THE OVERFLOW GUARD FOR A COMPUTED BOUNDARY, WHICH IS WHY `__managed_fill` CAN ASK ITS
+// WINDOW'S END THROUGH THIS AND NOTHING ELSE.** `start + count` for two NON-NEGATIVE operands lands in
+// `[0, 2^64-2]`, so it either fits an `i64` or wraps into `[-2^63, -2]` — never into a small positive number.
+// A wrapped end is therefore ABOVE every representable length, and this test refuses it, where a bare signed
+// `end > length` reads it as in range and the fill reports that it applied while writing nothing (MEASURED:
+// `mm.fill(1, count: i64.max, …)` on a length-3 buffer answered `applied` on BOTH compilers).
+//
+// ⭐⭐ **AND THAT REFUSAL SURVIVES THE UNSIGNED REWRITE UNCHANGED, WHICH IS NOT A COINCIDENCE — IT IS THE
+// SAME FACT FROM THE OTHER SIDE.** A wrapped end is `>= 2^63` as an unsigned number and every length is
+// below `2^63` (see `BoundsCompareOperandType`'s part 2), so `end >u length` is TRUE for exactly the values
+// the old negative disjunct caught. The guard used to be a SIGNED `position > length` OR-ed with
+// `emitIsNegative`; it is now one `cmp position, length` + `ja`.
 //
 // ⚠ It sits HERE, beside its half-open twin, rather than in a caller, for exactly the reason that twin is
-// exported: the NEGATIVE guard is the same guard, and `emitIsNegative` is the single home of "reject a
-// negative index" (see its header for the signed-compare hazard it closes). A private copy in the list
-// runtime would be that guard written down a second time, in the file least likely to hear about a change
-// to it.
+// exported: the two differ ONLY in that end, so a private copy in the list runtime would be one rule written
+// down twice, in the file least likely to hear about a change to it. The unsigned reading and its
+// `length >= 0` precondition are the twins' shared half and live at `BoundsCompareOperandType` above.
 export function emitBoundaryPositionOutOfRange(module StdModule, block IrBlock, position ValueId, length ValueId, ids ValueMinter) returns ValueId
-	let negative = emitIsNegative(module, block: block, value: position, ids: ids)
-	let pastEnd = emitCmp(module, block: block, a: position, b: length, pred: StdCmpPred.gt, ids: ids)
-	return emitBin(module, block: block, a: negative, b: pastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+	return emitCmp(module, block: block, a: position, b: length, pred: StdCmpPred.gt, ids: ids, operandType: BoundsCompareOperandType)
 end 'emitBoundaryPositionOutOfRange'
 
 // The `slice(start, end)` RANGE-violated boolean (0/1) — `end > length OR start > end OR start < 0 OR end < 0`,
@@ -2497,6 +2573,16 @@ end 'emitBoundaryPositionOutOfRange'
 // (deep-clone). See `buildManagedSlice`'s header for WHY each disjunct is present (the negative guards are what stop
 // a signed compare letting a negative index address before the buffer). The caller wires its own oob/ok branch
 // off the returned flag, so the two slice builders cannot drift on what "out of bounds" means.
+//
+// ⚠ **IT COLLAPSES TO TWO UNSIGNED COMPARES AND A2 DID NOT TAKE IT — the equivalence is written down here so
+// the next reader inherits it rather than re-deriving it.** For a non-negative `length`,
+// `(end >u length) OR (start >u end)` is TRUE on exactly the same values as the four signed disjuncts: a
+// negative `end` is enormous unsigned and fails the first, and a negative `start` is enormous unsigned and
+// fails the second whenever the first admitted `end`. That is 5 compares and 3 `bitOr`s down to 2 and 1,
+// about 6 x64 instructions per slice. It is NOT this row's, because the predicate is a THREE-operand
+// relation rather than "an index against a limit" — `start >u end` compares two user values, neither of
+// which `BoundsCompareOperandType`'s non-negativity argument covers — and it needs its own edge cases
+// (`start == end == length`, an empty window at the end) rather than inheriting the two guards' above.
 function emitSliceRangeViolated(module StdModule, block IrBlock, arr ValueId, start ValueId, endIndex ValueId, ids ValueMinter) returns ValueId
 	let length = emitLoadField(module, block: block, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let endTooLarge = emitCmp(module, block: block, a: endIndex, b: length, pred: StdCmpPred.gt, ids: ids)
@@ -3272,8 +3358,9 @@ end 'buildManagedReserve'
 //
 // ⚠ **A NEGATIVE `n` IS REJECTED, not clamped** (`RuntimeAbort.arrayNegativeResize`) — it is the one array write that
 // lands OUTSIDE the buffer in both directions and that a detach cannot make safe, because the shrink's zero
-// range starts at `buffer + n·es`. `StdCmpPred` is signed, so the existing `n < oldLen` shrink test happily
-// accepts it; `emitIsNegative` is the file's one home for the guard that does not. It is a REJECT rather than
+// range starts at `buffer + n·es`. The shrink test `n < oldLen` is a SIGNED compare — every compare in this
+// file is, unless it says otherwise on its `operandType` (see `BoundsCompareOperandType`) — so it happily
+// accepts a negative `n`; `emitIsNegative` is the file's one home for the guard that does not. It is a REJECT rather than
 // `insert`'s clamp because `insert` documents a `[0, length]` clamping contract and `resize` documents none —
 // a caller asking for a negative length has a bug, and silently resizing to empty would hide it.
 function buildManagedResize(module StdModule)
@@ -4003,6 +4090,19 @@ end 'buildManagedByteAt'
 // element member's is the limit itself. The two coincide at element size 1 and at no other size, which is the
 // whole reason `setByte` is not `set`'s alias.
 //
+// ⚠⚠ **IT KEEPS TWO TESTS WHERE `emitIndexOutOfRange` TOOK ONE UNSIGNED COMPARE (A2), AND THE REASON IS THE
+// DETACH RATHER THAN THE ARITHMETIC.** Its two limits ARE non-negative — the byte-addressed one comes out of
+// `emitBitsToBytes`' logical shift, whose top three bits are clear whatever it is handed, and the element
+// limit is `capacity@16` read AFTER `emitCowDetach` (`__managed_cow_detach` either early-outs on a record
+// whose capacity was already non-negative, or republishes `capacity = length@8`) — so the unsigned idiom is
+// SOUND here. What it is not is free: the two tests sit in two blocks BY DESIGN, the negative one before the
+// detach, and merging them would move the negative refusal AFTER it. A `set(-1)` on a non-owned record would
+// then copy the buffer into a fresh allocation and only then throw, changing a provenance `__managed_capacity`
+// hands straight to user code. That is a change to what the guard DECIDES, not to how it is spelled, so it
+// belongs to whoever wants it and not to A2. ⇒ It is also already 4 instructions rather than 7: each of its
+// two compares IS its block's branch condition, so both fuse; the seven were an artefact of OR-ing two
+// compares into one block.
+//
 // ⚠⚠ **ALL THREE CALLERS NOW SEE ONLY TRIVIAL-ELEMENT RECEIVERS, BY FRONT-END RULE, AND THIS GUARD IS WHERE
 // THAT IS WRITTEN DOWN BECAUSE IT IS WHAT THEY SHARE.** ⚖ Two user rulings of 2026-07-30, both enforced in
 // `Parser`: a MANAGED element may not reach `set` (**E3109**, `requireBufferSetOwnsWhatItStores` — the staging
@@ -4089,11 +4189,13 @@ end 'buildManagedMemSet'
 // and its hottest edge is `__managed_mem_set ← Array.refill ← augmentValue` at 17.6%.** See `ManagedFillName`
 // for the surface contract and for why the answer is a bool.
 //
-// ⚠ **IT REFUSES THREE WAYS AND THEY ARE THREE COMPARES, NOT ONE.** `StdCmpPred` is SIGNED
-// (`emitIsNegative`'s header), so `start + count > length` is FALSE for a negative `start` — the address would
-// then be computed BEFORE the buffer — and false for a negative `count` too, where the loop simply runs zero
-// times and the call would report that it had APPLIED. The second is the worse failure of the two: a wrong
-// answer rather than a fault.
+// ⚠ **IT REFUSES THREE WAYS AND THEY ARE THREE COMPARES, NOT ONE — AND THE END TEST GOING UNSIGNED (A2) DID
+// NOT MAKE EITHER OF THE OTHER TWO REDUNDANT.** The end test is about the END, so it says nothing about how
+// the window got there: `start = -1, count = 2` over a length-5 buffer ends at 1, which is IN RANGE under
+// either reading, and the address would then be computed BEFORE the buffer. `start = 3, count = -1` ends at 2,
+// likewise in range, and the loop simply runs zero times while the call reports that it APPLIED — the worse
+// failure of the two, a wrong answer rather than a fault. ⇒ both `emitIsNegative` calls below are
+// load-bearing; each was re-derived against the unsigned end test rather than inherited.
 //
 // ⚠ **THE BOUND IS THE LIVE LENGTH, WHERE `__managed_mem_set`'s IS THE CAPACITY, AND THAT IS DELIBERATE.**
 // `emitBufferAccessGuard`'s header carries the ruling that gives the buffer's element WRITE a capacity bound:

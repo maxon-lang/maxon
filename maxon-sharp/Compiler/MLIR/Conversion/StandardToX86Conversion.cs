@@ -221,6 +221,11 @@ public static class StandardToX86Conversion {
 
     // Pre-scan: compute last use index for each StdValue (for dead-value freeing)
     var lastUseOfValue = new Dictionary<StdValue, int>();
+    // How many times each value is READ, over the WHOLE function. The two-jump fusion below is its
+    // only consumer, and it needs a count rather than the "any read" flag beside it: folding a
+    // compare into a branch means NOT EMITTING that compare, which is sound only when the branch is
+    // the one thing that reads it. See that pre-scan for the crash the missing check causes.
+    var readCountOfValue = new Dictionary<StdValue, int>();
     // Track which value IDs have any read — pure ops defining unused values can be skipped.
     var usedValueIds = new HashSet<int>();
     // Values only consumed by return/call ops can be deferred (not eagerly materialized).
@@ -233,6 +238,7 @@ public static class StandardToX86Conversion {
       foreach (var op in block.Operations) {
         foreach (var val in op.ReadValues) {
           lastUseOfValue[val] = scanIdx;
+          readCountOfValue[val] = readCountOfValue.TryGetValue(val, out var seen) ? seen + 1 : 1;
           usedValueIds.Add(val.Id);
           if (op is StdReturnOp or StdCallOp or StdCallRuntimeOp or StdCallRuntimeIfNonnullOp or StdTryCallOp or StdTryCallRuntimeOp)
             sinkOnlyValues.Add(val);
@@ -383,6 +389,25 @@ public static class StandardToX86Conversion {
       // Pre-scan: detect or-of-two-cmps → condBr patterns for two-jump optimization.
       // When both cmps are integer, single-use, and feed an Or whose result is
       // the condBr condition, we can emit two cmp+jcc instead of setcc+setcc+or+test+je.
+      //
+      // ⛔ **"SINGLE-USE" WAS A CLAIM IN THIS COMMENT AND NOT A TEST IN THIS CODE.** All three folded
+      // ops go into `twoJumpSkipOps`, which means they EMIT NOTHING — so a second reader of any of
+      // them would later ask the register manager for a value nothing materialised and get
+      // `no register, no constant, and no stack home`. The three `ReadCount` lines below are that
+      // missing test.
+      //
+      // ⚠ **THE HONEST STATUS IS "HARDENING", NOT "BUG FIXED": THE PATTERN FIRES CONSTANTLY, AND THE
+      // GAP IS WHAT NOTHING REACHES.** A source-level `a > 0 or b > 0` produces no `StdOrI1Op` at all
+      // — `2-Parser.cs`'s `EmitShortCircuit` turns every bool `or` into `shortOr_N.rhs` /
+      // `shortOr_N.merge` blocks through a variable, so the `condBr` reads a LOAD. What DOES reach
+      // here is the parser's own synthesized `or`: the two-sided RANGED CAST check
+      // (`value < lo` OR `value > hi`, feeding one `MaxonCondBrOp`) fires at every two-sided ranged
+      // cast in every program, and a two-pattern match arm does the same. Both hand the `or` to one
+      // `condBr` and to nothing else, so the single-use condition holds by construction at every site
+      // that exists today. ⇒ The check DECLINES NOTHING: adding it left the shv2 self-build
+      // byte-identical (15,564,657 code bytes both ways). It is here so that a producer which wants
+      // the bool for something ELSE as well cannot open the hole silently, which is the toll
+      // `BufferOwnership` charges for its own fifth provenance one tree over.
       var twoJumpCondBrs = new Dictionary<StdCondBrOp, (StandardOp Cmp1, string Pred1, ComparisonKind Kind1, StandardOp Cmp2, string Pred2, ComparisonKind Kind2)>();
       var twoJumpSkipOps = new HashSet<StandardOp>();
       {
@@ -410,6 +435,12 @@ public static class StandardToX86Conversion {
           var info1 = GetCmpInfo(cmp1Op);
           var info2 = GetCmpInfo(cmp2Op);
           if (info1 == null || info2 == null) continue;
+
+          // The branch must be the `or`'s only reader, and the `or` each compare's only reader —
+          // otherwise the ops skipped below are ops somebody else still needs.
+          if (ReadCount(readCountOfValue, condBrScan.Condition) != 1) continue;
+          if (ReadCount(readCountOfValue, orOp.Lhs) != 1) continue;
+          if (ReadCount(readCountOfValue, orOp.Rhs) != 1) continue;
 
           twoJumpCondBrs[condBrScan] = (cmp1Op, info1.Value.pred, info1.Value.kind, cmp2Op, info2.Value.pred, info2.Value.kind);
           twoJumpSkipOps.Add(cmp1Op);
@@ -1251,6 +1282,16 @@ public static class StandardToX86Conversion {
     if (debugInfo) newFunc.SetLocalDebugInfo(varOffsets, func);
 
     return (newFunc, rdataEntries);
+  }
+
+  /// <summary>
+  /// How many times `value` is read across the whole function, for the two-jump fusion's single-use
+  /// condition. The 0 default is unreachable at today's three call sites — each passes a value some
+  /// op in the scanned body demonstrably reads — and is a total function rather than a claim about
+  /// the inputs.
+  /// </summary>
+  private static int ReadCount(Dictionary<StdValue, int> readCountOfValue, StdValue value) {
+    return readCountOfValue.TryGetValue(value, out var n) ? n : 0;
   }
 
   private static bool IsLastUse(Dictionary<StdValue, int> lastUseOfValue, StdValue value, int currentOpIndex) {

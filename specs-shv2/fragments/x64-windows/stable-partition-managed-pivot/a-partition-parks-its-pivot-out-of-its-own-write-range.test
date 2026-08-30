@@ -220,7 +220,6 @@ func @Array.stablePartition {
     x64.ret
   __rc_ok#63:
     x64.cmpRegImm32 r9, 0
-    x64.setccReg less, rax
     x64.jcc less, __rc_panic#67
   __rc_chk#68:
     x64.cmpRegImm32 r9, 1000
@@ -238,30 +237,24 @@ func @Array.stablePartition {
     x64.popReg rbp
     x64.ret
   __rc_ok#66:
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
-    x64.cmpRegImm32 rdx, 8
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride#247
   __im_word#245:
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-    x64.cmpRegReg r9, rdx
-    x64.setccReg greaterEqual, rdx
-    x64.orRegReg rdx, rdx, rax
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#244
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg r9, rax
+    x64.jcc aboveEqual, __im_slow#244
   __im_load#249:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r9*8 + 0]
     x64.jmp __im_loaded#248
   __im_stride#247:
-    x64.cmpRegImm32 rdx, 1
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#244
   __im_byte#246:
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-    x64.cmpRegReg r9, rdx
-    x64.setccReg greaterEqual, rdx
-    x64.orRegReg rdx, rdx, rax
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#244
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg r9, rax
+    x64.jcc aboveEqual, __im_slow#244
   __im_load#250:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r9
@@ -316,7 +309,7 @@ func @Array.stablePartition {
   __im_word#77:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, __im_slow#76
+    x64.jcc belowEqual, __im_slow#76
   __im_load#81:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -327,7 +320,7 @@ func @Array.stablePartition {
   __im_byte#78:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc lessEqual, __im_slow#76
+    x64.jcc belowEqual, __im_slow#76
   __im_load#82:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
@@ -376,13 +369,8 @@ func @Array.stablePartition {
   __im_word#86:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rdx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#85
+    x64.jcc aboveEqual, __im_slow#85
   __im_load#90:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -394,13 +382,8 @@ func @Array.stablePartition {
   __im_byte#87:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rdx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#85
+    x64.jcc aboveEqual, __im_slow#85
   __im_load#91:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -483,13 +466,8 @@ func @Array.stablePartition {
   __im_word#95:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rdx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#94
+    x64.jcc aboveEqual, __im_slow#94
   __im_load#99:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -501,13 +479,8 @@ func @Array.stablePartition {
   __im_byte#96:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rdx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#94
+    x64.jcc aboveEqual, __im_slow#94
   __im_load#100:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -569,21 +542,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#103
-  __im_bounds#107:
-    x64.loadRegSlot rax, slot9
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r14, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r14, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#103
-  __im_owned#108:
+  __im_owned#107:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#103
+  __im_bounds#108:
+    x64.loadRegSlot rax, slot9
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc aboveEqual, __im_slow#103
   __im_buffer#109:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -606,21 +574,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#103
-  __im_bounds#112:
-    x64.loadRegSlot rax, slot9
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r14, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r14, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#103
-  __im_owned#113:
+  __im_owned#112:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#103
+  __im_bounds#113:
+    x64.loadRegSlot rax, slot9
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc aboveEqual, __im_slow#103
   __im_buffer#114:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -674,22 +637,17 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#118
-  __im_bounds#122:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.loadRegSlot rcx, slot7
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg less, rdx
-    x64.cmpRegReg rcx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rdx, rdx, rax
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#118
-  __im_owned#123:
+  __im_owned#122:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#118
+  __im_bounds#123:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegSlot rcx, slot7
+    x64.cmpRegReg rcx, rax
+    x64.jcc aboveEqual, __im_slow#118
   __im_buffer#124:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -713,22 +671,17 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#118
-  __im_bounds#127:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.loadRegSlot rcx, slot7
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg less, rdx
-    x64.cmpRegReg rcx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rdx, rdx, rax
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#118
-  __im_owned#128:
+  __im_owned#127:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#118
+  __im_bounds#128:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegSlot rcx, slot7
+    x64.cmpRegReg rcx, rax
+    x64.jcc aboveEqual, __im_slow#118
   __im_buffer#129:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -795,13 +748,8 @@ func @Array.stablePartition {
   __im_word#134:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r13, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg r13, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#133
+    x64.jcc aboveEqual, __im_slow#133
   __im_load#138:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -813,13 +761,8 @@ func @Array.stablePartition {
   __im_byte#135:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r13, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg r13, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#133
+    x64.jcc aboveEqual, __im_slow#133
   __im_load#139:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -873,21 +816,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#142
-  __im_bounds#146:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#142
-  __im_owned#147:
+  __im_owned#146:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#142
+  __im_bounds#147:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow#142
   __im_buffer#148:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -910,21 +848,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#142
-  __im_bounds#151:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#142
-  __im_owned#152:
+  __im_owned#151:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#142
+  __im_bounds#152:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow#142
   __im_buffer#153:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1011,13 +944,8 @@ func @Array.stablePartition {
   __im_word#158:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rdx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#157
+    x64.jcc aboveEqual, __im_slow#157
   __im_load#162:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1029,13 +957,8 @@ func @Array.stablePartition {
   __im_byte#159:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rdx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#157
+    x64.jcc aboveEqual, __im_slow#157
   __im_load#163:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1097,21 +1020,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#166
-  __im_bounds#170:
-    x64.loadRegSlot rax, slot9
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg rbx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#166
-  __im_owned#171:
+  __im_owned#170:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#166
+  __im_bounds#171:
+    x64.loadRegSlot rax, slot9
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg rbx, rax
+    x64.jcc aboveEqual, __im_slow#166
   __im_buffer#172:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1134,21 +1052,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#166
-  __im_bounds#175:
-    x64.loadRegSlot rax, slot9
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg rbx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#166
-  __im_owned#176:
+  __im_owned#175:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#166
+  __im_bounds#176:
+    x64.loadRegSlot rax, slot9
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg rbx, rax
+    x64.jcc aboveEqual, __im_slow#166
   __im_buffer#177:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1202,22 +1115,17 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#181
-  __im_bounds#185:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.loadRegSlot rcx, slot8
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg less, rdx
-    x64.cmpRegReg rcx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rdx, rdx, rax
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#181
-  __im_owned#186:
+  __im_owned#185:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#181
+  __im_bounds#186:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegSlot rcx, slot8
+    x64.cmpRegReg rcx, rax
+    x64.jcc aboveEqual, __im_slow#181
   __im_buffer#187:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1241,22 +1149,17 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#181
-  __im_bounds#190:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.loadRegSlot rcx, slot8
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg less, rdx
-    x64.cmpRegReg rcx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rdx, rdx, rax
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#181
-  __im_owned#191:
+  __im_owned#190:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#181
+  __im_bounds#191:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.loadRegSlot rcx, slot8
+    x64.cmpRegReg rcx, rax
+    x64.jcc aboveEqual, __im_slow#181
   __im_buffer#192:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1322,13 +1225,8 @@ func @Array.stablePartition {
   __im_word#197:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#196
+    x64.jcc aboveEqual, __im_slow#196
   __im_load#201:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1340,13 +1238,8 @@ func @Array.stablePartition {
   __im_byte#198:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#196
+    x64.jcc aboveEqual, __im_slow#196
   __im_load#202:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1402,21 +1295,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#205
-  __im_bounds#209:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#205
-  __im_owned#210:
+  __im_owned#209:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#205
+  __im_bounds#210:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow#205
   __im_buffer#211:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1439,21 +1327,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#205
-  __im_bounds#214:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#205
-  __im_owned#215:
+  __im_owned#214:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#205
+  __im_bounds#215:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow#205
   __im_buffer#216:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1508,13 +1391,8 @@ func @Array.stablePartition {
   __im_word#221:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rbx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#220
+    x64.jcc aboveEqual, __im_slow#220
   __im_load#225:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1526,13 +1404,8 @@ func @Array.stablePartition {
   __im_byte#222:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rbx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#220
+    x64.jcc aboveEqual, __im_slow#220
   __im_load#226:
     x64.loadRegSlot rax, slot9
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1586,21 +1459,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#229
-  __im_bounds#233:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#229
-  __im_owned#234:
+  __im_owned#233:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#229
+  __im_bounds#234:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow#229
   __im_buffer#235:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1623,21 +1491,16 @@ func @Array.stablePartition {
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow#229
-  __im_bounds#238:
-    x64.loadRegSlot rax, slot17
-    x64.loadRegBaseDisp.word64 rax, [rax + 16]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg r12, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#229
-  __im_owned#239:
+  __im_owned#238:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow#229
+  __im_bounds#239:
+    x64.loadRegSlot rax, slot17
+    x64.loadRegBaseDisp.word64 rax, [rax + 16]
+    x64.cmpRegReg r12, rax
+    x64.jcc aboveEqual, __im_slow#229
   __im_buffer#240:
     x64.loadRegSlot rax, slot17
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -2142,13 +2005,8 @@ func @run {
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.loadRegSlot rax, slot2
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rcx
     x64.cmpRegReg rdx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow
+    x64.jcc aboveEqual, __im_slow
   __im_load:
     x64.loadRegSlot rax, slot2
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]

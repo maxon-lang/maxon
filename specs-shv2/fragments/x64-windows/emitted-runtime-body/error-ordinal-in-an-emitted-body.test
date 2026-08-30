@@ -42,14 +42,14 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_bounds:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc lessEqual, __im_slow
   __im_owned:
     x64.loadRegBaseDisp.word64 rax, [r12 + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
   __im_buffer:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.cmpRegImm32 rax, 0
@@ -109,13 +109,8 @@ func @__managed_set {
     x64.storeSlotReg slot1, r12
     x64.storeSlotReg slot0, rax
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg less, rdx
     x64.cmpRegReg r12, rcx
-    x64.setccReg greaterEqual, rcx
-    x64.orRegReg rdx, rdx, rcx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, store
+    x64.jcc below, store
   oob:
     x64.loadRegBaseDisp.word64 rbx, [rbx + 40]
     x64.cmpRegImm32 rbx, 0

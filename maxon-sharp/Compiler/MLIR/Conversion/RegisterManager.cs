@@ -593,73 +593,70 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
 
   // --- Call emission ---
 
-  private void EmitCallShared(
-      List<StdValue> args,
-      StdValue? result,
-      IrBlock<X86Op> block,
-      Action? preGprPlacement,
-      Func<X86Op> emitCallOp,
-      HashSet<StdValue>? consumedByCall = null) {
-    int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
-    int stackArgCount = args.Count - regArgCount;
+  /// <summary>
+  /// Where each GPR argument can be read from, as the three sources <see cref="PlaceGprArgs"/>
+  /// knows how to move into a parameter register. Exactly one of the three is set per argument.
+  ///
+  /// ⭐⭐ **ASKING IS NOT THE SAME AS FORCING, AND THAT IS THE WHOLE REASON THIS IS A TYPE.** The
+  /// obvious spelling — `EnsureInRegister` every argument, then read the register map — is wrong
+  /// for a reason that only shows up under pressure: ensuring argument N+1 allocates, allocation
+  /// evicts the least-recently-used value to its stack home, and the value it evicts can be
+  /// argument 0. See <see cref="EmitTailCall"/>, which spelled it that way and crashed.
+  /// </summary>
+  private readonly record struct GprArgSources(
+      X86Register?[] Registers, int?[] StackHomes, long?[] Constants);
 
-    SpillCallerSavedRegisters(block, consumedByCall);
-
-    int stackArgBytes = stackArgCount > 0 ? ((stackArgCount * 8 + 15) & ~15) : 0;
-    if (stackArgBytes > 0)
-      block.AddOp(new X86SubRegImmOp(X86Register.Rsp, stackArgBytes));
-
-    for (int i = CallConvRegs.Length; i < args.Count; i++) {
-      var argReg = EnsureInRegister(args[i], block);
-      int offset = (i - CallConvRegs.Length) * 8;
-      block.AddOp(new X86MovMemRspRegOp(offset, argReg));
-    }
-
-    var gprArgs = new List<int>();
-    var xmmArgs = new List<int>();
-    for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64 or StdF32)
-        xmmArgs.Add(i);
-      else
-        gprArgs.Add(i);
-    }
-
-    var xmmSources = new X86XmmRegister?[regArgCount];
-    foreach (int i in xmmArgs)
-      xmmSources[i] = EnsureInFpRegister(args[i], block);
-
-    PlaceXmmArgs(xmmArgs, xmmSources, regArgCount, block);
-
-    var argSources = new X86Register?[regArgCount];
-    int?[] argStackHomes = new int?[regArgCount];
-    long?[] argConstants = new long?[regArgCount];
+  /// <summary>
+  /// Read each GPR argument's current home WITHOUT moving anything, so no argument's source can be
+  /// invalidated by the act of reading another's. An argument already sitting in its own target
+  /// register is recorded as a register even when it also has a stack home; otherwise a value with
+  /// a stack home is read from there, which frees the register it was in for the shuffle.
+  /// </summary>
+  private GprArgSources ClassifyGprArgSources(List<StdValue> args, List<int> gprArgs, int regArgCount) {
+    var sources = new GprArgSources(
+      new X86Register?[regArgCount], new int?[regArgCount], new long?[regArgCount]);
     foreach (int i in gprArgs) {
       var target = CallConvRegs[i];
       if (_valueToRegister.TryGetValue(args[i], out var reg)) {
         if (reg != target && _valueStackHome.TryGetValue(args[i], out var disp))
-          argStackHomes[i] = disp;
+          sources.StackHomes[i] = disp;
         else
-          argSources[i] = reg;
+          sources.Registers[i] = reg;
       } else if (_constantValues.TryGetValue(args[i], out var imm)) {
-        argConstants[i] = imm;
+        sources.Constants[i] = imm;
       } else if (_valueStackHome.TryGetValue(args[i], out var disp)) {
-        argStackHomes[i] = disp;
+        sources.StackHomes[i] = disp;
       } else {
         throw new InvalidOperationException($"RegisterManager: call arg %{args[i].Id} has no register, no constant, and no stack home");
       }
     }
+    return sources;
+  }
 
-    preGprPlacement?.Invoke();
+  /// <summary>
+  /// Move every GPR argument into its parameter register, in three passes: the ones whose target
+  /// is not blocked by another unplaced argument (a plain `mov`, or a reload from the stack home),
+  /// then the remaining cycles (an `xchg`, re-pointing whichever argument that displaces), then
+  /// the constants, which are materialized last because they need no source register at all and so
+  /// can never block anyone.
+  ///
+  /// The XMM arguments are marked placed here rather than by the caller: `PlaceXmmArgs` has already
+  /// moved them and this pass must not touch them, which is one fact and was briefly spelled at both
+  /// call shapes.
+  /// </summary>
+  private void PlaceGprArgs(List<int> gprArgs, List<int> xmmArgs, GprArgSources sources, int regArgCount,
+      IrBlock<X86Op> block) {
+    var argSources = sources.Registers;
+    var argStackHomes = sources.StackHomes;
+    var argConstants = sources.Constants;
 
     var placed = new bool[regArgCount];
-    for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64 or StdF32) placed[i] = true;
-    }
+    foreach (int i in xmmArgs)
+      placed[i] = true;
 
     var targetRegs = new X86Register[regArgCount];
-    for (int i = 0; i < regArgCount; i++) {
+    for (int i = 0; i < regArgCount; i++)
       targetRegs[i] = CallConvRegs[i];
-    }
 
     foreach (int i in gprArgs) {
       if (argConstants[i] != null)
@@ -716,6 +713,50 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
         placed[i] = true;
       }
     }
+  }
+
+  private void EmitCallShared(
+      List<StdValue> args,
+      StdValue? result,
+      IrBlock<X86Op> block,
+      Action? preGprPlacement,
+      Func<X86Op> emitCallOp,
+      HashSet<StdValue>? consumedByCall = null) {
+    int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
+    int stackArgCount = args.Count - regArgCount;
+
+    SpillCallerSavedRegisters(block, consumedByCall);
+
+    int stackArgBytes = stackArgCount > 0 ? ((stackArgCount * 8 + 15) & ~15) : 0;
+    if (stackArgBytes > 0)
+      block.AddOp(new X86SubRegImmOp(X86Register.Rsp, stackArgBytes));
+
+    for (int i = CallConvRegs.Length; i < args.Count; i++) {
+      var argReg = EnsureInRegister(args[i], block);
+      int offset = (i - CallConvRegs.Length) * 8;
+      block.AddOp(new X86MovMemRspRegOp(offset, argReg));
+    }
+
+    var gprArgs = new List<int>();
+    var xmmArgs = new List<int>();
+    for (int i = 0; i < regArgCount; i++) {
+      if (args[i] is StdF64 or StdF32)
+        xmmArgs.Add(i);
+      else
+        gprArgs.Add(i);
+    }
+
+    var xmmSources = new X86XmmRegister?[regArgCount];
+    foreach (int i in xmmArgs)
+      xmmSources[i] = EnsureInFpRegister(args[i], block);
+
+    PlaceXmmArgs(xmmArgs, xmmSources, regArgCount, block);
+
+    var argSources = ClassifyGprArgSources(args, gprArgs, regArgCount);
+
+    preGprPlacement?.Invoke();
+
+    PlaceGprArgs(gprArgs, xmmArgs, argSources, regArgCount, block);
 
     block.AddOp(emitCallOp());
 
@@ -752,82 +793,49 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
       Assign(ValueReturnHighRegister, result2);
   }
 
+  /// <summary>
+  /// A tail call: place the arguments, tear the frame down, and JMP. It shares
+  /// <see cref="ClassifyGprArgSources"/> and <see cref="PlaceGprArgs"/> with the ordinary call
+  /// above, because the argument shuffle is the same problem and was the same code twice.
+  ///
+  /// It does NOT spill the caller-saved registers and has no stack arguments: the frame is torn
+  /// down two lines below and never read again, and a tail call is only ever formed when every
+  /// argument fits a register (<c>StandardToX86Conversion</c>'s tail-call pre-scan checks that).
+  /// Reading an argument out of its stack home is still legal, and happens, because the epilogue
+  /// comes AFTER the placement.
+  ///
+  /// ⛔⛔ **IT USED TO `EnsureInRegister` EVERY ARGUMENT AND THEN READ `_valueToRegister[arg]`,
+  /// AND THAT CRASHED THE COMPILER — the copy had drifted from the shared version in exactly the
+  /// place the shared version is careful.** Ensuring argument N+1 ALLOCATES, allocation SPILLS the
+  /// least-recently-used value, and the value it spills can be argument 0 — whose entry the second
+  /// loop then read with an indexer. MEASURED (A2, 2026-08-29): an shv2 function whose whole body
+  /// was `return emitCmp(module, block, a, b, pred, ids, operandType)` — a 7-argument tail call —
+  /// took `maxon build maxon-shv2` down with `E9001 … The given key '%5018818' was not present in
+  /// the dictionary`. There is no register-pressure threshold to tune here: the fix is to ask the
+  /// three sources an argument can have (register, rematerializable constant, stack home) rather
+  /// than to force all of them into the one source that can evict the others.
+  /// </summary>
   public void EmitTailCall(string callee, List<StdValue> args, IrBlock<X86Op> block) {
     int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
 
-    foreach (var arg in args) {
-      if (arg is StdF64 or StdF32)
-        EnsureInFpRegister(arg, block);
-      else
-        EnsureInRegister(arg, block);
-    }
-
     var gprArgs = new List<int>();
     var xmmArgs = new List<int>();
-    var argSources = new X86Register?[regArgCount];
     for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64 or StdF32) {
+      if (args[i] is StdF64 or StdF32)
         xmmArgs.Add(i);
-      } else {
+      else
         gprArgs.Add(i);
-        argSources[i] = _valueToRegister[args[i]];
-      }
     }
 
     var xmmSources = new X86XmmRegister?[regArgCount];
     foreach (int i in xmmArgs)
-      xmmSources[i] = _valueToFp[args[i]];
+      xmmSources[i] = EnsureInFpRegister(args[i], block);
 
     PlaceXmmArgs(xmmArgs, xmmSources, regArgCount, block);
 
-    var placed = new bool[regArgCount];
-    foreach (int i in xmmArgs)
-      placed[i] = true;
+    var argSources = ClassifyGprArgSources(args, gprArgs, regArgCount);
 
-    var targetRegs = new X86Register[regArgCount];
-    for (int i = 0; i < regArgCount; i++)
-      targetRegs[i] = CallConvRegs[i];
-
-    foreach (int i in gprArgs) {
-      if (SamePhysicalRegister(argSources[i], targetRegs[i]))
-        placed[i] = true;
-    }
-
-    bool progress = true;
-    while (progress) {
-      progress = false;
-      foreach (int i in gprArgs) {
-        if (placed[i]) continue;
-        bool targetBlocked = false;
-        foreach (int j in gprArgs) {
-          if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
-            targetBlocked = true;
-            break;
-          }
-        }
-        if (!targetBlocked) {
-          block.AddOp(new X86MovRegRegOp(targetRegs[i], argSources[i]!.Value));
-          placed[i] = true;
-          progress = true;
-        }
-      }
-    }
-
-    foreach (int i in gprArgs) {
-      if (placed[i]) continue;
-      if (SamePhysicalRegister(argSources[i], targetRegs[i])) {
-        placed[i] = true;
-        continue;
-      }
-      block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, targetRegs[i]));
-      foreach (int j in gprArgs) {
-        if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
-          argSources[j] = argSources[i];
-          break;
-        }
-      }
-      placed[i] = true;
-    }
+    PlaceGprArgs(gprArgs, xmmArgs, argSources, regArgCount, block);
 
     block.AddOp(new X86EpilogueOp());
     block.AddOp(new X86JmpOp(callee));

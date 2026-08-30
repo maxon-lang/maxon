@@ -45,7 +45,6 @@ func @Array.at {
     x64.prologue 40
     x64.movRegReg rbx, rax
     x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rax
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rdx, 1000
@@ -59,30 +58,24 @@ func @Array.at {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 24]
-    x64.cmpRegImm32 rsi, 8
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
     x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.cmpRegReg rdx, rsi
-    x64.setccReg greaterEqual, rsi
-    x64.orRegReg rsi, rsi, rax
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
   __im_load#12:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp __im_loaded
   __im_stride:
-    x64.cmpRegImm32 rsi, 1
+    x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.cmpRegReg rdx, rsi
-    x64.setccReg greaterEqual, rsi
-    x64.orRegReg rsi, rsi, rax
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
   __im_load#13:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, rdx
