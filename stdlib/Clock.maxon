@@ -2,10 +2,17 @@
 /// values are platform-defined (e.g. milliseconds since boot) and only
 /// meaningful when subtracted.
 /// @category System
-public typealias DurationMs = int(0 to u64.max)
-public typealias InstantMs = int(0 to u64.max)
-public typealias DurationNanos = int(0 to u64.max)
-public typealias InstantNanos = int(0 to u64.max)
+/// ⭐ **NO SHIM BEHIND THESE CAN PRESENT A VALUE ABOVE `i64.max`, AND THAT WAS CHECKED RATHER THAN
+/// ASSUMED.** `__gt_now_ns` — the one monotonic source both `currentTimeNanos` and `currentTimeMs`
+/// lower to — scales QPC ticks with SIGNED `div`/`mod` and answers nanoseconds since boot, which
+/// needs 292 years of uptime to reach `i64.max`; `GetTickCount64` and `clock_gettime` are the same
+/// quantity in coarser units. The wasm lane has no clock at all — `StdToWasm` panics on
+/// `osReadClock`, so no WASI `monotonic-clock.now` u64 reaches here. A duration is the difference of
+/// two such instants and is clamped at 0 below, so it is bounded by the same word.
+public typealias DurationMs = int(0 to i64.max)
+public typealias InstantMs = int(0 to i64.max)
+public typealias DurationNanos = int(0 to i64.max)
+public typealias InstantNanos = int(0 to i64.max)
 
 public type Clock
 	/// Monotonic time in milliseconds. Differences between two `nowMs()`
@@ -54,8 +61,9 @@ public type Clock
 	end 'elapsedNanos'
 end 'Clock'
 
-/// Whole seconds since the Unix epoch, 1970-01-01 00:00:00 UTC.
-public typealias UnixSeconds = int(0 to u64.max)
+/// Whole seconds since the Unix epoch, 1970-01-01 00:00:00 UTC. `i64.max` seconds is ~292 billion
+/// years, so the bound excludes no representable calendar moment the platform can report.
+public typealias UnixSeconds = int(0 to i64.max)
 
 /// The WALL clock — the calendar, as opposed to `Clock`, which is a stopwatch.
 ///

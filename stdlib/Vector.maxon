@@ -1,7 +1,11 @@
 /// Fixed-size collection with stack allocation for small data.
 /// @category Collections
-typealias ElementCount = int(0 to u64.max)
-typealias ElementIndex = int(0 to u64.max)
+// Bounded exactly as `stdlib/Array.maxon`'s twins are, and for the same reason: the backing
+// `__ManagedMemory` takes lengths and indices as a SIGNED `BufferCoordinate`. A vector is smaller still — its count is
+// `countof(Self)` — but the bound that is TRUE of the type is the buffer's, and an honest upper bound
+// is what makes these doors guarded and pins an ordering comparison on one of them to the signed reading.
+typealias ElementCount = int(0 to i64.max)
+typealias ElementIndex = int(0 to i64.max)
 
 public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (Element, VectorIter)
 	typealias ElementMemory = __ManagedMemory with Element

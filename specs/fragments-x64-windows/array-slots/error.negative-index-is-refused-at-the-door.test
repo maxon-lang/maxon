@@ -1,0 +1,27 @@
+// Test: error.negative-index-is-refused-at-the-door
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.reserve(2)
+	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	try arr.get(-1) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/array-slots/error.negative-index-is-refused-at-the-door.test:14:10: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
+```
+---
+---

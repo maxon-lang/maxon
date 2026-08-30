@@ -729,7 +729,7 @@ function build(n Val) returns Val
 	if seen != (n * (n - 1)) / 2 'sum'
 		return -1
 	end 'sum'
-	return m.count() as Val
+	return m.count()
 end 'build'
 
 function main() returns ExitCode
@@ -828,7 +828,7 @@ function build(n Count) returns Count
 	if seen != (n * (n - 1)) / 2 'sum'
 		return -1
 	end 'sum'
-	return m.count() as Count
+	return m.count()
 end 'build'
 
 function main() returns ExitCode
@@ -865,7 +865,7 @@ type Tagged
 	end 'create'
 
 	export function score() returns Count
-		return n + label.byteLength() as Count
+		return n + label.byteLength()
 	end 'score'
 end 'Tagged'
 

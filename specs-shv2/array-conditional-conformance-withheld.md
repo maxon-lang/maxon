@@ -147,7 +147,7 @@ over-refusal it excused: a program that COPIES NOTHING (`for … in` over a nest
 `managed.slice(0, len)` IS and that body is compiled once for the whole program.
 
 ⚠ **A stdlib-body refusal is still BLAMED AT THE USER'S OWN CONSTRUCT, and the library line survives as a
-NOTE** — the arrangement the remaining opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:145:32`,
+NOTE** — the arrangement the remaining opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:165:32`,
 a line no user wrote, and REPORTED at the `typealias` whose instantiation made the element uncopyable. The
 library location reads REPO-RELATIVE because the runner rewrites the compiler's absolute `stdlib/` root the
 way it already rewrites a staged fragment's path (`SpecTestRunner.rewriteStdlibPaths`). Only the NOTE carries
@@ -291,7 +291,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:41:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
-note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
+note: stdlib/Array.maxon:165:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- test: error.a-map-key-array-is-refused-for-its-element -->

@@ -1,0 +1,95 @@
+// Test: range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics
+typealias Wide = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function widen(n Wide) returns Wide
+  return n * 100
+end 'widen'
+
+function pick(i Wide, flag bool) returns Small
+  return ((i + 1) as Small) if flag else 7
+end 'pick'
+
+function main() returns ExitCode
+  return pick(widen(5), flag: true)
+end 'main'
+---
+ExitCode: 1
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 5
+    x64.jmp __il_body#3
+  __il_body#3:
+    x64.imulRegRegImm32 rcx, rax, 100
+    x64.jmp __il_cont#2
+  __il_cont#2:
+    x64.movRegImm32 rdx, 1
+    x64.jmp __il_body#4
+  __il_body#4:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc greater, __il_slow
+    x64.jmp __rc_ok
+  __il_slow:
+    x64.callDirect pick
+    x64.jmp __il_cont#1
+  __rc_ok:
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 rax, 7
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp __il_cont#1
+  __il_cont#1:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

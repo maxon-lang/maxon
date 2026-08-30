@@ -668,11 +668,19 @@ end 'main'
 
 ### Negative index
 
-A negative index passes an at-or-over-length bounds test (`StdCmpPred` is signed, so `-1 >= 3` is FALSE) and
-would address BEFORE the buffer — an OOB heap read/write. The throwing accessors (`get`/`set`/`remove`/`slice`)
-reject it; `insert`, which clamps rather than throws, clamps it to the front.
+A negative index would address BEFORE the buffer — an OOB heap read/write — and it never gets the chance,
+because `ElementIndex` and `ElementCount` are declared `int(0 to i64.max)` and a negative is refused at the
+DOOR of every member that takes one. That is a change of mechanism, not merely of message: the accessors
+used to be what stopped it, each in its own way, and they had to, because the aliases were the FULL range
+`int(0 to u64.max)` — the one shape neither compiler guards — so a `-1` arrived in the body intact and
+passed an at-or-over-length test (`StdCmpPred` is signed, so `-1 >= 3` is FALSE). `get`/`set`/`remove`/
+`slice` threw `indexOutOfBounds` for it, and `insert`, which clamps rather than throws, clamped it to the
+front.
 
-<!-- test: get-negative-index-throws -->
+Now none of that runs. A LITERAL negative is refused where it is written, by the same constant fold at
+every one of the six call sites — the accessor's own bound is not consulted at all.
+
+<!-- test: error.get-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -680,11 +688,11 @@ function main() returns ExitCode
 	return val
 end 'main'
 ```
-```exitcode
-99
+```maxoncstderr
+error E3005: <fragment>:4:20: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
-<!-- test: set-negative-index-throws -->
+<!-- test: error.set-negative-index-is-refused-at-the-door -->
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
@@ -692,11 +700,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-99
+```maxoncstderr
+error E3005: <fragment>:4:10: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
-<!-- test: remove-negative-index-throws -->
+<!-- test: error.remove-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
@@ -704,11 +712,11 @@ function main() returns ExitCode
 	return removed
 end 'main'
 ```
-```exitcode
-99
+```maxoncstderr
+error E3005: <fragment>:4:24: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
-<!-- test: slice-negative-start-throws -->
+<!-- test: error.slice-negative-start-is-refused -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -716,11 +724,15 @@ function main() returns ExitCode
 	return sub.count()
 end 'main'
 ```
-```exitcode
-99
+```maxoncstderr
+error E3005: <fragment>:4:20: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
-<!-- test: slice-negative-end-throws -->
+Both of `slice`'s ends take an `ElementIndex`, so a negative `endIndex` is refused by the same door as a
+negative `start`. The case below writes both negative, and BOTH are reported — the refusal does not stop
+at the first argument it finds.
+
+<!-- test: error.slice-negative-end-is-refused -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -728,24 +740,110 @@ function main() returns ExitCode
 	return sub.count()
 end 'main'
 ```
-```exitcode
-99
+```maxoncstderr
+error E3005: <fragment>:4:20: Value -2 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
+error E3005: <fragment>:4:20: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
-<!-- test: insert-negative-index-clamps-to-front -->
+<!-- test: error.insert-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
 	arr.insert(-1, value: 99)
-	let a = try arr.get(0) otherwise 0
-	let b = try arr.get(1) otherwise 0
-	let c = try arr.get(2) otherwise 0
-	let d = try arr.get(3) otherwise 0
-	return a + b + c + d
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:6: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
+```
+
+### A negative index the compiler cannot fold
+
+A value the compiler cannot see is refused by a runtime guard instead, and that refusal is a range
+violation rather than an error the type declares — so it PANICS, uncatchably, and the `otherwise` written
+around the call is never entered. The three cases below are the three shapes that matter: a READ, a WRITE
+whose `otherwise` used to be the refusal, and `insert`, which used to return normally having clamped.
+
+⚠ **THE THREE DO NOT ALL PANIC IN THE SAME PLACE, AND THE DIFFERENCE IS WHERE THE MEMBER'S BODY IS.**
+`insert` is served from `stdlib/Array.maxon`, so its guard stands at that function's ENTRY and the panic
+names `Array.maxon` with an `Array.insert` frame — the ordinary `RangeCheckParamSite` shape, identical on
+both compilers. `get` and `set` this compiler lowers INLINE, so there is no entry to stand at: the guard
+goes at the CALL, the panic names the caller's own line, and there is no callee frame to print
+(`Parser.recordArmServedIndexRangeCheck`). The RANGE is the same one either way — both read it out of the
+same declaration in `stdlib/Array.maxon` — and only the position the failure is reported at differs.
+
+<!-- test: get-laundered-negative-index-panics-at-the-door -->
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let val = try arr.get(launder(-1)) otherwise 99
+	return val
 end 'main'
 ```
 ```exitcode
-159
+1
+```
+```stderr
+panic at get-laundered-negative-index-panics-at-the-door.test:10: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: set-laundered-negative-index-panics-at-the-door -->
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	try arr.set(launder(-1), value: 5) otherwise return 99
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at set-laundered-negative-index-panics-at-the-door.test:10: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: insert-laundered-negative-index-panics-at-the-door -->
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	arr.insert(launder(-1), value: 99)
+	print("inserted, count is now {arr.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at Array.maxon:355: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in Array.insert
+  in main
+  in mrt_start
 ```
 
 ### Append
@@ -1137,11 +1235,14 @@ end 'main'
 42
 ```
 
-A NEGATIVE index is the same refusal and needs saying separately, for `insert`'s reason one section up:
-nothing range-checks an argument at `index`'s `int(0 to u64.max)`, so a `-1` arrives intact and is below
-the length on every signed comparison.
+A NEGATIVE index is refused too, and by a DIFFERENT mechanism — which is why it needs saying separately.
+The past-the-length refusal above is `set`'s own, a catchable `ArrayError`. A negative never reaches `set`
+at all: `index`'s `ElementIndex` stops at `i64.max`, so the door refuses it. It used to arrive intact,
+because the alias was the full `int(0 to u64.max)` and a full range is the one shape neither compiler
+guards, and `-1` is below the length on every signed comparison. The `otherwise` block returning 42 is
+kept here to say that it is NOT the arm that runs any more: the program does not compile at all.
 
-<!-- test: set-negative-index-is-refused -->
+<!-- test: error.set-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
@@ -1151,8 +1252,8 @@ function main() returns ExitCode
 	return try arr.get(0) otherwise 0
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3005: <fragment>:4:10: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
 ### Copy-on-Write

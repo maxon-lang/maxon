@@ -8,19 +8,25 @@
 /// rather than pattern-matching a recursive union.
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
-typealias BytePos = int(0 to u64.max)
+// A cursor into the document's source bytes, which are one `ByteArray`: its length is a signed
+// machine word, so that is the honest ceiling for every position into it.
+typealias BytePos = int(0 to i64.max)
 
 /// A handle into a `JsonDoc`'s node arena. The root of every parsed document
 /// is `0`; allocator order is deterministic but otherwise unspecified.
 /// Exported so callers can hold and pass node ids by name across files.
-public typealias JsonNodeId = int(0 to u64.max)
+/// An id is an index into that arena, and the arena is one `Array`; a child count and a child index
+/// are the same over the children list. All three are therefore bounded by a signed machine word.
+public typealias JsonNodeId = int(0 to i64.max)
 public typealias JsonNodeIdArray = Array with JsonNodeId
-typealias ChildCount = int(0 to u64.max)
-typealias ChildIndex = int(0 to u64.max)
+typealias ChildCount = int(0 to i64.max)
+typealias ChildIndex = int(0 to i64.max)
 
 typealias JsonInt = int(i64.min to i64.max)
 typealias JsonFloat = float(f64.min to f64.max)
-typealias IndentDepth = int(0 to u64.max)
+// Nesting depth while rendering. Every level is a live frame of a recursive walk over a tree whose
+// nodes live in one arena, so the depth cannot exceed the node count — a signed machine word.
+typealias IndentDepth = int(0 to i64.max)
 
 /// Errors emitted by `Json.parse`.
 enum JsonError implements Error

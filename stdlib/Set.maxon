@@ -1,6 +1,9 @@
 /// Hash set with open addressing for storing unique elements.
 /// @category Collections
-typealias MemberCount = int(0 to u64.max)
+// Occupied slots. A member needs a slot, so this is bounded by the table's capacity and carries the
+// capacity's bound for the reason stated once on `TableCapacity`: 2^62 is the last capacity a doubling
+// from 16 can mint.
+typealias MemberCount = int(0 to 4611686018427387904)
 
 // The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Map` (W93). This file used to
 // declare its own `SetSlotState`, byte-identical to that module's `SlotState`, and its own
@@ -56,6 +59,21 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		return result
 	end 'init'
 
+	// Internal: publish `element` into `slotIndex`, whose three parallel columns are written together
+	// or not at all. `hash` is the element's precomputed hash, cached beside it so a later probe can
+	// skip the full `equals()` when the hashes differ.
+	//
+	// The panics name "the probe" rather than a single caller because BOTH of `insert`'s write paths
+	// reach here — the empty slot it landed on, and the first tombstone on the probe path — and both
+	// masked their index with `capacity - 1`, so both hand over an index in [0, capacity).
+	// `Map.insertAtSlot` is the same helper over the same table for the same reason.
+	function insertAtSlot(slotIndex TableSlotIndex, element Element, hash HashValue)
+		try elements.set(slotIndex, value: element) otherwise panic("Set.insertAtSlot: elements.set OOB — slot from the probe is always in-bounds")
+		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Set.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
+		try hashes.set(slotIndex, value: hash) otherwise panic("Set.insertAtSlot: hashes.set OOB — slot from the probe is always in-bounds")
+		count = count + 1
+	end 'insertAtSlot'
+
 	/// Insert an element into the set
 	/// If the element already exists, this is a no-op
 	/// Automatically resizes the set when load factor exceeds 75%
@@ -88,6 +106,13 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		let mask = capacity - 1
 		var index = spreadHash(hash) and mask
 
+		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
+		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
+		// SIGNED. Annotating it `TableSlotIndex` is now a COMPILE ERROR rather than a latent hazard:
+		// that alias is non-negative, so the `-1` initializer is an out-of-range constant (E3005).
+		// Every use of it below sits inside a `>= 0` test, so the value that reaches an `elements`/
+		// `states`/`hashes` slot is always a real one. `Map.findSlot` carries the identical local for
+		// the identical reason.
 		var firstDeleted = -1
 		var probes = 0
 
@@ -106,10 +131,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 					insertIndex = firstDeleted
 				end 'use_deleted'
 
-				try elements.set(insertIndex, value: element) otherwise panic("Set.insert: elements.set OOB — insertIndex from probe is in-bounds")
-				try states.set(insertIndex, value: SlotState.Occupied) otherwise panic("Set.insert: states.set OOB — insertIndex from probe is in-bounds")
-				try hashes.set(insertIndex, value: hash) otherwise panic("Set.insert: hashes.set OOB — insertIndex from probe is in-bounds")
-				count = count + 1
+				insertAtSlot(insertIndex, element: element, hash: hash)
 				return
 			end 'empty'
 
@@ -145,14 +167,21 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 			probes = probes + 1
 		end 'probe'
 
-		// Should never reach here if load factor is maintained
-		// But if we do, insert at first deleted slot
+		// Every slot probed without finding the element or an empty one. A tombstone is still a
+		// vacancy an insert can take, so it is a perfectly good answer.
 		if firstDeleted >= 0 'fallback'
-			try elements.set(firstDeleted, value: element) otherwise panic("Set.insert: elements.set OOB — firstDeleted from probe is in-bounds")
-			try states.set(firstDeleted, value: SlotState.Occupied) otherwise panic("Set.insert: states.set OOB — firstDeleted from probe is in-bounds")
-			try hashes.set(firstDeleted, value: hash) otherwise panic("Set.insert: hashes.set OOB — firstDeleted from probe is in-bounds")
-			count = count + 1
+			insertAtSlot(firstDeleted, element: element, hash: hash)
+			return
 		end 'fallback'
+
+		// ⛔ **FALLING THROUGH MEANS EVERY SLOT IS Occupied — `count == capacity` — WHICH THE 75%
+		// LOAD-FACTOR GROW ABOVE FORBIDS.** This used to be a bare `end 'fallback'` that simply
+		// returned: `insert` reported success, `count` did not move and the element was silently
+		// DROPPED, so the very next `contains` answered false about a value the caller had just
+		// added. That is a broken invariant rather than a runtime condition a caller could handle,
+		// so it panics — the same call `Map.findSlot` makes at the identical point of the identical
+		// probe.
+		panic("Set.insert: probed every slot and found neither the element nor a vacancy — the 75% load-factor invariant is broken")
 	end 'insert'
 
 	/// Check if element exists in the set

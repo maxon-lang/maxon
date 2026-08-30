@@ -2607,6 +2607,12 @@ end 'RangeCheckGuard'
 // even when the cast sits in an unselected ternary arm / if-branch. BlockIds survive `lowerMaxonToStd`
 // (blocks are cloned 1:1 keeping their id), so the Std pass finds the same block by id.
 //
+// ⚠ **THEY SURVIVE THE LOWERING; THEY DO NOT SURVIVE THE PARSER, AND ONE CONSTRUCT REWRITES THEM.** A
+// ternary's TRUE ARM is parsed onto the unconditional path and then RELOCATED into a block minted
+// afterwards, so a site recorded inside it names a block its value has left. `Parser.rehomeArmRangeSites`
+// moves this pair with the ops — that function's header carries the two wrong answers it costs, one of
+// which stopped shv2 compiling itself.
+//
 // ⭐⭐ **`maxonOpPos` IS WHERE IN THAT BLOCK, AND IT IS THE DIFFERENCE BETWEEN A PATH ANCHOR AND A
 // STATEMENT ANCHOR.** The block alone says which path the guard runs on; without a position the guard
 // can only go at the END of that block, so the whole rest of the block — every print, every call, every
@@ -2693,6 +2699,13 @@ export type RangeCheckArgSite
 	export var callee as ByteArray
 	export var argIndex as ParamCount
 	export var label as ByteArray
+	// ⚠ **WRITTEN AND NEVER READ, AND IT IS STALE FOR ONE CONSTRUCT IF A READER EVER APPEARS.** A call
+	// argument owes the compile-time half alone, so nothing spends this block today. But it is recorded at
+	// the parse, and a ternary's TRUE ARM is RELOCATED onto a block minted afterwards
+	// (`Parser.parseTernaryExpression`), which is why the alias-named sites are re-homed with their ops
+	// (`Parser.rehomeArmRangeSites`). This column is not, because re-homing a field with no reader would
+	// only pretend one exists. ⇒ **A future reader that spends it as a position owes itself the same
+	// re-home** — or, better, this field's deletion.
 	export var block as BlockId
 	export var line as LineNumber
 	export var column as ColumnNumber

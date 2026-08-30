@@ -24,8 +24,29 @@
 // Raw process exit code or signal number. Signed because Unix signals and
 // some Windows abnormal-exit NTSTATUS codes are conventionally read as i64.
 typealias ExitInt = int(i64.min to i64.max)
-typealias Pid = int(0 to u64.max)
-typealias ByteLimit = int(0 to u64.max)
+// An OS process id, which is a `pid_t` on POSIX and a DWORD on Windows — never negative, and never
+// wider than the i64 the spawn builtins answer in. Narrowing it makes every `Pid` position a guarded
+// door, so it is worth being exact about where the builtins' `-1` is decoded, because it is NOT
+// decoded uniformly:
+//
+//   • `runDetachedConfiguration` gets the pid FROM the spawn, where `-1` means the spawn failed, and
+//     decodes it with an `==` before the value reaches this alias's return door.
+//   • `runConfiguration` does NOT decode — it reads `subprocessGetPid(handle)` and hands the result
+//     straight to `CollectedOutput.create`'s `pid Pid` parameter. That is sound rather than an
+//     oversight, and only because of what the entry answers `-1` FOR: both runtimes return it for a
+//     handle that is null / out of range / already released, and this handle was proved live one
+//     statement earlier and is released only after the read. A live handle carries the pid the spawn
+//     recorded.
+//
+// ⚠ So the guard here is the backstop for a `-1` that ESCAPED the first case, not a check the second
+// case is relying on. If a future runtime ever answers `-1` for a LIVE handle — a platform that
+// cannot report a pid — `runConfiguration` becomes an uncatchable range panic, and the fix is a
+// decode at that call, not a wider `Pid`.
+typealias Pid = int(0 to i64.max)
+
+// A cap on how many bytes of a child's output are collected. Every capped read materialises a
+// `String`, so the backing `__ManagedMemory`'s signed machine-word length bounds it.
+typealias ByteLimit = int(0 to i64.max)
 
 // File-private aliases mirroring the same names declared in `stdlib/String.maxon`
 // and `stdlib/Json.maxon`. The self-hosted stdlib whitelist doesn't yet include

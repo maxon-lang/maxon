@@ -1120,9 +1120,9 @@ function printMemoryDelta(results RungResultArray, date String, note String, log
 
 		var line = StringBuilder.create()
 		line.append(padRight("  {result.rung}", width: TrendRungColumnWidth))
-		line.append(padLeft(groupDigits(result.total.allocs as Delta), width: TrendCountColumnWidth))
+		line.append(padLeft(groupDigits(result.total.allocs), width: TrendCountColumnWidth))
 		line.append(padLeft(countDeltaText(result.total.allocs, logged: loggedAllocs, rung: i), width: TrendDeltaColumnWidth))
-		line.append(padLeft(groupDigits(result.total.bytes as Delta), width: TrendCountColumnWidth))
+		line.append(padLeft(groupDigits(result.total.bytes), width: TrendCountColumnWidth))
 		line.append(padLeft(byteDeltaText(result.total.bytes, logged: loggedBytes, rung: i, bytes: bytes), width: TrendDeltaColumnWidth))
 		print("{line.build()}\n")
 	end 'eachRung'
@@ -1190,7 +1190,7 @@ function countDeltaText(current AllocCount, logged AllocCountArray, rung LadderI
 	let before = try logged.get(rung) otherwise 'notLogged'
 		return NoBaselineText
 	end 'notLogged'
-	return signedDeltaText(current as Delta, before: before)
+	return signedDeltaText(current, before: before)
 end 'countDeltaText'
 
 // The byte column's delta cell, which is the ONE cell of this table that can be refused.
@@ -1268,7 +1268,7 @@ function printStdlibWalkCensus() throws ScaleError
 	var sources = MaxonSourcePathArray.create()
 	let directories = try collectMaxonSources(stdlibDir, into: sources) otherwise throw ScaleError.reason("{stdlibDir.toString()} could not be listed")
 
-	print("{padRight(StdlibWalkLabel, width: StdlibWalkLabelWidth)}{groupDigits(sources.count() as Delta)} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {stdlibDir.toString()}\n")
+	print("{padRight(StdlibWalkLabel, width: StdlibWalkLabelWidth)}{groupDigits(sources.count())} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {stdlibDir.toString()}\n")
 	print("{padRight("", width: StdlibWalkLabelWidth)}git cannot see IGNORED content and this walk can, so compare these two counts against\n")
 	print("{padRight("", width: StdlibWalkLabelWidth)}the checkout a logged row was minted at before reading a flat delta as a code change.\n")
 end 'printStdlibWalkCensus'

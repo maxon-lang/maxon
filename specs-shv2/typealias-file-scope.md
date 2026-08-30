@@ -123,8 +123,9 @@ line, and no interned instance, mangled symbol or committed golden moves.
 <!-- test: user-alias-wins-over-stdlib -->
 A user file declares `Milliseconds`, the name `stdlib/Sleep.maxon` also declares. The user's own
 range governs the cast written in the user's file, so `500` is out of range and rejected. Before
-file-scoped resolution the stdlib module merged last and its `int(0 to u64.max)` silently won: this
-program compiled and returned 9.
+file-scoped resolution the stdlib module merged last and ITS range silently won: this program
+compiled and returned 9. (`stdlib/Sleep.maxon` declared `int(0 to u64.max)` when that was measured
+and declares `int(0 to i64.max)` now; either admits `500`, so the observation is unchanged.)
 ```maxon
 typealias Milliseconds = int(0 to 100)
 
@@ -186,7 +187,7 @@ error E3005: <fragment>:6:14: Value 600 is outside the range of 'Limit' (int(0 t
 <!-- test: wide-file-cast-still-accepted -->
 The opposite direction, and the shape of the collision `stdlib/helpers/string/` already contains:
 `utf16.maxon` declares `Utf16UnitCount = int(1 to 2)` while `views.maxon` declares the same name as
-`int(0 to u64.max)`. Each file's cast is checked against its OWN range, so the wide file's `40`
+`int(0 to i64.max)`. Each file's cast is checked against its OWN range, so the wide file's `40`
 compiles even though a narrower alias of that name exists elsewhere. Under one whole-program registry
 this program did not merely answer wrongly — whichever file merged last decided whether it compiled
 at all, from the order the directory walk happened to return.
@@ -921,7 +922,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:30:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
-note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
+note: stdlib/Array.maxon:165:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- test: contested-generic-alias-argument-that-owns-heap-is-not-co-owned-trivial -->

@@ -4,7 +4,12 @@
 
 public typealias AsciiValue = int(0 to 127)
 public typealias Codepoint = int(0 to 1114111)
-typealias Utf8ByteCount = int(0 to u64.max)
+// How many UTF-8 bytes a `Character` occupies. ⚠ NOT `int(0 to 4)`: a `Character` is a grapheme
+// CLUSTER, not a codepoint, and a cluster is any number of codepoints — four is the width of ONE
+// codepoint's encoding (`Utf8ByteWidth` in `helpers/string/views.maxon` is that). The honest bound is
+// the one holding every byte count in the stdlib: the cluster's bytes live in a `__ManagedMemory`
+// whose length is a signed machine word.
+typealias Utf8ByteCount = int(0 to i64.max)
 
 // File-private. The canonical `Byte` declaration lives in
 // `stdlib/File.maxon`, which isn't yet whitelisted in the self-hosted

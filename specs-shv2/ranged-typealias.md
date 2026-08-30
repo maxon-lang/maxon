@@ -3498,9 +3498,17 @@ error E3005: specs/fragments/ranged-typealias/error.a-diagnostic-names-the-alias
 ### A CALL RESULT is named by the alias its callee's `returns` clause wrote
 ⭐⭐ **THE OTHER HALF OF THE PROVENANCE, AND THE ONE shv2's OWN SOURCE NEEDED.** The case above stamps a value
 built by a factory; this one arrives from a plain call, and its only spelling is the one the CALLEE's signature
-wrote. `filledColumn(…) returns DenseColumn` in `Targets/Shared/TargetLiveness.maxon` hands back a gid that
-`DurationNanosArray` and 26 other `int(0 to u64.max)` aliases share, and without this the diagnostic at
+wrote. `filledColumn(…) returns DenseColumn` in `Targets/Shared/TargetLiveness.maxon` hands back a gid every
+`Array` over an `int(0 to u64.max)` element shares, and without this the diagnostic at
 `RegisterAllocator.maxon:93` could only fall back to the element RANGE.
+
+⚠ **THE EXAMPLE THIS PARAGRAPH USED TO NAME NO LONGER BELONGS TO THAT SET, WHICH IS WHY IT NAMES THE
+SET AND NOT A MEMBER.** It read *"a gid that `DurationNanosArray` and 26 other `int(0 to u64.max)`
+aliases share"*; `stdlib/Clock.maxon`'s `DurationNanos` has since been narrowed to
+`int(0 to i64.max)`, so `DurationNanosArray` is a DIFFERENT instance now and the 26 was a census of a
+tree that has moved. The mechanism is unchanged — several distinct alias names still collapse onto one
+`Array` instance whenever their element ranges agree — and it is the mechanism, not the census, that
+this test pins.
 
 ⚠ **THE SPELLING IS CAPTURED AS THE TOKEN'S TEXT AND NOTHING IS ASKED ABOUT IT AT CAPTURE TIME.** Whether the
 name is a generic alias is a WHOLE-PROGRAM question and the capture runs inside the declaration sweep that

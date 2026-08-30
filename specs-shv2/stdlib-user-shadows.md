@@ -139,7 +139,7 @@ with `stdlib/Clock.maxon`'s and answers for the user's file, including for its R
 ## Tests
 
 <!-- test: stdlib-user-shadows.user-ranged-typealias-wins-over-a-listed-module -->
-`stdlib/Clock.maxon` declares `typealias DurationMs = int(0 to u64.max)` and is loaded into this compile.
+`stdlib/Clock.maxon` declares `typealias DurationMs = int(0 to i64.max)` and is loaded into this compile.
 A user file declaring its own `DurationMs` over a NARROWER range is legal, and the range in force in that
 file is the USER's: `50` is outside `int(0 to 10)` and is refused against it, where the listed module's
 range would have accepted it. The rejection is the observation — a program that merely compiled would not

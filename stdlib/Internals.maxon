@@ -7,17 +7,131 @@
 /// they live in stdlib rather than runtime.std (which only gets mem2reg).
 ///
 /// @category Compiler-internal
-// Raw machine word — covers pointers, sizes, byte values, refcounts, and
-// any other i64-sized scalar that flows through the runtime intrinsics.
-// Internals.maxon traffics in raw bits and addresses; the full i64 range
-// is intentional here so signed-arithmetic on byte offsets, atomic xadd
-// with negative deltas, and pointer values all flow through one type.
-typealias MachineWord = int(i64.min to i64.max)
+// ⭐⭐ **A RAW MACHINE WORD: AN ADDRESS, A SIZE, A BIT PATTERN, A FUNCTION POINTER, A COUNT, A
+// FLAG. UNSIGNED, BECAUSE EVERY ONE OF THOSE IS.**
+//
+// ⚠ **THIS NAME USED TO MEAN SEVERAL DIFFERENT THINGS AT ONCE AND ITS OWN HEADER ADMITTED IT** —
+// *"the full i64 range is intentional here so signed-arithmetic on byte offsets, atomic xadd with
+// negative deltas, and pointer values all flow through one type"*. An address and a refcount delta
+// are not the same fact and must not share a declaration: the ordering-comparison signedness rule
+// reads the DECLARED domain, so one name covering both had to be read one way and was therefore
+// wrong for the other. Each fact now has its own name, and each says what its values can be. The
+// four below are the ones this paragraph's quote was about; `McacheShard` and `ProcIdOrAbsent`
+// further down came out of the same split and are declared with their own reasons:
+//
+//   `MachineWord`      — this one. Unsigned, full range, unguarded. Nothing hostile arrives: every
+//                        value is minted by the OS, the slab, or the compiler itself.
+//   `BufferCoordinate` — an index/length/count a CALLER supplied. Signed, because rejecting a
+//                        negative one is what the entry point carrying it is FOR.
+//   `ElementStride`    — an `element_size`. Signed, because its NEGATIVE half is the sub-byte-packed
+//                        bit-width encoding the whole container runtime dispatches on.
+//   `RefCountDelta`    — refcount arithmetic. Signed, because a negative is the corruption signal.
+//
+// ⚠ **THE SECOND `MachineWord` NOW AGREES WITH THIS ONE, AND THAT IS THE POINT.**
+// `maxon-shv2/Compiler/Targets/Shared/BinaryHelpers.maxon` declares `MachineWord = int(0 to u64.max)`
+// for a value being SERIALIZED into an object file — a size, a file offset, an address. That was
+// described here as "the OPPOSITE domain"; it is the SAME domain, and this one was the one that was
+// wrong. The two names still do not collide, because this one is module-private and that one is
+// `export`ed.
+//
+// `NonZeroWord` is the one place the two DO still differ (`1 to i64.max` here against `1 to
+// u64.max` there), and deliberately: its only remaining use is casting an `ElementStride` at a
+// divide, where a stride above `i64.max` is not a value the type must admit — so the narrower
+// range keeps its door guarded instead of unguarded for a case that cannot arise.
+typealias MachineWord = int(0 to u64.max)
 
 // A machine word proven non-zero: the divisor type for `/`/`mod`. Integer division is fallible (a
 // zero divisor throws), so a structurally-non-zero-but-0-inclusive divisor is cast to this at the
 // divide — a bare divide, no check, and portable across compilers that do not model a throwing `/`.
 typealias NonZeroWord = int(1 to i64.max)
+
+// ⭐ **AN ELEMENT OR BYTE COORDINATE INTO A MANAGED BUFFER, AS THE CALLER SUPPLIED IT** — an index,
+// a length, a count, a byte offset, a requested capacity. FULL-RANGE SIGNED, and it has to be:
+// every `__managed_mem_*` entry point below opens with `if idx < 0 throw indexOutOfBounds`, and
+// that check IS the contract (`specs/arrays.md` pins the throw). Read unsigned the test is always
+// false, the bounds check silently disappears, and `get(-1)` becomes an out-of-bounds read.
+//
+// It cannot be narrowed either. A narrowed range is a GUARDED door, and a guarded door PANICS where
+// these are specified to THROW a catchable `indexOutOfBounds` — so the narrowest HONEST range for a
+// value whose whole purpose is to be caught and rejected here is the one that admits it.
+//
+// ⚠ It also puts the DESCENDING loops on a declaration rather than on an accident.
+// `__managed_mem_shift_right` walks `j` down to `idx - 1` and stops on `j >= idx`; read unsigned,
+// `-1 >= 0` is true and that loop never ends. MEASURED 2026-08-29, both compilers: it terminates
+// correctly TODAY even with unsigned parameters, because `j` is a LOCAL and an operand with no
+// declared range refuses the unsigned reading on its own. That is a property of where the value
+// happens to live, not of what it is — declaring `idx` here says it outright.
+typealias BufferCoordinate = int(i64.min to i64.max)
+
+// ⭐ **A RECORD'S `element_size@24`, WHOSE NEGATIVE HALF IS A REAL ENCODING** — not an error value:
+//   > 0  N-byte stride (byte-addressed: 1, 2, 4, 8, or a struct's width)
+//   == 0  reserved / unset (non-container, or a pre-stamp record)
+//   < 0  SUB-BYTE-PACKED: `(-element_size)` BITS per element (a `bool` is -1)
+// `__managed_mem_is_packed` is `elemSize < 0` and ~10 access sites dispatch on it. Read unsigned,
+// every packed array silently takes the byte-strided path and shreds its own buffer. Full-range
+// because a struct element's stride has no bound this file can state.
+typealias ElementStride = int(i64.min to i64.max)
+
+// ⭐ **REFCOUNT ARITHMETIC: the delta an atomic xadd applies (a decref is `-1`), and the prior /
+// resulting value that arithmetic produces.** FULL-RANGE SIGNED because the OVER-RELEASE TRAP
+// (`if prior <= 0`) exists precisely to see a value a correct program cannot produce. Read unsigned
+// that test degrades to `prior == 0`, a corrupt negative reads back as a huge positive, and the
+// double-free detector stops firing over a green suite.
+typealias RefCountDelta = int(i64.min to i64.max)
+
+// An mcache ROW index: which of the `SLAB_MAX_SHARDS` rows a thread allocates from. Non-negative by
+// construction — `__slab_shard_for_tag` is the sole producer and it caps. ⚠ The upper bound is
+// `SLAB_MAX_SHARDS - 1` written out, because a range needs literals; the two must move together.
+typealias McacheShard = int(0 to 255)
+
+// ⚠ **THE ONE PLACE `-1` STILL MEANS "NO P", AND IT IS AN ABI, NOT A CHOICE.** `__slab_current_p_id`
+// is OVERRIDDEN at that exact label by hand-emitted machine code on two targets
+// (`emitX64SlabCurrentPId`, `emitArm64SlabCurrentPId`), which return `P->id` or `-1`; neither the
+// encoding nor the NAME is this file's to change. So it is treated as what it is — a foreign
+// boundary — and converted AT the boundary by `__slab_owning_p_tag`, the single caller. Nothing
+// downstream of that ever sees a negative P id again.
+typealias ProcIdOrAbsent = int(-1 to i64.max)
+
+// ⭐⭐ **THE `int(0 to u64.max)` ROSTER — EVERY DELIBERATELY UNGUARDED NON-NEGATIVE ALIAS LEFT IN
+// `stdlib/`, AND WHY EACH ONE STAYS.**
+//
+// A FULL range is the one shape both compilers leave unchecked (`rangeIsFull`, `IsFullBaseRange`), so
+// `int(0 to u64.max)` means TWO things at once: this door is not guarded, AND every ordering
+// comparison on it reads UNSIGNED. Both are correct for the four names below and for nothing else in
+// `stdlib/` — every other non-negative alias has been narrowed to its honest upper bound, which is
+// what makes its doors checked and pins its comparisons to the signed reading.
+//
+// ⇒ **`grep -rn "int(0 to u64.max)" stdlib/` must return exactly the FOUR declarations below plus
+// the comments that quote the shape.** A fifth is either an alias nobody narrowed or an entry
+// nobody justified, and it is a live cross-compiler divergence either way: the bootstrap propagates the
+// first ranged type an operand offers onto arithmetic results, so a DERIVED negative under a
+// full-range alias orders unsigned there and signed in shv2, which mints binop results unnamed.
+//
+//   • `MachineWord`          (this file)                     — an address, a size, a raw bit pattern,
+//     a function pointer, a slot/page/class index, a count, a flag. ⭐ Its unguardedness is the one
+//     entry here that is not merely tolerated but REQUIRED: this is the memory manager, and every
+//     value it holds was minted by the OS, the slab, or the compiler — a guard could only ever fire
+//     on a value the allocator itself produced. See its header for the three-way split that let it
+//     join this roster.
+//   • `HashMixWord`          (`Interfaces.maxon`)            — a hash avalanche's bit pattern. The
+//     multiply and the shifts are defined on all 64 bits; a "negative" mixed word is meaningless.
+//   • `GraphemeStateBits`    (`helpers/string/grapheme.maxon`) — a packed UAX #29 break-state
+//     bitfield, read by masking, never ordered as a magnitude.
+//   • `SortIndex`            (`helpers/sort/insertionSort.maxon`) — genuinely unsigned ARITHMETIC:
+//     `nodePowerBetween`'s `scale * x` is designed to reach ~2^63 without wrapping, and its
+//     leading-zero scan builds the 2^63 top bit as `2^62 * 2`. ⚠ `SortRunIndex` (`driftsort.maxon`)
+//     is NOT this and was retyped: it holds a run's start index and length, which are array
+//     coordinates.
+//
+// Full-range SIGNED aliases are deliberate too and do NOT appear in that grep, so none of them is
+// evidence about the rule above. Each admits a NEGATIVE because a negative MEANS something to it:
+//   • `BufferCoordinate` / `ElementStride` / `RefCountDelta` here, and `Array.ReportedCapacity` —
+//     a caller's unvalidated index, a sub-byte-packed bit width, a refcount the trap must see go
+//     below zero, and the flag a non-owned buffer answers instead of a capacity.
+//   • `maxon-shv2/Compiler/Targets/Shared/BinaryHelpers.maxon`'s `NonZeroWord` — outside `stdlib/`
+//     entirely. (Its `MachineWord` twin now AGREES with this file's and is no longer a split.)
+// A range that must admit a sentinel is honest only by admitting it; the rule is not "narrow
+// everything", it is "say what the value can be".
 
 // Atomically increment the refcount at [ptr - 8]. Caller must ensure ptr is
 // the user-region pointer (32-byte mm header sits at ptr-32..ptr-1; refcount
@@ -35,6 +149,24 @@ function __mm_incref(ptr MachineWord)
 	#endif
 	__Internals.atomicInc(ptr - 8)
 end '__mm_incref'
+
+// ⭐ **THE OVER-RELEASE PREDICATE — one test, three callers, and the ONE place its SIGNEDNESS is
+// declared.** `prior` is the value an `atomicXadd(ptr - 8, value: -1)` displaced: `== 0` means this
+// decref released a reference that was never taken, `< 0` means the header was already corrupt.
+// Both are refcount-inserter / lowering bugs, and both are states a correct program cannot reach.
+//
+// ⚠ **IT TAKES A `RefCountDelta` FOR THE SAME REASON THE TEST EXISTS.** Read UNSIGNED, `<= 0`
+// degrades to `== 0` and a corrupt negative comes back as a huge positive — the double-free trap
+// stops firing, silently, over a green suite. The three call sites pass a LOCAL, which carries no
+// declared range and so already refuses the unsigned reading; routing them all through one door
+// that DECLARES the domain means the trap can no longer be broken by a retype anywhere, and states
+// the requirement instead of leaving it resting on an absence.
+//
+// A one-line body the stdlib inliner folds into each caller, so this costs no call on the decref
+// hot path — and it replaces three copies of the same comparison.
+function __mm_is_over_release(prior RefCountDelta) returns bool
+	return prior <= 0
+end '__mm_is_over_release'
 
 // Atomically decrement the refcount at [ptr - 8]. If the prior value was 1
 // (refcount transitions to 0) call __mm_free to release the allocation.
@@ -67,7 +199,8 @@ function __mm_decref(ptr MachineWord)
 	// negative masks the bug as a leak — or, once a later incref crosses zero
 	// again, as a delayed double-free whose slab-slot reuse corrupts unrelated
 	// data. Fault loudly at the source instead.
-	if prior <= 0 'overRelease'
+	// The test itself lives in `__mm_is_over_release`, which is where its signedness is declared.
+	if __mm_is_over_release(prior) 'overRelease'
 		panic("__mm_decref: over-release — refcount was already 0")
 	end 'overRelease'
 end '__mm_decref'
@@ -113,13 +246,14 @@ end '__mm_drop'
 // span it pops from is its sole writer. A cross-P free is CAS-pushed onto the
 // owner P's remote-free MPSC queue and replayed by the owner on its alloc slow
 // path. The slow path (refill / mcentral mutation / OS-direct) takes the global
-// __slab_lock. On single-P targets (wasm / arm64 / pre-scheduler x64)
-// __slab_current_p_id returns -1 → shard 0, collapsing to a single shard.
+// __slab_lock. On single-P targets (wasm / arm64 / pre-scheduler x64) no thread ever
+// adopts a P, so every allocation lands on SLAB_RAW_SHARD and the allocator collapses
+// to a single shard.
 //
 // mspan struct (88 bytes used; 96-byte / 0x60 slot — see MSPAN_META_SLOT_SIZE):
 //   +0x00 base_addr  +0x08 slot_size  +0x10 free_list  +0x18 free_count
 //   +0x20 next_span  +0x28 class_idx  +0x30 total_slots +0x38 arena_base
-//   +0x40 owning_p   (RAW P id; 0xFFFFFFFF sentinel while parked in mcentral)
+//   +0x40 owning_p   (an OWNING-P TAG — see MSPAN_OWNING_P_RAW / _PARKED)
 //   +0x48 scav_state (SPAN_SCAV_ACTIVE / SEEN_FREE / DECOMMITTED)
 //   +0x50 bump_next  (Go's mspan.freeindex, held as an address — see below)
 //
@@ -466,8 +600,9 @@ function __slab_meta_alloc() returns MachineWord
 		return head
 	end 'popFree'
 
-	// Bump path. Std-IR uses signed Lt for the gate; both values are well below
-	// the high bit so signed/unsigned agree.
+	// Bump path. The gate compares two ADDRESSES, both `MachineWord`-derived and so read
+	// UNSIGNED — which is the correct reading for an address and the reason the pair no longer
+	// needs the old "both are well below the high bit" argument to be safe.
 	let bumpPtr = __Internals.loadIndirect(__Internals.slabMetaBumpPtrAddr())
 	let advanced = bumpPtr + MSPAN_META_SLOT_SIZE
 	let bumpEnd = __Internals.loadIndirect(__Internals.slabMetaBumpEndAddr())
@@ -491,11 +626,23 @@ function __slab_meta_free(ptr MachineWord)
 	__Internals.storeIndirect(__Internals.slabMetaFreeHeadAddr(), value: ptr)
 end '__slab_meta_free'
 
-// Shard id of the calling OS thread's adopted P, or -1 when no multi-P
-// scheduler owns this thread. Signature stub (returns -1) for targets without
-// a GMP scheduler; x64-Windows overrides this label with a TLS-reading
-// machine-code version (emitX64SlabCurrentPId).
-function __slab_current_p_id() returns MachineWord
+// ⚠⚠ **THE RAW TLS BOUNDARY, AND THE ONLY FUNCTION IN THIS FILE THAT MAY ANSWER `-1`.** Shard id of
+// the calling OS thread's adopted P, or -1 when no multi-P scheduler owns this thread. Signature
+// stub (returns -1) for targets without a GMP scheduler; x64-Windows and arm64-macOS OVERRIDE THIS
+// EXACT LABEL with a TLS-reading machine-code version. ⚠ Both emitters live in **`maxon-selfhosted/`**
+// (`emitX64SlabCurrentPId`; `emitArm64SlabCurrentPId` in `Targets/Arm64/Arm64MacosGreenThread.maxon`)
+// and NOWHERE ELSE — grepping shv2 or the bootstrap for either name finds nothing, which is
+// consistent with this whole file: v1 is the only compiler that ever compiled it. That is why
+// neither its `-1` nor its NAME is this file's to change —
+// renaming it would leave those emitters registering a label nothing calls and every caller
+// resolving to this always-(-1) stub.
+//
+// ⛔ **NOTHING BUT `__slab_owning_p_tag` MAY CALL IT.** The `-1` is an out-of-band encoding at a
+// foreign boundary, so it is converted AT that boundary into an owning-P TAG, and every site
+// downstream decodes by EQUALITY against a named tag rather than by asking whether an id is
+// negative. That matters twice over: an ordering test against 0 is exactly the shape whose answer
+// the signed/unsigned reading changes, while an equality's answer is the same in both.
+function __slab_current_p_id() returns ProcIdOrAbsent
 	return -1
 end '__slab_current_p_id'
 
@@ -522,9 +669,17 @@ let SLAB_MAX_SHARDS = 256
 // (SLAB_NUM_SIZE_CLASSES × 8). Must stay lock-step with the size-class count.
 let SLAB_MCACHE_ROW_STRIDE = 144
 
-// Sentinel stamped into an mspan's owning_p (+0x40) while the span is parked in
-// mcentral (owned by no P). A real raw P id can never collide with it, so a
-// cross-P free that observes it has hit a returned-span invariant violation.
+// ⭐ **THE OWNING-P TAG: what an mspan's owning_p (+0x40) holds.** Either a real P id
+// (0 .. num_procs-1) or one of these two tags. Both sit far above SLAB_MAX_SHARDS, so no real P id
+// can ever collide with either — the same argument the parked sentinel has always made, now stated
+// once for the pair.
+//
+// ⚠ **THE "NO P" TAG IS NON-NEGATIVE, AND THAT IS THE WHOLE POINT.** This field is read straight
+// out of foreign memory as a raw `MachineWord`, so the old `-1` for a raw-thread-owned span had to
+// be decoded as `owningP < 0` — an ORDERING test on an unsigned word, which is always false. The
+// raw-owned locking arm in `__slab_free` would simply have stopped firing, silently, over a green
+// suite. A non-negative tag makes every decode an `==`, whose answer no reading can change.
+let MSPAN_OWNING_P_RAW = 0xFFFFFFFE
 let MSPAN_OWNING_P_PARKED = 0xFFFFFFFF
 
 // mspan scavenge state (+0x48), a two-epoch grace guard so the scavenger only
@@ -538,49 +693,90 @@ let SPAN_SCAV_ACTIVE = 0
 let SPAN_SCAV_SEEN_FREE = 1
 let SPAN_SCAV_DECOMMITTED = 2
 
-// The mcache row reserved for ALL raw OS threads (id < 0: the subprocess sync
-// worker, the IOCP completion poller — threads with no adopted P). It MUST be
-// distinct from every real P's row (a real P's row is its id, 0..num_procs-1),
-// so a raw thread's lockless-looking fast path never shares a cached span with
-// P[0]. Real Ps never reach num_procs == SLAB_MAX_SHARDS in practice; the
-// `>= SLAB_MAX_SHARDS` cap below is for an unreachable >256-CPU host and would
-// only collide there. Raw-thread access to this row is additionally serialized
-// under __slab_lock (see __slab_alloc / __slab_free), since multiple raw threads
-// share it — they have no exclusive-owner guarantee the per-P fast path relies on.
+// The mcache row reserved for ALL raw OS threads (the subprocess sync worker, the
+// IOCP completion poller — threads with no adopted P, which carry
+// MSPAN_OWNING_P_RAW). It MUST be distinct from every real P's row (a real P's row
+// is its id, 0..num_procs-1), so a raw thread's lockless-looking fast path never
+// shares a cached span with P[0]. Real Ps never reach num_procs == SLAB_MAX_SHARDS
+// in practice; the `>= SLAB_MAX_SHARDS` cap in `__slab_shard_for_tag` is for an
+// unreachable >256-CPU host and would only collide there. Raw-thread access to this
+// row is additionally serialized under __slab_lock (see __slab_alloc / __slab_free),
+// since multiple raw threads share it — they have no exclusive-owner guarantee the
+// per-P fast path relies on.
 let SLAB_RAW_SHARD = SLAB_MAX_SHARDS - 1
 
-// Map a raw P id into the mcache row index range [0, SLAB_MAX_SHARDS).
-// A -1 (no scheduler / raw OS thread) becomes the dedicated raw shard, NOT shard
-// 0 — sharing shard 0 with P[0] (the main thread, which actively allocates while
-// draining green threads in an await loop) raced the main thread's lockless pops
-// against a raw thread's, handing the same slab slot to both → heap corruption
-// (the async-subprocess flake: a managed pointer overwritten by a concurrent
-// cmdline UTF-16 / child-output write). A (practically unreachable) id >= 256 is
-// capped to the last row. This is the MCACHE INDEX only — a span's owning_p
-// stores the RAW id, so the cap never affects free correctness.
-function __slab_clamp_shard(rawId MachineWord) returns MachineWord
-	if rawId < 0 'neg'
+// ⭐ **THE ONE CONVERSION SITE.** The owning-P tag for the CALLING thread: its P's id when it has
+// adopted one, MSPAN_OWNING_P_RAW when it has not. This is the sole caller of
+// `__slab_current_p_id`, and the `-1` stops here.
+//
+// It answers the tag rather than a (bool, id) PAIR deliberately: the alloc and free paths each need
+// BOTH "which row am I" and "which tag do I stamp / compare against", and a pair of queries would
+// read the TLS twice per allocation — twice per FREE too — where one read serves both. It would also
+// be able to straddle an adopt/release between the two reads and answer about two different Ps.
+// One read, one value, and every consumer below is pure arithmetic on it.
+function __slab_owning_p_tag() returns MachineWord
+	let rawId = __slab_current_p_id()
+	if rawId < 0 'noAdoptedP'
+		return MSPAN_OWNING_P_RAW
+	end 'noAdoptedP'
+	return rawId
+end '__slab_owning_p_tag'
+
+// Does `tag` name an actual P — one with an id, an mcache row of its own, and a remote-free queue?
+// False for both tags: a raw OS thread has no P, and a span parked in mcentral is owned by none.
+function __slab_tag_is_real_p(tag MachineWord) returns bool
+	return tag != MSPAN_OWNING_P_RAW and tag != MSPAN_OWNING_P_PARKED
+end '__slab_tag_is_real_p'
+
+// Map an owning-P tag onto its mcache row index in [0, SLAB_MAX_SHARDS).
+// MSPAN_OWNING_P_RAW becomes the dedicated raw shard, NOT shard 0 — sharing shard 0
+// with P[0] (the main thread, which actively allocates while draining green threads
+// in an await loop) raced the main thread's lockless pops against a raw thread's,
+// handing the same slab slot to both → heap corruption (the async-subprocess flake:
+// a managed pointer overwritten by a concurrent cmdline UTF-16 / child-output
+// write). A (practically unreachable) id >= 256 is capped to the last row. This is
+// the MCACHE INDEX only — a span's owning_p stores the TAG, so the cap never affects
+// free correctness.
+function __slab_shard_for_tag(tag MachineWord) returns McacheShard
+	if not __slab_tag_is_real_p(tag) 'noP'
 		return SLAB_RAW_SHARD
-	end 'neg'
-	if rawId >= SLAB_MAX_SHARDS 'cap'
+	end 'noP'
+	if tag >= SLAB_MAX_SHARDS 'cap'
 		return SLAB_MAX_SHARDS - 1
 	end 'cap'
-	return rawId
-end '__slab_clamp_shard'
+	return tag
+end '__slab_shard_for_tag'
 
-// The ProcContext* for shard `id` from the scheduler's P array
-// (__sched_procs), or 0 when there is no P (id < 0, or __sched_procs is still
-// NULL). procs is an array of P*; entry `id` is itself a P*.
-function __slab_proc_at(id MachineWord) returns MachineWord
-	if id < 0 'none'
+// The ProcContext* for the P named by `tag`, from the scheduler's P array (__sched_procs), or 0
+// when there is none. procs is an array of P*; entry `tag` is itself a P*.
+//
+// Two ways to have none, and 0 is the right answer to both: the tag names no P at all
+// (MSPAN_OWNING_P_RAW / _PARKED), or the scheduler has not published __sched_procs yet. Returning 0
+// rather than throwing is deliberate — "there is no P" is the NORMAL answer on a raw OS thread and
+// on every program that never starts a scheduler, and every caller already handles it.
+//
+// ⚠ The tag gate also closes a wild deref the old `id < 0` gate did not: it caught -1 but NOT the
+// 0xFFFFFFFF parked sentinel, which a raw-thread free of a parked span would have used to index
+// `__sched_procs` four billion entries out. It now routes to the same fallback-local push a missing
+// P does.
+function __slab_proc_at(tag MachineWord) returns MachineWord
+	if not __slab_tag_is_real_p(tag) 'none'
 		return 0
 	end 'none'
 	let procs = __Internals.loadIndirect(__Internals.schedProcsAddr())
 	if procs == 0 'noProcs'
 		return 0
 	end 'noProcs'
-	return __Internals.loadIndirect(procs + (id shl 3))
+	return __Internals.loadIndirect(procs + (tag shl 3))
 end '__slab_proc_at'
+
+// Is a multi-P scheduler up? P[0] is published before any worker exists, so a non-null entry there
+// is the one observable that says "another thread may now be allocating". Named because two call
+// sites ask it (`__slab_alloc_needzero`, `__slab_free`) and `__slab_proc_at(0) != 0` states the
+// mechanism rather than the question.
+function __slab_scheduler_is_running() returns bool
+	return __slab_proc_at(0) != 0
+end '__slab_scheduler_is_running'
 
 // CAS-push `slot` onto P `pPtr`'s remote-free MPSC queue (Treiber stack at
 // pPtr + 0x78). The slot's first 8 bytes hold the `next` link. Lock-free,
@@ -702,21 +898,20 @@ end '__slab_reback_span'
 // Repopulates this P's mcache row entry mcache[shard][classIdx] with a span
 // that has at least one free slot. Two-tier:
 //   1. Pop the head of mcentral[classIdx].partial (clearing its next_span) and
-//      install it; re-stamp owning_p = rawId under the lock.
+//      install it; re-stamp owning_p = owningTag under the lock.
 //   2. If partial is empty: build a fresh span — alloc chunks for slot data, an
 //      mspan header from the metadata slab, init the mspan fields (owning_p =
-//      rawId), register it in the arena map, and wire up the intrusive free
+//      owningTag), register it in the arena map, and wire up the intrusive free
 //      list.
 //
 // Slow path: reads mcentral and drives the chunk / metadata / arena-map
 // allocators, so the whole body runs under the global __slab_lock. The per-P
 // mcache fast path takes NO lock.
 //
-// `shard = clamp(rawId)` is the mcache row index (must match __slab_alloc_class);
-// `rawId` is stamped into owning_p so cross-P frees compare it exactly.
-function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
-	let rowShard = __slab_clamp_shard(rawId)
-
+// `rowShard` and `owningTag` are both derived from ONE `__slab_owning_p_tag()` read in
+// `__slab_alloc_class` and passed down together, so the row a span is cached in and the tag stamped
+// into it can never disagree — which re-deriving either here from a second TLS read could allow.
+function __slab_refill_mcache(classIdx MachineWord, rowShard McacheShard, owningTag MachineWord)
 	__Internals.osLockAcquire(__Internals.slabLockAddr())
 
 	// mcentral entry = base + classIdx * 16; mcache slot = base + rowShard*stride + classIdx*8.
@@ -731,9 +926,9 @@ function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
 		let nextSpan = __Internals.loadIndirect(partial + 0x20)
 		__Internals.storeIndirect(mcentralEntry, value: nextSpan)
 		__Internals.storeIndirect(partial + 0x20, value: 0)
-		// Re-stamp owning_p = rawId — this P now exclusively owns the span (it
-		// carried the 0xFFFFFFFF sentinel while parked in mcentral).
-		__Internals.storeIndirect(partial + 0x40, value: rawId)
+		// Re-stamp owning_p = owningTag — this thread now exclusively owns the span (it
+		// carried MSPAN_OWNING_P_PARKED while parked in mcentral).
+		__Internals.storeIndirect(partial + 0x40, value: owningTag)
 		// Reset the scavenge grace state and re-back the pages if the scavenger handed
 		// them to the OS. Factored into __slab_reback_span so refill's hot body stays
 		// free of the syscall / rebuild calls.
@@ -761,10 +956,10 @@ function __slab_refill_mcache(classIdx MachineWord, rawId MachineWord)
 		__Internals.storeIndirect(span + 0x28, value: classIdx)
 		__Internals.storeIndirect(span + 0x30, value: totalSlots)
 		__Internals.storeIndirect(span + 0x38, value: arenaBase)
-		// owning_p = rawId (set once, here, under the lock). Storing the raw id
-		// (not the clamped shard) lets __slab_free compare it exactly against a
-		// freeing thread's raw id, so raw OS threads (id -1) always route remote.
-		__Internals.storeIndirect(span + 0x40, value: rawId)
+		// owning_p = owningTag (set once, here, under the lock). Storing the TAG (not the
+		// capped row index) lets __slab_free compare it exactly against a freeing thread's
+		// own tag, so a raw OS thread matches only a raw-owned span and never a real P's.
+		__Internals.storeIndirect(span + 0x40, value: owningTag)
 		// scavenge state (+0x48) = ACTIVE: a fresh span's pages are committed. The
 		// scavenger advances it to SEEN_FREE then DECOMMITTED across two idle passes;
 		// __slab_reback_span resets it to ACTIVE (re-backing the pages) on reuse.
@@ -794,9 +989,11 @@ end '__slab_refill_mcache'
 // __slab_lock) then pops. A successful pop that drains the span clears the
 // mcache entry so the next call refills cleanly.
 function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns MachineWord
-	// rawId = current P id (-1 if none); shard = clamp(rawId) for the mcache row.
-	let rawId = __slab_current_p_id()
-	let shard = __slab_clamp_shard(rawId)
+	// ONE TLS read, two derived facts: the tag this thread stamps into any span it takes ownership
+	// of, and the mcache row that tag indexes. Reading the tag twice could straddle an
+	// adopt/release and cache a span in one thread's row under another's tag.
+	let owningTag = __slab_owning_p_tag()
+	let shard = __slab_shard_for_tag(owningTag)
 
 	let mcacheSlot = __Internals.slabMcacheBaseAddr() + (shard * SLAB_MCACHE_ROW_STRIDE) + (classIdx shl 3)
 	let cachedSpan = __Internals.loadIndirect(mcacheSlot)
@@ -814,19 +1011,20 @@ function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns 
 		// gate). A span returned to mcentral (owning_p = MSPAN_OWNING_P_PARKED) or
 		// handed to another P keeps free_count != 0, so the depletion check above
 		// cannot detect a RECYCLED span; popping it would corrupt a span another P
-		// owns. owning_p (+0x40) is stamped == rawId for the owning P, so treat
-		// not-owned-by-this-P as a miss. No-op on the single-M arm64/wasm runtimes;
+		// owns. owning_p (+0x40) is stamped == owningTag for the owning thread, so treat
+		// not-owned-by-this-thread as a miss. No-op on the single-M arm64/wasm runtimes;
 		// closes the multi-M recycle race on the x64 worker-pool runtime (x64 TSO
 		// makes the plain load acquire-ordered, so no explicit barrier is needed).
-		if __Internals.loadIndirect(cachedSpan + 0x40) != rawId 'notOwned'
+		if __Internals.loadIndirect(cachedSpan + 0x40) != owningTag 'notOwned'
 			miss = true
 		end 'notOwned'
 	end 'haveSpan'
 
 	if miss 'handleMiss'
-		// Drain this P's remote-free queue (no-op when there is no P). Reclaimed
-		// slots may refill the cached span we just found empty.
-		__slab_drain_remote_frees(__slab_proc_at(rawId))
+		// Drain this P's remote-free queue (no-op when there is no P — `__slab_proc_at`
+		// answers 0 for the raw tag). Reclaimed slots may refill the cached span we just
+		// found empty.
+		__slab_drain_remote_frees(__slab_proc_at(owningTag))
 
 		// Re-probe the cached span after draining.
 		let probedSpan = __Internals.loadIndirect(mcacheSlot)
@@ -841,15 +1039,15 @@ function __slab_alloc_class(classIdx MachineWord, needzero MachineWord) returns 
 			// Same ownership gate as the initial check: refill via mcentral for a
 			// non-owned cached span rather than popping it (prevents the analogous
 			// fast-reject -> drain -> re-probe loop and the recycle corruption).
-			if __Internals.loadIndirect(probedSpan + 0x40) != rawId 'notOwned2'
+			if __Internals.loadIndirect(probedSpan + 0x40) != owningTag 'notOwned2'
 				stillMiss = true
 			end 'notOwned2'
 		end 'haveSpan2'
 
 		if stillMiss 'doRefill'
-			// Pass classIdx + rawId; refill stamps owning_p = rawId and indexes
-			// the mcache row by clamp(rawId).
-			__slab_refill_mcache(classIdx, rawId: rawId)
+			// Hand refill BOTH facts already derived from this frame's single tag read,
+			// so its row and its stamp are the same two this body used.
+			__slab_refill_mcache(classIdx, rowShard: shard, owningTag: owningTag)
 		end 'doRefill'
 	end 'handleMiss'
 
@@ -896,7 +1094,7 @@ end '__slab_alloc_class'
 
 // Return a fully-emptied span to its class's mcentral partial list so a
 // DIFFERENT P can later reclaim it. Runs entirely under the global __slab_lock.
-// Steps: (1) span.owning_p = 0xFFFFFFFF sentinel; (2) prepend span to
+// Steps: (1) span.owning_p = MSPAN_OWNING_P_PARKED; (2) prepend span to
 // mcentral[classIdx].partial_head; (3) walk all 256 mcache rows and NULL any
 // slot still pointing at this span (mostly defensive — the alloc-side evict
 // already NULLs the owner's slot, but the 256-shard bound covers shard 0, the
@@ -904,7 +1102,7 @@ end '__slab_alloc_class'
 function __slab_mcentral_return_span(span MachineWord)
 	__Internals.osLockAcquire(__Internals.slabLockAddr())
 
-	// span.owning_p = parked sentinel (no P owns it while in mcentral).
+	// span.owning_p = the parked tag (no P owns it while in mcentral).
 	__Internals.storeIndirect(span + 0x40, value: MSPAN_OWNING_P_PARKED)
 
 	// class_offset = span.class_idx * 8; mcentral entry = base + class_offset*2.
@@ -1226,8 +1424,9 @@ function __slab_alloc_needzero(size MachineWord, needzero MachineWord) returns M
 		return osPtr
 	end 'osPath'
 	let classIdx = __slab_class_index_for(size)
-	// A raw OS thread (id < 0) reaches the shared raw mcache shard. Two cases:
-	//   (a) PRE-SCHEDULER main (no `async` yet → `__slab_proc_at(0) == 0`): the
+	// A raw OS thread (one carrying MSPAN_OWNING_P_RAW) reaches the shared raw mcache
+	// shard. Two cases:
+	//   (a) PRE-SCHEDULER main (no `async` yet → no scheduler running): the
 	//       lone thread, so its pop is single-writer — lockless, no overhead on
 	//       ordinary non-async programs.
 	//   (b) a genuine raw thread WHILE a scheduler runs (subprocess sync worker
@@ -1237,8 +1436,12 @@ function __slab_alloc_needzero(size MachineWord, needzero MachineWord) returns M
 	//       re-acquires it, which is safe because __slab_lock is a recursive
 	//       Windows CRITICAL_SECTION. `__gt_init` runs on main before any worker
 	//       exists, so no raw thread ever takes the unlocked (a) path.
-	// Real Ps (id >= 0) always keep the lockless fast path — each owns its shard.
-	if __slab_current_p_id() < 0 and __slab_proc_at(0) != 0 'rawThreadLocked'
+	// A thread on a real P always keeps the lockless fast path — each owns its shard.
+	//
+	// ⚠ ORDER: the tag read is cheap (a TLS load) and the scheduler probe walks a global, so the
+	// tag test goes first and `and` short-circuits past the probe on the common real-P path. Both
+	// operands are side-effect-free, so the order is a cost choice and nothing else.
+	if not __slab_tag_is_real_p(__slab_owning_p_tag()) and __slab_scheduler_is_running() 'rawThreadLocked'
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
 		let rawSlot = __slab_alloc_class(classIdx, needzero: needzero)
 		__Internals.osLockRelease(__Internals.slabLockAddr())
@@ -1264,9 +1467,9 @@ end '__slab_rounded_size'
 // Public free entry point. Recovers the owning mspan via __slab_arena_map_get
 // (a lockless read of the immutable map). Routing:
 //   * miss (span == 0): OS-direct pointer — free it under __slab_lock.
-//   * same-P free (my raw id >= 0 AND == span.owning_p): lockless local push.
-//   * cross-P free (different P, or a raw OS thread with no P): CAS-push onto
-//     the OWNER P's remote-free queue.
+//   * same-owner free (my owning-P tag == span.owning_p): lockless local push.
+//   * cross-P free (a different owner tag): CAS-push onto the OWNER P's
+//     remote-free queue.
 //
 // Refcount sanitizer (`--rc-sanitize`): the gate at the top intercepts mm-sized
 // slab slots BEFORE the routing — they are poisoned and parked on the quarantine
@@ -1295,47 +1498,51 @@ function __slab_free(ptr MachineWord)
 		return
 	end 'osDirect'
 
+	// The span's owning-P TAG, and this thread's own. Both are tags, so every test below is an
+	// EQUALITY against a named value — never an ordering test against 0, which is what the old
+	// `-1`-for-no-P encoding forced and what an unsigned read of this raw word would have killed.
 	let owningP = __Internals.loadIndirect(span + 0x40)
-	let myId = __slab_current_p_id()
+	let myTag = __slab_owning_p_tag()
 
-	// RAW-OWNED span (owning_p < 0): the span lives in the shared raw mcache shard,
-	// whose alloc side is serialized under __slab_lock once a scheduler runs (see
-	// __slab_alloc). Once a scheduler is up (`__slab_proc_at(0) != 0`), ANY free of
-	// such a slot — by the owning raw thread, another raw thread, or a real P that
-	// received the slot through cross-thread data sharing — MUST take the same lock,
-	// or it races the raw thread's allocation pop / another raw free. (The
-	// `owningP == myId` raw==raw==-1 case and the real-P `__slab_proc_at(<0)==0`
-	// fallback-local case both reach an UNLOCKED push otherwise.) The recursive
-	// CRITICAL_SECTION makes the inner mcentral-return re-acquire safe. Before the
-	// scheduler exists the lone main thread is the only writer → lockless.
-	if owningP < 0 and __slab_proc_at(0) != 0 'rawOwnedLocked'
+	// RAW-OWNED span (owning_p == MSPAN_OWNING_P_RAW): the span lives in the shared raw mcache
+	// shard, whose alloc side is serialized under __slab_lock once a scheduler runs (see
+	// __slab_alloc). Once a scheduler is up, ANY free of such a slot — by the owning raw thread,
+	// another raw thread, or a real P that received the slot through cross-thread data sharing —
+	// MUST take the same lock, or it races the raw thread's allocation pop / another raw free.
+	// (The raw==raw `owningP == myTag` case and the real-P no-target fallback-local case both
+	// reach an UNLOCKED push otherwise.) The recursive CRITICAL_SECTION makes the inner
+	// mcentral-return re-acquire safe. Before the scheduler exists the lone main thread is the
+	// only writer → lockless.
+	if owningP == MSPAN_OWNING_P_RAW and __slab_scheduler_is_running() 'rawOwnedLocked'
 		__Internals.osLockAcquire(__Internals.slabLockAddr())
 		__slab_free_class_with_mspan(ptr, mspan: span)
 		__Internals.osLockRelease(__Internals.slabLockAddr())
 		return
 	end 'rawOwnedLocked'
 
-	// Same-P free requires my_id >= 0 AND my_id == owning_p. A raw OS thread
-	// (my_id == -1) never matches owning_p (>= 0), so it always routes remote.
-	if owningP == myId 'localPath'
+	// Local free: this thread's tag is exactly the span's. Covers a real P freeing into its own
+	// span, and — when no scheduler is running, so the arm above did not fire — a raw thread
+	// freeing into the raw-owned shard it is the lone writer of.
+	if owningP == myTag 'localPath'
 		// Single-writer push onto our own span's free list (lockless unless this
 		// free fully empties the span, escalating to a locked mcentral return).
 		__slab_free_class_with_mspan(ptr, mspan: span)
 		return
 	end 'localPath'
 
-	// Defensive: a genuine cross-P free (real P, owning_p != my_id) must never
-	// observe the 0xFFFFFFFF sentinel — the owning P drains every in-flight
-	// remote free for a span before its free_count can reach total_slots. A
-	// raw-OS-thread free (my_id < 0) skips this check (its id never equals the
-	// sentinel anyway), exactly as the bootstrap's LoadCurrentP==NULL path does.
-	if myId >= 0 'realP'
+	// Defensive: a genuine cross-P free (real P, owning_p != my tag) must never observe the
+	// PARKED tag — the owning P drains every in-flight remote free for a span before its
+	// free_count can reach total_slots. A raw-OS-thread free skips this check, exactly as the
+	// bootstrap's LoadCurrentP==NULL path does.
+	if __slab_tag_is_real_p(myTag) 'realP'
 		if owningP == MSPAN_OWNING_P_PARKED 'sentinel'
 			panic("__slab_free: cross-P free hit owning_p sentinel; span already returned to mcentral (Mimalloc invariant violation)")
 		end 'sentinel'
 	end 'realP'
 
-	// Remote path: target_p = __sched_procs[owning_p]; CAS-push onto its queue.
+	// Remote path: target_p = __sched_procs[owning_p]; CAS-push onto its queue. `__slab_proc_at`
+	// answers 0 for a tag that names no P, so a raw-owned or parked span lands on the
+	// fallback-local push below rather than indexing the P array with a tag.
 	let targetP = __slab_proc_at(owningP)
 	if targetP == 0 'fallbackLocal'
 		// Defensive: a NULL target (no live P for owning_p) would drop the free.
@@ -1764,12 +1971,17 @@ end '__slab_free'
 			return
 		end 'noFrame'
 
+		// ⚠ Bound `ra` against the .text ADDRESS RANGE, not `ra - textBase` against 0. The old form
+		// leant on the subtraction going NEGATIVE below `textBase` — a signed reading of a value
+		// derived from an address, which is exactly the conflation this file's `MachineWord` split
+		// removed. Comparing the two addresses directly says the same thing and says it in the
+		// reading an address actually has. (The symbol table is emitted immediately after the code
+		// region, so its address is .text's exclusive upper bound.)
 		let textBase = __Internals.mrtStartAddr()
-		let textOffset = ra - textBase
-		let textSize = __Internals.symtableAddr() - textBase
+		let textEnd = __Internals.symtableAddr()
 
-		if textOffset >= 0 and textOffset < textSize 'inText'
-			__Internals.panicPrintFrame(textOffset, symtable: __Internals.symtableAddr())
+		if ra >= textBase and ra < textEnd 'inText'
+			__Internals.panicPrintFrame(ra - textBase, symtable: textEnd)
 			return
 		end 'inText'
 
@@ -1941,7 +2153,7 @@ end '__slab_free'
 	// no ring (arena was exhausted at its allocation). Best-effort under
 	// concurrency: a torn ring under a genuine data race on ONE object is an
 	// acceptable diagnostic imprecision, never a correctness hazard.
-	function __rc_ledger_record(userPtr MachineWord, kind MachineWord, rcAfter MachineWord, ra MachineWord)
+	function __rc_ledger_record(userPtr MachineWord, kind MachineWord, rcAfter RefCountDelta, ra MachineWord)
 		let block = __Internals.loadIndirect(userPtr - 32)
 		if block == 0 'noRing'
 			return
@@ -2165,14 +2377,14 @@ end '__slab_free'
 		if prior == 1 'lastRef'
 			__mm_free(ptr)
 		end 'lastRef'
-		if prior <= 0 'overRelease'
+		if __mm_is_over_release(prior) 'overRelease'
 			__rc_report_over_release(ptr, kind: kind)
 		end 'overRelease'
 	end '__mm_decref_tagged_ra'
 
 	// Tagged strict decref: freed-touch check (naming the emission kind), atomic
 	// -1, record (kind, rc-after), free at the 1->0 transition, and OVER-RELEASE
-	// report when prior <= 0.
+	// report when `__mm_is_over_release`.
 	function __mm_decref_tagged(ptr MachineWord, kind MachineWord)
 		let ra = __Internals.loadIndirect(__Internals.loadFramePtr() + 8)
 		__mm_decref_tagged_ra(ptr, kind: kind, ra: ra)
@@ -2214,7 +2426,7 @@ end '__slab_free'
 		if prior == 1 'lastRef'
 			__mm_free(ptr)
 		end 'lastRef'
-		if prior <= 0 'overRelease'
+		if __mm_is_over_release(prior) 'overRelease'
 			__rc_report_over_release(ptr, kind: kind)
 		end 'overRelease'
 	end '__mm_drop_tagged'
@@ -2408,14 +2620,12 @@ end '__slab_free'
 			return 0
 		end 'tooFar'
 
-		// Two-deep return address: into the constructor's caller. Validate it lands in
-		// .text (mirrors __rc_print_free_frame: textSize = symtable - mrt_start, since
-		// the symbol table is emitted immediately after the code region).
+		// Two-deep return address: into the constructor's caller. Validate it lands in .text by
+		// bounding the ADDRESS against the region, exactly as `__rc_print_free_frame` does — the
+		// symbol table is emitted immediately after the code region, so it is .text's exclusive
+		// upper bound.
 		let ra2 = __Internals.loadIndirect(callerFp + 8)
-		let textBase = __Internals.mrtStartAddr()
-		let textOffset = ra2 - textBase
-		let textSize = __Internals.symtableAddr() - textBase
-		if textOffset >= 0 and textOffset < textSize 'inText'
+		if ra2 >= __Internals.mrtStartAddr() and ra2 < __Internals.symtableAddr() 'inText'
 			return ra2
 		end 'inText'
 
@@ -2638,8 +2848,11 @@ function __mm_alloc_raw(size MachineWord, destructor MachineWord) returns Machin
 end '__mm_alloc_raw'
 
 function __mm_alloc_needzero(size MachineWord, destructor MachineWord, needzero MachineWord) returns MachineWord
+	// Zero-sized requests get one byte, so every allocation has a distinct address. Written as
+	// `== 0` rather than `< 1`: `size` is an unsigned `MachineWord`, under which the two are the
+	// same test, and the equality says which one is meant without depending on the reading.
 	var clampedSize = size
-	if size < 1 'clamp'
+	if size == 0 'clamp'
 		clampedSize = 1
 	end 'clamp'
 	__Internals.atomicInc(__Internals.mmAllocCountAddr())
@@ -2916,7 +3129,7 @@ end '__destruct___ManagedMemory'
 // funnel through here so the element_destroy==0 raw-buffer gate and the per-slot
 // null check live in one place. Does NOT touch the buffer or length; callers do.
 // Caller guarantees 0 <= start <= end <= length.
-function __managed_mem_walk_elements_range(self MachineWord, start MachineWord, end MachineWord)
+function __managed_mem_walk_elements_range(self MachineWord, start BufferCoordinate, end BufferCoordinate)
 	let elementDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
 	if elementDestroy == 0 'rawElems'
 		return
@@ -2990,7 +3203,7 @@ end '__managed_mem_walk_elements'
 // live elements into a fresh ZEROED buffer sized to `length` and then mmReallocs
 // (zeroing the grown tail). The mandatory COW re-establishes the invariant by
 // construction. Caller guarantees 0 <= start <= end <= capacity.
-function __managed_mem_zero_elements_range(self MachineWord, start MachineWord, end MachineWord)
+function __managed_mem_zero_elements_range(self MachineWord, start BufferCoordinate, end BufferCoordinate)
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if capacity < 0 'notOwned'
 		return
@@ -3023,7 +3236,7 @@ end '__managed_mem_zero_elements_range'
 // to hand back (double-free); an erase without the release leaks the element.
 // The teardown must run first: it reads the slots this then zeroes.
 // Caller guarantees 0 <= start <= end <= length.
-function __managed_mem_vacate_range(self MachineWord, start MachineWord, end MachineWord)
+function __managed_mem_vacate_range(self MachineWord, start BufferCoordinate, end BufferCoordinate)
 	__managed_mem_walk_elements_range(self, start: start, end: end)
 	__managed_mem_zero_elements_range(self, start: start, end: end)
 end '__managed_mem_vacate_range'
@@ -3078,7 +3291,7 @@ end '__destruct___ManagedMemoryCursor'
 // pointer that has already been freed — a double-free on teardown). Both halves
 // live in `__managed_mem_vacate_range`. It must precede the length store: it
 // reads [n, oldLength) off the OLD live range.
-function __managed_mem_set_length(self MachineWord, n MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_set_length(self MachineWord, n BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if n > capacity 'tooLong'
 		throw __ManagedMemoryError.invalidLength
@@ -3107,21 +3320,21 @@ end '__managed_mem_set_length'
 // straddles a byte boundary — bit offset `(idx*w) & 7` plus `w` stays <= 8 — so a
 // single load/store per access suffices. A future width that does not divide 8
 // (3/5/6/7) would need a multi-byte read-modify-write, and ONLY here.
-function __managed_mem_is_packed(elemSize MachineWord) returns bool
+function __managed_mem_is_packed(elemSize ElementStride) returns bool
 	return elemSize < 0
 end '__managed_mem_is_packed'
 
-function __managed_mem_packed_bit_width(elemSize MachineWord) returns MachineWord
+function __managed_mem_packed_bit_width(elemSize ElementStride) returns MachineWord
 	return 0 - elemSize
 end '__managed_mem_packed_bit_width'
 
 // Bytes needed to hold `count` packed elements of this element_size.
-function __managed_mem_packed_byte_len(count MachineWord, elemSize MachineWord) returns MachineWord
+function __managed_mem_packed_byte_len(count BufferCoordinate, elemSize ElementStride) returns MachineWord
 	let bits = count * __managed_mem_packed_bit_width(elemSize)
 	return (bits + 7) shr 3
 end '__managed_mem_packed_byte_len'
 
-function __managed_mem_read_packed(buffer MachineWord, idx MachineWord, elemSize MachineWord) returns MachineWord
+function __managed_mem_read_packed(buffer MachineWord, idx BufferCoordinate, elemSize ElementStride) returns MachineWord
 	let w = __managed_mem_packed_bit_width(elemSize)
 	let bitPos = idx * w
 	let byte = __Internals.loadByte(buffer + (bitPos shr 3), offset: 0)
@@ -3129,7 +3342,7 @@ function __managed_mem_read_packed(buffer MachineWord, idx MachineWord, elemSize
 	return (byte shr (bitPos and 7)) and mask
 end '__managed_mem_read_packed'
 
-function __managed_mem_write_packed(buffer MachineWord, idx MachineWord, elemSize MachineWord, value MachineWord)
+function __managed_mem_write_packed(buffer MachineWord, idx BufferCoordinate, elemSize ElementStride, value MachineWord)
 	let w = __managed_mem_packed_bit_width(elemSize)
 	let bitPos = idx * w
 	let byteAddr = buffer + (bitPos shr 3)
@@ -3145,7 +3358,7 @@ end '__managed_mem_write_packed'
 // (element_size < 0) are measured in BITS; every byte-strided element is
 // count * element_size. Single source of truth for buffer sizing across
 // create / grow / cow_check / slice, so the packed-vs-byte split lives once.
-function __managed_mem_buffer_byte_len(count MachineWord, elemSize MachineWord) returns MachineWord
+function __managed_mem_buffer_byte_len(count BufferCoordinate, elemSize ElementStride) returns MachineWord
 	if __managed_mem_is_packed(elemSize) 'packed'
 		return __managed_mem_packed_byte_len(count, elemSize: elemSize)
 	end 'packed'
@@ -3157,12 +3370,21 @@ end '__managed_mem_buffer_byte_len'
 // it to reclaim the slab class slack as spare capacity: sub-byte-packed elements
 // are (-element_size) bits each, so `bytes * 8` bits hold `bytes*8 / bitWidth` of
 // them; byte-strided elements are `bytes / element_size`.
-function __managed_mem_capacity_for_bytes(bytes MachineWord, elemSize MachineWord) returns MachineWord
-	// `/` is fallible at the type level, and `elemSize` is typed 0-inclusive (MachineWord). Both
-	// divisors here are non-zero by construction — the packed path's `0 - elemSize` is >= 1 (packed
-	// elemSize < 0), and the sole caller reaches the non-packed path only under `elemSize != 0`. The
-	// non-zero cast makes that provable to the type system (a bare divide, no check); the cast's
-	// lower-bound panic is unreachable.
+function __managed_mem_capacity_for_bytes(bytes MachineWord, elemSize ElementStride) returns MachineWord
+	// `/` is fallible at the type level. `elemSize` is `ElementStride`, which is 0-inclusive, and
+	// `__managed_mem_packed_bit_width` returns a `MachineWord`, which is too — so BOTH divisors are
+	// cast. Both are non-zero by construction: the packed path's `0 - elemSize` is >= 1 (packed
+	// elemSize < 0), and the sole caller reaches the non-packed path only under `elemSize != 0`.
+	// The casts make that provable to the type system (a bare divide, no check); their lower-bound
+	// panics are unreachable.
+	//
+	// ⚠ **A NARROWER RETURN TYPE CANNOT REPLACE THE FIRST CAST, AND TRYING IT HITS A BOOTSTRAP
+	// CONTRADICTION.** MEASURED 2026-08-29 with the width declared `int(1 to 8)`: the bootstrap
+	// answers `E3057 division by a possibly-zero value` for the bare divide AND
+	// `E3010 unneeded cast: 'PackedBitWidth' already fits in 'NonZeroWord'` for the cast — so
+	// NEITHER spelling compiles there, because its divisor check cannot see a CALL RESULT's declared
+	// ranged return while its cast check can. (shv2 accepts the bare divide, so this is the
+	// bootstrap's alone.) The cast stays until those two checks agree.
 	if __managed_mem_is_packed(elemSize) 'packed'
 		let bitWidth = __managed_mem_packed_bit_width(elemSize) as NonZeroWord
 		return (bytes shl 3) / bitWidth
@@ -3176,7 +3398,7 @@ end '__managed_mem_capacity_for_bytes'
 // across get / cursor_current (load) and set / raw_set (store); centralize it
 // so a new width or a fixed default lands in exactly one place. Unsigned reads —
 // typed sign-extension is applied by the caller's field-load shim.
-function __managed_mem_load_sized(addr MachineWord, elemSize MachineWord) returns MachineWord
+function __managed_mem_load_sized(addr MachineWord, elemSize ElementStride) returns MachineWord
 	if elemSize == 1 'b'
 		return __Internals.loadByte(addr, offset: 0)
 	end 'b'
@@ -3189,7 +3411,7 @@ function __managed_mem_load_sized(addr MachineWord, elemSize MachineWord) return
 	return __Internals.loadIndirect(addr)
 end '__managed_mem_load_sized'
 
-function __managed_mem_store_sized(addr MachineWord, elemSize MachineWord, value MachineWord)
+function __managed_mem_store_sized(addr MachineWord, elemSize ElementStride, value MachineWord)
 	if elemSize == 1 'b'
 		__Internals.storeByte(addr, offset: 0, value: value)
 		return
@@ -3237,7 +3459,7 @@ end '__managed_mem_cursor_current'
 // lexer's hex-prefix peek returned garbage high bytes, splitting every `0x…`
 // literal into `0` + identifier). No empty-slot guard, mirroring
 // cursor_current: a zeroed managed slot reads back as null, same as current().
-function __managed_mem_cursor_peek(cursor MachineWord, ahead MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_cursor_peek(cursor MachineWord, ahead BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	let position = __Internals.loadIndirect(cursor + 8)
 	let length = __Internals.loadIndirect(cursor + 16)
 	let target = position + ahead
@@ -3262,7 +3484,7 @@ end '__managed_mem_cursor_peek'
 // fall through to qword (loadIndirect). Unsigned reads — typed sign-extension
 // is handled by the source-level field-load path with signed: true.
 // Throws indexOutOfBounds (wire 1) on OOB.
-function __managed_mem_get(self MachineWord, idx MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_get(self MachineWord, idx BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
@@ -3298,7 +3520,7 @@ end '__managed_mem_get'
 // capacity < 0 (rdata=-2 or slice=-1), materialize a private heap buffer
 // first via cow_check, then re-bounds-check against the post-COW capacity
 // (now == length). Throws indexOutOfBounds (wire 1) on OOB.
-function __managed_mem_set(self MachineWord, idx MachineWord, value MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_set(self MachineWord, idx BufferCoordinate, value MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
@@ -3354,7 +3576,7 @@ end '__managed_mem_set'
 // COW-aware: a slice/rdata-backed buffer (capacity < 0) is materialized private
 // first so the swap never mutates shared storage. Bounds: i,j ∈ [0, length).
 // Throws indexOutOfBounds (wire 1) on OOB.
-function __managed_mem_swap(self MachineWord, i MachineWord, j MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_swap(self MachineWord, i BufferCoordinate, j BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
 	if i < 0 'iLo'
 		throw __ManagedMemoryError.indexOutOfBounds
@@ -3413,7 +3635,7 @@ end '__managed_mem_swap'
 // [0, capacity); COW-materializes a shared buffer first. For a scalar element the
 // `value` IS the datum; for a managed/struct element it is the element pointer.
 // Throws indexOutOfBounds (wire 1) on OOB.
-function __managed_mem_raw_set(self MachineWord, idx MachineWord, value MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_raw_set(self MachineWord, idx BufferCoordinate, value MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
@@ -3487,7 +3709,7 @@ end '__managed_mem_cow_check'
 // (no-op when capacity >= 0), then reallocate via mm_realloc. Throws
 // invalidCapacity (wire 5) on newCap < capacity. mm_realloc is still in
 // runtime.std, so we cross the bridge via `__Internals.mmRealloc`.
-function __managed_mem_grow(self MachineWord, newCap MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_grow(self MachineWord, newCap BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	_ = __managed_mem_cow_check(self)
 	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
 	if newCap < capacity 'tooSmall'
@@ -3509,7 +3731,7 @@ end '__managed_mem_grow'
 
 // byteAt(self, i) — load a single byte at byte-offset `i` from the buffer.
 // Bound: 0 <= i < length * element_size. Throws invalidByteRange (wire 7).
-function __managed_mem_byte_at(self MachineWord, i MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_byte_at(self MachineWord, i BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
@@ -3526,7 +3748,7 @@ end '__managed_mem_byte_at'
 // setByte(self, i, value) — store a single byte at byte-offset `i`. Bound:
 // 0 <= i < length * element_size. COWs the buffer first so rdata-backed
 // MMs become writable. Throws invalidByteRange (wire 7).
-function __managed_mem_set_byte(self MachineWord, i MachineWord, value MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_set_byte(self MachineWord, i BufferCoordinate, value MachineWord) returns MachineWord throws __ManagedMemoryError
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
@@ -3569,7 +3791,7 @@ end '__managed_mem_set_byte'
 // over it re-adopts a pointer that is already owned elsewhere (or already freed),
 // and the teardown walk decrefs it a second time. This is the same
 // zero-the-vacated-slot rule as clear/shrink — see THE CAPACITY-SLOT INVARIANT.
-function __managed_mem_remove(self MachineWord, idx MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_remove(self MachineWord, idx BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
@@ -3643,7 +3865,7 @@ end '__managed_mem_remove'
 // right by one element. Bounds: idx >= 0, count >= 0, idx + count <=
 // capacity. Implemented as a descending byte-loop so overlapping copies
 // are safe. Throws shiftOutOfBounds (wire 6).
-function __managed_mem_shift_right(self MachineWord, idx MachineWord, count MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_shift_right(self MachineWord, idx BufferCoordinate, count BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'idxNeg'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'idxNeg'
@@ -3703,7 +3925,7 @@ end '__managed_mem_shift_right'
 // by one element. Bounds: idx >= 1 (so idx-1 is valid), count >= 0,
 // idx + count <= capacity. Ascending byte-loop for overlap safety.
 // Throws shiftOutOfBounds (wire 6).
-function __managed_mem_shift_left(self MachineWord, idx MachineWord, count MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_shift_left(self MachineWord, idx BufferCoordinate, count BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	if idx < 1 'idxLow'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'idxLow'
@@ -3821,7 +4043,7 @@ end '__managed_mem_append'
 // bytes in, and return the new MM pointer. The slice owns its buffer
 // (parent_ptr = -1), we don't hold a reference to the source. Bounds:
 // 0 <= start <= end <= length. Throws sliceOutOfBounds (wire 3).
-function __managed_mem_slice(self MachineWord, start MachineWord, endIdx MachineWord) returns MachineWord throws __ManagedMemoryError
+function __managed_mem_slice(self MachineWord, start BufferCoordinate, endIdx BufferCoordinate) returns MachineWord throws __ManagedMemoryError
 	if start < 0 'startNeg'
 		throw __ManagedMemoryError.sliceOutOfBounds
 	end 'startNeg'
@@ -3893,7 +4115,7 @@ end '__managed_mem_slice'
 // pointers into a walked buffer (`slice`, `append`) must take the matching +1
 // here. Callers gate on `element_destroy != 0`, so a raw/primitive buffer is
 // never walked (increfing a raw int would fault).
-function __managed_mem_retain_range(buffer MachineWord, count MachineWord, elemSize MachineWord)
+function __managed_mem_retain_range(buffer MachineWord, count BufferCoordinate, elemSize ElementStride)
 	var i = 0
 	while i < count 'eachElem'
 		let slot = __Internals.loadIndirect(buffer + i * elemSize)
@@ -3909,7 +4131,7 @@ end '__managed_mem_retain_range'
 // untagged buffer sized for `count` elements. Initializes length=0,
 // capacity=count, element_size=elemSize, parent_ptr=-1 (root).
 // Non-throwing (allocation-failure signalling is reserved for a future hook).
-function __managed_mem_create(count MachineWord, elemSize MachineWord) returns MachineWord
+function __managed_mem_create(count BufferCoordinate, elemSize ElementStride) returns MachineWord
 	return __managed_mem_create_managed(count, elemSize: elemSize, elementDestroy: 0)
 end '__managed_mem_create'
 
@@ -3920,7 +4142,7 @@ end '__managed_mem_create'
 // ROOT-branch element-walk decrefs each live element (cascading into the
 // element's own destructor). For raw/byte/primitive element buffers lowering
 // passes 0 (via __managed_mem_create), leaving the walk disabled.
-function __managed_mem_create_managed(count MachineWord, elemSize MachineWord, elementDestroy MachineWord) returns MachineWord
+function __managed_mem_create_managed(count BufferCoordinate, elemSize ElementStride, elementDestroy MachineWord) returns MachineWord
 	let destructor = __Internals.destructManagedMemoryAddr()
 
 	// Small-array inline-storage fast path. When the requested element bytes fit

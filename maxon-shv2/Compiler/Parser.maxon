@@ -31708,6 +31708,51 @@ export type Parser
 		return detached
 	end 'detachOpRefsAbove'
 
+	// ⭐⭐ **THE RANGE-CHECK SITES THE TRUE ARM RECORDED MOVE WITH ITS OPS — THE OTHER HALF OF THE
+	// RELOCATION ABOVE.** A site is a POSITION, not a value: it records the block control was in and the
+	// ordinal that block stood at (`RangeCheckSite`), because a narrowing int→int cast emits no op of its
+	// own and an ordinal is the only anchor there is. `detachOpRefsAbove` takes the arm's ops off
+	// `startBlock` and `parseTernaryExpression` re-attaches them inside `ternarytrue`, so a site the arm
+	// recorded describes a position that has ceased to exist — and `InsertRangeChecks` then splits
+	// `startBlock`, which is the CONDITION's block and runs unconditionally.
+	//
+	// ⛔ **BOTH HALVES OF THAT ARE MEASURED WRONG ANSWERS, not a theoretical hazard.**
+	//
+	//   * **The checked value is computed INSIDE the arm.** The cascade is emitted in `startBlock` while its
+	//     operand is defined in `ternarytrue`, which `startBlock` dominates — a use above its def. Liveness
+	//     propagates the operand out of the entry block and the register allocator refuses the function
+	//     outright: *"seedInUse: value N is live-in to block 0 but was never colored"*. This is what stopped
+	//     shv2 self-compiling once `stdlib/Array.maxon`'s `ElementIndex` narrowed and put a guard on every
+	//     computed array index — `Project.slotCallArgs` writes exactly this shape
+	//     (`argDefaultSlots.get(i - sourceCount)` in a conditional expression's true arm).
+	//   * **The checked value is computed EARLIER** (a parameter, or anything from a dominating block).
+	//     Nothing is out of order, so nothing complains — the guard simply runs on BOTH edges. MEASURED
+	//     against `maxon-sharp`: `(i as Small) if flag else 7` with `flag` FALSE and an out-of-range `i`
+	//     panicked *"Range check failed: value outside typealias 'Small'"* under shv2 where the bootstrap
+	//     prints `7` and exits 0. That is the very failure `RangeCheckSite.block` exists to prevent —
+	//     *"a cast in an unselected ternary arm / if-branch does not fire it"* — reintroduced one construct
+	//     over, by a relocation the site record had no way to hear about.
+	//
+	// The mapping is the relocation's own arithmetic and nothing more: an op that stood at position p of
+	// `startBlock` stands at `p - opShift` of the continuation. Only sites naming `fromBlock` move — a site
+	// the arm recorded in a block of its OWN (a nested ternary's branch, a short-circuit, a `try` fork)
+	// names that block, and those blocks are re-registered under the same ids, so they need nothing.
+	function rehomeArmRangeSites(fromBlock BlockId, toBlock BlockId, opShift BlockOpPos, firstSite ElementCount, endSite ElementCount)
+		for i in firstSite upto endSite 'eachArmSite'
+			var site = try self.rangeCheckSites.get(i) otherwise panic("rehomeArmRangeSites: rangeCheckSites.get OOB at {i}, inside the range the ternary's own marks bound")
+			if site.block != fromBlock 'recordedInAnInnerArmBlock'
+				continue
+			end 'recordedInAnInnerArmBlock'
+
+			if site.maxonOpPos < opShift 'aheadOfTheArm'
+				panic("rehomeArmRangeSites: a site recorded during the true arm names position {site.maxonOpPos} of block {fromBlock}, which already held {opShift} ops when the arm began — a block's ordinals only grow while the parser is inside it, so a site recorded after the mark cannot stand before it")
+			end 'aheadOfTheArm'
+
+			site.block = toBlock
+			site.maxonOpPos = site.maxonOpPos - opShift
+		end 'eachArmSite'
+	end 'rehomeArmRangeSites'
+
 	// The target's GRAMMAR, split from the state above so the flag brackets every path through it.
 	function parseTryTargetExpression(func IrFunction) returns ValueId throws ParseError
 		// P1.5-B2b: `try await p` — the awaited THROWING promise is the try target (the AWAIT is the throwing
@@ -43570,7 +43615,7 @@ export type Parser
 			return
 		end 'agrees'
 
-		throw ParseError.errorUnionWrongBindingCount("{String.from(member.name)}.{String.from(member.layout.caseNameAt(caseIndex))}", expected: declared as ElementCount, got: supplied, line: caseTok.line, column: caseTok.column)
+		throw ParseError.errorUnionWrongBindingCount("{String.from(member.name)}.{String.from(member.layout.caseNameAt(caseIndex))}", expected: declared, got: supplied, line: caseTok.line, column: caseTok.column)
 	end 'requireErrorUnionBindingCount'
 
 	// ⭐⭐ **RELEASE A BOXED MEMBER'S BOX ON THE PATH INTO A `default` ARM, WHICH NAMED NO MEMBER.** Returns
@@ -45317,6 +45362,13 @@ export type Parser
 
 		let markOpRefCount = block.opRefs.count()
 		let markBlockRefCount = func.blockRefs.count()
+		// ⭐ **AND THE RANGE-CHECK SITE HEIGHT AT THE SAME INSTANT (`rehomeArmRangeSites`).** A site records
+		// the block and ordinal a value is checked AT, and the relocation moves the arm's ops to a block that
+		// does not exist yet — so the arm's sites have to travel with them. The height is what separates the
+		// arm's sites from the CONDITION's: the condition parses into `startBlock` after the detach has
+		// truncated it, so it records sites at the very same ordinals, and a position test alone could not
+		// tell the two apart.
+		let markRangeSiteCount = self.rangeCheckSites.count()
 		// The pending-temporary height at the same instant as the op/block marks — everything enrolled above
 		// it while the value below parses belongs to what may turn out to be a ternary's TRUE ARM, and is
 		// released inside that arm rather than on the unconditional path (see `parseTernaryExpression`).
@@ -45337,7 +45389,7 @@ export type Parser
 		if self.at(TokenKind.if) 'ternary'
 			// The TRUE arm's blame, taken while its own tokens are still the ones the cursor last moved over
 			// — the condition and the false arm both clobber that answer, and both parse below.
-			return try self.parseTernaryExpression(func, trueValue: value, trueBlame: self.expressionImmutableBlame(armTok, valueStart: armStart, value: value), startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, preMoveMark: preMoveMark)
+			return try self.parseTernaryExpression(func, trueValue: value, trueBlame: self.expressionImmutableBlame(armTok, valueStart: armStart, value: value), startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markRangeSiteCount: markRangeSiteCount, markTempCount: markTempCount, markOwnedCount: markOwnedCount, preMoveMark: preMoveMark)
 		end 'ternary'
 
 		return value
@@ -45364,7 +45416,7 @@ export type Parser
 	// environment (the same merge hazard the match `gives` arm and the `otherwise` fallback are refused for),
 	// so it is rejected E3099 at the `if` — the shared anchor for both arms, where each reference compiler
 	// anchors it.
-	function parseTernaryExpression(func IrFunction, trueValue ValueId, trueBlame ByteArray, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, markTempCount TempDropMark, markOwnedCount BindingMark, preMoveMark MoveMark) returns ValueId throws ParseError
+	function parseTernaryExpression(func IrFunction, trueValue ValueId, trueBlame ByteArray, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, markRangeSiteCount ElementCount, markTempCount TempDropMark, markOwnedCount BindingMark, preMoveMark MoveMark) returns ValueId throws ParseError
 		let ifTok = try self.consume(TokenKind.if)
 
 		// The E3099 refusal for a capturing closure in EITHER arm — the route-specific prefix over the
@@ -45412,6 +45464,10 @@ export type Parser
 		// inner blocks (the `func.blockRefs` tail since the mark) go with them. The ops keep their
 		// `module.ops` indices; only the block that references them changes.
 		let relocatedOpRefs = self.detachOpRefsAbove(startBlock, mark: markOpRefCount)
+		// The arm's range-check sites are exactly the ones recorded since the mark, and that is true only
+		// HERE — the condition parses into `startBlock` a few lines down and records sites of its own, which
+		// stay put. Read the upper bound before it can move (`rehomeArmRangeSites`).
+		let armRangeSiteEnd = self.rangeCheckSites.count()
 
 		let savedTerminator = startBlock.terminator
 		let savedEdges = startBlock.branchEdges
@@ -45461,6 +45517,10 @@ export type Parser
 		trueBranch.opRefs = relocatedOpRefs
 		trueBranch.terminator = savedTerminator
 		trueBranch.branchEdges = savedEdges
+		// The ops have moved; so must every position recorded against them. Done here rather than at the
+		// detach because the destination block is what the arm's sites have to name, and it could not be
+		// minted any earlier — it has to sort after the condition's own blocks.
+		self.rehomeArmRangeSites(startBlock.id, toBlock: trueBranch.id, opShift: markOpRefCount, firstSite: markRangeSiteCount, endSite: armRangeSiteEnd)
 		for br in armInnerBlockRefs 'reattach'
 			func.blockRefs.push(br)
 		end 'reattach'
@@ -48133,60 +48193,42 @@ export type Parser
 			return IntegerSignedness.signed
 		end 'signedReading'
 
-		if not self.comparisonNeedsTheUnsignedReading(lhs, rhs: rhs) 'bothReadingsAgree'
+		if not self.operandReachesAboveSignedMax(lhs) and not self.operandReachesAboveSignedMax(rhs) 'bothReadingsAgree'
 			return IntegerSignedness.signed
 		end 'bothReadingsAgree'
 
 		return IntegerSignedness.unsigned
 	end 'comparisonSignedness'
 
-	// ⭐⭐ **CAN THE TWO READINGS ACTUALLY DISAGREE HERE?** — the clause that keeps this rule off every
-	// comparison whose answer it would not change, and the one that makes it SAFE against a declared
-	// range the program does not keep.
+	// ⭐⭐ **CAN THE TWO READINGS ACTUALLY DISAGREE HERE?** — the last gate `comparisonSignedness` asks,
+	// and the one that keeps this rule off every comparison whose answer it would not change. `jl` and
+	// `jb` order every value below `i64.max` identically, so unless SOME operand can hold a value above
+	// it the two readings agree everywhere the pair can reach and the signed instruction is already
+	// right. That is what keeps `int(0 to 100) < int(0 to 100)` — and thousands of goldens — on `jl`.
 	//
-	// ⚠⚠ **A DECLARED RANGE IS NOT A PROOF, AND THIS LANGUAGE'S OWN STANDARD LIBRARY RELIES ON THAT.**
-	// Nothing range-checks an argument at a ranged parameter in either compiler (`Array.isOutsideLiveRange`
-	// states it outright), so a value OUTSIDE its declared range arrives intact — and `stdlib` does not
-	// merely tolerate that, it BUILDS ON IT: `Map.findSlot` returns `-(insertIndex + 1)` to encode "not
-	// found", through a return type declared `TableSlotIndex = int(0 to u64.max)`. The test that decodes
-	// that sentinel is `if slotIndex >= 0`. Read unsigned, it is ALWAYS TRUE — every insert takes the
-	// found path with a negative index, and `Array.set` panics.
+	// ⚠ **THIS GATE BELIEVES THE DECLARATION, AND THE DECLARATION IS NOW TRUE.** It used to be preceded
+	// by a narrowing clause — a folded constant that FIT the signed domain vetoed the unsigned reading —
+	// because `stdlib` passed negative sentinels through types declared `int(0 to u64.max)`:
+	// `Map.findSlot` returned `-(insertIndex + 1)` through `TableSlotIndex` and `if slotIndex >= 0`
+	// decoded it, so the strict rule cost **81 measured behaviour failures** across a census of **72**
+	// against-zero comparisons in `stdlib/`. Its price was named rather than hidden: `wide > 100` kept
+	// the signed reading and was WRONG for a `wide` above `i64.max`.
 	//
-	// MEASURED without this clause: **81 behaviour failures** in the bootstrap's own suite, nearly all of
-	// them one cause — `map`, `array-slots`, `error-handling`, `string`… every cone that decodes a
-	// negative sentinel out of a non-negatively-declared type. A census found **72** comparisons against
-	// zero in `stdlib/` alone, and the ones that matter (`rawId < 0`, `owningP < 0`, `prior < 0`,
-	// `slotIndex >= 0`, `index < 0`) are all of exactly this shape.
+	// ⇒ **THE CLAUSE IS GONE BECAUSE ITS PREMISE IS.** Every stdlib alias that carried a sentinel was
+	// narrowed to a range it actually keeps — `findSlot` THROWS instead of encoding a miss, and the
+	// index/count aliases stop at `i64.max` — so a value outside one is refused at that alias's own door
+	// (`Range check failed: value outside typealias 'X'`) instead of arriving intact. The aliases still
+	// declared `int(0 to u64.max)` are rostered at `stdlib/Internals.maxon` — with the `grep` that keeps
+	// the roster honest — and none of them has a negative to decode. ⚠ The COUNT is deliberately not
+	// repeated here: this comment said "three" against a roster of four, which is the roster written
+	// twice and the copy over here going stale first. A sentinel is now written in a range that ADMITS it (`int(-1 to 4095)`), and
+	// this rule reads that admission as the operand itself refusing the unsigned reading — which is
+	// `comparisonOperandsAreUnsigned`'s job, one gate earlier, rather than a guess made from a constant.
 	//
-	// ⇒ **A FOLDED CONSTANT THAT FITS THE SIGNED DOMAIN IS EVIDENCE FOR THE SIGNED READING**, and the
-	// clause is stated that way rather than as a list of the idioms it protects. It is the same three-way
-	// distinction `IntegerValueDomain` already draws, one step further: a constant that FITS both readings
-	// does not merely fail to ask for the unsigned one — against an operand whose declared range reaches
-	// past `i64.max`, it is the only thing in the expression that says which reading the author meant.
-	//
-	// ⚠ **THE PRICE IS NAMED RATHER THAN HIDDEN: `wide > 100` KEEPS THE SIGNED READING and is WRONG for a
-	// `wide` above `i64.max`.** That is a real hole and it is the deliberate half of this trade — the
-	// alternative is believing a declaration the standard library contradicts on purpose. Closing it needs
-	// the ranges to become true (enforced parameters, and a signed `TableSlotIndex`), not a wider rule here.
-	function comparisonNeedsTheUnsignedReading(lhs ValueId, rhs ValueId) returns bool
-		if self.operandFitsTheSignedDomain(lhs) or self.operandFitsTheSignedDomain(rhs) 'aSignedConstantIsPresent'
-			return false
-		end 'aSignedConstantIsPresent'
-
-		return self.operandReachesAboveSignedMax(lhs) or self.operandReachesAboveSignedMax(rhs)
-	end 'comparisonNeedsTheUnsignedReading'
-
-	// Is this operand a FOLDED CONSTANT the signed domain holds? `u64.max` is excluded by name rather
-	// than by value: it is the one constant whose stored pattern is negative and whose value is not (see
-	// `unsignedMaxLiterals`), so a value test would answer this question about a number nobody wrote.
-	function operandFitsTheSignedDomain(value ValueId) returns bool
-		return self.constIsKnown(value) and not self.unsignedMaxLiterals.contains(value)
-	end 'operandFitsTheSignedDomain'
-
-	// Can this operand hold a value the SIGNED reading gets wrong — i.e. one above `i64.max`? Only two
-	// things can say so: a DECLARED range whose upper bound has wrapped past `i64.max`
-	// (`rangeIsUnsignedMaxUpper`, the same predicate the range declaration checks with), and the
-	// `u64.max` literal itself.
+	// Only two things can say a value above `i64.max` is reachable: a DECLARED range whose upper bound
+	// has wrapped past it (`rangeIsUnsignedMaxUpper`, the same predicate the range declaration checks
+	// with), and the `u64.max` literal itself (`unsignedMaxLiterals` — the one constant whose stored
+	// pattern is negative and whose value is not).
 	function operandReachesAboveSignedMax(value ValueId) returns bool
 		if self.unsignedMaxLiterals.contains(value) 'theUnsignedExtreme'
 			return true
@@ -49704,7 +49746,7 @@ export type Parser
 
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: ByteStringElementSize, elementCount: bytes.count() as ParsedInt, bytes: bytes), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: ByteStringElementSize, elementCount: bytes.count(), bytes: bytes), range: range)
 		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
 		return result
 	end 'emitByteStringLiteralValue'
@@ -62594,6 +62636,7 @@ export type Parser
 		// it); pop/remove MOVE the element OUT (the runtime nulls its slot), so their result is OWNED (P1.7 slice 3).
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
+			self.recordArmServedIndexRangeCheck(giid, member: methodTok.value, value: index, anchor: methodTok, bufferSurface: isManagedMemory)
 			return self.emitContainerElementAccessor(func, callee: ManagedGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 		// ⭐⭐ **ONE SPELLING, TWO ENTRIES — THE BUFFER'S `set` IS BOUNDED BY CAPACITY AND THE `Array`'s BY LENGTH
@@ -62655,7 +62698,7 @@ export type Parser
 				setCallee = ManagedMemSetName
 			end 'capacityBoundedSetter'
 
-			return try self.parseArraySet(func, arr: arr, giid: giid, callee: setCallee, methodTok: methodTok, secondArgLabelled: not isManagedMemory, range: range)
+			return try self.parseArraySet(func, arr: arr, giid: giid, callee: setCallee, methodTok: methodTok, bufferSurface: isManagedMemory, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
@@ -62811,6 +62854,7 @@ export type Parser
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireArrayResizeHasZeroElement(giid, methodTok: methodTok)
 			let n = try self.parseArrayOneArg(func)
+			self.recordArmServedIndexRangeCheck(giid, member: methodTok.value, value: n, anchor: methodTok, bufferSurface: isManagedMemory)
 			return self.emitArrayVoidCall(ManagedResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
 		// ⭐ **`clear` IS BUFFER-SURFACE ONLY SINCE ARR4**, for `remove`'s reason above and by its gate. The
@@ -64716,6 +64760,53 @@ export type Parser
 		return arg
 	end 'parseArrayOneArg'
 
+	// ⭐⭐ **AN ARM-SERVED MEMBER'S DECLARED PARAMETER RANGE IS ENFORCED AT THE CALL, BECAUSE THERE IS NO
+	// CALLEE ENTRY TO ENFORCE IT AT.**
+	//
+	// `RangeCheckGuard` splits the call-argument rule between two places: the caller reports a folded literal
+	// (`recordConstantArgRangeChecks`) and the CALLEE'S ENTRY guards everything else, once per narrowed
+	// parameter, in front of every caller (A1f, `RangeCheckParamSite`, `InsertRangeChecks.guardRangedParams`).
+	// A member this compiler serves from an ARM has NEITHER half available: no `call` op is emitted, so the
+	// caller-side recorder is never asked, and no function is entered, so there is no entry for the guard to
+	// stand at. The rule was therefore owed by nobody at all — not relaxed, just unclaimed.
+	//
+	// ⚠ **MEASURED, AND IT WAS A SILENT CROSS-COMPILER DIVERGENCE RATHER THAN A MISSING DIAGNOSTIC.** With
+	// `stdlib/Array.maxon`'s `ElementIndex`/`ElementCount` narrowed from the full `int(0 to u64.max)` to
+	// `int(0 to i64.max)`, the bootstrap — which serves every one of these from the corpus body — refuses
+	// `arr.get(-1)` with E3005 and panics `Range check failed` on a laundered `-1`. shv2 compiled the same
+	// programs and threw a catchable `indexOutOfBounds` instead, on `get`, `set` and `resize`: exactly the
+	// three ARRAY-surface members still served by an arm. Every other index-taking member (`insert`,
+	// `remove`, `slice`, `reserve`, `truncate`, `growFilled`) is corpus-served and was already guarded,
+	// which is why the hole showed on three members and not on the surface as a whole.
+	//
+	// ⭐ **IT READS THE RANGE OUT OF THE CORPUS DECLARATION, SO THE BOUND IS WRITTEN ONCE** — in
+	// `stdlib/Array.maxon`, the same declaration the bootstrap enforces from. An arm naming `ElementIndex`
+	// itself would be a second copy of the bound, in the one compiler that does not run the declaration.
+	// It is also why a program's OWN array conformer (ARR5b) is checked against ITS declaration and not the
+	// corpus's: `arrayReceiverDeclaredName` names whichever one this receiver was built from.
+	//
+	// ⭐ **AND IT IS THE ORDINARY ALIAS-NAMED SITE** — the same door the `as` cast, the field store and the
+	// array ELEMENT record (`requireContainerElementType`), so `InsertRangeChecks` raises the same E3005 for
+	// a foldable value and emits the same cascade for everything else, from one decider (`guardVerdict`).
+	//
+	// ⚠ **THE BUFFER SURFACE IS EXEMPT, AND THAT IS STATED HERE RATHER THAN AT THE THREE CALLERS.** A
+	// `__ManagedMemory` member is a compiler BUILTIN whose index is a machine word and not a stdlib alias;
+	// `specs-shv2/managed-memory-methods.md` pins that `mm.set(-1, …)` still throws, and
+	// `specs/managed-memory-methods.md` pins the same on the reference. One statement of the exemption
+	// cannot disagree with itself.
+	//
+	// ⚠ **THE ALIAS IS RESOLVED IN THE DECLARING FILE AND THE OVERLOAD RULE LIVES WITH IT** —
+	// `ProgramSignatures.firstParamAliasOf`, because both facts are about the DECLARATION and this frame
+	// holds only the call. The index or count is that member's FIRST declared parameter at all three arms.
+	function recordArmServedIndexRangeCheck(giid GenericInstanceId, member ByteArray, value ValueId, anchor Token, bufferSurface bool)
+		if bufferSurface 'aMachineWordNotAStdlibAlias'
+			return
+		end 'aMachineWordNotAStdlibAlias'
+
+		let declared = self.signatures.firstParamAliasOf(qualifiedMethodName(self.arrayReceiverDeclaredName(giid), methodName: member))
+		self.recordRangeCheckSite(value, targetAlias: declared, line: anchor.line, column: anchor.column)
+	end 'recordArmServedIndexRangeCheck'
+
 	// The ` , <label> : ` separating one of a builtin method's positional arguments from the next —
 	// `set`/`insert`'s `value:`, `slice`'s `endIndex:`, `sendFrom`'s `offset:` and `length:`. ONE home for that
 	// shape, so a builtin method names its label and inherits the same "must be labelled `<label>:`"
@@ -64785,18 +64876,24 @@ export type Parser
 	// ⚠ **AND THE SPELLINGS IT SERVES ARE NOW ONE CALL SITE (W190).** `List.insert` went with the list's
 	// surface at W153 and `Vector.set` with the sized container's here, so what is left is
 	// `dispatchArrayMethod`'s single `set` arm serving BOTH of its receivers — which is also what keeps
-	// `secondArgLabelled` live rather than a branch nothing can reach: it is `not isManagedMemory`, `true` for
-	// the array surface's `set(i, value: x)` and `false` for the buffer's positional one.
+	// `bufferSurface` live rather than a branch nothing can reach: it is `isManagedMemory`, `false` for the
+	// array surface's `set(i, value: x)` and `true` for the buffer's positional one.
+	//
+	// ⭐ **IT IS THE SURFACE ITSELF THAT ARRIVES, NOT A PARAPHRASE OF IT.** The parameter used to be
+	// `secondArgLabelled: not isManagedMemory` — one fact under a second name, which was fine while the label
+	// rule was the only thing that read it. It is not: the index's DECLARED RANGE is exempt on the buffer for
+	// a different reason (a builtin's index is a machine word), and two paraphrases of one surface answer are
+	// two places for it to drift. `parseArrayAppend` already spells it this way.
 	//
 	// ⚠ **EVERY SPELLING OWES THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT.** `moveElementIntoContainer`
 	// below runs BEFORE the call is emitted, so a callee that refuses owns the element and must destroy it —
 	// `ManagedMemoryRuntime.emitDestroyRejectedElement`, which every entry reached through here calls from its
 	// reject block. Shipping a fourth spelling without it is a leak, measured twice now (R4.6 on `__managed_set`,
 	// and again on `__list_insert` in the review of spec-port `list`).
-	function parseArraySet(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, secondArgLabelled bool, range SourceRange) returns ValueId throws ParseError
+	function parseArraySet(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, bufferSurface bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
-		try self.consumeArrayArgLabel(ArrayValueLabel, required: secondArgLabelled)
+		try self.consumeArrayArgLabel(ArrayValueLabel, required: not bufferSurface)
 		// The value is a managed-element STORE, so it is handled exactly as `push` is —
 		// `moveElementIntoContainer` promotes a borrowed String, co-owns an owned value a live binding keeps,
 		// adopts an owned temporary, and co-owns a borrowed aggregate. `__managed_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
@@ -64806,6 +64903,12 @@ export type Parser
 		let checked = try self.requireContainerElementType(func, giid: giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
+
+		// The INDEX's declared range, recorded here and not beside the `parseExpression` that produced it:
+		// `recordRangeCheckSite` anchors on the ordinal the NEXT op takes, so recording it now puts the
+		// cascade in front of the store rather than into the middle of the value's own evaluation — the
+		// position the callee's entry guard would have held. See `recordArmServedIndexRangeCheck`.
+		self.recordArmServedIndexRangeCheck(giid, member: methodTok.value, value: index, anchor: methodTok, bufferSurface: bufferSurface)
 
 		// ⭐⭐ **THE THROWING `set` IS VOID AND ITS TAG MUST SAY SO — the guard the void mutators call cannot
 		// reach here, and the check that CAN reads only this tag.** A `try` target is parsed with

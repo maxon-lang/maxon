@@ -8,7 +8,10 @@ public enum MapError implements Error
 	keyAlreadyExists
 end 'MapError'
 
-typealias EntryCount = int(0 to u64.max)
+// Occupied entries. An entry needs a slot, so this is bounded by the table's capacity and carries the
+// capacity's bound for the reason stated once on `TableCapacity`: 2^62 is the last capacity a doubling
+// from 16 can mint.
+typealias EntryCount = int(0 to 4611686018427387904)
 
 // The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Set` (W93): `SlotState`,
 // `TableSlotIndex`, `TableCapacity` and the `findNextOccupied` scan both iterators advance through.
@@ -97,11 +100,15 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	// Internal: write a key-value pair into the given slot. `hash` is the key's
 	// precomputed hash (from findSlot), cached in the parallel `hashes` array so
 	// probes can skip the full key.equals() when hashes differ.
+	//
+	// The panics name "the probe" rather than `findSlot` because `grow` also calls this, with an
+	// index from its own inline empty-slot scan; both probes mask with `capacity - 1`, so both
+	// hand over an index in [0, capacity).
 	function insertAtSlot(slotIndex TableSlotIndex, key Key, value Value, hash HashValue)
-		try keys.set(slotIndex, value: key) otherwise panic("Map.insertAtSlot: keys.set OOB — slot from findSlot is always in-bounds")
-		try values.set(slotIndex, value: value) otherwise panic("Map.insertAtSlot: values.set OOB — slot from findSlot is always in-bounds")
-		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Map.insertAtSlot: states.set OOB — slot from findSlot is always in-bounds")
-		try hashes.set(slotIndex, value: hash) otherwise panic("Map.insertAtSlot: hashes.set OOB — slot from findSlot is always in-bounds")
+		try keys.set(slotIndex, value: key) otherwise panic("Map.insertAtSlot: keys.set OOB — slot from the probe is always in-bounds")
+		try values.set(slotIndex, value: value) otherwise panic("Map.insertAtSlot: values.set OOB — slot from the probe is always in-bounds")
+		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Map.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
+		try hashes.set(slotIndex, value: hash) otherwise panic("Map.insertAtSlot: hashes.set OOB — slot from the probe is always in-bounds")
 		count = count + 1
 	end 'insertAtSlot'
 
@@ -112,13 +119,12 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		ensureCapacity()
 
 		let hash = key.hash()
-		let slotIndex = findSlot(key, hash: hash)
-		if slotIndex >= 0 'found'
+		let slotIndex = try findSlot(key, hash: hash) otherwise panic("Map.insert: findSlot named no slot — ensureCapacity established capacity > 0, which is the only condition findSlot throws on")
+		if slotHoldsKey(slotIndex) 'found'
 			throw MapError.keyAlreadyExists
 		end 'found'
 
-		let insertIndex = -(slotIndex + 1)
-		insertAtSlot(insertIndex, key: key, value: value, hash: hash)
+		insertAtSlot(slotIndex, key: key, value: value, hash: hash)
 	end 'insert'
 
 	/// Insert or update a key-value pair in the map
@@ -128,36 +134,38 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		ensureCapacity()
 
 		let hash = key.hash()
-		let slotIndex = findSlot(key, hash: hash)
-		if slotIndex >= 0 'found'
+		let slotIndex = try findSlot(key, hash: hash) otherwise panic("Map.upsert: findSlot named no slot — ensureCapacity established capacity > 0, which is the only condition findSlot throws on")
+		if slotHoldsKey(slotIndex) 'found'
 			try values.set(slotIndex, value: value) otherwise panic("Map.upsert: values.set OOB — slot from findSlot is always in-bounds")
 			return
 		end 'found'
 
-		let insertIndex = -(slotIndex + 1)
-		insertAtSlot(insertIndex, key: key, value: value, hash: hash)
+		insertAtSlot(slotIndex, key: key, value: value, hash: hash)
 	end 'upsert'
 
 	/// Get the value for a key, throws if not found
 	public function get(key Key) returns Value throws MapError
-		let slotIndex = findSlot(key, hash: key.hash())
-		if slotIndex >= 0 'found'
-			if let v = try values.get(slotIndex) 'get_value'
-				return v
-			end 'get_value'
+		// findSlot's own `keyNotFound` (the empty table) is exactly this function's answer, so it
+		// propagates rather than being caught and re-thrown.
+		let slotIndex = try findSlot(key, hash: key.hash())
+		if slotHoldsKey(slotIndex) 'found'
+			return try values.get(slotIndex) otherwise panic("Map.get: values.get OOB — slot from findSlot is always in-bounds")
 		end 'found'
+
 		throw MapError.keyNotFound
 	end 'get'
 
 	/// Check if key exists in the map
 	public function contains(key Key) returns bool
-		return findSlot(key, hash: key.hash()) >= 0
+		let slotIndex = try findSlot(key, hash: key.hash()) otherwise return false
+
+		return slotHoldsKey(slotIndex)
 	end 'contains'
 
 	/// Remove key from map, returns true if key was present
 	public function remove(key Key) returns bool
-		let slotIndex = findSlot(key, hash: key.hash())
-		if slotIndex >= 0 'found'
+		let slotIndex = try findSlot(key, hash: key.hash()) otherwise return false
+		if slotHoldsKey(slotIndex) 'found'
 			// Only the Deleted state marks the slot as removed. The cached hash is
 			// left as-is: the hash-guard only runs inside the Occupied branch of
 			// findSlot, so a tombstone's stale hash can never cause a false match.
@@ -165,6 +173,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			count = count - 1
 			return true
 		end 'found'
+
 		return false
 	end 'remove'
 
@@ -186,12 +195,18 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 	// Internal: find the slot for a key using linear probing.
 	// `hash` is the key's precomputed hash (computed once by the caller).
-	// Returns the index of the key if found (>= 0).
-	// Returns -(insertIndex + 1) if the key is not found, encoding the best
-	// slot for insertion as a negative value. Returns -1 if the map is empty.
-	function findSlot(key Key, hash HashValue) returns TableSlotIndex
+	//
+	// Returns a REAL slot index, always in [0, capacity): EITHER the slot holding the key OR
+	// the vacancy an insert would take. Callers tell those two apart by re-reading the slot's
+	// state with `slotHoldsKey`, which is exact because a returned vacancy is an Empty slot or
+	// the first tombstone on the probe path — never an Occupied one.
+	//
+	// Throws `MapError.keyNotFound` only when there is no slot to NAME at all, which is the
+	// empty table. "This key is in no slot" is literally true of an empty map, so the existing
+	// error is the right one and no new case is minted.
+	function findSlot(key Key, hash HashValue) returns TableSlotIndex throws MapError
 		if capacity == 0 'empty'
-			return -1
+			throw MapError.keyNotFound
 		end 'empty'
 
 		// capacity is always a power of two (starts at 16, only ever doubled), so
@@ -201,6 +216,13 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		let mask = capacity - 1
 		var index = spreadHash(hash) and mask
 
+		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
+		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
+		// SIGNED. Annotating it `TableSlotIndex` is now a COMPILE ERROR rather than a latent hazard:
+		// that alias is non-negative, so the `-1` initializer is an out-of-range constant (E3005).
+		// Neither `return` below hands this binding back un-tested — each sits inside a `>= 0` test,
+		// so the value crossing the narrowed return door is always a real slot. `Set.maxon` carries
+		// the identical local for the identical reason.
 		var firstDeleted = -1
 		var probes = 0
 
@@ -213,12 +235,14 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				Deleted gives false
 			end 'se1'
 			if isEmpty 'empty_slot'
-				// Key not found - return best insertion index encoded as negative
+				// Key not found — hand back the vacancy an insert should take: the first tombstone
+				// on the probe path if there was one, else this empty slot.
 				var bestIndex = index
 				if firstDeleted >= 0 'use_deleted'
 					bestIndex = firstDeleted
 				end 'use_deleted'
-				return -(bestIndex + 1)
+
+				return bestIndex
 			end 'empty_slot'
 
 			let isDeleted = match state 'sd1'
@@ -253,12 +277,30 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			probes = probes + 1
 		end 'probe'
 
-		// All slots probed without finding key or empty slot
+		// All slots probed without finding the key or an empty slot. A tombstone is still a vacancy
+		// an insert can take, so it is a perfectly good answer.
 		if firstDeleted >= 0 'use_deleted_fallback'
-			return -(firstDeleted + 1)
+			return firstDeleted
 		end 'use_deleted_fallback'
-		return -1
+
+		// Falling through means every slot is Occupied — count == capacity — which `ensureCapacity`
+		// forbids by growing at 75%. That is a broken invariant, not a runtime condition a caller
+		// could handle, so it panics rather than throwing.
+		panic("Map.findSlot: probed every slot and found neither the key nor a vacancy — the 75% load-factor invariant is broken")
 	end 'findSlot'
+
+	// Internal: does this slot hold a live entry? This is how `findSlot`'s callers tell a hit from
+	// a miss, and it is exact because the vacancy findSlot hands back is always Empty or a
+	// tombstone. It reads the same `states` cache line the probe just touched.
+	function slotHoldsKey(slotIndex TableSlotIndex) returns bool
+		let state = try states.get(slotIndex) otherwise panic("Map.slotHoldsKey: states.get OOB — slot from findSlot is always in-bounds")
+
+		return match state 'holds'
+			Occupied gives true
+			Empty gives false
+			Deleted gives false
+		end 'holds'
+	end 'slotHoldsKey'
 
 	// Internal: grow the table when load factor exceeds threshold
 	function grow()

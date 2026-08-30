@@ -3824,7 +3824,7 @@ type Inner uses P
 	let s as String
 
 	export function tag() returns Integer
-		return s.count() as Integer
+		return s.count()
 	end 'tag'
 
 	static function create(p P, s String) returns Self
@@ -3866,7 +3866,7 @@ instance: the argument door alone decides it.
 typealias Integer = int(i64.min to i64.max)
 
 function takeText(s String) returns Integer
-	return s.count() as Integer
+	return s.count()
 end 'takeText'
 
 type Outer uses T
@@ -3941,7 +3941,7 @@ type Inner uses P
 	let s as String
 
 	export function tag() returns Integer
-		return s.count() as Integer
+		return s.count()
 	end 'tag'
 
 	static function create(p P, s String) returns Self
@@ -4027,7 +4027,7 @@ end 'Message'
 function takeMsg(m Message) returns Integer
 	return match m 'm'
 		silent gives 1
-		text(b) gives b.count() as Integer
+		text(b) gives b.count()
 	end 'm'
 end 'takeMsg'
 

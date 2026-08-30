@@ -16,7 +16,9 @@
 typealias BreakProperty = int(0 to 13)
 
 // ByteCount, GraphemeCount, BytePos exported by stdlib/String.maxon.
-typealias RegionalIndicatorCount = int(0 to u64.max)
+// How many regional-indicator codepoints run consecutively — a count of codepoints inside one
+// string, so `String.ByteCount`'s bound holds: a signed machine word.
+typealias RegionalIndicatorCount = int(0 to i64.max)
 
 typealias Utf8Byte = int(0 to u8.max)
 
@@ -407,17 +409,19 @@ end 'byteIndexToGraphemeIndex'
 /// Returns the byte position after advancing by `count` graphemes
 public function graphemeOffsetToBytePos(s String, startBytePos BytePos, count GraphemeCount) returns BytePos
 	let len = s.byteLength()
-	// Advancing `count` graphemes is advancing `count` bytes, so the walk collapses to arithmetic —
-	// but only for the inputs that arithmetic can represent, and the WALK stays the definition of
-	// what the others mean. `count` reaching this from `slice(start, length:)` is caller-supplied,
-	// and `GraphemeCount` spans past i64.max where the comparisons this shortcut needs stop behaving
-	// (`u64.max` orders as -1); `count > 0` is what declines those, and declining hands them to the
-	// walk, which reaches the same answer it always did. An optimisation that changes the answer for
-	// an edge case is not one.
+	// Advancing `count` graphemes is advancing `count` bytes, so the walk collapses to arithmetic.
+	//
+	// ⚠ This used to carry a third conjunct, `count > 0`, whose only job was to decline counts past
+	// `i64.max` — back when `GraphemeCount` was the full `int(0 to u64.max)` and such a count ordered
+	// as negative, breaking the comparisons the shortcut needs. `GraphemeCount` is now
+	// `int(0 to i64.max)`, so the DOOR refuses those before the body sees them and the conjunct can
+	// no longer be false for any value that arrives. `count == 0` — the only input it still excluded —
+	// reaches `startBytePos + 0` here and reached `startBytePos` through the walk before, so dropping
+	// it is behaviour-identical.
 	//
 	// Inside the guard the arithmetic is safe: `startBytePos < len` makes the subtraction positive,
 	// and the sum is only formed when it is already known to land below `len`.
-	if s.hasSingleByteGraphemes() and count > 0 and startBytePos < len 'oneByteEach'
+	if s.hasSingleByteGraphemes() and startBytePos < len 'oneByteEach'
 		if count < len - startBytePos 'inRange'
 			return startBytePos + count
 		end 'inRange'

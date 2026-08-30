@@ -1330,7 +1330,7 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength() as Integer
+		text(s) gives s.byteLength()
 	end 'g'
 end 'grab'
 
@@ -1338,7 +1338,7 @@ function main() returns ExitCode
 	let m = M.text("an owned payload string, long enough to be a real heap allocation")
 	var n = 0 as Integer
 	match m 'k'
-		text(s) then n = s.byteLength() as Integer and fallthrough
+		text(s) then n = s.byteLength() and fallthrough
 		silent then n = n + grab(m)
 	end 'k'
 	print("n={n}")
@@ -1586,7 +1586,7 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength() as Integer
+		text(s) gives s.byteLength()
 	end 'g'
 end 'grab'
 
@@ -1624,7 +1624,7 @@ function main() returns ExitCode
 		silent gives 0 as Integer
 		text(s) gives match m 'again'
 			silent gives 1 as Integer
-			text(t) gives t.byteLength() as Integer
+			text(t) gives t.byteLength()
 		end 'again'
 	end 'k'
 	print("r={r}")
@@ -1653,14 +1653,14 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength() as Integer
+		text(s) gives s.byteLength()
 	end 'g'
 end 'grab'
 
 function main() returns ExitCode
 	let m = M.text("an owned payload string, long enough to be a real heap allocation")
 	let r = match m 'k'
-		text(s) gives s.byteLength() as Integer
+		text(s) gives s.byteLength()
 		silent gives grab(m)
 	end 'k'
 	print("r={r}")
@@ -1692,7 +1692,7 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength() as Integer
+		text(s) gives s.byteLength()
 	end 'g'
 end 'grab'
 
@@ -1701,7 +1701,7 @@ function main() returns ExitCode
 	let r = match m 'outer'
 		text gives match m 'inner'
 			silent gives 0 as Integer
-			text(t) gives t.byteLength() as Integer
+			text(t) gives t.byteLength()
 		end 'inner'
 		silent gives 0 as Integer
 	end 'outer'
@@ -1862,7 +1862,7 @@ function main() returns ExitCode
 	while i < 200 'spin'
 		match h.m 'k'
 			silent then n = n + 1
-			text(s) then n = n + s.byteLength() as Integer
+			text(s) then n = n + s.byteLength()
 		end 'k'
 		i = i + 1
 	end 'spin'
@@ -2167,7 +2167,7 @@ end 'Expr'
 
 function tyLen(ty Ty) returns Integer
 	return match ty 'l'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'l'
 end 'tyLen'
@@ -2311,7 +2311,7 @@ end 'Holder'
 
 function tyLen(ty Ty) returns Integer
 	return match ty 'l'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'l'
 end 'tyLen'
@@ -2320,7 +2320,7 @@ function main() returns ExitCode
 	let h = Holder.create(Ty.concrete("a co-owned payload string, long enough to be a real heap allocation"))
 	let borrowed = h.ty
 	let first = match borrowed 'b'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'b'
 	let second = tyLen(h.ty)
@@ -2359,7 +2359,7 @@ end 'Expr'
 function steal(e Expr) returns Integer
 	return match e 'i'
 		direct(ty) gives match ty 't'
-			concrete(name) gives name.byteLength() as Integer
+			concrete(name) gives name.byteLength()
 			stringy gives 0
 		end 't'
 		unresolved gives 99
@@ -2371,7 +2371,7 @@ function main() returns ExitCode
 	let stolen = steal(e)
 	let again = match e 'k'
 		direct(ty) gives match ty 'u'
-			concrete(name) gives name.byteLength() as Integer
+			concrete(name) gives name.byteLength()
 			stringy gives 0
 		end 'u'
 		unresolved gives 99
@@ -2410,7 +2410,7 @@ end 'Expr'
 
 function tyLen(ty Ty) returns Integer
 	return match ty 'l'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'l'
 end 'tyLen'
@@ -2459,7 +2459,7 @@ end 'Ty'
 
 function tyLen(ty Ty) returns Integer
 	return match ty 'l'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'l'
 end 'tyLen'
@@ -2469,7 +2469,7 @@ function main() returns ExitCode
 	arr.push(Ty.concrete("an array element payload, long enough to be a real heap allocation"))
 	var borrowed = try arr.get(0) otherwise panic("get failed")
 	let first = match borrowed 'b'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'b'
 	let second = tyLen(try arr.get(0) otherwise panic("get failed"))
@@ -2522,7 +2522,7 @@ end 'boom'
 
 function whyLen(e Err) returns Integer
 	return match e 'l'
-		bad(why) gives why.byteLength() as Integer
+		bad(why) gives why.byteLength()
 	end 'l'
 end 'whyLen'
 
@@ -2570,7 +2570,7 @@ end 'getTy'
 
 function tyLen(ty Ty) returns Integer
 	return match ty 'l'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'l'
 end 'tyLen'
@@ -2579,7 +2579,7 @@ function main() returns ExitCode
 	let h = Holder.create(Ty.concrete("a returned co-owned payload, long enough for the heap"))
 	let t = getTy(h)
 	let first = match t 'b'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 		stringy gives 0
 	end 'b'
 	let second = tyLen(h.ty)
@@ -2621,7 +2621,7 @@ end 'boom'
 
 function whyLen(e Err) returns Integer
 	return match e 'l'
-		bad(why) gives why.byteLength() as Integer
+		bad(why) gives why.byteLength()
 	end 'l'
 end 'whyLen'
 
@@ -2630,7 +2630,7 @@ function main() returns ExitCode
 	var first = 0 as Integer
 	try boom(h) otherwise (e) 'caught'
 		first = match e 'm'
-			bad(why) gives why.byteLength() as Integer
+			bad(why) gives why.byteLength()
 		end 'm'
 	end 'caught'
 	let second = whyLen(h.e)
@@ -2669,7 +2669,7 @@ function probe(inner Inner) returns Integer
 	let w = Wrap.held(inner)
 	return match w 'o'
 		held(i) gives match i 'n'
-			text(body) gives body.byteLength() as Integer
+			text(body) gives body.byteLength()
 		end 'n'
 	end 'o'
 end 'probe'
@@ -2678,7 +2678,7 @@ function main() returns ExitCode
 	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
 	let n = probe(inner)
 	let again = match inner 'k'
-		text(body) gives body.byteLength() as Integer
+		text(body) gives body.byteLength()
 	end 'k'
 	print("n={n} again={again}")
 	return 0
@@ -2709,7 +2709,7 @@ end 'Wrap'
 
 function innerLen(i Inner) returns Integer
 	return match i 'n'
-		text(body) gives body.byteLength() as Integer
+		text(body) gives body.byteLength()
 	end 'n'
 end 'innerLen'
 
@@ -2724,7 +2724,7 @@ function main() returns ExitCode
 	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
 	let n = probe(inner)
 	let again = match inner 'k'
-		text(body) gives body.byteLength() as Integer
+		text(body) gives body.byteLength()
 	end 'k'
 	print("n={n} again={again}")
 	return 0
@@ -2767,7 +2767,7 @@ function probe() returns Integer
 	let w = Wrap.held(Inner.text("a freshly built payload inside a sole box, heap-long"))
 	return match w 'o'
 		held(i) gives match i 'n'
-			text(body) gives body.byteLength() as Integer
+			text(body) gives body.byteLength()
 		end 'n'
 	end 'o'
 end 'probe'
@@ -2803,7 +2803,7 @@ function steal(ty Ty) returns Integer
 	list.append(ty)
 	let got = try list.removeFirst() otherwise panic("removeFirst failed")
 	return match got 'm'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 	end 'm'
 end 'steal'
 
@@ -2811,7 +2811,7 @@ function main() returns ExitCode
 	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
 	let n = steal(ty)
 	let again = match ty 'k'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 	end 'k'
 	print("n={n} again={again}")
 	return 0
@@ -2843,7 +2843,7 @@ function steal(ty Ty) returns Integer
 	arr.push(ty)
 	let got = try arr.remove(0) otherwise panic("remove failed")
 	return match got 'm'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 	end 'm'
 end 'steal'
 
@@ -2851,7 +2851,7 @@ function main() returns ExitCode
 	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
 	let n = steal(ty)
 	let again = match ty 'k'
-		concrete(name) gives name.byteLength() as Integer
+		concrete(name) gives name.byteLength()
 	end 'k'
 	print("n={n} again={again}")
 	return 0

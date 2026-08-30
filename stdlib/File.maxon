@@ -20,8 +20,12 @@ public enum FileRenameError implements Error
 	failed
 end 'FileRenameError'
 
-public typealias FileSize = int(0 to u64.max)
-public typealias Timestamp = int(0 to u64.max)
+/// A size in bytes, and a moment in whole Unix seconds. Both come out of `__ManagedFile.statField`,
+/// which answers an i64 on every platform: a size is `off_t`/`GetFileSizeEx` and a timestamp has
+/// already been converted from FILETIME's 100 ns ticks to seconds since 1970 by the runtime. Neither
+/// can present a value above `i64.max`, so the upper bound costs nothing and buys the doors a check.
+public typealias FileSize = int(0 to i64.max)
+public typealias Timestamp = int(0 to i64.max)
 
 /// Error for file info operations
 public enum FileInfoError implements Error

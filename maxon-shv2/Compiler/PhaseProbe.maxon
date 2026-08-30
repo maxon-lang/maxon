@@ -35,10 +35,33 @@
 // volume of heap bytes beside it, which is `stdlib/String.maxon`'s `ByteCount`. A count of
 // bytes is one fact, so it has one declaration; this file used to carry a second identical
 // one, and `Targets/Shared/BinaryHelpers.maxon` a third.
+//
+// ⚠ ITS BOUND MUST TRACK `ByteCount`'s, AND THE SELF-COMPILE IS WHAT SAYS SO. A ranged alias
+// mints no nominal identity, so `AllocCountArray` and `ByteCountArray` are THE SAME TYPE exactly
+// while these two ranges agree — and `rungCounts` serves allocations, bytes and CPU through one
+// of them. Narrowing one and not the other split the two array types apart, and
+// `ScaleHistory.memoryRowFrom` stopped compiling with `expected Array with
+// int(0 to 9223372036854775807), got AllocCountArray`.
+//
+// Both stay FULL-RANGE UNSIGNED, deliberately. A cumulative counter read out of the allocator is
+// unsigned by nature and NOTHING HOSTILE ARRIVES AT IT: every value is minted by the runtime's own
+// `__Builtins.mm*` counters, never passed in by a caller, so there is no door here for a guard to
+// stand at and no computed negative to catch. That is the test — not "can it be negative?" but
+// "can a value this type did not mint reach it?". Contrast `Array`'s `ElementIndex`, which is
+// equally never-negative in principle and is NARROWED anyway, because `arr.get(-1)` is a thing a
+// user program can write and `-1`'s bit pattern is a valid `u64`.
 export typealias AllocCount = int(0 to u64.max)
 
+// The volume of heap bytes, beside the allocation count and minted the same way. This file used to
+// spell it with `stdlib/String.maxon`'s `ByteCount` on a "a count of bytes is one fact, so it has one
+// declaration" argument. ⚠ THAT MERGED TWO FACTS WITH OPPOSITE THREAT MODELS. A String's byte count
+// is a PUBLIC API DOOR — `reserve(-1)` and `byteAt(-1)` are things a user program can write, so that
+// one is narrowed to `i64.max` and refuses them. This one is a cumulative counter no caller can reach.
+// Sharing a declaration forced one bound on both, and the self-compile is where it surfaced.
+typealias HeapByteCount = int(0 to u64.max)
+
 export typealias AllocCountArray = Array with AllocCount
-export typealias ByteCountArray = Array with ByteCount
+export typealias ByteCountArray = Array with HeapByteCount
 
 // The phase spans this process has OPENED and not yet closed, innermost LAST.
 typealias TraceNameArray = Array with TraceName

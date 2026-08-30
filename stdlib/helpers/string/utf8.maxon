@@ -86,14 +86,21 @@ public function utf8EncodeLength(codepoint Codepoint) returns ByteWidth
 	return 4
 end 'utf8EncodeLength'
 
-/// Check if an integer is a valid Unicode codepoint
-/// Returns false for negative values, values > 0x10FFFF, and surrogate pairs (0xD800-0xDFFF)
+/// Is this codepoint one UTF-8 may encode? Answers false for the surrogate pairs (0xD800-0xDFFF),
+/// which are a UTF-16 encoding artefact and are not scalar values.
+///
+/// ⚠ **IT DOES NOT ANSWER FOR A VALUE OUTSIDE `Codepoint` — SUCH A VALUE CANNOT ARRIVE.** The doc
+/// here used to promise *"returns false for negative values, values > 0x10FFFF"* and the body
+/// carried `cp < 0 or cp > 1114111` to keep it. Neither half can run: `Codepoint` is
+/// `int(0 to 1114111)` (`stdlib/Character.maxon`), a NARROWED range, so its parameter is guarded at
+/// this function's own ENTRY — MEASURED, a laundered `-1` panics `Range check failed: value outside
+/// typealias 'Codepoint'` in `utf8IsValidCodepoint`, uncatchably, before the first statement runs.
+/// A promise the door makes unkeepable is worse than no promise, and a dead disjunct is not a guard
+/// — the same reading that emptied `Array.isOutsideLiveRange`'s negative half.
+///
+/// ⇒ The bound `1114111` is therefore stated ONCE, on `Codepoint`. It used to be written here too,
+/// in another file, with nothing comparing the two.
 public function utf8IsValidCodepoint(cp Codepoint) returns bool
-	// Valid range: 0x0000-0x10FFFF, excluding surrogate pairs (0xD800-0xDFFF)
-	if cp < 0 or cp > 1114111 'range_check'
-		return false
-	end 'range_check'
-
 	// Exclude surrogate pairs
 	if cp >= 55296 and cp <= 57343 'surrogate_check'
 		return false

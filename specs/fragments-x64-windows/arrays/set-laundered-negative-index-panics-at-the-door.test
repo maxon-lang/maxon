@@ -1,16 +1,34 @@
-// Test: set-negative-index-is-refused
+// Test: set-laundered-negative-index-panics-at-the-door
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
 function main() returns ExitCode
 	var arr = [10, 20, 30]
-	try arr.set(-1, value: 99) otherwise 'negative'
+	try arr.set(launder(-1), value: 99) otherwise 'negative'
 		return 42
 	end 'negative'
 	return try arr.get(0) otherwise 0
 end 'main'
 ---
-ExitCode: 42
+ExitCode: 1
+Stderr: ```
+panic at Array.maxon:267: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in __Array_i64.set
+  in main
+  in mrt_start
+```
 ---
 // CompiledIR
 module {
+  func @launder(n: i64) -> i64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
@@ -23,7 +41,7 @@ module {
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
-    x64.mov r8, 3
+    x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov r9, [rbp-8]
@@ -59,9 +77,10 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
-    x64.mov rax, [rbp-8]
+    x64.mov rcx, -1
+    x64.call launder
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, -1
+    x64.mov rdx, rax
     x64.mov r8, 99
     x64.call __Array_i64.set
     x64.xor eax, eax
@@ -113,6 +132,47 @@ module {
     x64.call mm_decref
     x64.label __nonnull_skip_1
     x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___Array_i64(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___Array_i64.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct___Array_i64.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___Array_i64.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct___Array_i64.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___Array_i64.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___Array_i64.done
+  done:
     x64.epilogue
     x64.ret
   }

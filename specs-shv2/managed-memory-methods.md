@@ -1289,6 +1289,14 @@ which is a strictly stronger guarantee than "the refusal does not leak". The con
 where a sabotage-runner will look: `__managed_mem_set`'s own `emitDestroyRejectedElement` call is now unreachable
 from any spelling the front end admits, so no test can redden it. It is kept deliberately — see
 `buildManagedMemSet` — and this line is why breaking it is silent.
+
+⚠ **THE NEGATIVE-INDEX HALF LEFT THIS CASE WHEN `ElementIndex` BECAME HONEST.** It used to be here, beside
+the past-the-length half, because both were the same refusal arriving at the same `otherwise` — and a
+refusal that runs is a refusal that can leak the element it declined to store. `ElementIndex` is now
+`int(0 to i64.max)`, so a negative is refused at the DOOR and `set`'s body never runs: there is no rejected
+element to destroy, and therefore nothing for this case to assert. The two cases below carry what the
+negative half is now, and the managed-element flavour is kept in the laundered one, because that is the
+half where an element still gets allocated before the refusal.
 ```maxon
 typealias StrArray = Array with String
 
@@ -1299,17 +1307,63 @@ function main() returns ExitCode
 	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
 		refused = refused + 1
 	end 'arraySurface'
-	try xs.set(-1, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
-		refused = refused + 1
-	end 'negativeIndex'
-	if refused == 2 'both'
+	if refused == 1 'refusedOnce'
 		return 42
-	end 'both'
+	end 'refusedOnce'
 	return 5
 end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: error.a-negative-index-into-a-managed-array-is-refused -->
+The literal half: refused where it is written, and the element type has nothing to do with it.
+```maxon
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	try xs.set(-1, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
+		return 42
+	end 'negativeIndex'
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:9: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
+```
+
+<!-- test: a-laundered-negative-index-into-a-managed-array-panics -->
+The laundered half, and the one that keeps the managed-element flavour: the argument string IS built and
+retained before the call, and the door then refuses the call. The program panics rather than returning, so
+what this asserts is the leak gate — the process must not exit 101 on the way out.
+```maxon
+typealias StrArray = Array with String
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	try xs.set(launder(-1), value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
+		return 42
+	end 'negativeIndex'
+	return 5
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-laundered-negative-index-into-a-managed-array-panics.test:12: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: set-byte-through-a-viewed-owner-detaches-first -->

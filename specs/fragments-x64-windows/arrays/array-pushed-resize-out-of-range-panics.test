@@ -2,19 +2,23 @@
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
+function launder(n Integer) returns Integer
+	return n
+end 'launder'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(10)
 	a.push(20)
 	a.push(30)
-	a.resize(-2)
+	a.resize(launder(-2))
 	print("resized to {a.count()}\n")
 	return 0
 end 'main'
 ---
 ExitCode: 1
 Stderr: ```
-panic at Array.maxon:413: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
+panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
 Stack trace:
   in IntArray.resize
   in main
@@ -23,6 +27,11 @@ Stack trace:
 ---
 // CompiledIR
 module {
+  func @launder(n: i64) -> i64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=144
@@ -39,9 +48,11 @@ module {
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 30
     x64.call IntArray.push
+    x64.mov rcx, -2
+    x64.call launder
     x64.mov rbx, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, -2
+    x64.mov rdx, rax
     x64.call IntArray.resize
     x64.mov rsi, [rbp-8]
     x64.mov rcx, [rbp-8]

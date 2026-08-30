@@ -623,17 +623,22 @@ end 'main'
 2 65 66
 ```
 
-<!-- test: byte-string-literal.negative-resize-aborts -->
+<!-- test: error.byte-string-literal.negative-resize-is-refused -->
 
 A NEGATIVE `resize` is the one mutator that could write outside its buffer entirely, and the one the detach
 cannot rescue — detaching moves the write to a different allocation, it does not bring it back inside one.
-Without this guard, `resize(-2)` on a byte-string literal DOES detach (the detach at the head of the grow is
-unconditional), the growth check is then satisfied (`3 >= -2`) so nothing reallocates, and the shrink zeroes
-from `buffer + n·element_size` — two bytes BELOW the freshly allocated private buffer — over the allocation
-header. Measured with the guard stubbed out: the process exits 0, the leak gate stays green, `capacity()`
-reads 3 and `count()` publishes -2. It aborts instead: a length can never be negative, and a corrupt
-operation must never proceed (the `__managed_create` zero-element-size and `__managed_append` element-size-mismatch
-shape).
+With the `__ManagedMemory` guard stubbed out, `resize(-2)` on a byte-string literal DOES detach (the detach
+at the head of the grow is unconditional), the growth check is then satisfied (`3 >= -2`) so nothing
+reallocates, and the shrink zeroes from `buffer + n·element_size` — two bytes BELOW the freshly allocated
+private buffer — over the allocation header. Measured that way: the process exits 0, the leak gate stays
+green, `capacity()` reads 3 and `count()` publishes -2.
+
+⚠ **TWO REFUSALS NOW STAND IN FRONT OF THAT, AND THE OUTER ONE IS THE ONE THAT FIRES.** `Array.resize` takes
+an `ElementCount`, declared `int(0 to i64.max)`, so a negative is refused at the DOOR — a literal at compile
+time, as below, and a laundered one at the callee-entry guard (exit **1**, not 73). The buffer-level abort
+is now unreachable from any spelling a program can write. It is kept deliberately, as defence in depth: it
+is the layer that would still be there if a future caller reached `__managed_memory` without passing through
+`Array`, and this line is why nothing can redden it.
 ```maxon
 function main() returns ExitCode
 		var a = b"hey"
@@ -641,8 +646,33 @@ function main() returns ExitCode
 		return 0
 end 'main'
 ```
+```maxoncstderr
+error E3005: <fragment>:4:5: Value -2 is outside the range of 'ElementCount' (int(0 to 9223372036854775807))
+```
+
+<!-- test: byte-string-literal.laundered-negative-resize-panics-at-the-door -->
+The laundered twin: the door refuses it at run time instead, BEFORE the buffer's own abort can be reached.
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+		return n
+end 'launder'
+
+function main() returns ExitCode
+		var a = b"hey"
+		a.resize(launder(-2))
+		return 0
+end 'main'
+```
 ```exitcode
-73
+1
+```
+```stderr
+panic at byte-string-literal.laundered-negative-resize-panics-at-the-door.test:10: Range check failed: value outside typealias 'ElementCount'
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 ### A RAW newline in the body — legal here, and ONLY here

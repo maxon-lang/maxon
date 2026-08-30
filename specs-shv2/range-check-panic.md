@@ -157,6 +157,33 @@ zero-initialized slots crossing no door at all (see the array-element section ab
 and a coincidence is not a guarantee an elision may be written against. **That hole is `resize`'s to
 close, and closing it is what makes this premise total.**
 
+### ⛔⛔ A guard runs on the PATH ITS SITE IS ON — and a ternary's TRUE ARM moves after it is parsed
+
+The runtime half of every door is emitted **in the block the value is checked in**, so a cast in a branch
+that is not taken does not fire. A guard site is therefore a POSITION — a block plus an ordinal — and not
+just a value: a narrowing `int`→`int` cast emits no op of its own, so there is nothing else to anchor to.
+
+**One construct invalidates such a position after it is recorded, and it is the inline conditional.** The
+true arm of `<t> if <c> else <f>` is written *before* the `if` announces the form, so the parser emits it
+onto the unconditional path and then **relocates** it into a `ternarytrue` block only one edge reaches. A
+guard site recorded while that arm parsed names a block the value has left. Both halves of the resulting
+mistake are pinned below:
+
+- **The value is merely READ in the arm** (a parameter, anything from a dominating block): nothing is out
+  of order, so the cascade simply runs on **both** edges. `(i as Small) if flag else 7` panicked for an
+  out-of-range `i` with `flag` FALSE, where the bootstrap prints `7`.
+- **The value is COMPUTED in the arm**: the cascade is emitted in a block that DOMINATES the definition it
+  reads, which is a use above its def. Liveness carries the operand out of the entry block and the
+  register allocator refuses the function — *"value N is live-in to block 0 but was never colored"*. This
+  is what stopped shv2 compiling ITSELF the day `stdlib/Array.maxon`'s `ElementIndex` narrowed and put a
+  guard on every computed array index.
+
+**The cure is that the arm's SITES move with the arm's OPS** (`Parser.rehomeArmRangeSites`, called from
+`parseTernaryExpression` where `detachOpRefsAbove`'s ops are re-attached), which is the relocation's own
+arithmetic and no new decision: an op that stood at position `p` of the start block stands at `p - mark`
+of the continuation. It is not a rule about ternaries in `InsertRangeChecks` — that pass never learns the
+arm existed, and could not: the only frame that knows which ops moved is the one that moved them.
+
 ## Tests
 
 <!-- test: range-check-panic.upper-bound -->
@@ -1331,4 +1358,131 @@ end 'main'
 ```
 ```stdout
 t=10
+```
+```
+
+
+<!-- test: range-check-panic.a-guard-in-an-unselected-ternary-arm-does-not-fire -->
+⛔⛔ **A GUARD BELONGS TO ITS ARM, AND A CONDITIONAL EXPRESSION'S TRUE ARM IS *RELOCATED* AFTER IT IS
+PARSED.** A site records the block control was in and the ordinal that block stood at, because an
+int->int cast emits no op to anchor to — and `parseTernaryExpression` then lifts the true arm's ops off
+the unconditional path into `ternarytrue`, leaving the site describing a position that no longer holds
+its value. The cascade was emitted in the CONDITION's block and ran on both edges: this program panicked
+`value outside typealias 'Small'` where the bootstrap prints `7`. The arm's sites now travel with its
+ops (`Parser.rehomeArmRangeSites`).
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function widen(n Wide) returns Wide
+  return n * 100
+end 'widen'
+
+function pick(i Wide, flag bool) returns Small
+  return (i as Small) if flag else 7
+end 'pick'
+
+function main() returns ExitCode
+  return pick(widen(5), flag: false)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: range-check-panic.a-guard-in-the-selected-ternary-arm-still-fires -->
+<!-- targets: x64-windows, x64-linux -->
+The positive control for the case above, and the half that says the guard was MOVED rather than lost:
+the identical program with the condition TRUE panics, at the arm's own line.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function widen(n Wide) returns Wide
+  return n * 100
+end 'widen'
+
+function pick(i Wide, flag bool) returns Small
+  return (i as Small) if flag else 7
+end 'pick'
+
+function main() returns ExitCode
+  return pick(widen(5), flag: true)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-guard-in-the-selected-ternary-arm-still-fires.test:10: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-value-computed-inside-a-ternary-arm-is-guarded-there -->
+⛔ The same defect's louder half: when the guarded value is COMPUTED in the arm rather than merely read
+there, the misplaced cascade READS a value defined in a block it dominates, and the register allocator
+refuses the function outright — *"seedInUse: value N is live-in to block 0 but was never colored"*, so
+the program does not build at all. It is what stopped shv2 compiling ITSELF once `stdlib/Array.maxon`'s
+`ElementIndex` narrowed and put a guard on every computed array index: `Project.slotCallArgs` indexes
+`argDefaultSlots` by a subtraction inside a conditional expression's true arm. The second call also
+carries an OUT-OF-RANGE value down the arm that is NOT selected, so a guard that merely survived in the
+wrong block would be caught here too and not only by the compile.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function widen(n Wide) returns Wide
+  return n * 100
+end 'widen'
+
+function pick(i Wide, flag bool) returns Small
+  return ((i + 1) as Small) if flag else 7
+end 'pick'
+
+function main() returns ExitCode
+  print("{pick(widen(0), flag: true)}\n")
+  print("{pick(widen(5), flag: false)}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+7
+```
+
+<!-- test: range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics -->
+<!-- targets: x64-windows, x64-linux -->
+The fourth corner, and the one that says the computed shape's guard was MOVED rather than dropped: the
+same program with the arm SELECTED and the computation out of range panics, from the arm's own line.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function widen(n Wide) returns Wide
+  return n * 100
+end 'widen'
+
+function pick(i Wide, flag bool) returns Small
+  return ((i + 1) as Small) if flag else 7
+end 'pick'
+
+function main() returns ExitCode
+  return pick(widen(5), flag: true)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics.test:10: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in pick
+  in main
+  in mrt_start
 ```

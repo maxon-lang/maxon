@@ -8,8 +8,28 @@ public enum ArrayError implements Error
 	emptySlot  // the index was INSIDE [0, count()) and the slot there was never filled
 end 'ArrayError'
 
-typealias ElementCount = int(0 to u64.max)
-typealias ElementIndex = int(0 to u64.max)
+// The backing `__ManagedMemory` takes lengths and indices as a SIGNED `BufferCoordinate`
+// (Internals.maxon), so an array holds at most `i64.max` elements and no index names a slot above it.
+// The upper bound is not tighter than that because a caller's own `reserve(n)` sets the capacity, and
+// nothing in this type bounds `n` further. Stating the bound honestly is what makes these doors
+// GUARDED — a full `int(0 to u64.max)` is the one shape both compilers leave unchecked — and it is
+// what pins an ordering comparison on one of these to the signed reading.
+typealias ElementCount = int(0 to i64.max)
+typealias ElementIndex = int(0 to i64.max)
+
+// ⚠ **WHAT `__ManagedMemory.capacity()` REPORTS IS NOT AN `ElementCount`, AND IT NEVER WAS.** A buffer this
+// record does not OWN — a literal's static image, or another record's buffer this one is a view of —
+// answers a NEGATIVE FLAG rather than a number of slots, and both compilers do it. `specs-shv2/arrays.md`'s
+// `slice-capacity-is-a-view-until-written` pins **-1** for a slice on BOTH, deliberately: it is the one
+// place the copy-on-write sharing is observable, and an eager copy would report a positive capacity from
+// the moment it was made. MEASURED 2026-08-29, shv2 answers **-2** for a byte-string literal's buffer.
+//
+// So this is the alias for "a capacity, or the flag saying there is not one", and it is FULL-RANGE SIGNED
+// ON PURPOSE — the shape both compilers leave unguarded. Declaring these doors `ElementCount` panicked
+// `grownCapacity` at its own entry the instant a program inserted into a literal-backed array (6 spec cases,
+// measured). The narrowest HONEST range for a value that carries a sentinel is the one that admits it, and
+// `ElementCount` stays honest by not being asked to.
+typealias ReportedCapacity = int(i64.min to i64.max)
 
 // THE GROWTH POLICY AN `Array` GROWS BY — Go's `nextslicecap`, not plain doubling.
 //
@@ -62,7 +82,7 @@ let MinimumCapacity = 4 as ElementCount
 // The capacity a buffer of `current` capacity must grow to in order to hold `required` elements. This
 // is the POLICY, not a should-I-grow test: callers ask only when `required > current`, and what comes
 // back is never less than either.
-function grownCapacity(current ElementCount, required ElementCount) returns ElementCount
+function grownCapacity(current ReportedCapacity, required ElementCount) returns ElementCount
 	let doubled = current + current
 
 	// An ask that outruns doubling — `reserve(n)` on an empty array, `append` of a longer one — is
@@ -153,8 +173,10 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		return managed.length()
 	end 'count'
 
-	/// Get the current capacity (allocated space)
-	public function capacity() returns ElementCount
+	/// The number of element slots the buffer holds — or a NEGATIVE flag when the buffer is not this
+	/// record's to grow, which is a view's answer until its first write gives it a private one. See
+	/// `ReportedCapacity`, which is why this is not an `ElementCount`.
+	public function capacity() returns ReportedCapacity
 		return managed.capacity()
 	end 'capacity'
 
@@ -207,16 +229,19 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		return ArrayError.emptySlot
 	end 'accessFailure'
 
-	/// Is `index` outside the LIVE range — negative, or at or past `count()`? The one home of the bound the
-	/// two element accessors share: `accessFailure` reads it to name a READ's failure, and `set` throws on
-	/// it outright, because `set`'s builtin does not refuse the same indices this type does.
+	/// Is `index` at or past `count()`? The one home of the bound the two element accessors share:
+	/// `accessFailure` reads it to name a READ's failure, and `set` throws on it outright, because
+	/// `set`'s builtin does not refuse the same indices this type does.
 	///
-	/// ⚠ THE NEGATIVE HALF IS LIVE CODE THOUGH `ElementIndex` STARTS AT 0, for the reason `insert`'s own
-	/// clamp is: nothing range-checks an argument at a ranged parameter in either compiler, so a `-1`
-	/// arrives intact. Read as merely "below the length" it would name a negative index `emptySlot`, which
-	/// sends the reader to look for a slot that was never addressable.
+	/// ⚠ THIS ASKS ONLY THE PAST-THE-END QUESTION, and it used to have to ask a second one. `ElementIndex`
+	/// was declared `int(0 to u64.max)` — a FULL range, the one shape both compilers leave unguarded — so a
+	/// `-1` really did arrive here intact and the body carried an `index < 0` disjunct to stop a negative
+	/// being named `emptySlot`, which would send the reader looking for a slot that was never addressable.
+	/// The alias is now honest (`0 to i64.max`), so the DOOR refuses the negative: a foldable one is E3005
+	/// at compile time and a laundered one panics `Range check failed` at the guard — this function's own
+	/// entry, or the CALL where a compiler serves the member inline. A dead disjunct is not a guard.
 	function isOutsideLiveRange(index ElementIndex) returns bool
-		return index < 0 or index >= managed.length()
+		return index >= managed.length()
 	end 'isOutsideLiveRange'
 
 	/// Get element at index. Throws `indexOutOfBounds` when `index` is at or past `count()`, and
@@ -325,15 +350,17 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		return try managed.remove(len - 1) otherwise throw ArrayError.indexOutOfBounds
 	end 'pop'
 
-	/// Insert element at index, shifting elements to the right (clamps index to [0, count], BOTH ends)
+	/// Insert element at index, shifting elements to the right. An `at` above `count()` clamps to the end
+	/// and appends; there is no low clamp, because `ElementIndex` refuses a negative at the door.
 	public function insert(at ElementIndex, value Element)
 		let len = managed.length()
 
-		// ⚠ **THE LOW CLAMP IS LIVE CODE THOUGH `ElementIndex` STARTS AT 0**, because nothing range-checks
-		// an argument at a ranged parameter in either compiler — a `-1` arrives intact. MEASURED before this
-		// line existed: `shiftRight(-1, len)` read the slot BEFORE the buffer and stored it at 0, turning
-		// `[10, 20, 30]` into `[0, 10, 20]`, and only then did `set` panic asserting the clamp it lacked.
-		var index = 0 if at < 0 else at
+		// Only the HIGH end clamps. There used to be a low clamp beside it, because `ElementIndex` was a
+		// FULL range and therefore unguarded, so a `-1` arrived intact: MEASURED then, `shiftRight(-1, len)`
+		// read the slot BEFORE the buffer and stored it at 0, turning `[10, 20, 30]` into `[0, 10, 20]`. The
+		// alias now stops at `i64.max`, so the door refuses a negative outright — foldable ⇒ E3005, laundered
+		// ⇒ a `Range check failed` panic — and `insert(-1)` is a REFUSAL rather than an append-to-front.
+		var index = at
 		if index > len 'clampHigh'
 			index = len
 		end 'clampHigh'
@@ -410,7 +437,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	public function resize(newLength ElementCount)
 		reserve(newLength)
 		try managed.setLength(newLength) otherwise 'lenErr'
-			panic("Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it")
+			panic("Array.resize: setLength refused a length reserve had just made room for — the two disagree about the capacity")
 		end 'lenErr'
 	end 'resize'
 

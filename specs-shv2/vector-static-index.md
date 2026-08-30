@@ -220,9 +220,33 @@ end 'main'
 -1
 ```
 
-<!-- test: a-negative-constant-index-still-throws -->
-A negative constant is out of range on the other end, and the check that rejects it is the
-one this optimization must never remove.
+<!-- test: a-constant-index-well-past-the-size-still-throws -->
+`size` itself is the boundary and the case above is the boundary's own; this is a constant
+FAR outside, which the optimization has just as much room to fold away and just as little
+right to. The check it must never remove is the same one.
+
+This case used to be `get(-1)` — out of range on the OTHER end. It cannot be: `ElementIndex`
+is `int(0 to i64.max)`, so a negative constant no longer reaches the accessor's check at all.
+The pin it carried has to be carried by a positive constant, which is this; the negative's own
+refusal is pinned separately below.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = Vector with 4 Int
+
+function main() returns ExitCode
+	var v = Vec4.create()
+	let result = try v.get(9) otherwise -2
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```stdout
+-2
+```
+
+<!-- test: error.a-negative-constant-index-is-refused -->
+A negative constant is refused before any of this: it is outside `ElementIndex`, so the
+argument never becomes an index for the optimization to reason about.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec4 = Vector with 4 Int
@@ -234,8 +258,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
--2
+```maxoncstderr
+error E3005: <fragment>:7:21: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
 ```
 
 <!-- test: an-out-of-range-constant-set-still-throws -->

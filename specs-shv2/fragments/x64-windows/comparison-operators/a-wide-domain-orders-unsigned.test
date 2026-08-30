@@ -1,0 +1,39 @@
+// Test: a-wide-domain-orders-unsigned
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let big = wide(u64.max as Wide)
+
+	if big > 100 'aboveHundred'
+		return 42
+	end 'aboveHundred'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 18446744073709551615
+    x64.jmp __il_body
+  __il_body:
+    x64.jmp __il_cont
+  __il_cont:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc above, aboveHundred
+    x64.jmp ifcont
+  aboveHundred:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

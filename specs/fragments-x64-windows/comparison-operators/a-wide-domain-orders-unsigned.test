@@ -1,0 +1,44 @@
+// Test: a-wide-domain-orders-unsigned
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let big = wide(u64.max as Wide)
+
+	if big > 100 'aboveHundred'
+		return 42
+	end 'aboveHundred'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @wide(n: i64) -> u64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, -1
+    x64.call wide
+    x64.mov rcx, 100
+    x64.cmp rax, rcx
+    x64.jbe main.aboveHundred_0.after
+  aboveHundred_0:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  aboveHundred_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

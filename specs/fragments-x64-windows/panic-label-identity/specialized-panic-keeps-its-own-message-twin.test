@@ -1,4 +1,10 @@
 // Test: specialized-panic-keeps-its-own-message-twin
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
 function main() returns ExitCode
 	let s = "  héllo wörld  "
 	var n = s.trim(CharacterSet.letters()).count()
@@ -13,7 +19,7 @@ function main() returns ExitCode
 	n = n + m.count()
 	print("{n}\n")
 	var a = [10, 20, 30]
-	a.resize(-2)
+	a.resize(launder(-2))
 	return 0
 end 'main'
 ---
@@ -22,7 +28,7 @@ Stdout: ```
 9493
 ```
 Stderr: ```
-panic at Array.maxon:413: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
+panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
 Stack trace:
   in __Array_i64.resize
   in main
@@ -31,6 +37,11 @@ Stack trace:
 ---
 // CompiledIR
 module {
+  func @launder(n: i64) -> i64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=384
@@ -569,9 +580,10 @@ module {
     x64.mov rax, [rbp-264]
     x64.mov rcx, [rbp-264]
     x64.call mm_incref
-    x64.mov rax, [rbp-264]
+    x64.mov rcx, -2
+    x64.call launder
     x64.mov rcx, [rbp-264]
-    x64.mov rdx, -2
+    x64.mov rdx, rax
     x64.call __Array_i64.resize
     x64.mov rax, [rbp-200]
     x64.test rax, rax

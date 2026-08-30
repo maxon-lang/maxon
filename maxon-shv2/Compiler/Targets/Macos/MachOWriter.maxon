@@ -304,6 +304,11 @@ function sortMachoRebases(offsets ByteOffsetArray, targets ByteOffsetArray)
 	while i < n 'outer'
 		let keyOffset = try offsets.get(i) otherwise panic("sortMachoRebases: i < n by the guard but offsets.get({i}) failed")
 		let keyTarget = try targets.get(i) otherwise panic("sortMachoRebases: targets.get({i}) failed")
+		// ⚠ `j` MUST STAY A PLAIN LOCAL. The inner loop walks it down PAST zero and the `j >= 0`
+		// test is what stops it, so the comparison must read SIGNED — which it does only because
+		// `j` carries no non-negative declared type. Annotating it `ByteOffset` (or any other
+		// `int(0 to …)` alias) would both flip this test to the unsigned reading and put an
+		// out-of-range value through the alias's guard on the final decrement.
 		var j = i - 1
 		while j >= 0 'inner'
 			let valOffset = try offsets.get(j) otherwise panic("sortMachoRebases: 0 <= j < i but offsets.get({j}) failed")

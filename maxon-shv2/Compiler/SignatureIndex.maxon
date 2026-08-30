@@ -1469,7 +1469,7 @@ end 'GlobalFactoryReturn'
 function managedLiteralRecord(bytes ByteArray, kind ManagedConstKind) returns ManagedGlobalRecord
 	return match kind 'k'
 		string gives ManagedGlobalRecord.stringRecord(bytes)
-		byteArray gives ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count() as ParsedInt, bytes: bytes)
+		byteArray gives ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count(), bytes: bytes)
 	end 'k'
 end 'managedLiteralRecord'
 
@@ -15613,6 +15613,44 @@ export type ProgramSignatures
 	export function aliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
 		return self.typeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'aliasOf'
+
+	// ⭐⭐ **THE RANGED ALIAS `callee`'s FIRST DECLARED PARAMETER NAMES, ANSWERED FROM THIS INDEX'S OWN
+	// TABLES.** The door an ARM-SERVED member's range check asks through
+	// (`Parser.recordArmServedIndexRangeCheck`, which carries the whole argument): shv2 lowers
+	// `Array.get`/`set`/`resize` inline, so there is no callee ENTRY for
+	// `InsertRangeChecks.guardRangedParams` to stand at, and the declared bound has to be fetched from the
+	// declaration and applied at the CALL instead.
+	//
+	// ⚠ **IT RESOLVES THE NAME FROM THE DECLARING FILE, NOT THE READER'S.** A ranged alias is file-scoped
+	// (`RangedAliasRegistry.lookup`) and `stdlib/Array.maxon`'s `ElementIndex` is not `public`, so asked
+	// from the calling file it resolves to nothing at all. The file that DECLARED the parameter is the file
+	// whose `ElementIndex` that parameter means, and `OverloadedDecl` carries it.
+	//
+	// ⚠ **AN OVERLOAD SET ANSWERS `undeclared`.** Two declarations of one member may narrow the same
+	// position differently, and which one a call resolves to is not settled where this is asked — so a
+	// member declared more than once yields no bound rather than a guessed one.
+	//
+	// Allocation-free: the name crosses as the interned `ByteArray` rather than a rendered `String`,
+	// because this is asked at every `get` and every `set` in every program.
+	export function firstParamAliasOf(callee ByteArray) returns DeclaredAlias
+		let declarations = self.overloadedDeclsOf(callee)
+		if declarations.count() != 1 'noSingleDeclaration'
+			return DeclaredAlias.undeclared
+		end 'noSingleDeclaration'
+
+		let decl = try declarations.get(0) otherwise panic("ProgramSignatures.firstParamAliasOf: get(0) on the one-element array the line above tested for")
+		if decl.paramTypes.isEmpty() 'declaresNoParameter'
+			return DeclaredAlias.undeclared
+		end 'declaresNoParameter'
+
+		let declared = try decl.paramTypes.get(0) otherwise panic("ProgramSignatures.firstParamAliasOf: paramTypes.get(0) on a list the line above proved non-empty")
+		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoAlias'
+			return DeclaredAlias.undeclared
+		end 'namesNoAlias'
+
+		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.firstParamAliasOf: a recorded `named` parameter type carries an id this index's own interner does not hold")
+		return self.aliasOf(name, readerFilePath: decl.declFilePath)
+	end 'firstParamAliasOf'
 
 	// Is SOME declaration of `name` nameable from any file? The all-declarations question the door
 	// above cannot answer, asked only where `aliasOf`'s single answer is hidden — see

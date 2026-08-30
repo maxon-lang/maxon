@@ -8,10 +8,15 @@ public enum StringError implements Error
 	invalidIndex
 end 'StringError'
 
-public typealias ByteCount = int(0 to u64.max)
-public typealias GraphemeCount = int(0 to u64.max)
-public typealias BytePos = int(0 to u64.max)
-public typealias GraphemeIndex = int(0 to u64.max)
+// A string's bytes live in ONE `__ManagedMemory`, whose length is a signed machine word, so no honest
+// byte count or byte position can exceed `i64.max`; a grapheme is at least one byte, so no grapheme
+// count or index can exceed the byte count. The upper bound is what makes these doors GUARDED — a
+// full `int(0 to u64.max)` is the one shape both compilers leave unchecked — and it is also what pins
+// every ordering comparison on them to the signed reading.
+public typealias ByteCount = int(0 to i64.max)
+public typealias GraphemeCount = int(0 to i64.max)
+public typealias BytePos = int(0 to i64.max)
+public typealias GraphemeIndex = int(0 to i64.max)
 
 // File-private. The stdlib's canonical declarations of `Byte` and
 // `ByteArray` live in `stdlib/File.maxon`, which the self-hosted compiler
@@ -1027,8 +1032,25 @@ function findLastIn(haystack String, needle String) returns BytePos throws Strin
 	end 'too_long'
 
 	let firstNeedleByte = try needle.byteAt(0) otherwise panic("findLastIn: byteAt(0) OOB — needleLen > 0 checked above")
-	var i = len - needleLen
-	while i >= 0 'search_loop'
+
+	// Counted DOWN over the number of candidate start positions rather than over the positions
+	// themselves. The natural spelling — `var i = len - needleLen; while i >= 0; i = i - 1` — ends by
+	// storing -1 into a local that rides `BytePos`, an alias whose declared range says 0 and up. This
+	// form has no value that contradicts its own declared type: `remaining` is a COUNT, it stops at 0,
+	// and the one-before-the-start position that ends the scan is never represented at all.
+	//
+	// ⚠ **IT IS NOT A GUARD FIX, AND MEASURING SAID SO.** A LOCAL is not one of the doors a range is
+	// checked at — parameters, returns, `as` casts, field stores and array elements are — so the old
+	// loop did NOT panic once `BytePos` narrowed: measured on both compilers, a `var` riding an
+	// `int(0 to i64.max)` alias counts 2, 1, 0, -1 and exits normally. What the NARROWING fixes here
+	// is the COMPARISON: `i >= 0` on a full-range `int(0 to u64.max)` is an unsigned test that is
+	// always true, and it read as signed only because of the folded-constant narrowing clause the
+	// ordering rule USED TO carry. That clause is now gone from both compilers — a loop like this one
+	// was among the things holding it up — and with the upper at `i64.max` the signed reading is
+	// pinned by the declaration itself, which is what makes its deletion safe here.
+	var remaining = len - needleLen + 1
+	while remaining > 0 'search_loop'
+		let i = remaining - 1
 		let candidate = try haystack.byteAt(i) otherwise panic("findLastIn: byteAt OOB — i <= len - needleLen invariant")
 		if candidate == firstNeedleByte 'firstByteMatch'
 			if bytesEqual(haystack, aOffset: i, b: needle, bOffset: 0, len: needleLen) 'found_check'
@@ -1036,7 +1058,7 @@ function findLastIn(haystack String, needle String) returns BytePos throws Strin
 			end 'found_check'
 		end 'firstByteMatch'
 
-		i = i - 1
+		remaining = remaining - 1
 	end 'search_loop'
 	throw StringError.notFound
 end 'findLastIn'

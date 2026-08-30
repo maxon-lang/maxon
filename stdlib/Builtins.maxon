@@ -811,12 +811,18 @@ function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp Deci
 	// of the smaller side by `nb - db` lands it in [1/2, 2) and at most one further doubling
 	// finishes — no per-step loop to run away, and (unlike the i64 halving dance this replaced) no
 	// precision thrown away to keep a cell in range.
-	var exponent = __bigBitLength(numerator) - __bigBitLength(denominator)
+	var exponent = __bigBitDelta(numerator, against: denominator)
 	if exponent >= 0 'liftDenominator'
 		__bigShiftLeft(denominator, bits: exponent)
 	end 'liftDenominator' else 'liftNumerator'
 		__bigShiftLeft(numerator, bits: -exponent)
 	end 'liftNumerator'
+	// This is the ONE step that could walk `exponent` out of `BigBitDelta`, and it cannot: both bit
+	// lengths above are at least 1, never 0. The numerator is non-zero because both callers screen
+	// zero out first (`__float_magnitudeBitsFromText`'s `hasNonZeroDigit` shortcut, and
+	// `__shortestRoundTrip`'s `kept >= 1` prefix of a non-zero expansion), and the denominator starts
+	// at `1` and is only ever multiplied up. So `exponent` enters at worst -4607, and -1 leaves it
+	// inside the alias.
 	if __bigCompare(numerator, against: denominator) < 0 'stillBelowOne'
 		__bigShiftLeft(numerator, bits: 1)
 		exponent = exponent - 1
@@ -825,6 +831,13 @@ function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp Deci
 	// How many significand bits follow the leading one: 52 for a normal, and one fewer for every
 	// power of two below 2^-1022, because a subnormal's exponent field is pinned at zero and the
 	// leading one has to be spelled out inside the field instead of being implied.
+	//
+	// A `BigBitDelta` by domain — it spans [-3534, 52], since the subnormal arm below is reached only
+	// for `exponent <= -1023` and adds 1074 — but NOT one by declaration, and deliberately not. There
+	// is no local type annotation to carry it, and an `as` cast would check exactly one of the three
+	// writes to this binding while reading like it constrained all of them. The negative half is not
+	// an accident to be typed away: it is the shortfall the `< 0` correction below MOVES onto the
+	// denominator, which is the step that keeps `+0` and the least subnormal one rounding apart.
 	var significandBits = __SignificandFieldBits
 	let isSubnormal = exponent < __MinNormalBinaryExponent
 	if isSubnormal 'denormalize'
@@ -931,11 +944,38 @@ let __LimbMask = 0xFFFFFFFF
 // subnormal's exact expansion, `1 * 5^1074` — about 2494 bits, 78 limbs.
 let __MaxBigLimbs = 144
 
-// A bit position or shift distance inside a magnitude. Non-negative — every caller either passes a
-// literal or negates a value it has just tested as negative — and bounded in practice by
-// `__MaxBigLimbs * __LimbBits`, but written open-ended like `CharOffset`: the producers are i64
-// subtractions of two bit lengths, and narrowing would only move the check to a cast at each call.
-typealias BigBitCount = int(0 to u64.max)
+// A bit position or shift distance inside a magnitude. Non-negative, and bounded by the representation
+// rather than by convention: `__bigBitLength` returns `topIndex * __LimbBits + bitsInTop`, which at the
+// widest legal magnitude is `(__MaxBigLimbs - 1) * __LimbBits + __LimbBits` = 143 * 32 + 32 = **4608**,
+// i.e. `__MaxBigLimbs * __LimbBits`. Nothing can exceed it, because `__requireLimbBudget` PANICS rather
+// than let a magnitude grow past 144 limbs, and every growing site routes through it.
+//
+// ⛔ **THIS SAID THE NON-NEGATIVITY WAS TRUE OF EVERY SITE. IT IS TRUE OF THE PARAMETER ONLY.** The old
+// text — *"every caller either passes a literal or negates a value it has just tested as negative"* —
+// describes `__bigShiftLeft`'s argument, and describes it correctly. It does NOT describe the values
+// that PRODUCE that argument: `__float_bitsFromDecimal`'s `exponent` is a subtraction of two bit
+// lengths and is negative for every literal below one. Writing both quantities as one alias is what
+// forced the range open-ended, and an open-ended range is the one shape that gets NO door check at all.
+// The signed twin `BigBitDelta` below carries the derived locals, so this alias can state the truth
+// about the parameter instead of widening to cover a quantity it is not.
+//
+// The retired rationale for staying open — *"narrowing would only move the check to a cast at each
+// call"* — mistook a door for a cast. A narrowed alias is checked AT the parameter, and needs no cast.
+typealias BigBitCount = int(0 to 4608)
+
+// The DIFFERENCE between two bit positions: how far one magnitude's bit length sits above or below
+// another's. Symmetric, because either side can be the wider one, and bounded by the same 4608 as
+// `BigBitCount` because both operands live inside `[0, 4608]`.
+//
+// ⚠ **IT IS A RETURN TYPE AND IT CANNOT BE A LOCAL'S — MAXON HAS NO LOCAL TYPE ANNOTATION.**
+// `var exponent as BigBitDelta = ...` is not narrower typing, it is `E2010 Expected '=' but got 'as'`
+// (MEASURED 2026-08-29, both compilers; `var x as T` is FIELD syntax and reads as one only inside a
+// `type` body). The doors a range can actually be checked at are parameters, returns, `as` casts,
+// field stores and array elements — so a quantity that lives in a local gets an honest range only by
+// being MINTED through one of those. That is what `__bigBitDelta` below is for, and it is the same
+// move `__requireLimbBudget` makes for the limb count: put the bound at the one site that produces
+// the value, so it is one fact checked in one place rather than an assertion in a comment.
+typealias BigBitDelta = int(-4608 to 4608)
 
 // A POWER OF TEN: the exponent handed to `__powOf`/`__bigMulPow`, or the magnitude of a scientific
 // exponent being printed. Bounded by the decimal guards to 1091 — the same figure `__MaxBigLimbs` is
@@ -944,13 +984,32 @@ typealias BigBitCount = int(0 to u64.max)
 // ⚠ It is NOT the alias for a digit COUNT, a field WIDTH or an index into a digit string, all of
 // which briefly rode here because the range happened to fit. `DigitCount` is those, and the split is
 // the difference between a name that says what a number MEANS and one that says what it fits in.
-typealias DecimalScaleExponent = int(0 to u64.max)
+//
+// ⭐ **THE 1091 IS THE ENFORCEMENT NOW, NOT JUST THE PROSE.** The widest exponent any site here can
+// ask for is the denominator's, `-totalExp` at `__float_bitsFromDecimal`, and the decimal guards
+// bound it to `324 + __SignificantDigitBudget - 1` = 1091 — the same derivation `__MaxBigLimbs`
+// quotes. `__float_shortestDigits`'s base-five scaling stays under it at 1074, and the two chunk
+// strides are single digits. A narrowed upper is what makes each of those doors CHECKED; the full
+// `int(0 to u64.max)` it replaced was the one shape both compilers leave unguarded.
+typealias DecimalScaleExponent = int(0 to 1091)
 
 // How many digits: a significant-digit count, a zero-padded field width, a repeat count, or an index
-// into a `DigitString`. Bounded in practice by `__SignificantDigitBudget`, but written open-ended for
-// `BigBitCount`'s reason — the producers are i64 subtractions of two counts, and narrowing would only
-// move the check to a cast at each call.
-typealias DigitCount = int(0 to u64.max)
+// into a `DigitString`. Bounded in practice by `__SignificantDigitBudget`.
+//
+// The digits live in a `DigitString` — one array, whose count is a signed machine word — so no
+// honest count, width or index into one reaches `i64.max`, let alone past it. In practice
+// `__SignificantDigitBudget` bounds the counts far below that, but a field WIDTH is program-written
+// (`"{x:08}"`, up to `u32.max`) and shares this alias, so the container's own limit is the honest
+// bound rather than the budget.
+//
+// ⭐⭐ **THE UPPER IS LOAD-BEARING FOR THE COMPARISONS, NOT ONLY FOR THE DOORS.** The bootstrap
+// propagates the FIRST ranged type either operand offers onto an arithmetic result, so
+// `__float_bitsFromDecimal`'s `let magnitudeExp = sigDigits - 1 + totalExp` rides THIS alias — and a
+// full `int(0 to u64.max)` would make `magnitudeExp < __LeastRoundableDecimalExponent` an UNSIGNED
+// comparison there and a signed one in shv2, which mints binop results unnamed. `1.0e-400` would
+// then be `overflow` in one compiler and `+0` in the other. An upper of `i64.max` pins both readings
+// to signed, which is what a quantity derived by SUBTRACTION needs.
+typealias DigitCount = int(0 to i64.max)
 
 // -1, 0 or 1 as the left magnitude is below, equal to, or above the right.
 typealias MagnitudeOrder = int(-1 to 1)
@@ -1284,6 +1343,14 @@ function __bigBitLength(limbs ParsedIntArray) returns BigBitCount
 	return topIndex * __LimbBits + bitsInTop
 end '__bigBitLength'
 
+// How far `a`'s bit length sits above (positive) or below (negative) `against`'s. THE one place a bit
+// DELTA is minted, so the `+/-4608` bound is checked at the door rather than asserted in a comment —
+// a local cannot carry a range in Maxon, so a value that stays in one is only ever as honest as the
+// site that produced it.
+function __bigBitDelta(a ParsedIntArray, against ParsedIntArray) returns BigBitDelta
+	return __bigBitLength(a) - __bigBitLength(against)
+end '__bigBitDelta'
+
 // Ordering. The no-leading-zero-limb invariant is what makes the width comparison decisive.
 function __bigCompare(a ParsedIntArray, against ParsedIntArray) returns MagnitudeOrder
 	if a.count() != against.count() 'differentWidths'
@@ -1608,8 +1675,11 @@ function __digitSlice(digits DigitString, start DigitCount, endIndex DigitCount)
 end '__digitSlice'
 
 // How many times a fill unit is repeated: a run of zeros inside a number, or the padding of a
-// right-aligned field. Both are "this text, `count` times", so they share one loop.
-typealias RepeatCount = int(0 to u64.max)
+// right-aligned field. Both are "this text, `count` times", so they share one loop. The widest is a
+// program-written field width, which the parser caps at `u32.max`; the result is one `String`, whose
+// bytes live in a `__ManagedMemory` sized by a signed machine word, so `i64.max` is the honest
+// ceiling and a narrowed upper is what makes the door checked.
+typealias RepeatCount = int(0 to i64.max)
 
 // The fill of a run of zeros — inside a fixed-notation float, inside a scientific exponent, and in
 // front of a `"{x:08}"` field. One spelling, so a change of representation cannot reach three of them

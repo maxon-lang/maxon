@@ -214,12 +214,14 @@ end 'main'
 99
 ```
 
-<!-- test: negative-index-reports-index-out-of-bounds -->
-### A NEGATIVE index is out of bounds too, and it used to be called an empty slot
-The third answer the same distinction owes, and the one nothing asked for. The failure is decided from
-the live range, and "below the length" is true of `-1` on every signed comparison — so a negative index
-was reported as a slot that was never filled, sending the reader to look for a slot that was never
-addressable. It is out of bounds at BOTH ends.
+<!-- test: error.negative-index-is-refused-at-the-door -->
+### A NEGATIVE index never reaches the distinction at all
+The third answer the same distinction once owed, and the one nothing asked for. `get`'s failure is decided
+from the live range, and "below the length" is true of `-1` on every signed comparison, so a negative index
+was once reported as a slot that was never filled — sending the reader to look for a slot that was never
+addressable. Naming it `indexOutOfBounds` was the repair then. It is not the answer now, because the
+question no longer gets asked: `ElementIndex` stops at `i64.max`, so a negative is refused at `get`'s door
+and no `ArrayError` of either name is ever minted. A literal is refused at compile time.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -242,8 +244,50 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```maxoncstderr
+error E3005: specs/fragments/array-slots/error.negative-index-is-refused-at-the-door.test:14:10: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
+```
+
+<!-- test: laundered-negative-index-panics-at-the-door -->
+### The same refusal when the compiler cannot fold the index
+A negative the compiler cannot see is refused by the callee-entry guard rather than at the call site. The
+`match` arms are what prove the refusal is not either `ArrayError`: both are still written, both would
+return, and neither runs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function launder(n Integer) returns Integer
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.reserve(2)
+	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	try arr.get(launder(-1)) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
+end 'main'
+```
 ```exitcode
-99
+1
+```
+```stderr
+panic at Array.maxon:249: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in SlotArray.get
+  in main
+  in mrt_start
 ```
 
 <!-- test: first-empty-slot -->

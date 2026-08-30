@@ -1614,7 +1614,7 @@ function main() returns ExitCode
 	var v = Vec3.create()
 	var got = v.part()
 	got.clear()
-	return ((got.length() as Int) + (10 * (v.count() as Int))) as ExitCode
+	return ((got.length() as Int) + (10 * v.count())) as ExitCode
 end 'main'
 ```
 ```exitcode

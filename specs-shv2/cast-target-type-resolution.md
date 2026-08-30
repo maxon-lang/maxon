@@ -142,7 +142,7 @@ typealias Later = int(0 to 100)
 <!-- test: cast-to-loaded-stdlib-internal-typealias -->
 ⭐ **A TYPEALIAS DECLARED INSIDE THE STDLIB IS NAMEABLE AS A CAST TARGET FROM ANY FILE, WHATEVER
 ITS VISIBILITY MODIFIER.** `stdlib/Sleep.maxon` declares `typealias Milliseconds = int(0 to
-u64.max)` with no `export`, and `RangedAliasRegistry`'s bare-name fallback is what makes it
+i64.max)` with no `export`, and `RangedAliasRegistry`'s bare-name fallback is what makes it
 reachable here; that fallback exists FOR this property and its header names this test.
 
 ⚠ **READ THE NEXT TEST WITH THIS ONE — ON ITS OWN THIS PROGRAM PROVES NOTHING, AND THAT IS
@@ -151,12 +151,24 @@ from `/specs` named `ElementCount`, which lives in `stdlib/Array.maxon` — a mo
 whitelist does not list. The name resolved to nothing, the cast evaporated, and the exit code
 came out right anyway. It was green because the lookup FAILED.
 
-An exit code cannot tell the two apart, and neither can a golden: **MEASURED — with a runtime
-(non-constant) operand, `x as Milliseconds` and `x as NoSuchName` emit BYTE-IDENTICAL Target
-IR**, because every stdlib alias this loader lists is `int(0 to u64.max)`, a range that admits
-every 64-bit value and therefore emits no guard. There is no behavioural discriminator to be had.
+An exit code cannot tell the two apart, and for the CONSTANT operand below neither can a golden:
+the value folds and a folded in-range cast emits nothing either way.
 
-What discriminates is the DIAGNOSTIC, and only because of the rung this file documents: a cast
+⚠ **THE ARGUMENT THIS PARAGRAPH USED TO MAKE IS RETIRED, AND ONLY BECAUSE THE STDLIB CHANGED
+UNDER IT.** It read: *"MEASURED — with a runtime (non-constant) operand, `x as Milliseconds` and
+`x as NoSuchName` emit BYTE-IDENTICAL Target IR, because every stdlib alias this loader lists is
+`int(0 to u64.max)`, a range that admits every 64-bit value and therefore emits no guard."* Every
+one of those aliases has since been narrowed to its honest upper bound — `Milliseconds` is
+`int(0 to i64.max)` — so a runtime operand now DOES emit a guard and a behavioural discriminator
+is available where there was none. The measurement was true when it was taken; what made it stop
+being true is `stdlib/Internals.maxon`'s roster, which now names the only three aliases still
+full-range and why.
+
+What discriminates HERE is still the DIAGNOSTIC, and it is the stronger half in any case: a guard
+distinguishes a name that resolved to a NARROW range from one that resolved to nothing, while the
+pair below distinguishes a name that resolved AT ALL — which is the property this test is about,
+and the one that would survive `Milliseconds` being re-widened. It works only because of the rung
+this file documents: a cast
 target that denotes nothing is now a hard error. So the pair below IS the discrimination — two
 programs identical but for ONE CHARACTER in the name — and if `Milliseconds` ever stopped
 resolving (the module dropped from the whitelist, the bare-name fallback narrowed, the alias

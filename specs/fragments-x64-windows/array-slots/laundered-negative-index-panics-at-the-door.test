@@ -1,4 +1,4 @@
-// Test: negative-index-reports-index-out-of-bounds
+// Test: laundered-negative-index-panics-at-the-door
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
@@ -7,11 +7,15 @@ end 'Slot'
 
 typealias SlotArray = Array with Slot
 
+function launder(n Integer) returns Integer
+	return n
+end 'launder'
+
 function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.reserve(2)
 	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
-	try arr.get(-1) otherwise (e) 'handler'
+	try arr.get(launder(-1)) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
 			indexOutOfBounds then return 99
@@ -20,10 +24,22 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ---
-ExitCode: 99
+ExitCode: 1
+Stderr: ```
+panic at Array.maxon:249: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in SlotArray.get
+  in main
+  in mrt_start
+```
 ---
 // CompiledIR
 module {
+  func @launder(n: i64) -> i64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=64
@@ -88,14 +104,15 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   otherwise_continue_0:
-    x64.mov rax, [rbp-8]
+    x64.mov rcx, -1
+    x64.call launder
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, -1
+    x64.mov rdx, rax
     x64.call SlotArray.get
     x64.mov [rbp-24], rdx
     x64.mov [rbp-32], rax
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
     x64.je main.otherwise_continue_1
   otherwise_error_0:
     x64.mov rax, [rbp-24]

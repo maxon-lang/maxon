@@ -69,12 +69,15 @@ a.push(7)     // count() == 1
 ### `resize` accepts only a length it can produce
 
 `resize(newLength ElementCount)` takes an `ElementCount`, which is
-`int(0 to u64.max)` — the count of elements the array will have afterwards. A
-value that cannot be a length, such as a negative literal, is not a request the
-operation can honour, and it does not: `resize` cannot report failure to its
-caller (it does not `throw`), so it PANICS. It never quietly publishes the
-impossible length, because every later `count()`, `get` and `for..in` would then
-be reasoning about an array that does not exist.
+`int(0 to i64.max)` — the count of elements the array will have afterwards, and
+`i64.max` because the buffer beneath it measures its length in a signed machine
+word. A value that cannot be a length is not a request the operation can honour,
+and the range is what says so: the argument is refused at the DOOR, before the
+body runs. A literal the compiler can fold is refused at compile time (E3005); a
+value it cannot fold is refused by the callee-entry guard, which PANICS —
+`resize` cannot report failure to its caller, because it does not `throw`. It
+never quietly publishes the impossible length, because every later `count()`,
+`get` and `for..in` would then be reasoning about an array that does not exist.
 
 The rule belongs to the operation, not to the storage: a literal-backed array
 and a pushed-into array reject the same lengths for the same reason.
@@ -1241,26 +1244,56 @@ end 'main'
 
 ### Insert
 
-`insert` clamps its index into `[0, count]` at BOTH ends, so it is the one index-taking member that never
-refuses. The high end is `stdlib-array.insert-index-clamps-high`'s. The LOW end is pinned here because a
-negative index is not stopped by `at`'s `int(0 to u64.max)` — nothing range-checks an argument at a ranged
-parameter — and an unclamped `-1` made the tail shift read the slot BEFORE the buffer and store it at 0,
-turning `[10, 20, 30]` into `[0, 10, 20]` before the store finally failed.
+`insert` clamps its index to `count` at the HIGH end and only there — that half is unchanged and is
+`stdlib-array.insert-index-clamps-high`'s. There is no LOW clamp, and there used to be one: `at`'s
+`ElementIndex` was declared `int(0 to u64.max)`, a FULL range, which is the one shape both compilers leave
+unguarded, so a `-1` arrived in the body intact. Before the clamp existed it made the tail shift read the
+slot BEFORE the buffer and store it at 0, turning `[10, 20, 30]` into `[0, 10, 20]`.
 
-<!-- test: insert-negative-index-clamps-to-front -->
+`ElementIndex` now stops at `i64.max`, so the DOOR refuses the negative and the clamp has nothing left to
+do. A negative index is no longer a quiet append-to-front; it is a refusal — and WHICH refusal depends on
+whether the compiler can fold the value. A literal is refused where it is written.
+
+<!-- test: error.insert-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
 	arr.insert(-1, value: 99)
-	let a = try arr.get(0) otherwise 0
-	let b = try arr.get(1) otherwise 0
-	let c = try arr.get(2) otherwise 0
-	let d = try arr.get(3) otherwise 0
-	return a + b + c + d
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/arrays/error.insert-negative-index-is-refused.test:4:6: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
+```
+
+A negative the compiler cannot fold reaches the callee-entry guard instead, and panics there — uncatchably,
+and BEFORE `insert`'s body runs. The `print` is the proof the program never got past the call: the old
+clamping behaviour would have reached it and printed a count of 4.
+
+<!-- test: insert-laundered-negative-index-panics-at-the-door -->
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	arr.insert(launder(-1), value: 99)
+	print("inserted, count is now {arr.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
-159
+1
+```
+```stderr
+panic at Array.maxon:355: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in __Array_i64.insert
+  in main
+  in mrt_start
 ```
 
 ### Set is bounded by the LIVE LENGTH, not by the capacity
@@ -1291,11 +1324,15 @@ end 'main'
 42
 ```
 
-A NEGATIVE index is the same refusal and needs saying separately, for `insert`'s reason one section up:
-nothing range-checks an argument at `index`'s `int(0 to u64.max)`, so a `-1` arrives intact and is below
-the length on every signed comparison.
+A NEGATIVE index is refused too, and it is refused by a DIFFERENT mechanism from the one above — which is
+why it needs saying separately. The past-the-length refusal is `set`'s own, a catchable `ArrayError`. A
+negative never reaches `set` at all: `index`'s `ElementIndex` stops at `i64.max`, so the value is refused
+at the door. It used to arrive intact, because the alias was the full `int(0 to u64.max)` and a full range
+is the one shape neither compiler guards, and `-1` is below the length on every signed comparison.
 
-<!-- test: set-negative-index-is-refused -->
+A literal is refused at compile time.
+
+<!-- test: error.set-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30]
@@ -1305,8 +1342,40 @@ function main() returns ExitCode
 	return try arr.get(0) otherwise 0
 end 'main'
 ```
+```maxoncstderr
+error E3005: specs/fragments/arrays/error.set-negative-index-is-refused.test:4:10: Value -1 is outside the range of 'ElementIndex' (int(0 to 9223372036854775807))
+```
+
+A laundered one panics at the callee-entry guard — and the `try … otherwise` around the call does NOT
+catch it. That is the whole of the difference from the past-the-length case: this refusal is a range
+violation, not an error the type declares, so there is no arm for a program to take. The `otherwise` block
+returning 42 is what says so: it is never entered.
+
+<!-- test: set-laundered-negative-index-panics-at-the-door -->
+```maxon
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	try arr.set(launder(-1), value: 99) otherwise 'negative'
+		return 42
+	end 'negative'
+	return try arr.get(0) otherwise 0
+end 'main'
+```
 ```exitcode
-42
+1
+```
+```stderr
+panic at Array.maxon:267: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in __Array_i64.set
+  in main
+  in mrt_start
 ```
 
 ### Copy-on-Write
@@ -1483,11 +1552,13 @@ end 'main'
 0
 ```
 
-<!-- test: array-literal-resize-out-of-range-panics -->
-A length `resize` cannot produce is refused, and it is refused the same way
-whatever the array is backed by. This is the literal-backed half; the twin below
-is the same call on an array built by `push`. Publishing the length instead
-would hand every later `count()` a value no array can have.
+<!-- test: error.array-resize-negative-length-is-refused -->
+A length `resize` cannot produce is refused, and a length the compiler can FOLD
+is refused where it is written. This half needs no twin: the fold happens at the
+call site, on the argument, before anything about the array's backing is
+consulted — so a literal-backed array and a `push`-built one are refused by the
+same constant, in the same place. What DOES depend on the backing is the runtime
+half, and that keeps its pair below.
 ```maxon
 function main() returns ExitCode
 	var a = [10, 20, 30]
@@ -1496,30 +1567,26 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at Array.maxon:413: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
-Stack trace:
-  in __Array_i64.resize
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: specs/fragments/arrays/error.array-resize-negative-length-is-refused.test:4:4: Value -2 is outside the range of 'ElementCount' (int(0 to 9223372036854775807))
 ```
 
-<!-- test: array-pushed-resize-out-of-range-panics -->
-The heap-backed twin of the test above: an array built by `push` refuses the
-same length, at the same place, with the same message.
+<!-- test: array-literal-resize-out-of-range-panics -->
+A length the compiler cannot fold reaches `resize`'s callee-entry guard and
+panics there, and it panics the same way whatever the array is backed by. This
+is the literal-backed half; the twin below is the same call on an array built by
+`push`. Publishing the length instead would hand every later `count()` a value
+no array can have.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
 
 function main() returns ExitCode
-	var a = IntArray.create()
-	a.push(10)
-	a.push(20)
-	a.push(30)
-	a.resize(-2)
+	var a = [10, 20, 30]
+	a.resize(launder(-2))
 	print("resized to {a.count()}\n")
 	return 0
 end 'main'
@@ -1528,7 +1595,40 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:413: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
+panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
+Stack trace:
+  in __Array_i64.resize
+  in main
+  in mrt_start
+```
+
+<!-- test: array-pushed-resize-out-of-range-panics -->
+The heap-backed twin of the test above: an array built by `push` refuses the
+same length, at the same place, with the same message. The two frames name two
+different specializations, which is the point — the guard is copied into each.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function launder(n Integer) returns Integer
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(10)
+	a.push(20)
+	a.push(30)
+	a.resize(launder(-2))
+	print("resized to {a.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at Array.maxon:437: Range check failed: value outside typealias 'ElementCount'
 Stack trace:
   in IntArray.resize
   in main

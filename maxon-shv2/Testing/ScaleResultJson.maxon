@@ -188,14 +188,14 @@ function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray
 	end 'notLogged'
 	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
 
-	pushNumber(doc, keys: keys, children: children, key: "allocsDelta", value: (result.total.allocs as Delta) - beforeAllocs)
+	pushNumber(doc, keys: keys, children: children, key: "allocsDelta", value: result.total.allocs - beforeAllocs)
 
 	// OMITTED, never zero, when the logged row was minted at another path — the same rule `allocsDelta`
 	// follows one line up when a rung has no past. A consumer that finds no `bytesDelta` knows the
 	// subtraction was refused; one handed a number could not have known it was fiction.
 	match bytes 'b'
 		withheld then return
-		comparable then pushNumber(doc, keys: keys, children: children, key: "bytesDelta", value: (result.total.bytes as Delta) - beforeBytes)
+		comparable then pushNumber(doc, keys: keys, children: children, key: "bytesDelta", value: result.total.bytes - beforeBytes)
 	end 'b'
 end 'addLoggedDeltas'
 

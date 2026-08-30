@@ -7,6 +7,22 @@ export typealias ByteOffset = int(0 to u64.max)
 
 // Dense column of byte offsets — the two span columns of `SourceRangeTable`.
 export typealias ByteOffsetArray = Array with ByteOffset
+
+// ⚠ A SECOND `MachineWord` EXISTS AND IT NOW AGREES WITH THIS ONE. `stdlib/Internals.maxon` also
+// declares `MachineWord = int(0 to u64.max)`, for the same reason: an address, a size, a file
+// offset, a raw bit pattern is unsigned by nature.
+//
+// ⛔ **THAT WAS NOT ALWAYS TRUE, AND THIS COMMENT USED TO ARGUE THE OPPOSITE.** It said the two had
+// "the OPPOSITE DOMAIN" and that the runtime's had to admit negatives for "an atomic delta or a
+// pointer step". The atomic delta was real; putting it under the SAME name as an address was the
+// defect. That file now splits the facts it was carrying at once into `MachineWord`,
+// `BufferCoordinate`, `ElementStride` and `RefCountDelta` — so the disagreement described here was
+// never between two `MachineWord`s, it was inside one of them. The two names still do not collide,
+// because that one is module-private while this one is `export`ed.
+//
+// `NonZeroWord` below is the one place they DO still differ (`1 to u64.max` here against
+// `1 to i64.max` there): that one's sole use casts an `ElementStride` at a divide, where a stride
+// above `i64.max` is not a value the type must admit, so the narrower range keeps its door guarded.
 export typealias MachineWord = int(0 to u64.max)
 
 // A machine word proven non-zero — the divisor type for `/`/`mod`. Integer division is fallible

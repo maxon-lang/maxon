@@ -164,7 +164,7 @@ let WasmSingleThreadToken = 1 as ParsedInt
 // always at least one — the WASI `run` skeleton requires a memory export whether or not the
 // program has any global.
 function wasmMemoryMinPages(base Wasm32Index, dataSize ByteCount) returns Wasm32Index
-	let endByte = (base as ByteCount) + dataSize
+	let endByte = base + dataSize
 	return ((endByte + WasmPageSizeMask) shr WasmPageSizeLog2) as Wasm32Index
 end 'wasmMemoryMinPages'
 
@@ -378,7 +378,7 @@ end 'bakeFuncTableIndexRelocs'
 // `.data` image. `WasmDataBaseOffset` is itself 8-aligned, so a program with no top-level `var`
 // puts `.rdata` at `WasmDataBaseOffset`.
 function wasmRdataBase(dataBase Wasm32Index, dataSize ByteCount) returns Wasm32Index
-	return alignUp((dataBase as ByteCount) + dataSize, alignment: WasmRdataAlignment) as Wasm32Index
+	return alignUp(dataBase + dataSize, alignment: WasmRdataAlignment) as Wasm32Index
 end 'wasmRdataBase'
 
 // ⭐⭐ **`mrt_panic` ON WASM — THE THIRD IMPLEMENTATION OF ONE CONTRACT, AND THE ONLY ONE THAT PRINTS
@@ -2877,7 +2877,7 @@ type WasmFuncEmitter
 			return
 		end 'notI64'
 		self.body.localGet(subjectId as Wasm32Index)
-		self.body.i64Const(span as ParsedInt)
+		self.body.i64Const(span)
 		self.body.i64GeU()
 		self.body.brIf(0 as Wasm32Index)
 	end 'emitSwitchBoundsGuard'

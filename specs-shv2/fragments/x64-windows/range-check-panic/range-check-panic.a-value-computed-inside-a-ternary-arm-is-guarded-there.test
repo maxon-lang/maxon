@@ -1,0 +1,236 @@
+// Test: range-check-panic.a-value-computed-inside-a-ternary-arm-is-guarded-there
+typealias Wide = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function widen(n Wide) returns Wide
+  return n * 100
+end 'widen'
+
+function pick(i Wide, flag bool) returns Small
+  return ((i + 1) as Small) if flag else 7
+end 'pick'
+
+function main() returns ExitCode
+  print("{pick(widen(0), flag: true)}\n")
+  print("{pick(widen(5), flag: false)}\n")
+  return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body#5
+  __il_body#5:
+    x64.imulRegRegImm32 rcx, rax, 100
+    x64.jmp __il_cont#4
+  __il_cont#4:
+    x64.movRegImm32 rdx, 1
+    x64.jmp __il_body#6
+  __il_body#6:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ternarytrue#7
+    x64.jmp ternaryfalse#8
+  ternarytrue#7:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#12
+    x64.jmp __rc_chk#11
+  __rc_chk#11:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc greater, __il_slow#12
+    x64.jmp __rc_ok#10
+  __il_slow#12:
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont#3
+  __rc_ok#10:
+    x64.jmp matchcont#9
+  ternaryfalse#8:
+    x64.movRegImm32 rax, 7
+    x64.jmp matchcont#9
+  matchcont#9:
+    x64.movRegReg rbx, rax
+    x64.jmp __il_cont#3
+  __il_cont#3:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot5
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rax, 5
+    x64.jmp __il_body#13
+  __il_body#13:
+    x64.imulRegRegImm32 rcx, rax, 100
+    x64.jmp __il_cont#2
+  __il_cont#2:
+    x64.movRegImm32 rdx, 0
+    x64.jmp __il_body#14
+  __il_body#14:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, ternarytrue#15
+    x64.jmp ternaryfalse#16
+  ternarytrue#15:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow#20
+    x64.jmp __rc_chk#19
+  __rc_chk#19:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc greater, __il_slow#20
+    x64.jmp __rc_ok#18
+  __il_slow#20:
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont#1
+  __rc_ok#18:
+    x64.jmp matchcont#17
+  ternaryfalse#16:
+    x64.movRegImm32 rax, 7
+    x64.jmp matchcont#17
+  matchcont#17:
+    x64.movRegReg rbx, rax
+    x64.jmp __il_cont#1
+  __il_cont#1:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot4
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -36,14 +36,28 @@ public typealias SlotStateArray = Array with SlotState
 /// declared, identically, in `Map.maxon` and `Set.maxon`; they are the parameter types of the scan below,
 /// so they belong with it.
 ///
+/// ⚠ **THE UPPER BOUND IS 2^62 AND IT IS A REAL BOUND, NOT A ROUND NUMBER.** A capacity is zero or a
+/// power of two minted only by doubling from 16, so the mintable capacities are 16, 32, … and the LAST
+/// of them is 2^62: `2^63` does not fit the signed 64-bit cell a magnitude lives in, so `capacity * 2`
+/// can never legitimately produce it. The INDEX shares the capacity's bound rather than taking
+/// `capacity - 1`, because a slot cursor legitimately holds `capacity` itself one past the end — that is
+/// what `MapIterator.advance`/`SetIterator.advance` hand to `findNextOccupied` as `from` after the last
+/// occupied slot.
+///
+/// ⭐ **A NARROWED BOUND IS THE ENFORCEMENT, AND THAT IS THE POINT.** `int(0 to u64.max)` is the one
+/// shape both compilers leave UNGUARDED (it covers all 64 bits, so there is nothing to check), which
+/// made these two aliases a place a negative could travel undetected — and made every `<`/`>` on them
+/// ambiguous between the signed and unsigned readings. Below `i64.max` the doors (parameters, returns,
+/// `as` casts, field stores) gain runtime range checks and the comparisons pin to the signed reading.
+///
 /// ⚠ **THEY ARE SPELLED `Table…` RATHER THAN THE CONTAINERS' OLD BARE `SlotIndex`/`BucketCapacity`, AND
 /// THAT IS A COLLISION CHECK RATHER THAN A PREFERENCE.** A listed module's exported names are visible to
 /// EVERY program the compiler builds — the compiler's OWN sources included, since the bootstrap loads all
 /// of `stdlib/` — and `SlotIndex` is already a local binding inside
 /// `maxon-shv2/Compiler/Targets/X64/X64Runtime.maxon`. A shared home has to be checked against the whole
 /// tree, not only against the two files it is being shared by (`StdlibLoader`'s collision rule).
-public typealias TableSlotIndex = int(0 to u64.max)
-public typealias TableCapacity = int(0 to u64.max)
+public typealias TableSlotIndex = int(0 to 4611686018427387904)
+public typealias TableCapacity = int(0 to 4611686018427387904)
 
 /// Find the next slot index >= `from` whose state is Occupied. Throws `IterationError.exhausted` if no
 /// occupied slot is found before `capacity`.

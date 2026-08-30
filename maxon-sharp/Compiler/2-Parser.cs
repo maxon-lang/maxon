@@ -24720,17 +24720,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// An earlier version of this remark ended "the two now answer through one predicate", which reads
   /// as though the whole rule were unified and is not true of the widening half.
   ///
-  /// ⚠⚠ THAT DISAGREEMENT IS REACHABLE AND SILENT, and it is NOT cured by deleting the four arms.
-  /// With `typealias Byte = int(0 to u8.max)`, `takeByte(n)` for `let n = 300` compiles clean and
-  /// passes **300** — outside the parameter's declared range — while the identical conversion at a
-  /// `return` is refused with "Value 300 is outside the range of 'Byte' (int(0 to 255))". The
-  /// asymmetry is not the widening table at all: it is that `ValidateAndEmitRangeCheck` has four
-  /// callers (return, explicit `as`, array-literal element, and nothing else) and THE CALL PATH IS
-  /// NOT ONE OF THEM, so a ranged parameter's bounds are never enforced at a call. Deferring these
-  /// arms to `IsWideningCastSafe` would reject the in-range `takeByte(65)` too, with an "argument
-  /// type mismatch" that names the wrong problem — the cure is the missing range check, not fewer
-  /// arms. Filed on PLAN.md's bootstrap-oracle-bugs list; it carries codegen blast radius (runtime
-  /// checks at call sites) and is its own change.
+  /// ⛔⛔ THIS REMARK USED TO END "so a ranged parameter's bounds are never enforced at a call", AND
+  /// THAT IS FALSE — it was already false when the sibling remark on <see cref="FillDefaultArgs"/>
+  /// was rewritten into the past tense ("had FOUR callers"), and the two have been contradicting
+  /// each other in one file since. MEASURED 2026-08-29 on this compiler: with
+  /// `typealias Byte = int(0 to u8.max)`, `takeByte(n)` for a LAUNDERED `n` of 300 builds clean and
+  /// then dies `panic ... Range check failed: value outside typealias 'Byte' / in takeByte` —
+  /// <see cref="EmitParameterRangeGuards"/> stands one guard at the CALLEE'S ENTRY, in front of
+  /// every caller, and the call path itself now reaches
+  /// <see cref="ValidateAndEmitRangeCheck"/> (`emitRuntimeCheck: false`) for the compile-time half a
+  /// dozen lines above this remark. The "four callers, and the call path is not one of them" census
+  /// is likewise stale — it listed three items and there are now six call sites.
+  ///
+  /// ⇒ What SURVIVES of the finding is only the widening disagreement itself, and it is no longer
+  /// silent: an out-of-range argument at one of the four permissive arms is caught at the entry
+  /// rather than passed. Deferring these arms to `IsWideningCastSafe` would still reject the
+  /// in-range `takeByte(65)` with an "argument type mismatch" that names the wrong problem, which is
+  /// why they stay. ⚠ Do not re-derive a blocker from this paragraph without re-measuring it: the
+  /// claim it replaced outlived the defect it described, and a PLAN.md row that quotes it describes
+  /// work already done.
   /// </remarks>
   private MaxonValue ConvertArgToParamType(MaxonValue arg, MaxonValueKind argKind, MaxonValueKind paramKind,
       string paramName, Token callToken) {
@@ -26984,43 +26992,33 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (!lhsDeclared && !rhsDeclared) return null;
     if (!ComparisonOperandIsUnsigned(lhsExpr, lhs)) return null;
     if (!ComparisonOperandIsUnsigned(rhsExpr, rhs)) return null;
-    if (!ComparisonNeedsTheUnsignedReading(lhsExpr, lhs, rhsExpr, rhs)) return null;
+    if (!OperandReachesAboveSignedMax(lhsExpr, lhs)
+        && !OperandReachesAboveSignedMax(rhsExpr, rhs)) return null;
     return IrType.U64;
   }
 
-  /// <summary>
-  /// ⭐⭐ **CAN THE TWO READINGS ACTUALLY DISAGREE HERE?** — shv2's
-  /// `Parser.comparisonNeedsTheUnsignedReading`, which carries the whole argument. In short:
+  /// ⭐⭐ **CAN THE TWO READINGS ACTUALLY DISAGREE HERE?** — the last gate, and the one that keeps this
+  /// rule off every comparison whose answer it would not change. Nothing below `i64.max` is read
+  /// differently by `jl` and `jb`, so unless SOME operand can hold a value above it the two readings
+  /// agree at every value the pair admits and the signed instruction this compiler has always emitted
+  /// is already right. That is what keeps `int(0 to 100) &lt; int(0 to 100)` — and thousands of goldens
+  /// — on `jl`.
   ///
-  /// ⚠⚠ **A DECLARED RANGE IS NOT A PROOF, AND THIS LANGUAGE'S STANDARD LIBRARY RELIES ON THAT.**
-  /// Nothing range-checks an argument at a ranged parameter in either compiler, and `stdlib` BUILDS on
-  /// it: `Map.findSlot` encodes "not found" as `-(insertIndex + 1)` through a return type declared
-  /// `TableSlotIndex = int(0 to u64.max)`, and `if slotIndex &gt;= 0` is what decodes it. Read unsigned
-  /// that test is always true. MEASURED without this clause: <b>81 behaviour failures</b> in this
-  /// suite, nearly all one cause.
+  /// ⚠ **IT ASKS THE DECLARATION, AND THE DECLARATION IS NOW TRUE.** This gate used to be preceded by a
+  /// narrowing clause: a folded constant that FITS the signed domain vetoed the unsigned reading, because
+  /// `stdlib` passed negative sentinels through types declared `int(0 to u64.max)` (`Map.findSlot`
+  /// returned `-(insertIndex + 1)` through `TableSlotIndex`, decoded by `if slotIndex &gt;= 0`) and the
+  /// strict rule cost <b>81 measured behaviour failures</b>. The price was that `wide &gt; 100` kept the
+  /// signed reading and was WRONG for a `wide` above `i64.max`. That clause is GONE because its premise
+  /// is: every stdlib alias that carries a sentinel was narrowed to a range it actually keeps, so the
+  /// only aliases still declared full-unsigned are ones with no negative to decode
+  /// (`stdlib/Internals.maxon`'s roster), and a value outside a narrowed alias is refused at its door
+  /// rather than arriving intact. A sentinel is now written in a SIGNED range that admits it — which
+  /// this rule reads as a refusal of the unsigned reading, from the operand itself.
   ///
-  /// ⇒ A folded constant that FITS the signed domain is evidence FOR the signed reading — against an
-  /// operand whose declared range reaches past `i64.max` it is the only thing in the expression that
-  /// says which reading the author meant. `u64.max` is excluded by name (see
-  /// <see cref="_unsignedMaxLiterals"/>), being the one constant whose pattern is negative and whose
-  /// value is not.
-  ///
-  /// ⚠ The price is named rather than hidden: `wide &gt; 100` keeps the signed reading and is WRONG for
-  /// a `wide` above `i64.max`. Closing that needs the ranges to become TRUE, not a wider rule here.
-  /// </summary>
-  private bool ComparisonNeedsTheUnsignedReading(ExprResult lhsExpr, MaxonValue lhs,
-      ExprResult rhsExpr, MaxonValue rhs) {
-    if (OperandFitsTheSignedDomain(lhs) || OperandFitsTheSignedDomain(rhs)) return false;
-    return OperandReachesAboveSignedMax(lhsExpr, lhs) || OperandReachesAboveSignedMax(rhsExpr, rhs);
-  }
-
-  /// A folded constant the signed domain holds — `u64.max` excluded by name, not by value.
-  private bool OperandFitsTheSignedDomain(MaxonValue operand) =>
-    !_unsignedMaxLiterals.Contains(operand.Id) && TryFoldIntConst(operand) is not null;
-
-  /// Can this operand hold a value the SIGNED reading gets wrong — one above `i64.max`? Only a DECLARED
-  /// range whose stored upper has wrapped negative (<see cref="IsAboveSignedMax"/>) or the `u64.max`
-  /// literal can say so.
+  /// Only a DECLARED range whose stored upper has wrapped negative (<see cref="IsAboveSignedMax"/>) or
+  /// the `u64.max` literal (<see cref="_unsignedMaxLiterals"/>, the one constant whose pattern is
+  /// negative and whose value is not) can say a value above `i64.max` is reachable.
   private bool OperandReachesAboveSignedMax(ExprResult operandExpr, MaxonValue operand) =>
     _unsignedMaxLiterals.Contains(operand.Id)
     || (DeclaredIntRange(operandExpr, operand) is { } range && IsAboveSignedMax(range));

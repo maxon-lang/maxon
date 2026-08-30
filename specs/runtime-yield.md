@@ -236,7 +236,7 @@ function held() returns Integer
 		Runtime.yield()
 		i = i + 1
 	end 'l'
-	return label.count() as Integer
+	return label.count()
 end 'held'
 
 function main() returns ExitCode
