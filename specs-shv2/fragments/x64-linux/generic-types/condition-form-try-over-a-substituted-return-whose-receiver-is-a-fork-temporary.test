@@ -56,11 +56,9 @@ func @Alpha.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 125
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
@@ -108,11 +106,9 @@ func @Box.fetch {
     x64.prologue 32
     x64.loadRegBaseDisp.byte rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, boom
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   boom:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
@@ -171,8 +167,7 @@ func @forkTemp {
     x64.movRegReg r12, r8
     x64.movRegReg r13, r10
     x64.cmpRegImm32 r13, 0
-    x64.jcc equal, ok
-    x64.jmp ifelse
+    x64.jcc notEqual, ifelse
   ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Box_Alpha
@@ -197,7 +192,6 @@ func @forkTemp {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
 }
 
 func @main {
@@ -305,17 +299,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

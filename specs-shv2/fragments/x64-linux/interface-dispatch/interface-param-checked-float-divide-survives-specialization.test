@@ -86,8 +86,7 @@ func @ratioVia {
     x64.setccReg equal, rax
     x64.divsdRegReg xmm0, xmm0, xmm6
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -116,9 +115,6 @@ func @main {
     x64.callDirect Alpha.create
     x64.movRegReg rbx, r8
     x64.movsdRegRip xmm0, [rip + __fconst_5]
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRdata rdx, [rip + __witness_Alpha.Scorer]
     x64.movRegReg rcx, rbx
@@ -126,26 +122,21 @@ func @main {
     x64.movsdRegRip xmm1, [rip + __fconst_6]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, ternaryfalse
-    x64.jmp fordered
   fordered:
-    x64.jcc equal, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc notEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r12, 14
     x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 r12, 1
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

@@ -1,0 +1,77 @@
+// Test: a-reduced-division-still-meets-its-range-check
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+
+function narrow(x Small) returns Small
+	return x
+end 'narrow'
+
+function quotient(n Integer) returns Integer
+	return n / 3
+end 'quotient'
+
+function main() returns ExitCode
+	let big = quotient(1000)
+	return narrow(big)
+end 'main'
+---
+ExitCode: 1
+---
+func @narrow {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 10
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @quotient {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 6148914691236517206
+    x64.imulHighReg rcx
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg r8, rdx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1000
+    x64.callDirect quotient
+  __il_body:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.cmpRegImm32 r8, 10
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
+    x64.movRegReg rcx, r8
+    x64.callDirect narrow
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -76,20 +76,16 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

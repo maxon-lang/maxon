@@ -95,11 +95,9 @@ func @Crate.count {
     x64.loadRegBaseDisp.word64 r8, [rax + 8]
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
@@ -147,9 +145,22 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect Crate.absorb
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect Crate.count
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg rbx, r12
+  __il_cont:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -219,65 +230,6 @@ func @__fieldDefault#Crate#items {
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __managed_decref]
     x64.callDirect __managed_create
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Array.clone {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
-    x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r13
-    x64.movRegReg rax, r12
-    x64.movRegReg r9, rbx
-    x64.callDirect __managed_slice_opaque
-    x64.movRegReg rbx, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -44,8 +44,7 @@ func @rewrap {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -57,8 +56,7 @@ func @rewrap {
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
@@ -75,7 +73,6 @@ func @rewrap {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegReg r8, r12
-    x64.jmp matchcont
   matchcont:
     x64.epilogue 32
     x64.popReg r12
@@ -108,8 +105,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.movRegImm32 r13, 0
     x64.movRegReg rcx, rbx
@@ -125,8 +121,7 @@ func @main {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
     x64.movRegReg rcx, r13
@@ -135,7 +130,6 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp matchcont
   matchcont:
     x64.movRegImm32 r13, 8
     x64.movRegReg rcx, rbx
@@ -150,15 +144,4 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }

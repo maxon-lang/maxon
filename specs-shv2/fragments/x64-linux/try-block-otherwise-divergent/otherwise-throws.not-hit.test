@@ -38,11 +38,9 @@ func @maybeFail {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -61,11 +59,9 @@ func @compute {
     x64.movRegImm32 rcx, 0
     x64.callDirect maybeFail
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryblkerr
-    x64.jmp tryblkok
+    x64.jcc equal, tryblkok
   tryblkerr:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
@@ -84,21 +80,15 @@ func @main {
     x64.prologue 32
     x64.callDirect compute
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.movRegImm32 r8, 99
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

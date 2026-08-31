@@ -17,17 +17,21 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 3001
-    x64.movRegImm32 rcx, 100
-    x64.cqo
-    x64.idivReg rcx
-    x64.cmpRegImm32 rdx, 0
+    x64.movRegImm32 r8, 3001
+    x64.movRegImm rax, 11805916207174113035
+    x64.imulHighReg r8
+    x64.leaRegRegImm32 rax, rdx, 3001
+    x64.sarRegImm8 rax, rax, 6
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 63
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.subRegReg r8, r8, rax
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -36,7 +40,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, rdx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

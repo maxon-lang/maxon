@@ -1,5 +1,5 @@
 // Test: loop-reuse-transient-overflow
-function loopReuse(p int) returns int
+function loopReuse(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -28,6 +28,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -53,22 +54,21 @@ func @loopReuse {
     x64.leaRegRegImm32 r12, rcx, 10
     x64.leaRegRegImm32 r13, rcx, 11
     x64.storeSlotReg slot0, r13
-    x64.leaRegRegImm32 r13, rcx, 20
-    x64.leaRegRegImm32 rcx, rcx, 5
-    x64.movRegImm32 r14, 0
-    x64.jmp whilehdr
+    x64.leaRegRegImm32 rcx, rcx, 20
+    x64.movRegImm32 r13, 0
+    x64.movRegReg r14, r13
+    x64.movRegReg r13, r8
   whilehdr:
     x64.cmpRegImm32 r14, 3
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
-    x64.movRegReg r15, r13
-    x64.subRegReg r15, r13, rcx
+    x64.movRegReg r15, rcx
+    x64.subRegReg r15, rcx, r13
     x64.leaRegRegImm32 r14, r14, 1
-    x64.movRegReg rcx, r15
+    x64.movRegReg r13, r15
     x64.jmp whilehdr
   whileexit:
-    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, r13, rax
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegReg rax, rax, rsi
     x64.leaRegRegReg rax, rax, rdi
@@ -98,8 +98,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect loopReuse
     x64.cmpRegImm32 r8, 81
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

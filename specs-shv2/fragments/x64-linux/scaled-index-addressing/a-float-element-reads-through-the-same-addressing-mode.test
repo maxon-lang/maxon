@@ -1,0 +1,157 @@
+// Test: a-float-element-reads-through-the-same-addressing-mode
+typealias Real = float(f64.min to f64.max)
+typealias RealArray = Array with Real
+
+function total(a RealArray) returns Real
+	var t = 0.0
+	for v in a 'loop'
+		t = t + v
+	end 'loop'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var a = RealArray.create()
+	a.push(1.5)
+	a.push(2.25)
+	a.push(4.0)
+	if total(a) != 7.75 'sum'
+		return 1
+	end 'sum'
+	if (try a.get(1) otherwise panic("get: index out of range")) != 2.25 'middle'
+		return 2
+	end 'middle'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movqGprXmm rdx, xmm0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movqGprXmm rdx, xmm0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.movqGprXmm rdx, xmm0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  __il_body:
+    x64.movsdRegRip xmm0, [rip + __fconst_5]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+  forhdr:
+    x64.cmpRegReg rax, rcx
+    x64.jcc greaterEqual, __il_cont
+  loop:
+    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
+  __im_cont#17:
+    x64.movqXmmGpr xmm1, rsi
+    x64.addsdRegReg xmm0, xmm0, xmm1
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  __il_cont:
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, sum
+  fordered#19:
+    x64.jcc equal, ifcont#2
+  sum:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#20
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#21
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#7
+  critsplit#21:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#7
+  critsplit#20:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont#7:
+    x64.movqXmmGpr xmm0, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, middle
+  fordered#18:
+    x64.jcc equal, ifcont#6
+  middle:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

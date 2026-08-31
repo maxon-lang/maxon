@@ -32,8 +32,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect List.isEmpty
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   check:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -52,37 +51,6 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @List.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
-    x64.callDirect __list_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @List.isEmpty {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect __list_is_empty
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

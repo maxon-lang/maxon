@@ -40,8 +40,7 @@ func @compute {
     x64.leaRegSlot rdx, slot0
     x64.storeBaseDispReg.word64 [rdx + 0], rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, inner
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   inner:
     x64.movRegImm32 rax, 2
     x64.leaRegSlot rcx, slot1
@@ -68,11 +67,9 @@ func @main {
     x64.callDirect compute
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

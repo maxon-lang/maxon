@@ -1,8 +1,8 @@
 // Test: parsable.byte-user-type-outranks-primitive
 type byte
-	export let n as int
+	export let n as Integer
 
-	export static function fromString(_ String) returns int
+	export static function fromString(_ String) returns Integer
 		return 7
 	end 'fromString'
 end 'byte'
@@ -10,6 +10,7 @@ end 'byte'
 function main() returns ExitCode
 	return byte.fromString("41")
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 7
 ---
@@ -19,18 +20,14 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.leaRegRdata rax, [rip + __str_rec_1]
-    x64.jmp __il_body
   __il_body:
     x64.movRegImm32 r8, 7
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

@@ -1,11 +1,12 @@
 // Test: dead-def-parameter-holds-a-register
-function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, _ int) returns int
+function f(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, _ Integer) returns Integer
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
 end 'f'
 
 function main() returns ExitCode
 	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, _: 15)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 105
 ---
@@ -14,31 +15,14 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_body
   __il_body:
-    x64.leaRegRegImm32 rax, rax, 2
-    x64.leaRegRegImm32 rax, rax, 3
-    x64.leaRegRegImm32 rax, rax, 4
-    x64.leaRegRegImm32 rax, rax, 5
-    x64.leaRegRegImm32 rax, rax, 6
-    x64.leaRegRegImm32 rax, rax, 7
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.leaRegRegImm32 rax, rax, 9
-    x64.leaRegRegImm32 rax, rax, 10
-    x64.leaRegRegImm32 rax, rax, 11
-    x64.leaRegRegImm32 rax, rax, 12
-    x64.leaRegRegImm32 rax, rax, 13
-    x64.leaRegRegImm32 r8, rax, 14
-    x64.jmp __il_cont
+    x64.movRegImm32 r8, 105
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -50,11 +50,9 @@ func @fetch {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 125
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic
@@ -70,11 +68,9 @@ func @fetch {
     x64.ret
   __rc_ok:
     x64.cmpRegImm32 rbx, 1
-    x64.jcc less, bad
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   bad:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
@@ -159,11 +155,9 @@ func @run {
     x64.prologue 72
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 125
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_11]
     x64.callDirect mrt_panic
@@ -180,18 +174,14 @@ func @run {
     x64.callDirect fetch
     x64.storeSlotReg slot0, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryblkerr
-    x64.jmp tryblkok
+    x64.jcc equal, tryblkok
   tryblkerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.leaRegRdata rcx, [rip + __str_rec_9]
     x64.callDirect print
-    x64.jmp matchcont
-  matchcont:
     x64.jmp tryblkcont
   matchdead:
   tryblkok:
@@ -243,7 +233,6 @@ func @run {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot0
     x64.callDirect __str_decref
-    x64.jmp tryblkcont
   tryblkcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -263,17 +252,6 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.callDirect run
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

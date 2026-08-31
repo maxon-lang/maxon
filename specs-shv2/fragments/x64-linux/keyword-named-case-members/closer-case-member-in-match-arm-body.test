@@ -5,7 +5,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		end then return 2
@@ -13,7 +13,7 @@ function tagOf(k Kw) returns int
 	end 'm'
 end 'tagOf'
 
-function pick(n int) returns int
+function pick(n Integer) returns Integer
 	match n 'p'
 		0 then return tagOf(Kw.end) * 21
 		default then return 9
@@ -23,6 +23,7 @@ end 'pick'
 function main() returns ExitCode
 	return pick(0) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 42
 ---
@@ -31,43 +32,17 @@ func @pick {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchdefault
-  matcharm#1:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_body
-  __il_body:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext#10
-  matcharm#6:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont
-  matchnext#10:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#7
-    x64.jmp matchnext#11
-  matcharm#7:
+    x64.jcc notEqual, matchdefault
+  matcharm:
     x64.movRegImm32 rax, 2
-    x64.jmp __il_cont
-  matchnext#11:
-    x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm#8
-    x64.jmp matchdead
-  matcharm#8:
-    x64.movRegImm32 rax, 3
-    x64.jmp __il_cont
   __il_cont:
     x64.imulRegRegImm32 r8, rax, 21
     x64.popReg rbp
     x64.ret
-  matchdead:
   matchdefault:
     x64.movRegImm32 r8, 9
     x64.popReg rbp
     x64.ret
-  matchcont#3:
-  matchcont#12:
 }
 
 func @main {
@@ -79,11 +54,9 @@ func @main {
     x64.callDirect pick
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

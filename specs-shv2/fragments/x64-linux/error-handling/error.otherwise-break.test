@@ -44,11 +44,9 @@ func @mayFail {
     x64.leaRegGlobal rax, __data_counter
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 3
-    x64.jcc equal, check
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   check:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -67,32 +65,16 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, loop
-    x64.jmp critsplit
   loop:
     x64.callDirect mayFail
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.jmp whileexit
-  tryok:
-    x64.leaRegRegReg rbx, rbx, r8
-    x64.jmp whilehdr
-  critsplit:
-    x64.jmp whileexit
+    x64.jcc equal, tryok
   whileexit:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -107,4 +89,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  tryok:
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.jmp loop
 }

@@ -26,27 +26,24 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rdx, 68
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 rdx, 72
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.movRegImm32 rsi, 7
     x64.movRegReg rcx, rdx
     x64.andRegImm32 rcx, rdx, -64
     x64.movRegReg rdi, rcx
     x64.negReg rdi, rcx
-    x64.orRegReg rcx, rcx, rdi
-    x64.movRegReg rdi, rcx
-    x64.sarRegImm8 rdi, rcx, 63
+    x64.orRegReg rdi, rdi, rcx
+    x64.sarRegImm8 rdi, rdi, 63
     x64.movRegReg rcx, rdx
     x64.shlRegCl rsi, rsi
-    x64.notReg rdi, rdi
-    x64.andRegReg rsi, rsi, rdi
+    x64.movRegReg r8, rdi
+    x64.notReg r8, rdi
+    x64.andRegReg rsi, rsi, r8
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, shl
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#6
   shl:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
@@ -54,32 +51,22 @@ func @main {
   ifcont#6:
     x64.movRegImm32 rsi, 1024
     x64.movRegReg rcx, rdx
-    x64.andRegImm32 rcx, rdx, -64
-    x64.movRegReg rdi, rcx
-    x64.negReg rdi, rcx
-    x64.orRegReg rcx, rcx, rdi
-    x64.sarRegImm8 rcx, rcx, 63
-    x64.movRegReg rdi, rdx
-    x64.orRegReg rdi, rdx, rcx
-    x64.movRegReg rcx, rdi
+    x64.orRegReg rcx, rdx, rdi
     x64.sarRegCl rsi, rsi
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, shr
-    x64.jmp ifcont#8
+    x64.jcc equal, ifcont#8
   shr:
     x64.movRegImm32 r8, 2
     x64.popReg rbp
     x64.ret
   ifcont#8:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp forhdr
   forexit:
     x64.cmpRegImm32 rax, 4
-    x64.jcc notEqual, iterations
-    x64.jmp ifcont#10
+    x64.jcc equal, ifcont#10
   iterations:
     x64.movRegImm32 r8, 3
     x64.popReg rbp

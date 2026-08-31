@@ -2,7 +2,7 @@
 type Named
 	export var name as String
 
-	static function create(f String, flag int) returns Named
+	static function create(f String, flag Integer) returns Named
 		if flag > 0 'g'
 			return Self{name: f}
 		end 'g'
@@ -16,6 +16,7 @@ function main() returns ExitCode
 	print("{n.name}")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -36,8 +37,7 @@ func @Named.create {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greater, g
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   g:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -178,17 +178,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

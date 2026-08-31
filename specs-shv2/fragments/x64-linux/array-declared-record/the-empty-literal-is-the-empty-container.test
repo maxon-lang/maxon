@@ -48,8 +48,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, notEmpty
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   notEmpty:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -70,11 +69,9 @@ func @main {
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

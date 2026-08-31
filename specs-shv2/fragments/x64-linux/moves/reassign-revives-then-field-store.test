@@ -1,8 +1,8 @@
 // Test: reassign-revives-then-field-store
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -15,6 +15,7 @@ function main() returns ExitCode
 	p.x = 5
 	return p.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 5
 ---
@@ -76,11 +77,9 @@ func @main {
     x64.loadRegBaseDisp.word64 r8, [rcx + 0]
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -98,17 +97,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

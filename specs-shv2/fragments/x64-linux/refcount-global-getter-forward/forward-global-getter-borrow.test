@@ -153,11 +153,9 @@ func @Box.size {
     x64.loadRegBaseDisp.word64 r8, [rax + 8]
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_8]
     x64.callDirect mrt_panic
@@ -184,8 +182,7 @@ func @loadBase {
     x64.leaRegGlobal rax, __data_baseLoaded
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, hit
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   hit:
     x64.leaRegGlobal rax, __data_cachedBase
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -320,8 +317,7 @@ func @buildFor {
     x64.storeSlotReg slot0, r12
     x64.xorRegImm32 rbx, rbx, 1
     x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, native
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   native:
     x64.movRegReg r8, r12
     x64.epilogue 40
@@ -336,8 +332,7 @@ func @buildFor {
     x64.leaRegGlobal rax, __data_mergedDone
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, cached
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   cached:
     x64.leaRegGlobal rax, __data_cachedMerged
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -421,9 +416,19 @@ func @augment {
     x64.prologue 32
     x64.callDirect buildFor
     x64.movRegReg rbx, r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc lessEqual, __il_cont
+  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect Box.size
     x64.movRegReg r12, r8
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Box_Item
     x64.movRegReg r8, r12
@@ -443,11 +448,9 @@ func @main {
     x64.callDirect augment
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_9]
     x64.callDirect mrt_panic

@@ -1,5 +1,5 @@
 // Test: idle-lets-across-a-loop
-function idleLets(p int) returns int
+function idleLets(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -31,6 +31,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -64,11 +65,9 @@ func @idleLets {
     x64.storeSlotReg slot1, rcx
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 r15, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r15, 4
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRegReg rcx, rcx, r15
     x64.leaRegRegImm32 r15, r15, 1
@@ -110,8 +109,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect idleLets
     x64.cmpRegImm32 r8, 126
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

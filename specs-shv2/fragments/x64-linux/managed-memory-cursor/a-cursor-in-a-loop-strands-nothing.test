@@ -44,18 +44,15 @@ func @main {
     x64.callDirect __managed_push
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r13, 200
-    x64.jcc less, many
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   many:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_cursor_create
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r12, 99
     x64.movRegReg rcx, rbx
@@ -74,23 +71,22 @@ func @main {
     x64.leaRegRegReg r12, r12, r8
     x64.movRegReg rcx, r14
     x64.callDirect __managed_cursor_decref
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr
   forexit:
-    x64.movRegImm32 rcx, 200
-    x64.movRegReg rax, r12
-    x64.cqo
-    x64.idivReg rcx
-    x64.movRegReg r12, rax
+    x64.movRegImm rax, 11805916207174113035
+    x64.imulHighReg r12
+    x64.leaRegRegReg rax, rdx, r12
+    x64.sarRegImm8 rax, rax, 7
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 63
+    x64.leaRegRegReg r12, rax, rcx
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

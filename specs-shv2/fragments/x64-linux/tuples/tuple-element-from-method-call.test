@@ -1,8 +1,8 @@
 // Test: tuple-element-from-method-call
 type Point
-	export let x as int
+	export let x as Integer
 
-	export static function create(x int) returns Point
+	export static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 end 'Point'
@@ -11,6 +11,7 @@ function main() returns ExitCode
 	let t = (1, Point.create(41))
 	return t.0 + t.1.x
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 42
 ---
@@ -62,11 +63,9 @@ func @main {
     x64.callDirect __destruct___Tuple2.int.Point
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -1,9 +1,9 @@
 // Test: seven-across-call-in-loop
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
-function sevenAcross(p int) returns int
+function sevenAcross(p Integer) returns Integer
 	var a1 = p + 1
 	var a2 = p + 2
 	var a3 = p + 3
@@ -33,6 +33,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -48,25 +49,19 @@ func @sevenAcross {
     x64.leaRegRegImm32 r9, rcx, 6
     x64.leaRegRegImm32 rcx, rcx, 7
     x64.movRegImm32 r10, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r10, 3
-    x64.jcc less, loop
-    x64.jmp whileexit
-  loop:
-    x64.jmp __il_body
+    x64.jcc greaterEqual, whileexit
   __il_body:
-    x64.leaRegRegImm32 r11, r10, 1
-    x64.jmp __il_cont
-  __il_cont:
-    x64.leaRegRegReg rax, rax, r11
-    x64.leaRegRegReg rdx, rdx, r11
-    x64.leaRegRegReg rsi, rsi, r11
-    x64.leaRegRegReg rdi, rdi, r11
-    x64.leaRegRegReg r8, r8, r11
-    x64.leaRegRegReg r9, r9, r11
-    x64.leaRegRegReg rcx, rcx, r11
     x64.leaRegRegImm32 r10, r10, 1
+  __il_cont:
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rdx, rdx, r10
+    x64.leaRegRegReg rsi, rsi, r10
+    x64.leaRegRegReg rdi, rdi, r10
+    x64.leaRegRegReg r8, r8, r10
+    x64.leaRegRegReg r9, r9, r10
+    x64.leaRegRegReg rcx, rcx, r10
     x64.jmp whilehdr
   whileexit:
     x64.leaRegRegReg rax, rax, rdx
@@ -87,8 +82,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect sevenAcross
     x64.cmpRegImm32 r8, 70
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -1,5 +1,5 @@
 // Test: recursion-factorial
-function factorial(n int) returns int
+function factorial(n Integer) returns Integer
 	if n <= 1 'base'
 		return 1
 	end 'base'
@@ -9,6 +9,7 @@ end 'factorial'
 function main() returns ExitCode
 	return factorial(5)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 120
 ---
@@ -20,8 +21,7 @@ func @factorial {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 1
-    x64.jcc lessEqual, base
-    x64.jmp ifcont
+    x64.jcc greater, ifcont
   base:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
@@ -48,11 +48,9 @@ func @main {
     x64.callDirect factorial
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

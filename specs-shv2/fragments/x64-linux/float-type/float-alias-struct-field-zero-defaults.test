@@ -43,20 +43,16 @@ func @main {
     x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont#4
-    x64.jmp fordered#8
+    x64.jcc parity, ifcont
   fordered#8:
-    x64.jcc equal, zeroMass
-    x64.jmp ifcont#4
+    x64.jcc notEqual, ifcont
   zeroMass:
     x64.loadRegBaseDisp.word64 xmm0, [rax + 8]
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont#3
-    x64.jmp fordered#9
+    x64.jcc parity, ifcont
   fordered#9:
-    x64.jcc equal, zeroVel
-    x64.jmp ifcont#3
+    x64.jcc notEqual, ifcont
   zeroVel:
     x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
     x64.loadRegBaseDisp.word64 xmm1, [rax + 8]
@@ -68,11 +64,9 @@ func @main {
     x64.cvttsd2siRegReg r8, xmm0
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -84,9 +78,7 @@ func @main {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  ifcont#3:
-    x64.jmp ifcont#4
-  ifcont#4:
+  ifcont:
     x64.movRegImm32 r8, 7
     x64.epilogue 48
     x64.popReg rbp

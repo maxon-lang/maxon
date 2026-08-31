@@ -17,18 +17,15 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_rec_2]
     x64.callDirect __bool_fromString
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 rax, 1
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, r8
-    x64.jmp trycont
   trycont:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   check:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -37,50 +34,6 @@ func @main {
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__bool_fromString {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.leaRegRdata rdx, [rip + __str_rec_3]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_eq
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, is_true
-    x64.jmp ifcont#2
-  is_true:
-    x64.movRegImm32 r8, 1
-    x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont#2:
-    x64.leaRegRdata rdx, [rip + __str_rec_2]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_eq
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, is_false
-    x64.jmp ifcont#4
-  is_false:
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont#4:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

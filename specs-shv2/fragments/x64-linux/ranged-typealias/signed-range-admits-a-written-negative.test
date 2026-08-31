@@ -1,0 +1,33 @@
+// Test: signed-range-admits-a-written-negative
+typealias Offset = int(-10 to 10)
+
+function take(o Offset) returns Offset
+	return o
+end 'take'
+
+function main() returns ExitCode
+	if take(-5) == -5 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 18446744073709551611
+  __il_cont:
+    x64.cmpRegImm32 rax, -5
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+}

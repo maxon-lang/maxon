@@ -24,7 +24,16 @@ func @hasContent {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow:
     x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.setccReg greater, r8
     x64.epilogue 32
@@ -84,8 +93,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect hasContent
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, ternaryfalse
   ternarytrue:
     x64.loadRegSlot rbx, slot1
     x64.jmp matchcont
@@ -95,7 +103,6 @@ func @main {
     x64.movRegReg rbx, r8
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, rbx
     x64.callDirect print
@@ -109,26 +116,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

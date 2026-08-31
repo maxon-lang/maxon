@@ -48,26 +48,14 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg equal, rcx
-    x64.leaRegFunc rdx, [rip + __fnref_doubleFn]
-    x64.imulRegReg rcx, rcx, rdx
-    x64.cmpRegImm32 rax, 1
-    x64.setccReg equal, rax
-    x64.leaRegFunc rdx, [rip + __fnref_tripleFn]
-    x64.imulRegReg rax, rax, rdx
-    x64.leaRegRegReg rbx, rcx, rax
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg equal, rcx
-    x64.leaRegFunc rdx, [rip + __fnref_doubleFn]
-    x64.imulRegReg rcx, rcx, rdx
-    x64.cmpRegImm32 rax, 1
-    x64.setccReg equal, rax
-    x64.leaRegFunc rdx, [rip + __fnref_tripleFn]
-    x64.imulRegReg rax, rax, rdx
-    x64.leaRegRegReg r12, rcx, rax
+    x64.leaRegFunc rax, [rip + __fnref_doubleFn]
+    x64.leaRegFunc rcx, [rip + __fnref_tripleFn]
+    x64.imulRegRegImm32 rcx, rcx, 0
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.leaRegFunc rax, [rip + __fnref_doubleFn]
+    x64.imulRegRegImm32 rax, rax, 0
+    x64.leaRegFunc rcx, [rip + __fnref_tripleFn]
+    x64.leaRegRegReg r12, rax, rcx
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callReg rbx
@@ -78,11 +66,9 @@ func @main {
     x64.leaRegRegReg r8, rbx, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

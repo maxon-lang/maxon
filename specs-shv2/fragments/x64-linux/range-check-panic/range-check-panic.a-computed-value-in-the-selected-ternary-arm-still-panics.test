@@ -1,0 +1,63 @@
+// Test: range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics
+typealias Wide = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+function widen(n Wide) returns Wide
+  return n * 100
+end 'widen'
+
+function pick(i Wide, flag bool) returns Small
+  return ((i + 1) as Small) if flag else 7
+end 'pick'
+
+function main() returns ExitCode
+  return pick(widen(5), flag: true)
+end 'main'
+---
+ExitCode: 1
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, matchcont
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ternaryfalse:
+    x64.movRegImm32 r8, 7
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rcx, 500
+  __il_cont#2:
+    x64.movRegImm32 rdx, 1
+  __il_slow:
+    x64.callDirect pick
+  __il_cont#1:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

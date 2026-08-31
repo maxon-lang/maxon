@@ -86,19 +86,6 @@ func @Pairs.add {
     x64.ret
 }
 
-func @Pairs.size {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.leaRegRegReg r8, rax, rcx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -194,23 +181,25 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
     x64.leaRegRdata r9, [rip + __layout_Pairs_String_String]
-    x64.loadRegSlot rbx, slot0
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rcx, slot0
     x64.movRegReg rdx, r14
     x64.movRegReg rax, r13
     x64.callDirect Pairs.add
-    x64.movRegReg rcx, rbx
-    x64.callDirect Pairs.size
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
+  __il_body:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegRegReg rbx, rcx, rax
+  __il_cont:
+    x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Pairs_String_String
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_8]
     x64.callDirect mrt_panic
@@ -224,7 +213,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

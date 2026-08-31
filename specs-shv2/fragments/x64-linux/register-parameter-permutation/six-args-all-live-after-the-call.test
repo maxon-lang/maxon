@@ -1,9 +1,9 @@
 // Test: six-args-all-live-after-the-call
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function keepAll(a int, b int, c int, d int, e int, f int) returns int
+function keepAll(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	let r = digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
 	return r + a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f
 end 'keepAll'
@@ -15,6 +15,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -22,7 +23,6 @@ func @keepAll {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.imulRegRegImm32 r8, rdi, 100000
     x64.imulRegRegImm32 r10, rsi, 10000
@@ -34,7 +34,6 @@ func @keepAll {
     x64.imulRegRegImm32 r10, rdx, 10
     x64.leaRegRegReg r8, r8, r10
     x64.leaRegRegReg r8, r8, rcx
-    x64.jmp __il_cont
   __il_cont:
     x64.imulRegRegImm32 rcx, rcx, 100000
     x64.leaRegRegReg rcx, r8, rcx
@@ -64,8 +63,7 @@ func @main {
     x64.movRegImm32 rdi, 6
     x64.callDirect keepAll
     x64.cmpRegImm32 r8, 777777
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -1,0 +1,79 @@
+// Test: a-float-constant-expression-is-not-folded
+typealias Real = float(f64.min to f64.max)
+
+function scaleF(a Real, b Real) returns Real
+	return a * b
+end 'scaleF'
+
+function addF(a Real, b Real) returns Real
+	return a + b
+end 'addF'
+
+function main() returns ExitCode
+	if scaleF(2.5, b: 4.0) != 10.0 'product'
+		return 1
+	end 'product'
+	if addF(0.5, b: 0.25) != 0.75 'sum'
+		return 2
+	end 'sum'
+	if scaleF(-1.5, b: 2.0) != -3.0 'negativeProduct'
+		return 3
+	end 'negativeProduct'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+  __il_body#8:
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+  __il_cont#7:
+    x64.movsdRegRip xmm1, [rip + __fconst_6]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, product
+  fordered#13:
+    x64.jcc equal, ifcont#2
+  product:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+  __il_body#10:
+    x64.addsdRegReg xmm0, xmm0, xmm1
+  __il_cont#9:
+    x64.movsdRegRip xmm1, [rip + __fconst_7]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, sum
+  fordered#14:
+    x64.jcc equal, ifcont#4
+  sum:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.movsdRegRip xmm1, [rip + __fconst_5]
+  __il_body#12:
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+  __il_cont#11:
+    x64.movsdRegRip xmm1, [rip + __fconst_8]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, negativeProduct
+  fordered#15:
+    x64.jcc equal, ifcont#6
+  negativeProduct:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

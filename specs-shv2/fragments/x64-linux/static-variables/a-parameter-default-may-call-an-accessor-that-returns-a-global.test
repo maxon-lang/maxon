@@ -40,15 +40,6 @@ func @shared {
     x64.ret
 }
 
-func @describe {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -64,9 +55,9 @@ func @main {
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.callDirect __paramDefault#describe#0
     x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect describe
-    x64.movRegReg r13, r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+  __il_cont:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -125,17 +116,6 @@ func @__paramDefault#describe#0 {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.callDirect shared
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

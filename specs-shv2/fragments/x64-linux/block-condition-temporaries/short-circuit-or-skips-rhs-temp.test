@@ -42,10 +42,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 3
     x64.movRegImm32 r13, 1
-    x64.jcc equal, critsplit#8
-    x64.jmp orrhs
-  critsplit#8:
-    x64.jmp scmerge
+    x64.jcc equal, scmerge
   orrhs:
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
@@ -63,27 +60,22 @@ func @main {
     x64.setccReg equal, r13
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
-    x64.jmp scmerge
   scmerge:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, x
-    x64.jmp critsplit#9
+    x64.jcc equal, critsplit
   x:
     x64.movRegImm32 r8, 1
     x64.jmp ifcont
-  critsplit#9:
+  critsplit:
     x64.movRegReg r8, rbx
-    x64.jmp ifcont
   ifcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

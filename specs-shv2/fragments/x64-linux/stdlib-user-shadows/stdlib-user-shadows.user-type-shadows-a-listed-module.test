@@ -1,6 +1,6 @@
 // Test: stdlib-user-shadows.user-type-shadows-a-listed-module
 type Clock
-	export var x as int
+	export var x as Integer
 
 	static function make() returns Clock
 		return Clock{x: 9}
@@ -11,6 +11,7 @@ function main() returns ExitCode
 	let c = Clock.make()
 	return c.x as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 9
 ---
@@ -32,11 +33,9 @@ func @main {
     x64.loadRegBaseDisp.word64 r8, [rax + 0]
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

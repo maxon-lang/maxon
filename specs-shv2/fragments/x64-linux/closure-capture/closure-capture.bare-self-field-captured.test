@@ -1,20 +1,20 @@
 // Test: closure-capture.bare-self-field-captured
 
-typealias Fn1 = function(int) returns int
+typealias Fn1 = function(int) returns Integer
 
-function apply(f Fn1, x int) returns int
+function apply(f Fn1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 type Counter
-	export var n as int
+	export var n as Integer
 
 	static function create() returns Counter
 		return Self{n: 3}
 	end 'create'
 
-	export function via() returns int
-		return apply(function(k int) gives k + n, x: 1)
+	export function via() returns Integer
+		return apply(function(k Integer) gives k + n, x: 1)
 	end 'via'
 end 'Counter'
 
@@ -22,6 +22,7 @@ function main() returns ExitCode
 	var c = Counter.create()
 	return c.via() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 4
 ---
@@ -121,11 +122,9 @@ func @main {
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

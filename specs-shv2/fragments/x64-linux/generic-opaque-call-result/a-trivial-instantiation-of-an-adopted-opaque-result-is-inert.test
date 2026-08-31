@@ -159,8 +159,7 @@ func @main {
     x64.callDirect Holder.holds
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, mismatch
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   mismatch:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -178,8 +177,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Holder.holds
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, falsePositive
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   falsePositive:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -198,16 +196,6 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @int.equals {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg equal, r8
     x64.popReg rbp
     x64.ret
 }

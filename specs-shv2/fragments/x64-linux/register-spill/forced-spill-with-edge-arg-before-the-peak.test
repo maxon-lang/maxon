@@ -1,9 +1,9 @@
 // Test: forced-spill-with-edge-arg-before-the-peak
-function leaf(x int) returns int
+function leaf(x Integer) returns Integer
 	return x + 1
 end 'leaf'
 
-function edgeAnchor(p int, q int) returns int
+function edgeAnchor(p Integer, q Integer) returns Integer
 	let t = p + q
 	let a1 = p + 1
 	let a2 = p + 2
@@ -30,6 +30,7 @@ function main() returns ExitCode
 	end 'skipped'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -50,28 +51,22 @@ func @edgeAnchor {
     x64.leaRegRegImm32 rbx, rcx, 8
     x64.movRegImm32 r12, 0
     x64.cmpRegImm32 rcx, 0
-    x64.jcc greater, br
-    x64.jmp critsplit
+    x64.jcc lessEqual, critsplit
   br:
-    x64.movRegReg r12, rax
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
-    x64.jmp __il_body
-  __il_body:
-    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegReg rcx, rax
     x64.jmp __il_cont
+  critsplit:
+    x64.movRegReg rcx, r12
   __il_cont:
-    x64.leaRegRegReg rdx, rdx, rsi
-    x64.leaRegRegReg rdx, rdx, rdi
-    x64.leaRegRegReg rdx, rdx, r8
-    x64.leaRegRegReg rdx, rdx, r9
-    x64.leaRegRegReg rdx, rdx, r10
-    x64.leaRegRegReg rdx, rdx, r11
-    x64.leaRegRegReg rdx, rdx, rbx
-    x64.leaRegRegReg rdx, rdx, r12
-    x64.leaRegRegReg rcx, rdx, rcx
+    x64.leaRegRegReg rsi, rdx, rsi
+    x64.leaRegRegReg rsi, rsi, rdi
+    x64.leaRegRegReg rsi, rsi, r8
+    x64.leaRegRegReg rsi, rsi, r9
+    x64.leaRegRegReg rsi, rsi, r10
+    x64.leaRegRegReg rsi, rsi, r11
+    x64.leaRegRegReg rsi, rsi, rbx
+    x64.leaRegRegReg rcx, rsi, rcx
+    x64.leaRegRegReg rcx, rcx, rdx
     x64.leaRegRegReg r8, rcx, rax
     x64.popReg r12
     x64.popReg rbx
@@ -88,8 +83,7 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.callDirect edgeAnchor
     x64.cmpRegImm32 r8, 52
-    x64.jcc notEqual, taken
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   taken:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -100,8 +94,7 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.callDirect edgeAnchor
     x64.cmpRegImm32 r8, 39
-    x64.jcc notEqual, skipped
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   skipped:
     x64.movRegImm32 r8, 2
     x64.epilogue 32

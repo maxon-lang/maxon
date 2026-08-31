@@ -147,26 +147,6 @@ func @GenericModule.pushItem {
     x64.ret
 }
 
-func @GenericModule.opCount {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
-func @GenericModule.itemCount {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -194,25 +174,22 @@ func @main {
     x64.callDirect GenericModule.pushItem
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect GenericModule.opCount
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect GenericModule.itemCount
-    x64.cmpRegImm32 r12, 2
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+  __il_cont:
+    x64.cmpRegImm32 rax, 2
     x64.movRegImm32 rax, 0
-    x64.jcc equal, andrhs
-    x64.jmp critsplit
+    x64.jcc notEqual, scmerge
   andrhs:
-    x64.cmpRegImm32 r8, 1
+    x64.cmpRegImm32 rcx, 1
     x64.setccReg equal, rax
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   check:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx

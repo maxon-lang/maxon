@@ -6,7 +6,7 @@ type Box uses T
 		return Self{v: v}
 	end 'create'
 
-	export function pack() returns int
+	export function pack() returns Integer
 		let t = (self.v, 1)
 		return t.1
 	end 'pack'
@@ -16,6 +16,7 @@ function main() returns ExitCode
 	let b = Box.create(5)
 	return b.pack()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 1
 ---
@@ -62,11 +63,9 @@ func @main {
     x64.callDirect Box.pack
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

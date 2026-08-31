@@ -1,7 +1,7 @@
 // Test: mod-by-a-ranged-divisor-below-minus-one-is-a-bare-idiv
 typealias BelowMinusOne = int(i64.min to -2)
 
-function remainder(n int, d BelowMinusOne) returns int
+function remainder(n Integer, d BelowMinusOne) returns Integer
 	return n mod d
 end 'remainder'
 
@@ -9,6 +9,7 @@ function main() returns ExitCode
 	print("r={remainder(0 - 13, d: -5)}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -26,8 +27,7 @@ func @remainder {
     x64.prologue 32
     x64.movRegReg rsi, rdx
     x64.cmpRegImm32 rsi, -2
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
@@ -58,8 +58,7 @@ func @main {
     x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rcx, rax, -13
+    x64.movRegImm rcx, 18446744073709551603
     x64.movRegImm rdx, 18446744073709551611
     x64.callDirect remainder
     x64.movRegReg r13, r8
@@ -121,17 +120,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -36,22 +36,19 @@ func @grab {
     x64.prologue 40
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.leaRegRdata rcx, [rip + __str_rec_3]
     x64.callDirect __str_retain
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
     x64.movRegReg r8, rbx
-    x64.jmp matchcont
   matchcont:
     x64.epilogue 40
     x64.popReg rbx
@@ -97,53 +94,6 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_M
     x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.append {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg rcx, r12
-    x64.callDirect __str_bytes_view
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_append
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-    x64.loadRegBaseDisp.byte rax, [r12 + 48]
-    x64.xorRegImm32 rax, rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, clearFlag
-    x64.jmp ifcont
-  clearFlag:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.byte [rbx + 48], rax
-    x64.jmp ifcont
-  ifcont:
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

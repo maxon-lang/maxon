@@ -24,11 +24,9 @@ func @clampPct {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -48,28 +46,11 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_body#3
-  __il_body#3:
-    x64.imulRegRegImm32 rcx, rax, 101
-    x64.jmp __il_cont#2
-  __il_cont#2:
-    x64.jmp __il_body#4
-  __il_body#4:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 100
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok
+  __il_body:
+    x64.movRegImm32 rcx, 101
   __il_slow:
     x64.callDirect clampPct
-    x64.jmp __il_cont#1
-  __rc_ok:
-    x64.movRegReg r8, rcx
-    x64.jmp __il_cont#1
-  __il_cont#1:
+  __il_cont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -189,11 +189,9 @@ func @drain {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, broken
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   broken:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -212,8 +210,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect drain
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.movRegImm32 rcx, 7
@@ -226,11 +223,9 @@ func @main {
     x64.leaRegRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic
@@ -239,18 +234,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  afterdiverge:
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -84,11 +84,9 @@ func @UpCursor.create {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.cmpRegImm32 rbx, 1
-    x64.jcc less, empty
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   empty:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
@@ -129,11 +127,9 @@ func @UpCursor.advance {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, atTheLast
-    x64.jmp ifcont
+    x64.jcc less, ifcont
   atTheLast:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -173,8 +169,7 @@ func @UpBag.createIterator {
     x64.movRegImm32 rdx, 0
     x64.callDirect UpCursor.create
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -203,19 +198,14 @@ func @total {
     x64.movRegReg rbx, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-    x64.jmp forempty
-  critsplit:
-    x64.jmp forhdr
+    x64.jcc notEqual, forempty
   forhdr:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, walk
-    x64.jmp forexit
+    x64.jcc notEqual, forexit
   walk:
     x64.movRegReg rcx, rbx
     x64.callMem [r13 + 24]
     x64.leaRegRegReg r12, r12, r8
-    x64.jmp forstep
   forstep:
     x64.movRegReg rcx, rbx
     x64.callMem [r13 + 32]
@@ -229,7 +219,6 @@ func @total {
     x64.jmp forjoin
   forempty:
     x64.movRegReg r8, r12
-    x64.jmp forjoin
   forjoin:
     x64.epilogue 40
     x64.popReg r13
@@ -360,17 +349,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -1,0 +1,91 @@
+// Test: a-division-is-never-reused
+typealias Word = int(i64.min to i64.max)
+// A divisor whose type EXCLUDES ZERO, so the divisions do not throw and the case can be about CSE
+// rather than about `try`. The op is still `StdOp.div`/`StdOp.mod` and still `isPure: false`.
+typealias NonZeroWord = int(1 to i64.max)
+
+function halves(a Word, b NonZeroWord) returns Word
+	return (a / b) + (a / b) + (a mod b) + (a mod b)
+end 'halves'
+
+function main() returns ExitCode
+	if halves(17, b: 5) != 10 'quotientAndRemainder'
+		return 1
+	end 'quotientAndRemainder'
+	if halves(-17, b: 5) != -10 'negativeTruncatesTowardZero'
+		return 2
+	end 'negativeTruncatesTowardZero'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @halves {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rsi, rdx
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc greaterEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.movRegReg rdi, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.leaRegRegReg rdi, rdi, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.leaRegRegReg rdi, rdi, rdx
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+    x64.leaRegRegReg r8, rdi, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 17
+    x64.movRegImm32 rdx, 5
+    x64.callDirect halves
+    x64.cmpRegImm32 r8, 10
+    x64.jcc equal, ifcont#2
+  quotientAndRemainder:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm rcx, 18446744073709551599
+    x64.movRegImm32 rdx, 5
+    x64.callDirect halves
+    x64.cmpRegImm32 r8, -10
+    x64.jcc equal, ifcont#4
+  negativeTruncatesTowardZero:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

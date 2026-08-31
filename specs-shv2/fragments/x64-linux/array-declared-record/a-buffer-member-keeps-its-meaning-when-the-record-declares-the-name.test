@@ -66,20 +66,9 @@ func @Array.bufferBare {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
     x64.callDirect __managed_element_size
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -110,10 +99,8 @@ func @Array.ownBare {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.movRegImm32 r8, 99
-    x64.jmp __il_cont
   __il_cont:
     x64.popReg rbp
     x64.ret
@@ -123,10 +110,8 @@ func @Array.ownViaSelf {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.movRegImm32 r8, 99
-    x64.jmp __il_cont
   __il_cont:
     x64.popReg rbp
     x64.ret
@@ -155,9 +140,6 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_element_size
     x64.movRegReg r12, r8
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect Array.bufferBare
@@ -368,17 +350,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

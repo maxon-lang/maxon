@@ -57,35 +57,28 @@ func @pick {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegReg rbx, rdx
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
-    x64.movRegImm32 r13, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc greater, l
-    x64.jmp critsplit
+    x64.jcc lessEqual, critsplit
   l:
     x64.movRegImm32 rcx, 9
     x64.callDirect Point.create
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.leaRegRegImm32 rax, r13, 1
     x64.movRegReg rcx, rbx
     x64.jmp whileexit
   critsplit:
     x64.movRegReg rcx, r12
-    x64.jmp whileexit
   whileexit:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -110,11 +103,9 @@ func @main {
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

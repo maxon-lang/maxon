@@ -60,7 +60,13 @@ func @Wrapper.len {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
     x64.callDirect String.byteLength
+  __il_cont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -165,26 +171,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

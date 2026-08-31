@@ -43,11 +43,8 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.movRegImm32 rax, 3
-    x64.jmp __il_body#9
   __il_body#9:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp __il_cont#8
+    x64.movRegImm32 rax, 4
   __il_cont#8:
     x64.leaRegRegImm32 rcx, rax, 1
     x64.leaRegRegImm32 rdx, rax, 2
@@ -85,10 +82,8 @@ func @main {
     x64.leaRegRegReg rcx, rcx, r15
     x64.loadRegSlot rdx, slot0
     x64.leaRegRegReg rcx, rcx, rdx
-    x64.jmp __il_body#10
   __il_body#10:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp __il_cont#7
   __il_cont#7:
     x64.loadRegSlot rdx, slot1
     x64.loadRegSlot rsi, slot2
@@ -98,22 +93,18 @@ func @main {
     x64.leaRegRegReg rax, rdx, rax
     x64.leaRegRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 214
-    x64.jcc equal, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc notEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 r8, 99
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

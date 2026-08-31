@@ -1,5 +1,5 @@
 // Test: divisor-live-across-call
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
@@ -14,6 +14,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -21,19 +22,16 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 500
-    x64.movRegImm32 rcx, 6
-    x64.jmp __il_body
-  __il_body:
-    x64.leaRegRegImm32 rsi, rcx, 1
-    x64.jmp __il_cont
+    x64.movRegImm32 rcx, 500
   __il_cont:
-    x64.cqo
-    x64.idivReg rcx
-    x64.leaRegRegReg rax, rax, rsi
+    x64.movRegImm rax, 3074457345618258603
+    x64.imulHighReg rcx
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegImm32 rax, rax, 7
     x64.cmpRegImm32 rax, 90
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.popReg rbp

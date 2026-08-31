@@ -24,11 +24,9 @@ func @pick {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#10
-    x64.jmp __rc_chk#11
   __rc_chk#11:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic#10
-    x64.jmp __rc_ok#9
+    x64.jcc lessEqual, __rc_ok#9
   __rc_panic#10:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -39,27 +37,17 @@ func @pick {
   __rc_ok#9:
     x64.movRegImm32 rax, 7
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
-  matcharm#1:
-    x64.jmp matchcont
+    x64.jcc equal, matchcont
   matchnext:
     x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, matcharm#3
-    x64.jmp matchdefault
-  matcharm#3:
-    x64.jmp matchcont
-  matchdefault:
-    x64.jmp matchcont
+    x64.jcc equal, matchcont
   matchcont:
     x64.leaRegRegImm32 r8, rax, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#13
-    x64.jmp __rc_chk#14
   __rc_chk#14:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic#13
-    x64.jmp __rc_ok#12
+    x64.jcc lessEqual, __rc_ok#12
   __rc_panic#13:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -71,9 +59,6 @@ func @pick {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  afterbreak#2:
-  afterbreak#4:
-  afterbreak#6:
 }
 
 func @main {
@@ -94,11 +79,9 @@ func @main {
     x64.leaRegRegImm32 r8, rax, -16
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

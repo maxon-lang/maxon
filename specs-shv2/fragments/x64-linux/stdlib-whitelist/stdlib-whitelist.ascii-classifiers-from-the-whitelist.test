@@ -40,429 +40,76 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_rec_25]
     x64.callDirect Ascii.isDigit
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, digit
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   digit:
     x64.leaRegRdata rcx, [rip + __str_rec_26]
     x64.callDirect print
-    x64.jmp ifcont#2
   ifcont#2:
     x64.leaRegRdata rcx, [rip + __str_rec_27]
     x64.callDirect Ascii.isAlpha
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, alpha
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   alpha:
     x64.leaRegRdata rcx, [rip + __str_rec_28]
     x64.callDirect print
-    x64.jmp ifcont#4
   ifcont#4:
     x64.leaRegRdata rcx, [rip + __str_rec_29]
     x64.callDirect Ascii.isAlphanumeric
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, alnum
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#6
   alnum:
     x64.leaRegRdata rcx, [rip + __str_rec_30]
     x64.callDirect print
-    x64.jmp ifcont#6
   ifcont#6:
     x64.leaRegRdata rcx, [rip + __str_rec_31]
     x64.callDirect Ascii.isWhitespace
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, tab
-    x64.jmp ifcont#8
+    x64.jcc equal, ifcont#8
   tab:
     x64.leaRegRdata rcx, [rip + __str_rec_32]
     x64.callDirect print
-    x64.jmp ifcont#8
   ifcont#8:
     x64.leaRegRdata rcx, [rip + __str_rec_33]
     x64.callDirect Ascii.isUpper
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, upper
-    x64.jmp ifcont#10
+    x64.jcc equal, ifcont#10
   upper:
     x64.leaRegRdata rcx, [rip + __str_rec_34]
     x64.callDirect print
-    x64.jmp ifcont#10
   ifcont#10:
     x64.leaRegRdata rcx, [rip + __str_rec_35]
     x64.callDirect Ascii.isLower
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, lower
-    x64.jmp ifcont#12
+    x64.jcc equal, ifcont#12
   lower:
     x64.leaRegRdata rcx, [rip + __str_rec_36]
     x64.callDirect print
-    x64.jmp ifcont#12
   ifcont#12:
     x64.leaRegRdata rcx, [rip + __str_rec_37]
     x64.callDirect Ascii.isDigit
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, notDigit
-    x64.jmp ifcont#14
+    x64.jcc equal, ifcont#14
   notDigit:
     x64.leaRegRdata rcx, [rip + __str_rec_38]
     x64.callDirect print
-    x64.jmp ifcont#14
   ifcont#14:
     x64.leaRegRdata rcx, [rip + __str_rec_35]
     x64.callDirect Ascii.isUpper
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, notUpper
-    x64.jmp ifcont#16
+    x64.jcc equal, ifcont#16
   notUpper:
     x64.leaRegRdata rcx, [rip + __str_rec_39]
     x64.callDirect print
-    x64.jmp ifcont#16
   ifcont#16:
     x64.leaRegRdata rcx, [rip + __str_rec_40]
     x64.callDirect Ascii.isAlpha
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, notAscii
-    x64.jmp ifcont#18
+    x64.jcc equal, ifcont#18
   notAscii:
     x64.leaRegRdata rcx, [rip + __str_rec_41]
     x64.callDirect print
-    x64.jmp ifcont#18
   ifcont#18:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Ascii.isDigit {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, notAscii
-    x64.jmp ifcont
-  notAscii:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rdx, [rip + __str_rec_42]
-    x64.leaRegRdata r12, [rip + __str_rec_43]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg notEqual, r13
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 2
-    x64.setccReg notEqual, rax
-    x64.andRegReg r13, r13, rax
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchnext:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchcont:
-}
-
-func @Ascii.isAlpha {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, notAscii
-    x64.jmp ifcont
-  notAscii:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rdx, [rip + __str_rec_44]
-    x64.leaRegRdata r12, [rip + __str_rec_45]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg notEqual, r13
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 2
-    x64.setccReg notEqual, rax
-    x64.andRegReg r13, r13, rax
-    x64.leaRegRdata rdx, [rip + __str_rec_46]
-    x64.leaRegRdata r12, [rip + __str_rec_29]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg notEqual, r14
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 2
-    x64.setccReg notEqual, rax
-    x64.andRegReg r14, r14, rax
-    x64.orRegReg r13, r13, r14
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchnext:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchcont:
-}
-
-func @Ascii.isAlphanumeric {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect Ascii.isAlpha
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, critsplit
-    x64.jmp orrhs
-  critsplit:
-    x64.movRegReg r8, rax
-    x64.jmp scmerge
-  orrhs:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Ascii.isDigit
-    x64.jmp scmerge
-  scmerge:
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Ascii.isWhitespace {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, notAscii
-    x64.jmp ifcont
-  notAscii:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rdx, [rip + __str_rec_47]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_eq
-    x64.movRegReg r12, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_31]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_eq
-    x64.orRegReg r12, r12, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_48]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_eq
-    x64.orRegReg r12, r12, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_49]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_eq
-    x64.orRegReg r12, r12, r8
-    x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchnext:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchcont:
-}
-
-func @Ascii.isUpper {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, notAscii
-    x64.jmp ifcont
-  notAscii:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rdx, [rip + __str_rec_46]
-    x64.leaRegRdata r12, [rip + __str_rec_29]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg notEqual, r13
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 2
-    x64.setccReg notEqual, rax
-    x64.andRegReg r13, r13, rax
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchnext:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchcont:
-}
-
-func @Ascii.isLower {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, notAscii
-    x64.jmp ifcont
-  notAscii:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rdx, [rip + __str_rec_44]
-    x64.leaRegRdata r12, [rip + __str_rec_45]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg notEqual, r13
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __char_cmp
-    x64.cmpRegImm32 r8, 2
-    x64.setccReg notEqual, rax
-    x64.andRegReg r13, r13, rax
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchnext:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchcont:
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

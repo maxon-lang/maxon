@@ -39,8 +39,7 @@ func @inner {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 2
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -53,8 +52,7 @@ func @outer {
     x64.prologue 32
     x64.callDirect inner
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.leaRegRegImm32 r10, rax, 1
@@ -78,30 +76,25 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.callDirect outer
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#3
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#3:
     x64.movRegImm32 rax, 1
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#4
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#4:
     x64.movRegImm32 rax, 7
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg r8, rax
     x64.jmp trycont
   matchdead:
   tryok:
     x64.movRegReg r8, rbx
-    x64.jmp trycont
   trycont:
     x64.epilogue 40
     x64.popReg rbx

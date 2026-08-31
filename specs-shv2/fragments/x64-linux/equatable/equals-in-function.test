@@ -44,13 +44,11 @@ func @areEqual {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
     x64.cmpRegReg rax, rcx
     x64.setccReg equal, r8
-    x64.jmp __il_cont
   __il_cont:
     x64.popReg rbp
     x64.ret
@@ -75,15 +73,13 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect areEqual
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, eq
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   eq:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect areEqual
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, neq
-    x64.jmp ifcont#3
+    x64.jcc equal, ifcont#3
   neq:
     x64.movRegImm32 r8, 1
     x64.epilogue 64

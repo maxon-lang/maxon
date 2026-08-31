@@ -1,7 +1,7 @@
 // Test: idiv-under-loop-pressure
 typealias Positive = int(1 to i64.max)
 
-function press(p int) returns int
+function press(p Integer) returns Integer
 	let k1 = p + 11
 	let k2 = p + 12
 	let k3 = p + 13
@@ -28,6 +28,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -37,59 +38,52 @@ func @press {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
     x64.prologue 32
-    x64.leaRegRegImm32 rsi, rcx, 11
-    x64.leaRegRegImm32 rdi, rcx, 12
-    x64.leaRegRegImm32 r8, rcx, 13
-    x64.leaRegRegImm32 r9, rcx, 14
-    x64.leaRegRegImm32 r10, rcx, 15
-    x64.leaRegRegImm32 r11, rcx, 16
-    x64.leaRegRegImm32 rbx, rcx, 17
-    x64.leaRegRegImm32 r12, rcx, 18
+    x64.leaRegRegImm32 rax, rcx, 11
+    x64.leaRegRegImm32 rdx, rcx, 12
+    x64.leaRegRegImm32 rsi, rcx, 13
+    x64.leaRegRegImm32 rdi, rcx, 14
+    x64.leaRegRegImm32 r8, rcx, 15
+    x64.leaRegRegImm32 r9, rcx, 16
+    x64.leaRegRegImm32 r10, rcx, 17
+    x64.leaRegRegImm32 r11, rcx, 18
     x64.leaRegRegImm32 rcx, rcx, 19
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 r14, 1
-    x64.jmp whilehdr
-  whilehdr:
-    x64.cmpRegImm32 r14, 5
-    x64.jcc lessEqual, loop
-    x64.jmp whileexit
-  loop:
-    x64.leaRegRegReg rax, rsi, rdi
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
     x64.leaRegRegReg rax, rax, r8
     x64.leaRegRegReg rax, rax, r9
     x64.leaRegRegReg rax, rax, r10
     x64.leaRegRegReg rax, rax, r11
-    x64.leaRegRegReg rax, rax, rbx
-    x64.leaRegRegReg rax, rax, r12
-    x64.leaRegRegReg rax, rax, rcx
-    x64.cmpRegImm32 r14, 1
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_ok
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.movRegReg r8, rbx
+    x64.movRegReg rsi, r12
+  whilehdr:
+    x64.cmpRegImm32 rsi, 5
+    x64.jcc greater, whileexit
+  loop:
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc greaterEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg rax, rcx
     x64.cqo
-    x64.idivReg r14
-    x64.leaRegRegReg r13, r13, rax
-    x64.leaRegRegImm32 r14, r14, 1
+    x64.idivReg rsi
+    x64.leaRegRegReg r8, r8, rax
+    x64.leaRegRegImm32 rsi, rsi, 1
     x64.jmp whilehdr
   whileexit:
-    x64.movRegReg r8, r13
     x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -104,8 +98,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect press
     x64.cmpRegImm32 r8, 307
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

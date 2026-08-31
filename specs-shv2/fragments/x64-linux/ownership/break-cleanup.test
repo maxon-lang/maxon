@@ -46,17 +46,14 @@ func @main {
     x64.prologue 72
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rcx, 5
-    x64.jcc less, loop
-    x64.jmp critsplit
+    x64.jcc greaterEqual, critsplit
   loop:
     x64.leaRegSlot rdx, slot0
     x64.storeBaseDispReg.word64 [rdx + 0], rcx
     x64.cmpRegImm32 rcx, 3
-    x64.jcc equal, brk
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   brk:
     x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
     x64.leaRegRegReg rbx, rax, rcx
@@ -68,7 +65,6 @@ func @main {
     x64.jmp whilehdr
   critsplit:
     x64.movRegReg rbx, rax
-    x64.jmp whileexit
   whileexit:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -120,17 +116,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

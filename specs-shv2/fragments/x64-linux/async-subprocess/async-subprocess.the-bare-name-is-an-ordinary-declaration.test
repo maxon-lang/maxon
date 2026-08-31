@@ -1,5 +1,5 @@
 // Test: async-subprocess.the-bare-name-is-an-ordinary-declaration
-function runProcess(exe int, argv int, workingDirectory int) returns int
+function runProcess(exe Integer, argv Integer, workingDirectory Integer) returns Integer
 	return exe + argv + workingDirectory
 end 'runProcess'
 
@@ -7,6 +7,7 @@ function main() returns ExitCode
 	let n = runProcess(1, argv: 2, workingDirectory: 4)
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 7
 ---
@@ -15,20 +16,14 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_body
   __il_body:
-    x64.leaRegRegImm32 rax, rax, 2
-    x64.leaRegRegImm32 r8, rax, 4
-    x64.jmp __il_cont
+    x64.movRegImm32 r8, 7
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

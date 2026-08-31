@@ -63,12 +63,10 @@ func @Point.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -96,8 +94,7 @@ func @Point.check {
     x64.prologue 40
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 10
-    x64.jcc less, small
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   small:
     x64.movRegImm32 rbx, 7
     x64.movRegImm32 rcx, 16
@@ -151,17 +148,14 @@ func @Box.itemCheck {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callMem [rbx + 24]
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.loadRegBaseDisp.word64 rax, [r10 + 8]
     x64.leaRegRegImm32 rbx, rax, 1
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, r10
     x64.callDirect __mm_decref
@@ -170,16 +164,13 @@ func @Box.itemCheck {
   matchdead:
   tryok:
     x64.movRegReg r8, r12
-    x64.jmp trycont
   trycont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -223,11 +214,9 @@ func @main {
     x64.callDirect __destruct_Box_Point
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

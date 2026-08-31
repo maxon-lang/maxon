@@ -9,14 +9,14 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength() as Integer
+		text(s) gives s.byteLength()
 	end 'g'
 end 'grab'
 
 function main() returns ExitCode
 	let m = M.text("an owned payload string, long enough to be a real heap allocation")
 	let r = match m 'k'
-		text(s) gives s.byteLength() as Integer
+		text(s) gives s.byteLength()
 		silent gives grab(m)
 	end 'k'
 	print("r={r}")
@@ -41,26 +41,29 @@ func @grab {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
+  __il_body:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect String.byteLength
     x64.movRegReg r12, r8
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegReg r8, r12
-    x64.jmp matchcont
   matchcont:
     x64.epilogue 32
     x64.popReg r12
@@ -93,8 +96,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r12 + 8], r8
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#2:
     x64.movRegReg rcx, r12
     x64.callDirect grab
@@ -102,30 +104,34 @@ func @main {
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#1
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#1:
     x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 8], rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect String.byteLength
     x64.movRegReg r12, r8
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegReg rbx, r12
-    x64.jmp matchcont
   matchcont:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
     x64.leaRegRegReg rax, r13, rbx
     x64.storeSlotReg slot1, rax
@@ -171,24 +177,4 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
 }

@@ -146,8 +146,7 @@ func @pickLength {
     x64.pushReg r12
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc equal, ternaryfalse
   ternarytrue:
     x64.callDirect makeA
     x64.movRegReg rbx, r8
@@ -156,7 +155,7 @@ func @pickLength {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
-    x64.jmp matchcont
+    x64.jmp __il_body
   ternaryfalse:
     x64.callDirect makeB
     x64.movRegReg rbx, r8
@@ -165,11 +164,15 @@ func @pickLength {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
-    x64.jmp matchcont
-  matchcont:
+  __il_body:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
     x64.movRegReg rcx, r12
     x64.callDirect String.byteLength
     x64.movRegReg rbx, r8
+  __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.movRegReg r8, rbx
@@ -194,11 +197,9 @@ func @main {
     x64.leaRegRegReg r8, rbx, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
@@ -210,15 +211,6 @@ func @main {
   __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

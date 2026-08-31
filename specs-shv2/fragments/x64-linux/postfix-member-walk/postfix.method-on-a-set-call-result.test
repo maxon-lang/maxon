@@ -20,155 +20,52 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.leaRegRdata rcx, [rip + __layout_Set_Wide]
     x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
     x64.leaRegRdata rax, [rip + __witness_int.Equatable]
     x64.callDirect Set.create
-    x64.leaRegRdata rax, [rip + __witness_int.Hashable]
-    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
-    x64.jmp __il_body
-  __il_body:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 24]
-    x64.jmp __il_cont
-  __il_cont:
-    x64.leaRegRegImm32 rbx, rax, 11
-    x64.movRegReg rcx, r8
-    x64.callDirect __destruct_Set_Wide
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_19]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @int.hash {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rax, 4294967295
-    x64.movRegReg r8, rcx
-    x64.andRegReg r8, rcx, rax
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @int.equals {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg equal, r8
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Set.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.callDirect __fieldDefault#Set#elements
     x64.movRegReg rbx, r8
-    x64.callDirect __fieldDefault#Set#states
-    x64.movRegReg r12, r8
-    x64.callDirect __fieldDefault#Set#hashes
-    x64.movRegReg r13, r8
-    x64.movRegImm32 r14, 0
-    x64.movRegImm32 r15, 0
-    x64.movRegImm32 rcx, 40
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
-    x64.storeBaseDispReg.word64 [r8 + 24], r14
-    x64.storeBaseDispReg.word64 [r8 + 32], r15
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
+    x64.leaRegRdata rdx, [rip + __witness_int.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __il_slow
+  __rc_chk#7:
+    x64.movRegImm rsi, 4611686018427387904
+    x64.cmpRegReg rcx, rsi
+    x64.jcc lessEqual, __rc_ok#6
+  __il_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Set.count
+    x64.jmp __il_cont
+  __rc_ok#6:
+    x64.movRegReg r8, rcx
+  __il_cont:
+    x64.leaRegRegImm32 r12, r8, 11
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Set_Wide
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk#3:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok#1
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @__fieldDefault#Set#elements {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rax, 8
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
-    x64.movRegReg rcx, rax
-    x64.callDirect __managed_create
+  __rc_ok#1:
+    x64.movRegReg r8, r12
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__fieldDefault#Set#states {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__fieldDefault#Set#hashes {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 4
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

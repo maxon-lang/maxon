@@ -1,10 +1,7 @@
 // Test: negative-wide-immediate
-function base(p int) returns int
-	return p
-end 'base'
-
 function main() returns ExitCode
-	let x = base(1000)
+	let cell = [1000]
+	let x = try cell.get(0) otherwise 0
 	let addNeg = x + -1000000007
 	if addNeg != -999999007 'addNeg'
 		return 41
@@ -34,73 +31,160 @@ end 'main'
 ---
 ExitCode: 0
 ---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 1000
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
-  __il_cont:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 48
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __barr_blob_0]
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551614
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#20
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#21
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#21:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#20:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
     x64.leaRegRegImm32 rcx, rax, -1000000007
     x64.cmpRegImm32 rcx, -999999007
-    x64.jcc notEqual, addNeg
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#5
   addNeg:
-    x64.movRegImm32 r8, 41
+    x64.movRegImm32 r12, 41
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#2:
+  ifcont#5:
     x64.leaRegRegImm32 rcx, rax, 1000000007
     x64.cmpRegImm32 rcx, 1000001007
-    x64.jcc notEqual, subNeg
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#7
   subNeg:
-    x64.movRegImm32 r8, 42
+    x64.movRegImm32 r12, 42
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#4:
+  ifcont#7:
     x64.leaRegRegImm32 rcx, rax, 2147483647
     x64.movRegImm32 rdx, 2147484647
     x64.cmpRegReg rcx, rdx
-    x64.jcc notEqual, addMax
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#9
   addMax:
-    x64.movRegImm32 r8, 43
+    x64.movRegImm32 r12, 43
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#6:
+  ifcont#9:
     x64.leaRegRegImm32 rcx, rax, -2147483647
     x64.cmpRegImm32 rcx, -2147482647
-    x64.jcc notEqual, subMax
-    x64.jmp ifcont#8
+    x64.jcc equal, ifcont#11
   subMax:
-    x64.movRegImm32 r8, 44
+    x64.movRegImm32 r12, 44
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#8:
+  ifcont#11:
     x64.leaRegRegImm32 rcx, rax, -2147483648
     x64.cmpRegImm32 rcx, -2147482648
-    x64.jcc notEqual, addMin
-    x64.jmp ifcont#10
+    x64.jcc equal, ifcont#13
   addMin:
-    x64.movRegImm32 r8, 45
+    x64.movRegImm32 r12, 45
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#10:
+  ifcont#13:
     x64.movRegImm rcx, 18446744071562067968
     x64.subRegReg rax, rax, rcx
     x64.movRegImm32 rcx, 2147484648
     x64.cmpRegReg rax, rcx
-    x64.jcc notEqual, subMin
-    x64.jmp ifcont#12
+    x64.jcc equal, ifcont#15
   subMin:
-    x64.movRegImm32 r8, 46
+    x64.movRegImm32 r12, 46
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#12:
-    x64.movRegImm32 r8, 0
+  ifcont#15:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

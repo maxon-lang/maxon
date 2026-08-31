@@ -46,8 +46,7 @@ func @main {
     x64.callDirect __managed_cursor_create
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 r12, 99
     x64.movRegReg rcx, rbx
@@ -64,8 +63,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_cursor_seek
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.movRegImm32 r13, 98
     x64.movRegReg rcx, r12
@@ -82,18 +80,17 @@ func @main {
   tryok#3:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_cursor_current
-    x64.movRegImm32 rcx, 1000
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg rcx
-    x64.movRegReg r13, rax
+    x64.movRegImm rax, 2361183241434822607
+    x64.imulHighReg r8
+    x64.sarRegImm8 rdx, rdx, 7
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg r13, rdx, rax
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r13, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

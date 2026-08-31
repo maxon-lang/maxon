@@ -89,15 +89,13 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext#4
+    x64.jcc notEqual, matchnext#4
   matcharm#1:
     x64.movRegImm32 r12, 0
     x64.jmp matchcont#5
   matchnext#4:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead#3
+    x64.jcc notEqual, matchdead#3
   matcharm#2:
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.movRegReg rcx, r12
@@ -106,42 +104,42 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r12, r13
-    x64.jmp matchcont#5
   matchcont#5:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext#9
+    x64.jcc notEqual, matchnext#9
   matcharm#6:
     x64.movRegImm32 rax, 0
     x64.jmp matchcont#10
   matchnext#9:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#7
-    x64.jmp matchdead#8
+    x64.jcc notEqual, matchdead#8
   matcharm#7:
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
+  __il_body:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
     x64.movRegReg rcx, r13
     x64.callDirect String.byteLength
     x64.movRegReg r14, r8
+  __il_cont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.movRegReg rax, r14
-    x64.jmp matchcont#10
   matchcont#10:
     x64.leaRegRegReg r12, r12, rax
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Cfg
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -164,13 +162,4 @@ func @main {
     x64.ret
   matchdead#8:
   matchdead#3:
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
 }

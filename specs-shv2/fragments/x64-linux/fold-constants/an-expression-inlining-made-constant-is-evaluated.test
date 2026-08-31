@@ -1,0 +1,58 @@
+// Test: an-expression-inlining-made-constant-is-evaluated
+typealias Word = int(i64.min to i64.max)
+
+function scale(a Word, b Word) returns Word
+	return a * 31 + b
+end 'scale'
+
+function main() returns ExitCode
+	if scale(3, b: 4) != 97 'value'
+		return 1
+	end 'value'
+	if scale(0, b: 0) != 0 'zero'
+		return 2
+	end 'zero'
+	if scale(-2, b: 5) != -57 'negative'
+		return 3
+	end 'negative'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#8:
+    x64.movRegImm32 rax, 97
+  __il_cont#7:
+    x64.cmpRegImm32 rax, 97
+    x64.jcc equal, __il_body#10
+  value:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  __il_body#10:
+    x64.movRegImm32 rax, 0
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#12
+  zero:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  __il_body#12:
+    x64.movRegImm rax, 18446744073709551559
+  __il_cont#11:
+    x64.cmpRegImm32 rax, -57
+    x64.jcc equal, ifcont
+  negative:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

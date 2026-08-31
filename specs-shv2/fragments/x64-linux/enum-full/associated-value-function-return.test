@@ -38,8 +38,7 @@ func @getResult {
     x64.pushReg rbx
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   check:
     x64.movRegImm32 rbx, 42
     x64.movRegImm32 rcx, 16
@@ -76,19 +75,16 @@ func @main {
     x64.callDirect getResult
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#7
-    x64.jmp __rc_chk#8
   __rc_chk#8:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic#7
-    x64.jmp __rc_ok#6
+    x64.jcc lessEqual, __rc_ok#6
   __rc_panic#7:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -105,19 +101,16 @@ func @main {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#10
-    x64.jmp __rc_chk#11
   __rc_chk#11:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic#10
-    x64.jmp __rc_ok#9
+    x64.jcc lessEqual, __rc_ok#9
   __rc_panic#10:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

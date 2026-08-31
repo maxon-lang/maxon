@@ -1,5 +1,5 @@
 // Test: back-edge-rotate-three
-function rotate3(p int) returns int
+function rotate3(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
@@ -21,6 +21,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -28,33 +29,27 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 0
-    x64.jmp __il_body
   __il_body:
-    x64.leaRegRegImm32 rcx, rax, 1
-    x64.leaRegRegImm32 rdx, rax, 2
-    x64.leaRegRegImm32 rax, rax, 3
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 3
     x64.movRegImm32 rsi, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rsi, 4
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRegImm32 rsi, rsi, 1
+    x64.xchgRegReg rax, rcx
     x64.xchgRegReg rcx, rdx
-    x64.xchgRegReg rdx, rax
     x64.jmp whilehdr
   whileexit:
-    x64.imulRegRegImm32 rcx, rcx, 100
-    x64.imulRegRegImm32 rdx, rdx, 10
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.leaRegRegReg rax, rcx, rax
-    x64.jmp __il_cont
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.imulRegRegImm32 rcx, rcx, 10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
   __il_cont:
     x64.cmpRegImm32 rax, 231
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.popReg rbp

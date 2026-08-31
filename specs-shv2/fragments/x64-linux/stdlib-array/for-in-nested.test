@@ -38,73 +38,13 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @innerSum {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
-    x64.jmp forhdr
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r13, rax
-    x64.jcc less, inner
-    x64.jmp forexit
-  inner:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, r13, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __il_cont:
-    x64.leaRegRegReg r12, r12, rax
-    x64.jmp forstep
-  forstep:
-    x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp forhdr
-  forexit:
-    x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -118,60 +58,46 @@ func @main {
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
-    x64.jmp forhdr
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r13, rax
-    x64.jcc less, outer
-    x64.jmp forexit
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r8, [rbx + 0]
+  forhdr#1:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, forexit
   outer:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.imulRegRegImm32 rcx, r13, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-    x64.jmp __il_cont
+    x64.loadRegBaseIndexScale.word64 r9, [rsi + rcx*8 + 0]
+  __im_cont#7:
+    x64.leaRegRegReg rax, rax, r9
+  __il_body:
+    x64.movRegImm32 r9, 0
+    x64.movRegImm32 r10, 0
+  forhdr#10:
+    x64.cmpRegReg r10, rdi
+    x64.jcc greaterEqual, __il_cont
+  inner:
+    x64.loadRegBaseIndexScale.word64 r11, [r8 + r10*8 + 0]
+  __im_cont#14:
+    x64.leaRegRegReg r9, r9, r11
+  forstep#12:
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.jmp forhdr#10
   __il_cont:
-    x64.leaRegRegReg r12, r12, rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect innerSum
-    x64.leaRegRegReg r12, r12, r8
-    x64.jmp forstep
-  forstep:
-    x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp forhdr
+    x64.leaRegRegReg rax, rax, r9
+  forstep#3:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#1
   forexit:
-    x64.cmpRegImm32 r12, 24
-    x64.jcc equal, check
-    x64.jmp ifcont
+    x64.cmpRegImm32 rax, 24
+    x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -181,8 +107,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

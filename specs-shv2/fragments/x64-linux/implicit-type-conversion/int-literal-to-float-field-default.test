@@ -1,6 +1,6 @@
 // Test: int-literal-to-float-field-default
 type Reading
-	export var value as float = 3
+	export var value as Real = 3
 
 	export static function make() returns Self
 		return Self{}
@@ -14,6 +14,7 @@ function main() returns ExitCode
 	end 'exact'
 	return 7
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 42
 ---
@@ -36,10 +37,8 @@ func @main {
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, ifcont
-    x64.jmp fordered
   fordered:
-    x64.jcc equal, exact
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   exact:
     x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
     x64.movsdRegRip xmm1, [rip + __fconst_2]
@@ -47,11 +46,9 @@ func @main {
     x64.cvttsd2siRegReg r8, xmm0
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

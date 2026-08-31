@@ -1,5 +1,5 @@
 // Test: reuse-transient-overflow
-function reuseTransientOverflow(p int) returns int
+function reuseTransientOverflow(p Integer) returns Integer
 	let a = p + 100
 	let b1 = p + 2
 	let b2 = p + 3
@@ -22,6 +22,7 @@ end 'reuseTransientOverflow'
 function main() returns ExitCode
 	return reuseTransientOverflow(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 240
 ---
@@ -85,11 +86,9 @@ func @main {
     x64.callDirect reuseTransientOverflow
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

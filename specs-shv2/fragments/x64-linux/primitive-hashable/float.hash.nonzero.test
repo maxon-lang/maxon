@@ -16,14 +16,11 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movsdRegRip xmm0, [rip + __fconst_1]
-    x64.jmp __il_body
   __il_body:
     x64.movqGprXmm rax, xmm0
-    x64.movRegImm rcx, 9223372036854775809
-    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.movRegImm rcx, 9223372036854775808
     x64.cmpRegReg rax, rcx
-    x64.jcc equal, negzero
-    x64.jmp ifcont#6
+    x64.jcc notEqual, ifcont#6
   negzero:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont
@@ -32,22 +29,16 @@ func @main {
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __il_slow
-    x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rcx, 4294967295
     x64.cmpRegReg rax, rcx
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __il_cont
   __il_slow:
     x64.callDirect float.hash
     x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __rc_ok:
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, check
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   check:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -55,46 +46,6 @@ func @main {
     x64.ret
   ifcont#2:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @float.hash {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movqGprXmm r8, xmm0
-    x64.movRegImm rax, 9223372036854775809
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.cmpRegReg r8, rax
-    x64.jcc equal, negzero
-    x64.jmp ifcont
-  negzero:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 rax, 4294967295
-    x64.andRegReg r8, r8, rax
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -68,8 +68,7 @@ func @invert {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, wasLight
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   wasLight:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
@@ -93,26 +92,13 @@ func @main {
     x64.leaRegRdata r9, [rip + __layout_Holder_Shade]
     x64.callDirect Holder.apply
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect print
-    x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -17,16 +17,13 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect __char_ascii
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, hasAscii
-    x64.jmp ifelse
+    x64.jcc notEqual, ifcont
   hasAscii:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -38,8 +35,6 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifelse:
-    x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

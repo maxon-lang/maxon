@@ -1,5 +1,5 @@
 // Test: two-preds-different-permutations
-function twoPerms(p int) returns int
+function twoPerms(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
@@ -26,6 +26,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -33,36 +34,34 @@ func @twoPerms {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.leaRegRegImm32 rsi, rcx, 1
-    x64.leaRegRegImm32 rdi, rcx, 2
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rdx, rcx, 2
     x64.leaRegRegImm32 rcx, rcx, 3
-    x64.movRegImm32 r8, 0
-    x64.jmp whilehdr
+    x64.movRegImm32 rsi, 0
   whilehdr:
-    x64.cmpRegImm32 r8, 4
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.cmpRegImm32 rsi, 4
+    x64.jcc greaterEqual, whileexit
   loop:
-    x64.movRegImm32 r9, 2
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg r9
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, even
-    x64.jmp ifelse
-  even:
-    x64.jmp ifcont
+    x64.movRegReg rdi, rsi
+    x64.sarRegImm8 rdi, rsi, 63
+    x64.shrRegImm8 rdi, rdi, 63
+    x64.leaRegRegReg rdi, rsi, rdi
+    x64.sarRegImm8 rdi, rdi, 1
+    x64.imulRegRegImm32 rdi, rdi, 2
+    x64.movRegReg r8, rsi
+    x64.subRegReg r8, rsi, rdi
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
   ifelse:
-    x64.xchgRegReg rdi, rsi
-    x64.xchgRegReg rsi, rcx
-    x64.jmp ifcont
+    x64.xchgRegReg rdx, rax
+    x64.xchgRegReg rax, rcx
   ifcont:
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.xchgRegReg rsi, rdi
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.xchgRegReg rax, rdx
     x64.jmp whilehdr
   whileexit:
-    x64.imulRegRegImm32 rax, rsi, 100
-    x64.imulRegRegImm32 rdx, rdi, 10
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.imulRegRegImm32 rdx, rdx, 10
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegReg r8, rax, rcx
     x64.popReg rbp
@@ -77,8 +76,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect twoPerms
     x64.cmpRegImm32 r8, 312
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

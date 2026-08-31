@@ -31,8 +31,7 @@ func @main {
     x64.callDirect __managed_mem_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -43,8 +42,7 @@ func @main {
   tryok:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, badLen
-    x64.jmp ifcont#4
+    x64.jcc equal, ifcont#4
   badLen:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -59,8 +57,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_capacity
     x64.cmpRegImm32 r8, 4
-    x64.jcc less, badCap
-    x64.jmp ifcont#6
+    x64.jcc greaterEqual, ifcont#6
   badCap:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx

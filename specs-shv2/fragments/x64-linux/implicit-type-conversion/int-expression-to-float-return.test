@@ -2,13 +2,14 @@
 
 typealias Float = float(f64.min to f64.max)
 
-function widen(a int, b int) returns Float
+function widen(a Integer, b Integer) returns Float
 	return a + b
 end 'widen'
 
 function main() returns ExitCode
 	return trunc(widen(20, b: 22) + 0.5)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 42
 ---
@@ -17,23 +18,18 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 20
-    x64.jmp __il_body
   __il_body:
-    x64.leaRegRegImm32 rax, rax, 22
+    x64.movRegImm32 rax, 42
     x64.cvtsi2sdRegReg xmm0, rax
-    x64.jmp __il_cont
   __il_cont:
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.addsdRegReg xmm0, xmm0, xmm1
     x64.cvttsd2siRegReg r8, xmm0
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -32,27 +32,22 @@ func @colorValue {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.movRegImm32 r8, 10
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdefault
+    x64.jcc notEqual, matchdefault
   matcharm#2:
     x64.movRegImm32 r8, 20
-    x64.jmp matchcont
   matchcont:
     x64.movRegImm32 r10, 0
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -66,8 +61,7 @@ func @colorValue {
     x64.popReg rbp
     x64.ret
   matchdefault:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
@@ -82,13 +76,9 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect colorValue
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.epilogue 32
     x64.popReg rbp

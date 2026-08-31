@@ -1,5 +1,5 @@
 // Test: two-floats-multiplied-between-calls
-function work(x int) returns int
+function work(x Integer) returns Integer
 	return x + 1
 end 'work'
 
@@ -14,6 +14,7 @@ function main() returns ExitCode
 	s = s + a * b
 	return trunc(s) + acc
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 9
 ---
@@ -25,31 +26,18 @@ func @main {
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.movsdRegRip xmm2, [rip + __fconst_3]
-    x64.movRegImm32 rax, 0
-    x64.jmp __il_body#6
-  __il_body#6:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp __il_cont#5
   __il_cont#5:
-    x64.movRegReg xmm3, xmm0
-    x64.mulsdRegReg xmm3, xmm0, xmm1
-    x64.addsdRegReg xmm2, xmm2, xmm3
-    x64.jmp __il_body#7
-  __il_body#7:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp __il_cont#4
-  __il_cont#4:
     x64.mulsdRegReg xmm0, xmm0, xmm1
     x64.addsdRegReg xmm2, xmm2, xmm0
-    x64.cvttsd2siRegReg rcx, xmm2
-    x64.leaRegRegReg r8, rcx, rax
+  __il_cont#4:
+    x64.addsdRegReg xmm2, xmm2, xmm0
+    x64.cvttsd2siRegReg rax, xmm2
+    x64.leaRegRegImm32 r8, rax, 2
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

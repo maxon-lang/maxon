@@ -23,49 +23,42 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
     x64.movRegImm32 rsi, 0
-    x64.movRegImm32 rdi, 0
-    x64.movRegImm32 r8, 0
-    x64.jmp whilehdr
   whilehdr:
-    x64.cmpRegImm32 r8, 20
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.cmpRegImm32 rsi, 20
+    x64.jcc greaterEqual, whileexit
   loop:
-    x64.movRegImm32 r9, 2
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg r9
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, even
-    x64.jmp ifelse
+    x64.movRegReg rdi, rsi
+    x64.sarRegImm8 rdi, rsi, 63
+    x64.shrRegImm8 rdi, rdi, 63
+    x64.leaRegRegReg rdi, rsi, rdi
+    x64.sarRegImm8 rdi, rdi, 1
+    x64.imulRegRegImm32 rdi, rdi, 2
+    x64.movRegReg r8, rsi
+    x64.subRegReg r8, rsi, rdi
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ifelse
   even:
-    x64.leaRegRegReg rax, rcx, r8
-    x64.leaRegRegImm32 rcx, rdi, 1
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp ifcont
   ifelse:
-    x64.leaRegRegReg rax, rsi, r8
-    x64.movRegReg rsi, rax
-    x64.movRegReg rax, rcx
-    x64.movRegReg rcx, rdi
-    x64.jmp ifcont
+    x64.leaRegRegReg rcx, rcx, rsi
   ifcont:
-    x64.leaRegRegImm32 r8, r8, 1
-    x64.movRegReg rdi, rcx
-    x64.movRegReg rcx, rax
+    x64.leaRegRegImm32 rsi, rsi, 1
     x64.jmp whilehdr
   whileexit:
-    x64.leaRegRegReg rax, rcx, rsi
-    x64.leaRegRegReg r8, rax, rdi
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r8, rax, rdx
     x64.andRegImm32 r8, r8, 125
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

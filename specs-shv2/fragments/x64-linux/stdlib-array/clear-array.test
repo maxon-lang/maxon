@@ -54,8 +54,7 @@ func @main {
     x64.callDirect Array.clear
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, cnt
-    x64.jmp ifcont#2
+    x64.jcc equal, __il_body
   cnt:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -66,12 +65,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#2:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Array.isEmpty
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, empty
-    x64.jmp ifcont#4
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont
   empty:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -82,42 +82,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#4:
+  ifcont:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Array.isEmpty {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg equal, r8
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Array.clear {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_clear
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

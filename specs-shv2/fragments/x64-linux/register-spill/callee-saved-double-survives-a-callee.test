@@ -1,16 +1,16 @@
 // Test: callee-saved-double-survives-a-callee
-function leaf(x int) returns int
+function leaf(x Integer) returns Integer
 	return x + 1
 end 'leaf'
 
-function inner(k int) returns int
+function inner(k Integer) returns Integer
 	let p = 2.0
 	var acc = k
 	acc = leaf(acc)
 	return acc + trunc(p)
 end 'inner'
 
-function outer(k int) returns int
+function outer(k Integer) returns Integer
 	let a = 42.5
 	var acc = k
 	acc = inner(acc)
@@ -20,6 +20,7 @@ end 'outer'
 function main() returns ExitCode
 	return outer(0) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 45
 ---
@@ -28,10 +29,8 @@ func @inner {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.movsdRegRip xmm0, [rip + __fconst_1]
-    x64.jmp __il_body
   __il_body:
     x64.leaRegRegImm32 rax, rcx, 1
-    x64.jmp __il_cont
   __il_cont:
     x64.cvttsd2siRegReg rcx, xmm0
     x64.leaRegRegReg r8, rax, rcx
@@ -64,11 +63,9 @@ func @main {
     x64.callDirect outer
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

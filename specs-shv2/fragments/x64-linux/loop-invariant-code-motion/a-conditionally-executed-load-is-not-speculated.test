@@ -1,0 +1,120 @@
+// Test: a-conditionally-executed-load-is-not-speculated
+typealias Word = int(i64.min to i64.max)
+
+type Cell
+	export var value as Word
+
+	export static function of(value Word) returns Cell
+		return Self{value: value}
+	end 'of'
+end 'Cell'
+
+function conditionalRead(c Cell, n Word) returns Word
+	var t = 0
+	var i = 0
+	while i < n 'loop'
+		if i == 3 'once'
+			t = t + c.value
+		end 'once'
+		i = i + 1
+	end 'loop'
+	return t
+end 'conditionalRead'
+
+function main() returns ExitCode
+	var trips = 0
+	for _ in 0 upto 9 'feed'
+		trips = trips + 1
+	end 'feed'
+
+	var c = Cell.of(9)
+	if conditionalRead(c, n: trips) != 9 'readOnce'
+		return 1
+	end 'readOnce'
+	if conditionalRead(c, n: 0) != 0 'noTrips'
+		return 2
+	end 'noTrips'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 16
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  forhdr:
+    x64.cmpRegImm32 rcx, 9
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.leaRegRegImm32 rax, rax, 1
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rcx, 9
+    x64.leaRegSlot rdx, slot0
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
+  __il_body#10:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rsi, 0
+  whilehdr#11:
+    x64.cmpRegReg rsi, rax
+    x64.jcc greaterEqual, __il_cont#9
+  loop#12:
+    x64.cmpRegImm32 rsi, 3
+    x64.jcc notEqual, ifcont#15
+  once#14:
+    x64.loadRegBaseDisp.word64 rdi, [rdx + 0]
+    x64.leaRegRegReg rcx, rcx, rdi
+  ifcont#15:
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.jmp whilehdr#11
+  __il_cont#9:
+    x64.cmpRegImm32 rcx, 9
+    x64.jcc equal, __il_body#17
+  readOnce:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 16
+    x64.popReg rbp
+    x64.ret
+  __il_body#17:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  whilehdr#18:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greaterEqual, __il_cont#16
+  loop#19:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc notEqual, ifcont#22
+  once#21:
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 0]
+    x64.leaRegRegReg rax, rax, rsi
+  ifcont#22:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr#18
+  __il_cont#16:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#8
+  noTrips:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 16
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 16
+    x64.popReg rbp
+    x64.ret
+}

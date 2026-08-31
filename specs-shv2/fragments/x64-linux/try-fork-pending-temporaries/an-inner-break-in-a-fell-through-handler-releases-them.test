@@ -46,11 +46,9 @@ func @consume {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rdx, 100
-    x64.jcc greater, big
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   big:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -75,11 +73,9 @@ func @run {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegReg r13, rbx
-    x64.jcc less, loop
-    x64.jmp critsplit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRdata r14, [rip + __str_rec_2]
     x64.movRegImm32 rcx, 8
@@ -100,28 +96,20 @@ func @run {
     x64.movRegReg rcx, r15
     x64.callDirect consume
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, trycont
   tryerr:
     x64.cmpRegImm32 r13, 1
-    x64.jcc greater, deep
-    x64.jmp ifcont
+    x64.jcc lessEqual, trycont
   deep:
     x64.movRegReg rcx, r15
     x64.callDirect __managed_decref
     x64.jmp whileexit
-  ifcont:
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, r15
     x64.callDirect __managed_decref
     x64.leaRegRegImm32 r12, r12, 1
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp whilehdr
-  critsplit:
-    x64.jmp whileexit
   whileexit:
     x64.movRegReg r8, r12
     x64.epilogue 40
@@ -143,11 +131,9 @@ func @main {
     x64.callDirect run
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic

@@ -2,14 +2,14 @@
 enum Order
 	alpha
 
-	export function bump() returns int
+	export function bump() returns Integer
 		return 1
 	end 'bump'
 
 	omega
 end 'Order'
 
-function tagOf(k Order) returns int
+function tagOf(k Order) returns Integer
 	return match k 'w'
 		alpha gives 1
 		omega gives 5
@@ -20,6 +20,7 @@ function main() returns ExitCode
 	let e = Order.omega
 	return tagOf(e) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 5
 ---
@@ -28,32 +29,14 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_body
-  __il_body:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext
-  matcharm#6:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#7
-    x64.jmp matchdead
-  matcharm#7:
+  matcharm:
     x64.movRegImm32 r8, 5
-    x64.jmp matchcont
-  matchcont:
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -65,5 +48,4 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchdead:
 }

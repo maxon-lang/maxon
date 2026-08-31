@@ -1,5 +1,5 @@
 // Test: recursive-permuting-six-params
-function rot(p1 int, p2 int, p3 int, p4 int, p5 int, n int) returns int
+function rot(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, n Integer) returns Integer
 	if n <= 0 'base'
 		return p1 * 10000 + p2 * 1000 + p3 * 100 + p4 * 10 + p5
 	end 'base'
@@ -13,6 +13,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -23,8 +24,7 @@ func @rot {
     x64.prologue 32
     x64.movRegReg r8, rcx
     x64.cmpRegImm32 rdi, 0
-    x64.jcc lessEqual, base
-    x64.jmp ifcont
+    x64.jcc greater, ifcont
   base:
     x64.imulRegRegImm32 rcx, r8, 10000
     x64.imulRegRegImm32 rdx, rdx, 1000
@@ -63,8 +63,7 @@ func @main {
     x64.movRegImm32 rdi, 3
     x64.callDirect rot
     x64.cmpRegImm32 r8, 45123
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

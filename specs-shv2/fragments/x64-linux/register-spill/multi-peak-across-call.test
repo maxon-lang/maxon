@@ -1,9 +1,9 @@
 // Test: multi-peak-across-call
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 100
 	let b1 = p + 1
 	let b2 = p + 2
@@ -39,6 +39,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -51,12 +52,13 @@ func @f {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 16
+    x64.prologue 32
     x64.storeSlotReg slot0, rcx
     x64.leaRegRegImm32 rax, rcx, 100
-    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot2, rax
     x64.leaRegRegImm32 rax, rcx, 1
     x64.leaRegRegImm32 rdx, rcx, 2
+    x64.storeSlotReg slot1, rdx
     x64.leaRegRegImm32 rsi, rcx, 3
     x64.leaRegRegImm32 rdi, rcx, 4
     x64.leaRegRegImm32 r8, rcx, 5
@@ -69,43 +71,34 @@ func @f {
     x64.leaRegRegImm32 r14, rcx, 12
     x64.leaRegRegImm32 r15, rcx, 13
     x64.leaRegRegImm32 rcx, rcx, 14
+    x64.leaRegRegReg rdx, rax, rdx
+    x64.leaRegRegReg rdx, rdx, rsi
+    x64.leaRegRegReg rdx, rdx, rdi
+    x64.leaRegRegReg rdx, rdx, r8
+    x64.leaRegRegReg rdx, rdx, r9
+    x64.leaRegRegReg rdx, rdx, r10
+    x64.leaRegRegReg rdx, rdx, r11
+    x64.leaRegRegReg rdx, rdx, rbx
+    x64.leaRegRegReg rdx, rdx, r12
+    x64.leaRegRegReg rdx, rdx, r13
+    x64.leaRegRegReg rdx, rdx, r14
+    x64.leaRegRegReg rdx, rdx, r15
+    x64.leaRegRegReg rcx, rdx, rcx
+    x64.loadRegSlot rdx, slot2
+    x64.leaRegRegReg rcx, rdx, rcx
+  __il_cont:
+    x64.loadRegSlot rdx, slot2
+    x64.leaRegRegReg rax, rdx, rax
+    x64.loadRegSlot rdx, slot1
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegReg rax, rax, rsi
     x64.leaRegRegReg rax, rax, rdi
     x64.leaRegRegReg rax, rax, r8
     x64.leaRegRegReg rax, rax, r9
-    x64.leaRegRegReg rax, rax, r10
-    x64.leaRegRegReg rax, rax, r11
-    x64.leaRegRegReg rax, rax, rbx
-    x64.leaRegRegReg rax, rax, r12
-    x64.leaRegRegReg rax, rax, r13
-    x64.leaRegRegReg rax, rax, r14
-    x64.leaRegRegReg rax, rax, r15
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegSlot rcx, slot1
-    x64.leaRegRegReg rax, rcx, rax
-    x64.loadRegSlot rcx, slot0
-    x64.leaRegRegImm32 rdx, rcx, 1
-    x64.leaRegRegImm32 rsi, rcx, 2
-    x64.leaRegRegImm32 rdi, rcx, 3
-    x64.leaRegRegImm32 r8, rcx, 4
-    x64.leaRegRegImm32 r9, rcx, 5
-    x64.leaRegRegImm32 rcx, rcx, 6
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
-  __il_cont:
-    x64.loadRegSlot r10, slot1
-    x64.leaRegRegReg rdx, r10, rdx
-    x64.leaRegRegReg rdx, rdx, rsi
-    x64.leaRegRegReg rdx, rdx, rdi
-    x64.leaRegRegReg rdx, rdx, r8
-    x64.leaRegRegReg rdx, rdx, r9
-    x64.leaRegRegReg rcx, rdx, rcx
     x64.loadRegSlot rdx, slot0
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 16
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg r8, rcx, rax
+    x64.epilogue 32
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -123,8 +116,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect f
     x64.cmpRegImm32 r8, 326
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

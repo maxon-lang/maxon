@@ -40,8 +40,7 @@ func @greet {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, matcharm#1
-    x64.jmp matchnext#2
+    x64.jcc equal, matchnext#2
   matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
@@ -50,8 +49,7 @@ func @greet {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, matcharm#3
-    x64.jmp matchnext#4
+    x64.jcc equal, matchnext#4
   matcharm#3:
     x64.movRegImm32 r8, 2
     x64.jmp matchcont
@@ -60,8 +58,7 @@ func @greet {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, matcharm#5
-    x64.jmp matchnext#6
+    x64.jcc equal, matchnext#6
   matcharm#5:
     x64.movRegImm32 r8, 3
     x64.jmp matchcont
@@ -70,8 +67,7 @@ func @greet {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, matcharm#7
-    x64.jmp matchnext#8
+    x64.jcc equal, matchnext#8
   matcharm#7:
     x64.movRegImm32 r8, 4
     x64.jmp matchcont
@@ -80,22 +76,18 @@ func @greet {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, matcharm#9
-    x64.jmp matchnext#10
+    x64.jcc equal, matchnext#10
   matcharm#9:
     x64.movRegImm32 r8, 5
     x64.jmp matchcont
   matchnext#10:
     x64.movRegImm32 r8, 9
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_12]
     x64.callDirect mrt_panic
@@ -121,55 +113,39 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_rec_6]
     x64.callDirect greet
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, a
-    x64.jmp critsplit#12
+    x64.jcc notEqual, ifcont#2
   a:
-    x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#2
-  critsplit#12:
-    x64.jmp ifcont#2
+    x64.movRegImm32 rbx, 1
   ifcont#2:
     x64.leaRegRdata rcx, [rip + __str_rec_8]
     x64.callDirect greet
     x64.cmpRegImm32 r8, 3
-    x64.jcc equal, b
-    x64.jmp critsplit#13
+    x64.jcc notEqual, ifcont#4
   b:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#4
-  critsplit#13:
-    x64.jmp ifcont#4
   ifcont#4:
     x64.leaRegRdata rcx, [rip + __str_rec_10]
     x64.callDirect greet
     x64.cmpRegImm32 r8, 5
-    x64.jcc equal, c
-    x64.jmp critsplit#14
+    x64.jcc notEqual, ifcont#6
   c:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#6
-  critsplit#14:
-    x64.jmp ifcont#6
   ifcont#6:
     x64.leaRegRdata rcx, [rip + __str_rec_11]
     x64.callDirect greet
     x64.cmpRegImm32 r8, 9
-    x64.jcc equal, d
-    x64.jmp critsplit#15
+    x64.jcc notEqual, critsplit
   d:
     x64.leaRegRegImm32 r8, rbx, 1
     x64.jmp ifcont#8
-  critsplit#15:
+  critsplit:
     x64.movRegReg r8, rbx
-    x64.jmp ifcont#8
   ifcont#8:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_13]
     x64.callDirect mrt_panic

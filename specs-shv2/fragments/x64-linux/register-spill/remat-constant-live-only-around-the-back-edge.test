@@ -1,9 +1,9 @@
 // Test: remat-constant-live-only-around-the-back-edge
-function leaf(x int) returns int
+function leaf(x Integer) returns Integer
 	return x + 1
 end 'leaf'
 
-function loopDivisor(p int) returns int
+function loopDivisor(p Integer) returns Integer
 	let c = 7
 	var a1 = p + 1
 	var a2 = p + 2
@@ -31,6 +31,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -38,44 +39,41 @@ func @loopDivisor {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.movRegImm32 rsi, 7
-    x64.leaRegRegImm32 rdi, rcx, 1
-    x64.leaRegRegImm32 r8, rcx, 2
-    x64.leaRegRegImm32 r9, rcx, 3
-    x64.leaRegRegImm32 r10, rcx, 4
-    x64.leaRegRegImm32 r11, rcx, 5
+    x64.leaRegRegImm32 rsi, rcx, 1
+    x64.leaRegRegImm32 rdi, rcx, 2
+    x64.leaRegRegImm32 r8, rcx, 3
+    x64.leaRegRegImm32 r9, rcx, 4
+    x64.leaRegRegImm32 r10, rcx, 5
     x64.leaRegRegImm32 rcx, rcx, 6
-    x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
+    x64.movRegImm32 r11, 0
   whilehdr:
-    x64.movRegReg rax, rbx
-    x64.cqo
-    x64.idivReg rsi
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg r11
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 7
+    x64.movRegReg rdx, r11
+    x64.subRegReg rdx, r11, rax
     x64.cmpRegImm32 rdx, 3
-    x64.jcc less, loop
-    x64.jmp whileexit
-  loop:
-    x64.jmp __il_body
+    x64.jcc greaterEqual, whileexit
   __il_body:
-    x64.leaRegRegImm32 rax, rbx, 1
-    x64.jmp __il_cont
+    x64.leaRegRegImm32 r11, r11, 1
   __il_cont:
-    x64.leaRegRegReg rdi, rdi, rax
+    x64.leaRegRegReg rsi, rsi, r11
+    x64.leaRegRegReg rdi, rdi, rsi
     x64.leaRegRegReg r8, r8, rdi
     x64.leaRegRegReg r9, r9, r8
     x64.leaRegRegReg r10, r10, r9
-    x64.leaRegRegReg r11, r11, r10
-    x64.leaRegRegReg rcx, rcx, r11
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegReg rcx, rcx, r10
     x64.jmp whilehdr
   whileexit:
-    x64.leaRegRegReg rax, rdi, r8
+    x64.leaRegRegReg rax, rsi, rdi
+    x64.leaRegRegReg rax, rax, r8
     x64.leaRegRegReg rax, rax, r9
     x64.leaRegRegReg rax, rax, r10
-    x64.leaRegRegReg rax, rax, r11
     x64.leaRegRegReg r8, rax, rcx
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -88,8 +86,7 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect loopDivisor
     x64.cmpRegImm32 r8, 494
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

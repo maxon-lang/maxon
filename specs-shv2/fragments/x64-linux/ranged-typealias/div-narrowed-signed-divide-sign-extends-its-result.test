@@ -40,11 +40,9 @@ func @quotient {
     x64.prologue 32
     x64.cmpRegImm32 rcx, -2147483648
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 2147483647
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
@@ -53,15 +51,12 @@ func @quotient {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegImm32 rsi, 8
     x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
+    x64.sarRegImm8 rax, rcx, 63
+    x64.shrRegImm8 rax, rax, 61
+    x64.leaRegRegReg r8, rcx, rax
+    x64.sarRegImm8 r8, r8, 3
   __il_cont:
-    x64.movRegReg r8, rax
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -74,11 +69,9 @@ func @remainder {
     x64.prologue 32
     x64.cmpRegImm32 rcx, -2147483648
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 2147483647
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_7]
     x64.callDirect mrt_panic
@@ -87,15 +80,15 @@ func @remainder {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegImm32 rsi, 8
     x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
+    x64.sarRegImm8 rax, rcx, 63
+    x64.shrRegImm8 rax, rax, 61
+    x64.leaRegRegReg rax, rcx, rax
+    x64.sarRegImm8 rax, rax, 3
+    x64.imulRegRegImm32 rax, rax, 8
+    x64.movRegReg r8, rcx
+    x64.subRegReg r8, rcx, rax
   __il_cont:
-    x64.movRegReg r8, rdx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -111,31 +104,7 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rbx, rax, -65
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
-  __il_cont:
-    x64.cmpRegImm32 rbx, -2147483648
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 2147483647
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 104
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.movRegImm rbx, 18446744073709551551
   __rc_ok:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -232,17 +201,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

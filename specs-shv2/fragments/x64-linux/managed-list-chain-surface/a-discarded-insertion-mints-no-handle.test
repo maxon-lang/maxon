@@ -39,18 +39,15 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.movRegImm32 r12, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r12, 32
-    x64.jcc less, fill
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   fill:
     x64.leaRegRdata rcx, [rip + __str_rec_3]
     x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __list_append
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
@@ -124,8 +121,7 @@ func @main {
     x64.callDirect __list_head_checked
     x64.storeSlotReg slot1, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -194,17 +190,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

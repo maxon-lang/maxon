@@ -54,8 +54,7 @@ func @headOfAFreshChain {
     x64.movRegReg r12, r8
     x64.movRegReg r13, r10
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegReg rcx, rbx
     x64.callDirect __list_decref
@@ -91,18 +90,15 @@ func @main {
     x64.pushReg r15
     x64.prologue 72
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.storeSlotReg slot0, rax
     x64.cmpRegImm32 rax, 8
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.callDirect headOfAFreshChain
     x64.storeSlotReg slot1, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 1
     x64.epilogue 72
@@ -158,7 +154,6 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __list_node_decref
-    x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rax, rax, 1
@@ -171,17 +166,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

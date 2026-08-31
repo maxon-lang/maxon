@@ -41,11 +41,9 @@ func @workFunc {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, empty
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   empty:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
@@ -77,36 +75,28 @@ func @main {
     x64.callDirect workFunc
     x64.movRegReg r13, r10
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, tryblkthrow
-    x64.jmp tryblkok
+    x64.jcc equal, tryblkok
   tryblkthrow:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.jmp tryblkerr
   tryblkerr:
     x64.leaRegRegImm32 rax, r13, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm:
     x64.movRegImm32 r8, 42
-    x64.jmp matchcont
-  matchcont:
     x64.jmp tryblkcont
   matchdead:
   tryblkok:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
-    x64.jmp tryblkcont
   tryblkcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

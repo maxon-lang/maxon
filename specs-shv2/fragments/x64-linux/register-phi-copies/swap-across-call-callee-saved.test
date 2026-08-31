@@ -1,9 +1,9 @@
 // Test: swap-across-call-callee-saved
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function swapAcrossCall(p int) returns int
+function swapAcrossCall(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var i = 0
@@ -23,6 +23,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -33,15 +34,9 @@ func @swapAcrossCall {
     x64.leaRegRegImm32 rax, rcx, 1
     x64.leaRegRegImm32 rcx, rcx, 2
     x64.movRegImm32 rdx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rdx, 3
-    x64.jcc less, loop
-    x64.jmp whileexit
-  loop:
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
+    x64.jcc greaterEqual, whileexit
   __il_cont:
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.xchgRegReg rax, rcx
@@ -61,8 +56,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect swapAcrossCall
     x64.cmpRegImm32 r8, 21
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

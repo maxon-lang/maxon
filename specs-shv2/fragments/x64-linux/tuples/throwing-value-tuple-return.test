@@ -41,11 +41,9 @@ func @pairThrows {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#4
-    x64.jmp __rc_chk#5
   __rc_chk#5:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic#4
-    x64.jmp __rc_ok#3
+    x64.jcc lessEqual, __rc_ok#3
   __rc_panic#4:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -59,11 +57,9 @@ func @pairThrows {
   __rc_ok#3:
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#7
-    x64.jmp __rc_chk#8
   __rc_chk#8:
     x64.cmpRegImm32 rdx, 1000
-    x64.jcc greater, __rc_panic#7
-    x64.jmp __rc_ok#6
+    x64.jcc lessEqual, __rc_ok#6
   __rc_panic#7:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -76,11 +72,9 @@ func @pairThrows {
     x64.ret
   __rc_ok#6:
     x64.cmpRegImm32 rcx, 900
-    x64.jcc greater, guard
-    x64.jmp ifcont
+    x64.jcc lessEqual, ifcont
   guard:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
@@ -111,11 +105,9 @@ func @run {
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#4
-    x64.jmp __rc_chk#5
   __rc_chk#5:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic#4
-    x64.jmp __rc_ok#3
+    x64.jcc lessEqual, __rc_ok#3
   __rc_panic#4:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -129,8 +121,7 @@ func @run {
     x64.movRegImm32 rdx, 20
     x64.callDirect pairThrows
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -146,11 +137,9 @@ func @run {
     x64.movRegImm32 r10, 0
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#7
-    x64.jmp __rc_chk#8
   __rc_chk#8:
     x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic#7
-    x64.jmp __rc_ok#6
+    x64.jcc lessEqual, __rc_ok#6
   __rc_panic#7:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -177,35 +166,29 @@ func @main {
     x64.movRegImm32 rcx, 10
     x64.callDirect run
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 rbx, 0
     x64.jmp trycont#3
   tryok#1:
     x64.movRegReg rbx, r8
-    x64.jmp trycont#3
   trycont#3:
     x64.movRegImm32 rcx, 950
     x64.callDirect run
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#5
-    x64.jmp tryok#4
+    x64.jcc equal, tryok#4
   tryerr#5:
     x64.movRegImm32 rax, 42
     x64.jmp trycont#6
   tryok#4:
     x64.movRegReg rax, r8
-    x64.jmp trycont#6
   trycont#6:
     x64.leaRegRegReg r8, rbx, rax
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic

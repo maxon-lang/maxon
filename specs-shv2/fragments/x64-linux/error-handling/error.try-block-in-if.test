@@ -26,8 +26,7 @@ func @risky {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -40,36 +39,25 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-    x64.cmpRegImm32 rbx, 5
-    x64.jcc less, guard
-    x64.jmp critsplit
   guard:
     x64.movRegImm32 rcx, 3
     x64.callDirect risky
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRegImm32 rax, r10, -1
     x64.movRegImm32 rax, 7
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, rbx
-    x64.jmp trycont
   trycont:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.movRegReg r8, rbx
-    x64.jmp ifcont
   ifcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

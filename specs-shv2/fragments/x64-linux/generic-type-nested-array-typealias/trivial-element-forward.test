@@ -68,16 +68,6 @@ func @Container.create {
     x64.ret
 }
 
-func @Container.count {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Container.store {
   entry:
     x64.pushReg rbp
@@ -119,11 +109,12 @@ func @main {
     x64.leaRegRdata rax, [rip + __layout_Container_SmallInt]
     x64.movRegReg rcx, rbx
     x64.callDirect Container.add
-    x64.movRegReg rcx, rbx
-    x64.callDirect Container.count
-    x64.cmpRegImm32 r8, 2
-    x64.jcc equal, check
-    x64.jmp ifcont
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx

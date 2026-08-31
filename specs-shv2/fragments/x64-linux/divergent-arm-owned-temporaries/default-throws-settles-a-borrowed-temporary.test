@@ -70,13 +70,11 @@ func @pick {
     x64.pushReg r13
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#5
-    x64.jmp __rc_chk#6
-  __rc_chk#6:
+    x64.jcc less, __rc_panic
+  __rc_chk:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc greater, __rc_panic#5
-    x64.jmp __rc_ok#4
-  __rc_panic#5:
+    x64.jcc lessEqual, __rc_ok#4
+  __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -89,31 +87,11 @@ func @pick {
     x64.ret
   __rc_ok#4:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
+    x64.jcc notEqual, matchdefault
   matcharm:
     x64.movRegImm32 r8, 5
-    x64.jmp matchcont
   matchcont:
     x64.movRegImm32 r10, 0
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#8
-    x64.jmp __rc_chk#9
-  __rc_chk#9:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc greater, __rc_panic#8
-    x64.jmp __rc_ok#7
-  __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __rc_ok#7:
     x64.epilogue 40
     x64.popReg r13
@@ -159,8 +137,7 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect pick
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 rbx, 9
     x64.movRegReg rcx, r10
@@ -168,7 +145,6 @@ func @main {
     x64.jmp trycont#3
   tryok#1:
     x64.movRegReg rbx, r8
-    x64.jmp trycont#3
   trycont#3:
     x64.leaRegRdata rax, [rip + __str_rec_4]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -215,8 +191,7 @@ func @main {
     x64.movRegImm32 rcx, 2
     x64.callDirect pick
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#5
-    x64.jmp tryok#4
+    x64.jcc equal, tryok#4
   tryerr#5:
     x64.movRegImm32 rbx, 9
     x64.movRegReg rcx, r10
@@ -224,7 +199,6 @@ func @main {
     x64.jmp trycont#6
   tryok#4:
     x64.movRegReg rbx, r8
-    x64.jmp trycont#6
   trycont#6:
     x64.leaRegRdata rax, [rip + __str_rec_5]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -275,17 +249,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

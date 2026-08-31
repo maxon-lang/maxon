@@ -1,5 +1,5 @@
 // Test: divisor-is-read-after-a-checked-divide
-function opaque(x int) returns int
+function opaque(x Integer) returns Integer
 	return x
 end 'opaque'
 
@@ -10,6 +10,7 @@ function main() returns ExitCode
 	let r = try (100 / z) otherwise 0
 	return (q + d + r + z) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 21
 ---
@@ -18,33 +19,16 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 7
-    x64.jmp __il_body#12
-  __il_body#12:
-    x64.jmp __il_cont#11
   __il_cont#11:
     x64.movRegImm32 rcx, 0
-    x64.jmp __il_body#13
-  __il_body#13:
-    x64.jmp __il_cont#10
   __il_cont#10:
-    x64.movRegImm32 rdx, 100
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg equal, rsi
-    x64.movRegReg rdi, rsi
-    x64.orRegImm32 rdi, rsi, 7
+    x64.movRegImm32 rsi, 100
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg rsi
+    x64.sarRegImm8 rdx, rdx, 1
     x64.movRegReg rax, rdx
-    x64.cqo
-    x64.idivReg rdi
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
-  tryerr#2:
-    x64.movRegImm32 rsi, 99
-    x64.jmp trycont#3
-  tryok#1:
-    x64.movRegReg rsi, rax
-    x64.jmp trycont#3
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rsi, rdx, rax
   trycont#3:
     x64.movRegImm32 rax, 100
     x64.cmpRegImm32 rcx, 0
@@ -52,23 +36,17 @@ func @main {
     x64.cqo
     x64.idivReg rcx
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr#5
-    x64.jmp tryok#4
-  tryerr#5:
+    x64.jcc equal, trycont#6
+  tryerr:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont#6
-  tryok#4:
-    x64.jmp trycont#6
   trycont#6:
     x64.leaRegRegImm32 rcx, rsi, 7
     x64.leaRegRegReg r8, rcx, rax
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -47,11 +47,9 @@ func @Gate.check {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, neg
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   neg:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -84,11 +82,9 @@ func @Gate.bump {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, neg
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   neg:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -111,8 +107,7 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect Gate.check
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 r12, 9
     x64.movRegReg rcx, rbx
@@ -128,8 +123,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Gate.bump
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp tryok#3
+    x64.jcc equal, tryok#3
   tryerr#4:
     x64.movRegImm32 r12, 8
     x64.movRegReg rcx, rbx
@@ -144,8 +138,7 @@ func @main {
     x64.movRegImm rcx, 18446744073709551615
     x64.callDirect Gate.check
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#6
-    x64.jmp tryok#5
+    x64.jcc equal, tryok#5
   tryerr#6:
     x64.movRegImm32 r12, 5
     x64.movRegReg rcx, rbx

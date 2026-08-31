@@ -12,7 +12,7 @@ end 'Derived'
 type FloatRunner implements Derived with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return self.base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -32,6 +32,7 @@ end 'useIt'
 function main() returns ExitCode
 	return useIt(FloatRunner.create(0)) as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 31
 ---
@@ -49,14 +50,12 @@ func @FloatRunner.take {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc above, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc belowEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 rcx, 20
     x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 rcx, 0
-    x64.jmp matchcont
   matchcont:
     x64.leaRegRegReg r8, rax, rcx
     x64.popReg rbp
@@ -130,11 +129,9 @@ func @main {
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

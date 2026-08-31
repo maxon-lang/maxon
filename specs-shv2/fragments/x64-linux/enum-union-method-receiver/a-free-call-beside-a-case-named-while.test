@@ -3,20 +3,20 @@ enum Sib
 	alpha
 	while
 
-	export function outer() returns int
+	export function outer() returns Integer
 		return helper() + 1
 	end 'outer'
 end 'Sib'
 
 type Later
-	export var n as int
+	export var n as Integer
 
-	export function helper() returns int
+	export function helper() returns Integer
 		return 99
 	end 'helper'
 end 'Later'
 
-function helper() returns int
+function helper() returns Integer
 	return 6
 end 'helper'
 
@@ -24,6 +24,7 @@ function main() returns ExitCode
 	let a = Sib.alpha
 	return a.outer() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 7
 ---
@@ -31,10 +32,8 @@ func @Sib.outer {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.movRegImm32 rax, 6
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRegImm32 r8, rax, 1
     x64.popReg rbp
@@ -50,11 +49,9 @@ func @main {
     x64.callDirect Sib.outer
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

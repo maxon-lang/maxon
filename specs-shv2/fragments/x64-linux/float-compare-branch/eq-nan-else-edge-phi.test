@@ -29,26 +29,17 @@ func @main {
     x64.mulsdRegReg xmm0, xmm0, xmm1
     x64.subsdRegReg xmm0, xmm0, xmm0
     x64.ucomisdRegReg xmm0, xmm0
-    x64.jcc parity, critsplit#7
-    x64.jmp fordered
-  critsplit#7:
-    x64.jmp ifcont
+    x64.jcc parity, ifcont
   fordered:
-    x64.jcc equal, check
-    x64.jmp critsplit#8
+    x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 r8, 1
-    x64.jmp ifcont
-  critsplit#8:
-    x64.jmp ifcont
   ifcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

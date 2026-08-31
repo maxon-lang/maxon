@@ -21,41 +21,25 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rax, 0
-    x64.jmp whilehdr#1
-  whilehdr#1:
+  whilehdr:
     x64.cmpRegImm32 rax, 10
-    x64.jcc less, outer
-    x64.jmp critsplit
+    x64.jcc greaterEqual, critsplit
   outer:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp whilehdr#4
-  whilehdr#4:
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, inner
-    x64.jmp whileexit#6
   inner:
     x64.cmpRegImm32 r8, 3
-    x64.jcc equal, check
-    x64.jmp ifcont
-  check:
-    x64.jmp whileexit#3
-  ifcont:
-    x64.jmp whileexit#6
+    x64.jcc equal, whileexit#3
   whileexit#6:
     x64.movRegReg rax, r8
-    x64.jmp whilehdr#1
+    x64.jmp whilehdr
   critsplit:
     x64.movRegReg r8, rax
-    x64.jmp whileexit#3
   whileexit#3:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

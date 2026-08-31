@@ -1,13 +1,14 @@
 // Test: ranged-divisor-excluding-minus-one-is-still-a-bare-idiv
 typealias BelowMinusOne = int(i64.min to -2)
 
-function remainder(n int, d BelowMinusOne) returns int
+function remainder(n Integer, d BelowMinusOne) returns Integer
 	return n mod d
 end 'remainder'
 
 function main() returns ExitCode
 	return (remainder(0 - 13, d: -5) + 45) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 42
 ---
@@ -18,8 +19,7 @@ func @remainder {
     x64.prologue 32
     x64.movRegReg rsi, rdx
     x64.cmpRegImm32 rsi, -2
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -42,18 +42,15 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 rcx, rax, -13
+    x64.movRegImm rcx, 18446744073709551603
     x64.movRegImm rdx, 18446744073709551611
     x64.callDirect remainder
     x64.leaRegRegImm32 r8, r8, 45
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

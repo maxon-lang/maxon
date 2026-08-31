@@ -1,0 +1,27 @@
+// Test: unsigned-full-alias-admits-the-unsigned-extreme
+typealias Slot = int(0 to u64.max)
+
+let NO_SLOT = u64.max as Slot
+
+function isSentinel(s Slot) returns bool
+	return s == NO_SLOT
+end 'isSentinel'
+
+function main() returns ExitCode
+	if isSentinel(NO_SLOT) 'yes'
+		return 7
+	end 'yes'
+	return 0
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  yes:
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}

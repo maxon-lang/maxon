@@ -1,12 +1,12 @@
 // Test: field-access-on-live-struct
 type Point
-	export var x as int
+	export var x as Integer
 
-	static function create(x int) returns Point
+	static function create(x Integer) returns Point
 		return Self{x: x}
 	end 'create'
 
-	function getX() returns int
+	function getX() returns Integer
 		return x
 	end 'getX'
 end 'Point'
@@ -16,6 +16,7 @@ function main() returns ExitCode
 	p.x = 0
 	return p.getX()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -36,18 +37,14 @@ func @main {
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 r8, [rcx + 0]
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

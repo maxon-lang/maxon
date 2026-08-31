@@ -45,11 +45,9 @@ func @shlLowByte {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -72,11 +70,9 @@ func @shlTopByte {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -99,11 +95,9 @@ func @shrLowByte {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -119,63 +113,19 @@ func @shrLowByte {
     x64.ret
 }
 
-func @bits {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 10
-    x64.jmp __il_body#9
-  __il_body#9:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow#12
-    x64.jmp __rc_chk#11
-  __rc_chk#11:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __il_slow#12
-    x64.jmp __rc_ok#10
-  __il_slow#12:
-    x64.callDirect bits
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont#8
   __rc_ok#10:
-    x64.jmp __il_cont#8
-  __il_cont#8:
-    x64.jmp __il_body#13
+    x64.movRegImm32 rcx, 10
   __il_body#13:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#16
-    x64.jmp __rc_chk#15
   __rc_chk#15:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __il_slow#16
-    x64.jmp __rc_ok#14
+    x64.jcc lessEqual, __rc_ok#14
   __il_slow#16:
     x64.callDirect shlLowByte
     x64.jmp __il_cont#7
@@ -183,43 +133,22 @@ func @main {
     x64.movRegImm32 rax, 200
     x64.shlRegCl rax, rax
     x64.movRegReg r8, rax
-    x64.jmp __il_cont#7
   __il_cont#7:
     x64.cmpRegImm32 r8, 204800
-    x64.jcc notEqual, tenBits
-    x64.jmp ifcont#2
+    x64.jcc equal, __rc_ok#20
   tenBits:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#2:
-    x64.movRegImm32 rcx, 56
-    x64.jmp __il_body#19
-  __il_body#19:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow#22
-    x64.jmp __rc_chk#21
-  __rc_chk#21:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __il_slow#22
-    x64.jmp __rc_ok#20
-  __il_slow#22:
-    x64.callDirect bits
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont#18
   __rc_ok#20:
-    x64.jmp __il_cont#18
-  __il_cont#18:
-    x64.jmp __il_body#23
+    x64.movRegImm32 rcx, 56
   __il_body#23:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#26
-    x64.jmp __rc_chk#25
   __rc_chk#25:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __il_slow#26
-    x64.jmp __rc_ok#24
+    x64.jcc lessEqual, __rc_ok#24
   __il_slow#26:
     x64.callDirect shlTopByte
     x64.jmp __il_cont#17
@@ -227,46 +156,23 @@ func @main {
     x64.movRegImm32 rax, 255
     x64.shlRegCl rax, rax
     x64.movRegReg r8, rax
-    x64.jmp __il_cont#17
   __il_cont#17:
-    x64.movRegImm32 rax, 0
-    x64.movRegImm rcx, 72057594037927936
-    x64.subRegReg rax, rax, rcx
+    x64.movRegImm rax, 18374686479671623680
     x64.cmpRegReg r8, rax
-    x64.jcc notEqual, topByte
-    x64.jmp ifcont#4
+    x64.jcc equal, __rc_ok#30
   topByte:
     x64.movRegImm32 r8, 2
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#4:
-    x64.movRegImm32 rcx, 3
-    x64.jmp __il_body#29
-  __il_body#29:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow#32
-    x64.jmp __rc_chk#31
-  __rc_chk#31:
-    x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __il_slow#32
-    x64.jmp __rc_ok#30
-  __il_slow#32:
-    x64.callDirect bits
-    x64.movRegReg rcx, r8
-    x64.jmp __il_cont#28
   __rc_ok#30:
-    x64.jmp __il_cont#28
-  __il_cont#28:
-    x64.jmp __il_body#33
+    x64.movRegImm32 rcx, 3
   __il_body#33:
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __il_slow#36
-    x64.jmp __rc_chk#35
   __rc_chk#35:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __il_slow#36
-    x64.jmp __rc_ok#34
+    x64.jcc lessEqual, __rc_ok#34
   __il_slow#36:
     x64.callDirect shrLowByte
     x64.jmp __il_cont#27
@@ -274,17 +180,15 @@ func @main {
     x64.movRegImm32 rax, 200
     x64.shrRegCl rax, rax
     x64.movRegReg r8, rax
-    x64.jmp __il_cont#27
   __il_cont#27:
     x64.cmpRegImm32 r8, 25
-    x64.jcc notEqual, shrByte
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont
   shrByte:
     x64.movRegImm32 r8, 3
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#6:
+  ifcont:
     x64.movRegImm32 r8, 42
     x64.epilogue 32
     x64.popReg rbp

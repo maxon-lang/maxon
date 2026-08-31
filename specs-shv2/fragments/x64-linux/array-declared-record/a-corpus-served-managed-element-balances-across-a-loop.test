@@ -71,42 +71,32 @@ func @Array.clone {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
-    x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
+    x64.prologue 32
+    x64.movRegReg rsi, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r13
-    x64.movRegReg rax, r12
-    x64.movRegReg r9, rbx
+    x64.movRegReg r9, rsi
     x64.callDirect __managed_slice_opaque
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -118,117 +108,77 @@ func @Array.at {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
     x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.movRegReg r12, rax
-    x64.cmpRegImm32 rbx, 0
+    x64.movRegReg rbx, rax
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.cmpRegImm32 rdx, 1000
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_12]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
-    x64.loadRegBaseDisp.word64 rax, [r13 + 24]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg rbx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#12
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
   __im_load#12:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.imulRegRegImm32 rcx, rbx, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __im_slow
   __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.setccReg less, rcx
-    x64.cmpRegReg rbx, rax
-    x64.setccReg greaterEqual, rax
-    x64.orRegReg rcx, rcx, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#13
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
   __im_load#13:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.leaRegRegReg rax, rax, rbx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
   __im_loaded:
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [r13 + 40]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#15
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#15
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#16
+    x64.jcc equal, __im_slow
   critsplit#16:
     x64.movRegReg rdx, rax
-    x64.jmp __il_cont
+    x64.jmp __im_cont
   critsplit#15:
     x64.movRegReg rdx, rax
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, rbx
+    x64.jmp __im_cont
+  __im_slow:
     x64.callDirect __managed_get
     x64.movRegReg rdx, r8
-    x64.movRegReg rcx, r10
-    x64.jmp __il_cont
-  __il_cont:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.movRegReg rsi, r10
+  __im_cont:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, tryok
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __retain_type_param
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
     x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -244,11 +194,9 @@ func @Array.lastOne {
     x64.leaRegRegImm32 rdx, rdx, -1
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rdx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_13]
     x64.callDirect mrt_panic
@@ -295,12 +243,10 @@ func @main {
     x64.callDirect __managed_push
     x64.movRegImm32 r12, 0
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.storeSlotReg slot15, rax
     x64.cmpRegImm32 rax, 50
-    x64.jcc less, rounds
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   rounds:
     x64.leaRegRdata rdx, [rip + __layout_Array_String]
     x64.movRegReg rcx, rbx
@@ -321,24 +267,35 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect Array.lastOne
     x64.movRegReg r13, r8
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 r15, [r14 + 8]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc greaterEqual, __il_body#15
+  __il_slow#14:
     x64.movRegReg rcx, r14
     x64.callDirect String.byteLength
     x64.movRegReg r15, r8
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, __rc_ok
+  __il_slow#17:
     x64.movRegReg rcx, r13
     x64.callDirect String.byteLength
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
     x64.leaRegRegReg rax, r15, r8
     x64.cmpRegImm32 rax, 0
-    x64.jcc greater, nonEmpty
-    x64.jmp critsplit
+    x64.jcc lessEqual, ifcont
   nonEmpty:
     x64.leaRegRegImm32 r12, r12, 1
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, ifcont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_14]
     x64.callDirect mrt_panic
@@ -351,10 +308,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
   ifcont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
@@ -362,7 +315,6 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot19
     x64.callDirect __managed_decref
-    x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot15
     x64.leaRegRegImm32 rax, rax, 1
@@ -506,26 +458,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

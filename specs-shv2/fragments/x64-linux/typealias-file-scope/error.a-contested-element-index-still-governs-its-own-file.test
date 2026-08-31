@@ -1,0 +1,18 @@
+// Test: error.a-contested-element-index-still-governs-its-own-file
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias ElementIndex = int(0 to 3)
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.resize(20)
+	try a.set(9, value: 42) otherwise ignore
+	// ⚠ NOT `return mine as ExitCode`: that spelling raises E3010 (`unneeded cast`) first and masks
+	// the diagnostic this case is about.
+	let mine = 9 as ElementIndex
+	print("{mine}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:12:15: Value 9 is outside the range of 'ElementIndex' (int(0 to 3))

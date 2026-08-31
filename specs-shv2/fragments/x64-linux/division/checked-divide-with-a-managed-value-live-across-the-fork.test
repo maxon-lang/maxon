@@ -1,5 +1,5 @@
 // Test: checked-divide-with-a-managed-value-live-across-the-fork
-function opaque(x int) returns int
+function opaque(x Integer) returns Integer
 	return x
 end 'opaque'
 
@@ -11,6 +11,7 @@ function main() returns ExitCode
 	print("q={q}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -32,9 +33,6 @@ func @main {
     x64.pushReg r15
     x64.prologue 104
     x64.movRegImm32 rbx, 4
-    x64.jmp __il_body
-  __il_body:
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -88,22 +86,12 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.movRegImm32 rax, 100
-    x64.movRegImm32 rcx, 4
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rcx
-    x64.movRegReg rsi, rcx
-    x64.orRegImm32 rsi, rcx, 4
-    x64.cqo
-    x64.idivReg rsi
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 r12, 0
-    x64.jmp trycont
+    x64.sarRegImm8 rax, rax, 63
+    x64.shrRegImm8 rax, rax, 62
+    x64.leaRegRegImm32 rax, rax, 100
+    x64.sarRegImm8 rax, rax, 2
   tryok:
     x64.movRegReg r12, rax
-    x64.jmp trycont
   trycont:
     x64.movRegReg rcx, rbx
     x64.callDirect print
@@ -171,17 +159,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

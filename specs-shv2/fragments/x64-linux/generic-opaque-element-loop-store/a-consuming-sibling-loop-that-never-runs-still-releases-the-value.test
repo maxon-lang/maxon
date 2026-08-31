@@ -93,11 +93,9 @@ func @Bag.fill {
     x64.movRegReg r13, rax
     x64.movRegReg r14, r9
     x64.movRegImm32 r15, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegReg r15, r12
-    x64.jcc less, fill
-    x64.jmp whileexit
+    x64.jcc aboveEqual, whileexit
   fill:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
@@ -118,16 +116,6 @@ func @Bag.fill {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Bag.count {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
     x64.popReg rbp
     x64.ret
 }
@@ -206,16 +194,16 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect Bag.count
-    x64.movRegReg rbx, r8
+  __il_body:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+  __il_cont:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
@@ -238,17 +226,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

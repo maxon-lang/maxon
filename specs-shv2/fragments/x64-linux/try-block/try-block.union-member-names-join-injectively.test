@@ -81,11 +81,9 @@ func @callAB {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -101,11 +99,9 @@ func @callC {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -121,11 +117,9 @@ func @callA {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -141,11 +135,9 @@ func @callBC {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
@@ -167,8 +159,7 @@ func @main {
     x64.callDirect callAB
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit#22
-    x64.jmp tryblkok#2
+    x64.jcc equal, tryblkok#2
   critsplit#22:
     x64.movRegReg rbx, r10
     x64.jmp tryblkerr#1
@@ -177,77 +168,55 @@ func @main {
     x64.callDirect callC
     x64.leaRegRegImm32 r12, r10, 1
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit#24
-    x64.jmp tryblkok#3
+    x64.jcc equal, tryblkok#3
   critsplit#24:
     x64.movRegReg rbx, r12
-    x64.jmp tryblkerr#1
   tryblkerr#1:
     x64.movRegImm32 rcx, 0
     x64.callDirect callA
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit#23
-    x64.jmp tryblkok#5
-  critsplit#23:
-    x64.jmp tryblkerr#4
+    x64.jcc notEqual, tryblkerr#4
   tryblkok#5:
     x64.movRegImm32 rcx, 0
     x64.callDirect callBC
     x64.leaRegRegImm32 rax, r10, 1
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, critsplit#25
-    x64.jmp tryblkok#6
+    x64.jcc equal, tryblkok#6
   critsplit#25:
     x64.movRegReg r10, rax
-    x64.jmp tryblkerr#4
   tryblkerr#4:
     x64.cmpRegImm32 r10, 1
-    x64.jcc equal, matcharm#7
-    x64.jmp matchnext#10
-  matcharm#7:
-    x64.jmp matchcont#11
+    x64.jcc equal, tryblkcont#12
   matchnext#10:
     x64.cmpRegImm32 r10, 2
-    x64.jcc equal, matcharm#8
-    x64.jmp matchdead#9
-  matcharm#8:
-    x64.jmp matchcont#11
-  matchcont#11:
-    x64.jmp tryblkcont#12
+    x64.jcc equal, tryblkcont#12
   matchdead#9:
   tryblkok#6:
     x64.leaRegRegReg rax, r12, r8
-    x64.jmp tryblkcont#12
   tryblkcont#12:
     x64.cmpRegImm32 rbx, 1
-    x64.jcc equal, matcharm#13
-    x64.jmp matchnext#16
+    x64.jcc notEqual, matchnext#16
   matcharm#13:
     x64.movRegImm32 rax, 11
-    x64.jmp matchcont#17
+    x64.jmp matchcont
   matchnext#16:
     x64.cmpRegImm32 rbx, 2
-    x64.jcc equal, matcharm#14
-    x64.jmp matchdead#15
+    x64.jcc notEqual, matchdead#15
   matcharm#14:
     x64.movRegImm32 rax, 22
-    x64.jmp matchcont#17
-  matchcont#17:
+  matchcont:
     x64.movRegReg r8, rax
     x64.jmp tryblkcont#18
   matchdead#15:
   tryblkok#3:
     x64.leaRegRegReg r8, rbx, r8
-    x64.jmp tryblkcont#18
   tryblkcont#18:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

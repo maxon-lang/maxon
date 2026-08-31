@@ -5,7 +5,7 @@ enum Kw
 	omega
 end 'Kw'
 
-function tagOf(k Kw) returns int
+function tagOf(k Kw) returns Integer
 	match k 'm'
 		alpha then return 1
 		for then return 2
@@ -20,6 +20,7 @@ function main() returns ExitCode
 	end 'each'
 	return acc as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 21
 ---
@@ -30,50 +31,23 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 r8, 0
     x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 1
-    x64.jmp __il_body
-  __il_body:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, matcharm#10
-    x64.jmp matchnext#14
-  matcharm#10:
-    x64.movRegImm32 rcx, 1
-    x64.jmp __il_cont
-  matchnext#14:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm#11
-    x64.jmp matchnext#15
-  matcharm#11:
+  matcharm:
     x64.movRegImm32 rcx, 2
-    x64.jmp __il_cont
-  matchnext#15:
-    x64.cmpRegImm32 rcx, 2
-    x64.jcc equal, matcharm#12
-    x64.jmp matchdead
-  matcharm#12:
-    x64.movRegImm32 rcx, 3
-    x64.jmp __il_cont
-  __il_cont:
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegReg rax, rcx
-    x64.jcc less, each
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   each:
     x64.leaRegRegImm32 rdx, r8, 10
     x64.leaRegRegReg r8, rdx, rax
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 rax, rax, 1
     x64.jmp forhdr
   forexit:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -85,6 +59,4 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchdead:
-  matchcont:
 }

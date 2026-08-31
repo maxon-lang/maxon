@@ -1,0 +1,33 @@
+// Test: error.message-param-interface-value-not-transferable
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function measure(s Shape)
+		self.count = self.count + s.area()
+	end 'measure'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3135: <fragment>:27:10: parameter `s` of the message `Calc.measure` is a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry, and this `spawn` makes `Calc` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message

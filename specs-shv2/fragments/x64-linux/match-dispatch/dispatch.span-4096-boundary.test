@@ -1,5 +1,5 @@
 // Test: dispatch.span-4096-boundary
-function bucket(x int) returns int
+function bucket(x Integer) returns Integer
 	// 128 width-32 range arms cover [0, 4095] exactly -- span 4096, the WIDEST table admitted (and the arm64
 	// bounds-check imm12 boundary: 4096 does not fit a CMP immediate, so the count is materialised into a
 	// scratch register). A `cmp idx, #4096` that spilled into the LSL#12 bit would compare against 0 and
@@ -163,6 +163,7 @@ function main() returns ExitCode
 	end 'g'
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 7
 ---
@@ -557,7 +558,6 @@ func @bucket {
     x64.jmp matchcont
   matcharm#128:
     x64.movRegImm32 r8, 128
-    x64.jmp matchcont
   matchcont:
     x64.popReg rbp
     x64.ret
@@ -573,88 +573,62 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect bucket
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, a
-    x64.jmp critsplit#21
+    x64.jcc notEqual, ifcont#2
   a:
-    x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#2
-  critsplit#21:
-    x64.jmp ifcont#2
+    x64.movRegImm32 rbx, 1
   ifcont#2:
     x64.movRegImm32 rcx, 31
     x64.callDirect bucket
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, b
-    x64.jmp critsplit#22
+    x64.jcc notEqual, ifcont#4
   b:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#4
-  critsplit#22:
-    x64.jmp ifcont#4
   ifcont#4:
     x64.movRegImm32 rcx, 32
     x64.callDirect bucket
     x64.cmpRegImm32 r8, 2
-    x64.jcc equal, c
-    x64.jmp critsplit#23
+    x64.jcc notEqual, ifcont#6
   c:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#6
-  critsplit#23:
-    x64.jmp ifcont#6
   ifcont#6:
     x64.movRegImm32 rcx, 2047
     x64.callDirect bucket
     x64.cmpRegImm32 r8, 64
-    x64.jcc equal, d
-    x64.jmp critsplit#24
+    x64.jcc notEqual, ifcont#8
   d:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#8
-  critsplit#24:
-    x64.jmp ifcont#8
   ifcont#8:
     x64.movRegImm32 rcx, 4095
     x64.callDirect bucket
     x64.cmpRegImm32 r8, 128
-    x64.jcc equal, e
-    x64.jmp critsplit#25
+    x64.jcc notEqual, ifcont#10
   e:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#10
-  critsplit#25:
-    x64.jmp ifcont#10
   ifcont#10:
     x64.movRegImm32 rcx, 4096
     x64.callDirect bucket
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, f
-    x64.jmp critsplit#26
+    x64.jcc notEqual, ifcont#12
   f:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp ifcont#12
-  critsplit#26:
-    x64.jmp ifcont#12
   ifcont#12:
     x64.movRegImm rcx, 18446744073709551615
     x64.callDirect bucket
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, g
-    x64.jmp critsplit#27
+    x64.jcc notEqual, critsplit
   g:
     x64.leaRegRegImm32 r8, rbx, 1
     x64.jmp ifcont#14
-  critsplit#27:
+  critsplit:
     x64.movRegReg r8, rbx
-    x64.jmp ifcont#14
   ifcont#14:
     x64.cmpRegImm32 r8, 0
+    x64.setccReg less, rax
     x64.jcc less, __rc_panic#16
-    x64.jmp __rc_chk#17
   __rc_chk#17:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic#16
-    x64.jmp __rc_ok#15
+    x64.setccReg greater, rcx
+    x64.jcc lessEqual, __rc_ok#15
   __rc_panic#16:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -664,13 +638,11 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok#15:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#19
-    x64.jmp __rc_chk#20
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __rc_panic#19
   __rc_chk#20:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic#19
-    x64.jmp __rc_ok#18
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __rc_ok#18
   __rc_panic#19:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

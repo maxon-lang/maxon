@@ -2,7 +2,7 @@
 typealias Coord = int(0 to 1000)
 
 interface Scaled
-	function scale(k float) returns float
+	function scale(k Real) returns Real
 end 'Scaled'
 
 type Point implements Scaled
@@ -10,7 +10,7 @@ type Point implements Scaled
 	export static function create(x Coord) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function scale(k float) returns float
+	export function scale(k Real) returns Real
 		return k * 2.0
 	end 'scale'
 end 'Point'
@@ -20,10 +20,10 @@ type Box uses T where T is Scaled
 	export static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function fromInt() returns float
+	export function fromInt() returns Real
 		return self.item.scale(2)
 	end 'fromInt'
-	export function fromFloat() returns float
+	export function fromFloat() returns Real
 		return self.item.scale(1.5)
 	end 'fromFloat'
 end 'Box'
@@ -37,6 +37,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 0
 ---
@@ -56,11 +57,9 @@ func @Point.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -164,13 +163,9 @@ func @main {
     x64.movsdRegRip xmm1, [rip + __fconst_3]
     x64.ucomisdRegReg xmm0, xmm1
     x64.movRegImm32 rax, 0
-    x64.jcc parity, critsplit#6
-    x64.jmp fordered
-  critsplit#6:
-    x64.jmp scmerge
+    x64.jcc parity, scmerge
   fordered:
-    x64.jcc equal, andrhs
-    x64.jmp critsplit#7
+    x64.jcc notEqual, scmerge
   andrhs:
     x64.leaRegRdata rdx, [rip + __witness_Point.Scaled]
     x64.movRegReg rcx, r12
@@ -182,13 +177,9 @@ func @main {
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rcx, 0
     x64.setccReg equal, rax
-    x64.jmp scmerge
-  critsplit#7:
-    x64.jmp scmerge
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ok
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   ok:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12

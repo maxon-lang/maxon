@@ -110,7 +110,6 @@ func @Mixer.mix {
     x64.leaRegRegImm32 rcx, rcx, 12
     x64.movRegImm32 r15, 0
     x64.xchgRegReg rcx, r13
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot13, rax
     x64.storeSlotReg slot12, rdx
@@ -125,13 +124,9 @@ func @Mixer.mix {
     x64.storeSlotReg slot3, r13
     x64.storeSlotReg slot2, r15
     x64.cmpRegImm32 r15, 3
-    x64.jcc less, loop
-    x64.jmp whileexit
-  loop:
-    x64.jmp __il_body
+    x64.jcc greaterEqual, whileexit
   __il_body:
     x64.leaRegRegImm32 r13, r15, 1
-    x64.jmp __il_cont
   __il_cont:
     x64.loadRegSlot r14, slot0
     x64.movRegReg rcx, r14
@@ -142,14 +137,12 @@ func @Mixer.mix {
     x64.loadRegSlot r14, slot1
     x64.callMem [r14 + 24]
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, sameKey
-    x64.jmp critsplit
+    x64.jcc equal, critsplit
   sameKey:
     x64.leaRegRegReg rax, r13, r15
     x64.jmp ifcont
   critsplit:
     x64.movRegReg rax, r13
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRegReg r12, r12, rax
     x64.loadRegSlot rcx, slot13
@@ -227,8 +220,7 @@ func @main {
     x64.leaRegRdata r9, [rip + __witness_int.Equatable]
     x64.callDirect Mixer.mix
     x64.cmpRegImm32 r8, 330
-    x64.jcc notEqual, wrongSum
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   wrongSum:
     x64.movRegImm32 r8, 90
     x64.epilogue 48
@@ -237,45 +229,6 @@ func @main {
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-}
-
-func @int.hash {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rax, 4294967295
-    x64.movRegReg r8, rcx
-    x64.andRegReg r8, rcx, rax
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @int.equals {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.cmpRegReg rcx, rdx
-    x64.setccReg equal, r8
     x64.popReg rbp
     x64.ret
 }

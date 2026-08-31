@@ -47,11 +47,9 @@ func @makeStr {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, c
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   c:
-    x64.movRegImm32 rax, 0
-    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
@@ -72,14 +70,10 @@ func @run {
     x64.prologue 32
     x64.callDirect makeStr
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.jmp trycont
+    x64.jcc notEqual, trycont
   tryok:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.jmp trycont
   trycont:
     x64.movRegImm32 r8, 9
     x64.epilogue 32
@@ -99,21 +93,17 @@ func @main {
     x64.movRegImm32 rcx, 1
     x64.callDirect run
     x64.cmpRegImm32 rbx, 9
-    x64.jcc equal, x
-    x64.jmp ifcont#4
+    x64.jcc notEqual, ifcont
   x:
     x64.cmpRegImm32 r8, 9
-    x64.jcc equal, y
-    x64.jmp ifcont#3
+    x64.jcc notEqual, ifcont
   y:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#3:
-    x64.jmp ifcont#4
-  ifcont#4:
+  ifcont:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
     x64.popReg rbx

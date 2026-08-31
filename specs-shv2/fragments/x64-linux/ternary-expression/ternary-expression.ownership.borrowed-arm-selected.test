@@ -71,47 +71,6 @@ func @Entry.create {
     x64.ret
 }
 
-func @remapKind {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
-  matcharm#1:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
-  matcharm#2:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.leaRegRegImm32 rbx, rax, 1
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.jmp matchcont
-  matchcont:
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-}
-
 func @record {
   entry:
     x64.pushReg rbp
@@ -119,26 +78,21 @@ func @record {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#1:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.jmp matchcont
   matchcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -173,45 +127,28 @@ func @main {
     x64.movRegReg rcx, r8
     x64.callDirect Entry.create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ternarytrue
-    x64.jmp ternaryfalse
   ternarytrue:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
-    x64.jmp matchcont#3
-  ternaryfalse:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect remapKind
-    x64.movRegReg r12, r8
-    x64.jmp matchcont#3
-  matchcont#3:
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#6
-    x64.jmp matchnext
+    x64.jcc notEqual, matchnext
   matcharm#6:
     x64.movRegImm32 rax, 0
-    x64.jmp matchcont#10
+    x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#7
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#7:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.jmp matchcont#10
-  matchcont#10:
+  matchcont:
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __il_slow
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rax, 1000
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __il_slow:
     x64.movRegReg rcx, r12
     x64.callDirect record
@@ -219,7 +156,6 @@ func @main {
     x64.jmp __il_cont
   __rc_ok:
     x64.movRegReg r13, rax
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
@@ -266,15 +202,4 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }

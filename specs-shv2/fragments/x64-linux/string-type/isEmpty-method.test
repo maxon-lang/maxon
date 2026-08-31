@@ -32,18 +32,15 @@ func @main {
     x64.leaRegRdata rbx, [rip + __str_rec_6]
     x64.callDirect String.isEmpty
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, check1
-    x64.jmp ifcont#2
+    x64.jcc equal, ifcont#2
   check1:
     x64.leaRegRdata rcx, [rip + __str_rec_7]
     x64.callDirect print
-    x64.jmp ifcont#2
   ifcont#2:
     x64.movRegReg rcx, rbx
     x64.callDirect String.isEmpty
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, check2
-    x64.jmp ifelse
+    x64.jcc equal, ifelse
   check2:
     x64.leaRegRdata rcx, [rip + __str_rec_8]
     x64.callDirect print
@@ -51,44 +48,10 @@ func @main {
   ifelse:
     x64.leaRegRdata rcx, [rip + __str_rec_9]
     x64.callDirect print
-    x64.jmp ifcont#5
   ifcont#5:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.isEmpty {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect String.byteLength
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg equal, r8
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -1,0 +1,27 @@
+// Test: a-negative-literal-is-not-the-unsigned-extreme
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let three = wide(3 as Wide)
+
+	if three > 0 - 1 'aboveNegativeOne'
+		return 42
+	end 'aboveNegativeOne'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  aboveNegativeOne:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

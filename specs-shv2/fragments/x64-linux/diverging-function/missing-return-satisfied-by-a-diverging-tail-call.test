@@ -1,9 +1,9 @@
 // Test: missing-return-satisfied-by-a-diverging-tail-call
-function fatal(tag int)
+function fatal(tag Integer)
 	panic("fatal {tag}")
 end 'fatal'
 
-function pick(b bool) returns int
+function pick(b bool) returns Integer
 	if b 'y'
 		return 6
 	end 'y'
@@ -13,6 +13,7 @@ end 'pick'
 function main() returns ExitCode
 	return pick(true) * 7
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 42
 ---
@@ -113,8 +114,7 @@ func @pick {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, y
-    x64.jmp ifcont
+    x64.jcc equal, ifcont
   y:
     x64.movRegImm32 r8, 6
     x64.epilogue 32
@@ -127,7 +127,6 @@ func @pick {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  afterdiverge:
 }
 
 func @main {
@@ -140,11 +139,9 @@ func @main {
     x64.imulRegRegImm32 r8, r8, 7
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_6]
     x64.callDirect mrt_panic

@@ -33,11 +33,9 @@ func @sumTo {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#6
-    x64.jmp __rc_chk#7
   __rc_chk#7:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __rc_panic#6
-    x64.jmp __rc_ok#5
+    x64.jcc lessEqual, __rc_ok#5
   __rc_panic#6:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -48,25 +46,20 @@ func @sumTo {
   __rc_ok#5:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 rax, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegReg rax, rcx
-    x64.jcc lessEqual, l
-    x64.jmp forexit
+    x64.jcc greater, forexit
   l:
     x64.leaRegRegReg r8, r8, rax
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 rax, rax, 1
     x64.jmp forhdr
   forexit:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#9
-    x64.jmp __rc_chk#10
   __rc_chk#10:
     x64.cmpRegImm32 r8, 63
-    x64.jcc greater, __rc_panic#9
-    x64.jmp __rc_ok#8
+    x64.jcc lessEqual, __rc_ok#8
   __rc_panic#9:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -89,18 +82,15 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 97
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r12, 101
-    x64.jcc lessEqual, k
-    x64.jmp forexit
+    x64.jcc greater, forexit
   k:
     x64.movRegReg rcx, r12
     x64.callDirect __char_from_cp
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
@@ -110,11 +100,9 @@ func @main {
     x64.leaRegRegReg r8, r8, rbx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

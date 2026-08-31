@@ -47,11 +47,9 @@ func @Point.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -83,13 +81,11 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 9
     x64.callDirect Point.create
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.cmpRegReg rax, rcx
-    x64.jcc less, lt
-    x64.jmp ifcont#14
+    x64.jcc greaterEqual, ifcont#14
   lt:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont
@@ -97,35 +93,29 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.cmpRegReg rax, rcx
-    x64.jcc greater, gt
-    x64.jmp ifcont#16
+    x64.jcc lessEqual, ifcont#16
   gt:
     x64.movRegImm32 rax, 2
     x64.jmp __il_cont
   ifcont#16:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm#1
-    x64.jmp matchnext#5
+    x64.jcc notEqual, matchnext#5
   matcharm#1:
     x64.movRegImm32 r12, 1
     x64.jmp matchcont
   matchnext#5:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm#2
-    x64.jmp matchnext#6
+    x64.jcc notEqual, matchnext#6
   matcharm#2:
     x64.movRegImm32 r12, 2
     x64.jmp matchcont
   matchnext#6:
     x64.cmpRegImm32 rax, 2
-    x64.jcc equal, matcharm#3
-    x64.jmp matchdead
+    x64.jcc notEqual, matchdead
   matcharm#3:
     x64.movRegImm32 r12, 3
-    x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
@@ -133,11 +123,9 @@ func @main {
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic

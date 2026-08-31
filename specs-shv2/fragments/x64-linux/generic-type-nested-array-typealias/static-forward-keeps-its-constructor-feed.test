@@ -94,16 +94,6 @@ func @Holder.of {
     x64.ret
 }
 
-func @Holder.count {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -115,12 +105,10 @@ func @main {
     x64.pushReg r15
     x64.prologue 120
     x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 rbx, 3
-    x64.jcc less, grow
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   grow:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp whilehdr
@@ -230,17 +218,17 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.movRegReg rdx, rbx
     x64.callDirect Holder.of
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect Holder.count
-    x64.cmpRegImm32 r8, 1
-    x64.jcc equal, check
-    x64.jmp ifcont
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, ifcont
   check:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Holder_String
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 120
     x64.popReg r15
     x64.popReg r14
@@ -250,10 +238,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 r12, 1
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r8
     x64.callDirect __destruct_Holder_String
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 120
     x64.popReg r15
     x64.popReg r14

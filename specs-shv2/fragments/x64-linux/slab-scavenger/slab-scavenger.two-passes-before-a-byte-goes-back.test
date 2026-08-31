@@ -53,11 +53,9 @@ func @build {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#6
-    x64.jmp __rc_chk#7
   __rc_chk#7:
     x64.cmpRegImm32 rbx, 65536
-    x64.jcc greater, __rc_panic#6
-    x64.jmp __rc_ok#5
+    x64.jcc lessEqual, __rc_ok#5
   __rc_panic#6:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -77,23 +75,25 @@ func @build {
     x64.movRegReg rcx, r12
     x64.callDirect Array.reserve
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r13, 96
-    x64.jcc less, fill
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   fill:
-    x64.leaRegRegReg rax, rbx, r13
-    x64.movRegImm32 rcx, 251
-    x64.cqo
-    x64.idivReg rcx
+    x64.leaRegRegReg rsi, rbx, r13
+    x64.movRegImm rax, 2351776136887273513
+    x64.imulHighReg rsi
+    x64.sarRegImm8 rdx, rdx, 5
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rsi
+    x64.subRegReg rdx, rsi, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#9
-    x64.jmp __rc_chk#10
   __rc_chk#10:
     x64.cmpRegImm32 rdx, 255
-    x64.jcc greater, __rc_panic#9
-    x64.jmp __rc_ok#8
+    x64.jcc lessEqual, __rc_ok#8
   __rc_panic#9:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -107,7 +107,6 @@ func @build {
   __rc_ok#8:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp forhdr
@@ -133,35 +132,15 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r12, 16000
-    x64.jcc less, alloc
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   alloc:
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 r12, 65536
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.movRegReg rcx, r12
     x64.callDirect build
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
@@ -174,8 +153,7 @@ func @main {
     x64.callDirect __managed_decref
     x64.callDirect __slab_scavenge
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, graceSkipped
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#6
   graceSkipped:
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r12
@@ -189,8 +167,7 @@ func @main {
   ifcont#6:
     x64.callDirect __slab_scavenge
     x64.cmpRegImm32 r8, 0
-    x64.jcc lessEqual, nothingReleased
-    x64.jmp ifcont#8
+    x64.jcc greater, ifcont#8
   nothingReleased:
     x64.movRegImm32 rbx, 2
     x64.movRegReg rcx, r12
@@ -207,62 +184,6 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Array.reserve {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_capacity
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-    x64.cmpRegReg r12, r14
-    x64.jcc greater, grow
-    x64.jmp ifcont
-  grow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __managed_mem_grow
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.jmp ifcont
-  ifcont:
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

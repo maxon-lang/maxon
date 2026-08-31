@@ -41,8 +41,7 @@ func @main {
     x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc greater, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc lessEqual, ternaryfalse
   ternarytrue:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
@@ -52,18 +51,12 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
-    x64.jmp matchcont
   matchcont:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_set_length
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.jmp trycont
-  tryok:
-    x64.jmp trycont
+    x64.jcc notEqual, trycont
   trycont:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.imulRegRegImm32 rax, rax, 10
@@ -71,11 +64,9 @@ func @main {
     x64.leaRegRegReg r13, rax, rcx
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r13, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

@@ -36,11 +36,9 @@ func @Adder.create {
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rbx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -69,11 +67,9 @@ func @Adder.bump {
     x64.leaRegRegImm32 r8, rax, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -97,34 +93,26 @@ func @main {
     x64.movRegImm32 rcx, 41
     x64.callDirect Adder.create
     x64.movRegReg rbx, r8
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 r12, rax, 1
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __il_slow
-    x64.jmp __rc_chk#7
   __rc_chk#7:
     x64.cmpRegImm32 r12, 1000
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok#6
+    x64.jcc lessEqual, __il_cont
   __il_slow:
     x64.movRegReg rcx, rbx
     x64.callDirect Adder.bump
     x64.movRegReg r12, r8
-    x64.jmp __il_cont
-  __rc_ok#6:
-    x64.jmp __il_cont
   __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk#3
   __rc_chk#3:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok#1
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -134,7 +122,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#1:
+  __rc_ok:
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12

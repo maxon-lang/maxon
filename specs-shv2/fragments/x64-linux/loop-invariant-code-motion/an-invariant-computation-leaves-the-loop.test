@@ -1,0 +1,67 @@
+// Test: an-invariant-computation-leaves-the-loop
+typealias Word = int(i64.min to i64.max)
+
+function weighted(n Word, k Word) returns Word
+	var t = 0
+	for _ in 0 upto n 'loop'
+		t = t + k * 31 + 7
+	end 'loop'
+	return t
+end 'weighted'
+
+function main() returns ExitCode
+	var seed = 0
+	for i in 0 upto 4 'feed'
+		seed = seed + weighted(i, k: i + 1)
+	end 'feed'
+	// k*31+7 per trip, n trips: 0 + 69 + 2*100 + 3*131 = 662.
+	if seed != 662 'value'
+		return 1
+	end 'value'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+  forhdr#1:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc greaterEqual, forexit
+  feed:
+    x64.leaRegRegImm32 rdx, rcx, 1
+  __il_body:
+    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rdi, 0
+    x64.imulRegRegImm32 r8, rdx, 31
+  forhdr#9:
+    x64.cmpRegReg rdi, rcx
+    x64.jcc greaterEqual, __il_cont
+  loop:
+    x64.leaRegRegReg rsi, rsi, r8
+    x64.leaRegRegImm32 rsi, rsi, 7
+  forstep#11:
+    x64.leaRegRegImm32 rdi, rdi, 1
+    x64.jmp forhdr#9
+  __il_cont:
+    x64.leaRegRegReg rax, rax, rsi
+  forstep#3:
+    x64.movRegReg rcx, rdx
+    x64.jmp forhdr#1
+  forexit:
+    x64.cmpRegImm32 rax, 662
+    x64.jcc equal, ifcont
+  value:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

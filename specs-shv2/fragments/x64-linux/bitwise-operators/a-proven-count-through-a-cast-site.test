@@ -32,39 +32,20 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rdx, 0
-    x64.jmp forhdr#1
   forhdr#1:
     x64.cmpRegImm32 rdx, 8
-    x64.jcc less, lowBits
-    x64.jmp forexit#4
+    x64.jcc greaterEqual, forexit#4
   lowBits:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#14
-    x64.jmp __rc_chk#15
-  __rc_chk#15:
-    x64.cmpRegImm32 rdx, 63
-    x64.jcc greater, __rc_panic#14
-    x64.jmp __rc_ok#13
-  __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#13:
     x64.movRegImm32 rsi, 1
     x64.movRegReg rcx, rdx
     x64.shlRegCl rsi, rsi
     x64.leaRegRegReg rax, rax, rsi
-    x64.jmp forstep#3
   forstep#3:
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp forhdr#1
   forexit#4:
     x64.cmpRegImm32 rax, 255
-    x64.jcc notEqual, sum
-    x64.jmp ifcont#6
+    x64.jcc equal, ifcont#6
   sum:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -73,42 +54,34 @@ func @main {
   ifcont#6:
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rdx, 0
-    x64.jmp forhdr#7
   forhdr#7:
     x64.cmpRegImm32 rdx, 2
-    x64.jcc less, boundary
-    x64.jmp forexit#10
+    x64.jcc greaterEqual, forexit#10
   boundary:
     x64.imulRegRegImm32 rcx, rdx, 63
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#17
-    x64.jmp __rc_chk#18
-  __rc_chk#18:
+    x64.jcc less, __rc_panic
+  __rc_chk:
     x64.cmpRegImm32 rcx, 63
-    x64.jcc greater, __rc_panic#17
-    x64.jmp __rc_ok#16
-  __rc_panic#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok#16:
+  __rc_ok:
     x64.movRegImm32 rsi, 1
     x64.shlRegCl rsi, rsi
     x64.leaRegRegReg rax, rax, rsi
-    x64.jmp forstep#9
   forstep#9:
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.jmp forhdr#7
   forexit#10:
-    x64.movRegImm32 rcx, 0
-    x64.movRegImm rdx, 9223372036854775807
-    x64.subRegReg rcx, rcx, rdx
+    x64.movRegImm rcx, 9223372036854775809
     x64.cmpRegReg rax, rcx
-    x64.jcc notEqual, topSum
-    x64.jmp ifcont#12
+    x64.jcc equal, ifcont#12
   topSum:
     x64.movRegImm32 r8, 2
     x64.epilogue 32

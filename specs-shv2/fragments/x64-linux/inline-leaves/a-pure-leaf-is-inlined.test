@@ -29,11 +29,9 @@ func @maskContains {
     x64.movRegReg rax, rcx
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rdx, 63
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
@@ -63,19 +61,17 @@ func @main {
     x64.movRegImm32 rbx, 5
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r13, 8
-    x64.jcc less, each
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   each:
     x64.cmpRegImm32 r13, 0
+    x64.setccReg less, rax
     x64.jcc less, __rc_panic#7
-    x64.jmp __rc_chk#8
   __rc_chk#8:
     x64.cmpRegImm32 r13, 63
-    x64.jcc greater, __rc_panic#7
-    x64.jmp __rc_ok#6
+    x64.setccReg greater, rcx
+    x64.jcc lessEqual, __il_body
   __rc_panic#7:
     x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
@@ -86,16 +82,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#6:
-    x64.jmp __il_body
   __il_body:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __il_slow
-    x64.jmp __rc_chk#15
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_slow
   __rc_chk#15:
-    x64.cmpRegImm32 r13, 63
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok#14
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __rc_ok#14
   __il_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -109,17 +101,14 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.setccReg notEqual, rax
     x64.movRegReg r8, rax
-    x64.jmp __il_cont
   __il_cont:
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, set
-    x64.jmp critsplit
+    x64.jcc equal, critsplit
   set:
     x64.leaRegRegImm32 rax, r12, 1
     x64.jmp ifcont
   critsplit:
     x64.movRegReg rax, r12
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg r12, rax
@@ -127,11 +116,9 @@ func @main {
   whileexit:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic#10
-    x64.jmp __rc_chk#11
   __rc_chk#11:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic#10
-    x64.jmp __rc_ok#9
+    x64.jcc lessEqual, __rc_ok#9
   __rc_panic#10:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic

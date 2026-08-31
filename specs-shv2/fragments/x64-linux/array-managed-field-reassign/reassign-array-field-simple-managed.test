@@ -122,52 +122,23 @@ func @keepBigValues {
     x64.movRegReg r12, r8
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.movRegImm32 r14, 0
-    x64.jmp forhdr
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegReg r14, rax
-    x64.jcc less, scan
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   scan:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.imulRegRegImm32 rcx, r14, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 r15, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.leaRegRegReg rax, rax, r14
-    x64.loadRegBaseDisp.byte r15, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r14
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg r15, r8
-    x64.jmp __il_cont
-  __il_cont:
+    x64.loadRegBaseIndexScale.word64 r15, [rax + r14*8 + 0]
+  __im_cont:
     x64.loadRegBaseDisp.word64 rax, [r15 + 8]
     x64.cmpRegImm32 rax, 3
-    x64.jcc greater, big
-    x64.jmp ifcont
+    x64.jcc lessEqual, forstep
   big:
     x64.movRegReg rcx, r15
     x64.callDirect __mm_incref
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect __managed_push
-    x64.jmp ifcont
-  ifcont:
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
@@ -344,11 +315,9 @@ func @main {
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r13, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic

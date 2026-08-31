@@ -7,15 +7,16 @@ export type Holder
 		return Holder{buf: t.toByteArray()}
 	end 'ofText'
 
-	export function first() returns int
+	export function first() returns Integer
 		return try self.buf.get(0) otherwise 0
 	end 'first'
 end 'Holder'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Byte = int(0 to 1000)
 
-function widen(b Byte) returns int
+function widen(b Byte) returns Integer
 	return b
 end 'widen'
 
@@ -23,6 +24,7 @@ function main() returns ExitCode
 	let h = Holder.ofText("ab")
 	return (h.first() - widen(50)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 47
 ---
@@ -60,99 +62,46 @@ func @Holder.first {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
+    x64.jcc notEqual, __im_stride
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rsi
     x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rsi, rsi, rax
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#10
+    x64.jcc belowEqual, __im_slow
   __im_load#10:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.imulRegRegImm32 rsi, rdx, 8
-    x64.leaRegRegReg rax, rax, rsi
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
+    x64.jcc notEqual, __im_slow
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg less, rsi
     x64.cmpRegImm32 rax, 0
-    x64.setccReg lessEqual, rax
-    x64.orRegReg rsi, rsi, rax
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __il_slow
-    x64.jmp __im_load#11
+    x64.jcc belowEqual, __im_slow
   __im_load#11:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_loaded
   __im_loaded:
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_empty
-    x64.jmp critsplit#13
+    x64.jcc equal, __im_cont
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_slow
-    x64.jmp critsplit#14
-  critsplit#14:
-    x64.jmp __il_cont
-  critsplit#13:
-    x64.jmp __il_cont
-  __il_slow:
+    x64.jcc notEqual, __im_cont
+  __im_slow:
     x64.callDirect __managed_get
     x64.movRegReg rax, r8
     x64.movRegReg rsi, r10
-    x64.jmp __il_cont
-  __il_cont:
+  __im_cont:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg r8, rax
-    x64.jmp trycont
   trycont:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @widen {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rcx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -170,32 +119,15 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect Holder.first
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rcx, 50
-    x64.jmp __il_body
-  __il_body:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow
-    x64.jmp __rc_chk#7
-  __rc_chk#7:
-    x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __il_slow
-    x64.jmp __rc_ok#6
-  __il_slow:
-    x64.callDirect widen
-    x64.jmp __il_cont
-  __rc_ok#6:
-    x64.movRegReg r8, rcx
-    x64.jmp __il_cont
+    x64.movRegImm32 rax, 50
   __il_cont:
-    x64.subRegReg r12, r12, r8
+    x64.movRegReg r12, r8
+    x64.subRegReg r12, r8, rax
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk#3
-  __rc_chk#3:
+  __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok#1
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
@@ -205,72 +137,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#1:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.toByteArray {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_bytes_view
-    x64.movRegReg r12, r8
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.byteLength
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
-    x64.movRegReg rax, r8
-    x64.callDirect __managed_slice
-    x64.movRegReg rbx, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

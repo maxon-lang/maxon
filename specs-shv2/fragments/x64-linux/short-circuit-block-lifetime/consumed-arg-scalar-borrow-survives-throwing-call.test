@@ -192,66 +192,6 @@ func @Module.addBlock {
     x64.ret
 }
 
-func @Module.sumIds {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegImm32 rbx, 0
-    x64.loadRegBaseDisp.word64 r12, [rcx + 0]
-    x64.movRegImm32 r13, 0
-    x64.jmp forhdr
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegReg r13, rax
-    x64.jcc less, each
-    x64.jmp forexit
-  each:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc equal, __im_word
-    x64.jmp __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.imulRegRegImm32 rcx, r13, 8
-    x64.leaRegRegReg rax, rax, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __il_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc equal, __im_byte
-    x64.jmp __il_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __il_cont
-  __il_slow:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-    x64.jmp __il_cont
-  __il_cont:
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegReg rbx, rbx, rax
-    x64.jmp forstep
-  forstep:
-    x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp forhdr
-  forexit:
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Parser.create {
   entry:
     x64.pushReg rbp
@@ -305,15 +245,13 @@ func @Parser.parseIdentifierExpr {
     x64.storeBaseDispReg.word64 [rbx + 0], r12
     x64.loadRegBaseDisp.word64 r14, [r12 + 0]
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, callArgs
-    x64.jmp critsplit
+    x64.jcc equal, critsplit
   callArgs:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect Parser.parseCallArgsRaw
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -328,7 +266,6 @@ func @Parser.parseIdentifierExpr {
     x64.jmp ifcont
   critsplit:
     x64.movRegReg rax, r14
-    x64.jmp ifcont
   ifcont:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.leaRegRegReg r8, rax, rcx
@@ -364,8 +301,7 @@ func @Parser.parseCallArgsRaw {
     x64.movRegReg rdx, r12
     x64.callDirect Parser.parseExpressionBP
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -409,8 +345,7 @@ func @Parser.parsePrimary {
     x64.movRegReg rax, r13
     x64.callDirect Parser.parseIdentifierExpr
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -456,8 +391,7 @@ func @Parser.parseUnary {
     x64.movRegReg rax, r13
     x64.callDirect Parser.parsePrimary
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -509,8 +443,7 @@ func @Parser.parseExpressionBP {
     x64.movRegReg r13, r8
     x64.movRegReg r15, r10
     x64.cmpRegImm32 r15, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
@@ -531,12 +464,10 @@ func @Parser.parseExpressionBP {
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.movRegReg rax, r12
-    x64.jmp whilehdr
   whilehdr:
     x64.storeSlotReg slot1, rax
     x64.cmpRegImm32 rax, 0
-    x64.jcc greater, prattLoop
-    x64.jmp whileexit
+    x64.jcc belowEqual, whileexit
   prattLoop:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
@@ -544,8 +475,7 @@ func @Parser.parseExpressionBP {
     x64.movRegReg r12, r8
     x64.movRegReg r14, r10
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, tryerr#7
-    x64.jmp tryok#6
+    x64.jcc equal, tryok#6
   tryerr#7:
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
@@ -618,8 +548,7 @@ func @Parser.emitShortCircuit {
     x64.storeSlotReg slot1, r8
     x64.movRegReg r15, r10
     x64.cmpRegImm32 r15, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
@@ -638,12 +567,10 @@ func @Parser.emitShortCircuit {
     x64.movRegImm32 rdx, 102
     x64.callDirect Module.addBlock
     x64.movRegReg r13, r8
-    x64.jmp __il_body
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.leaRegRegImm32 rax, rax, 1
     x64.storeBaseDispReg.word64 [r13 + 0], rax
-    x64.jmp __il_cont
   __il_cont:
     x64.leaRegRegReg r12, r14, r12
     x64.loadRegBaseDisp.word64 r14, [rbx + 0]
@@ -698,10 +625,8 @@ func @main {
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r12
     x64.callDirect Parser.parseExpressionBP
-    x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, __il_body
   tryerr:
     x64.movRegImm32 r14, 3
     x64.movRegReg rcx, r13
@@ -718,12 +643,26 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Module.sumIds
-    x64.cmpRegImm32 r8, 205
-    x64.jcc notEqual, corrupt
-    x64.jmp ifcont#4
+  __il_body:
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+  forhdr:
+    x64.cmpRegReg rdx, rsi
+    x64.jcc greaterEqual, __il_cont
+  each:
+    x64.loadRegBaseIndexScale.word64 rdi, [rcx + rdx*8 + 0]
+  __im_cont:
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
+    x64.leaRegRegReg rax, rax, rdi
+  forstep:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp forhdr
+  __il_cont:
+    x64.cmpRegImm32 rax, 205
+    x64.jcc equal, ifcont#4
   corrupt:
     x64.movRegImm32 r14, 1
     x64.movRegReg rcx, r13
@@ -741,9 +680,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#4:
-    x64.cmpRegImm32 r14, 0
-    x64.jcc equal, noResult
-    x64.jmp ifcont#6
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ifcont#6
   noResult:
     x64.movRegImm32 r14, 2
     x64.movRegReg rcx, r13

@@ -1,0 +1,74 @@
+// Test: an-honest-signed-sentinel-still-decodes
+typealias Slot = int(-1 to 4095)
+
+function findSlot(key Slot) returns Slot
+	if key == 7 'found'
+		return 3 as Slot
+	end 'found'
+	return 0 - 1
+end 'findSlot'
+
+function main() returns ExitCode
+	let slot = findSlot(9 as Slot)
+
+	if slot >= 0 'wronglyFound'
+		return 1
+	end 'wronglyFound'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @findSlot {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, -1
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 4095
+    x64.jcc lessEqual, __rc_ok#3
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#3:
+    x64.cmpRegImm32 rcx, 7
+    x64.jcc notEqual, ifcont
+  found:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm r8, 18446744073709551615
+  __rc_ok#6:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 9
+    x64.callDirect findSlot
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, ifcont
+  wronglyFound:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

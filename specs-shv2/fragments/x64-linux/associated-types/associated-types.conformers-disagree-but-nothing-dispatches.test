@@ -8,7 +8,7 @@ end 'Taker'
 type FloatRunner implements Taker with float
 	let base as Integer
 
-	function take(e float) returns Integer
+	function take(e Real) returns Integer
 		return base + (20 if e > 19.0 else 0)
 	end 'take'
 
@@ -32,6 +32,7 @@ end 'IntRunner'
 function main() returns ExitCode
 	return (FloatRunner.create(0).take(20.0) + IntRunner.create(11).take(20)) as ExitCode
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 51
 ---
@@ -51,40 +52,32 @@ func @main {
     x64.leaRegSlot rcx, slot0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.movsdRegRip xmm0, [rip + __fconst_1]
-    x64.jmp __il_body#6
   __il_body#6:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.movsdRegRip xmm1, [rip + __fconst_2]
     x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc above, ternarytrue
-    x64.jmp ternaryfalse
+    x64.jcc belowEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 rcx, 20
     x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 rcx, 0
-    x64.jmp matchcont
   matchcont:
     x64.leaRegRegReg rax, rax, rcx
-    x64.jmp __il_cont#5
   __il_cont#5:
     x64.movRegImm32 rcx, 11
     x64.leaRegSlot rdx, slot1
     x64.storeBaseDispReg.word64 [rdx + 0], rcx
-    x64.jmp __il_body#10
   __il_body#10:
     x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
     x64.leaRegRegImm32 rcx, rcx, 20
-    x64.jmp __il_cont#4
   __il_cont#4:
     x64.leaRegRegReg r8, rax, rcx
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

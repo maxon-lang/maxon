@@ -1,5 +1,5 @@
 // Test: nested-loops-pressure-at-depth-two
-function depthTwo(p int) returns int
+function depthTwo(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -32,6 +32,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -60,18 +61,14 @@ func @depthTwo {
     x64.storeSlotReg slot0, rcx
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 r14, 0
-    x64.jmp whilehdr#1
   whilehdr#1:
     x64.cmpRegImm32 r14, 3
-    x64.jcc less, outer
-    x64.jmp whileexit#3
+    x64.jcc greaterEqual, whileexit#3
   outer:
     x64.movRegImm32 r15, 0
-    x64.jmp whilehdr#4
   whilehdr#4:
     x64.cmpRegImm32 r15, 3
-    x64.jcc less, inner
-    x64.jmp whileexit#6
+    x64.jcc greaterEqual, whileexit#6
   inner:
     x64.leaRegRegReg rcx, rcx, r15
     x64.leaRegRegImm32 r15, r15, 1
@@ -111,8 +108,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect depthTwo
     x64.cmpRegImm32 r8, 87
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

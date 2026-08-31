@@ -1,9 +1,9 @@
 // Test: reverse-six-params-across-an-idiv
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function divPermute(a int, b int, c int, d int, e int, f int) returns int
+function divPermute(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	let sum = a + b + c + d + e + f
 	let q = sum / 2
 	let r = digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
@@ -17,6 +17,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -24,31 +25,29 @@ func @divPermute {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rdx
-    x64.movRegReg r10, rax
-    x64.leaRegRegReg rax, rcx, r8
-    x64.leaRegRegReg rax, rax, r10
-    x64.leaRegRegReg rax, rax, r9
-    x64.leaRegRegReg rax, rax, rsi
-    x64.leaRegRegReg rax, rax, rdi
-    x64.movRegImm32 r11, 2
-    x64.cqo
-    x64.idivReg r11
-    x64.jmp __il_body
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.leaRegRegReg r8, r8, rax
+    x64.leaRegRegReg r8, r8, r9
+    x64.leaRegRegReg r8, r8, rsi
+    x64.leaRegRegReg r8, r8, rdi
+    x64.movRegReg r10, r8
+    x64.sarRegImm8 r10, r8, 63
+    x64.shrRegImm8 r10, r10, 63
+    x64.leaRegRegReg r8, r8, r10
+    x64.sarRegImm8 r8, r8, 1
   __il_body:
-    x64.imulRegRegImm32 rdx, rdi, 100000
+    x64.imulRegRegImm32 rdi, rdi, 100000
     x64.imulRegRegImm32 rsi, rsi, 10000
-    x64.leaRegRegReg rdx, rdx, rsi
-    x64.imulRegRegImm32 rsi, r9, 1000
-    x64.leaRegRegReg rdx, rdx, rsi
-    x64.imulRegRegImm32 rsi, r10, 100
-    x64.leaRegRegReg rdx, rdx, rsi
-    x64.imulRegRegImm32 rsi, r8, 10
-    x64.leaRegRegReg rdx, rdx, rsi
-    x64.leaRegRegReg rcx, rdx, rcx
-    x64.jmp __il_cont
+    x64.leaRegRegReg rsi, rdi, rsi
+    x64.imulRegRegImm32 rdi, r9, 1000
+    x64.leaRegRegReg rsi, rsi, rdi
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.leaRegRegReg rax, rsi, rax
+    x64.imulRegRegImm32 rdx, rdx, 10
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rcx
   __il_cont:
-    x64.leaRegRegReg r8, rcx, rax
+    x64.leaRegRegReg r8, rax, r8
     x64.popReg rbp
     x64.ret
 }
@@ -66,8 +65,7 @@ func @main {
     x64.movRegImm32 rdi, 6
     x64.callDirect divPermute
     x64.cmpRegImm32 r8, 654331
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

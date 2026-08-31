@@ -45,16 +45,13 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-    x64.jmp forhdr
   forhdr:
     x64.cmpRegImm32 r12, 512
-    x64.jcc less, push
-    x64.jmp forexit
+    x64.jcc greaterEqual, forexit
   push:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
@@ -64,31 +61,23 @@ func @main {
     x64.callDirect __mm_counter_raw_alloc_total
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r12, 0
-    x64.jcc greater, trackedMoved
-    x64.jmp critsplit#12
+    x64.jcc lessEqual, ifcont#6
   trackedMoved:
-    x64.leaRegRegImm32 rax, rax, 2
-    x64.jmp ifcont#6
-  critsplit#12:
-    x64.jmp ifcont#6
+    x64.movRegImm32 rax, 2
   ifcont#6:
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, rawDidNot
-    x64.jmp critsplit#13
+    x64.jcc notEqual, critsplit
   rawDidNot:
     x64.leaRegRegImm32 r12, rax, 5
     x64.jmp ifcont#8
-  critsplit#13:
+  critsplit:
     x64.movRegReg r12, rax
-    x64.jmp ifcont#8
   ifcont#8:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

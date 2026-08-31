@@ -79,20 +79,24 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
+  __il_body:
+    x64.loadRegBaseDisp.word64 r12, [r14 + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
     x64.movRegReg rcx, r14
     x64.callDirect String.byteLength
     x64.movRegReg r12, r8
+  __il_cont:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct___Tuple2.int.String
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -113,15 +117,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @String.byteLength {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.popReg rbp
     x64.ret
 }

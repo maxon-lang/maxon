@@ -46,21 +46,16 @@ func @main {
     x64.prologue 72
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rax, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rax, 5
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegSlot rcx, slot0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegRegImm32 rax, rax, 1
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.cmpRegImm32 rdx, 2
-    x64.jcc equal, skip
-    x64.jmp ifcont
-  skip:
-    x64.jmp whilehdr
+    x64.jcc equal, whilehdr
   ifcont:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegRegReg rbx, rbx, rcx
@@ -116,17 +111,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

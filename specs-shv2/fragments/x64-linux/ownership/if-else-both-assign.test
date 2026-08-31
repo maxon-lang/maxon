@@ -65,8 +65,7 @@ func @choose {
     x64.callDirect Box.create
     x64.movRegReg r12, r8
     x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, branch
-    x64.jmp critsplit#5
+    x64.jcc equal, critsplit#5
   branch:
     x64.movRegImm32 rcx, 1
     x64.callDirect Box.create
@@ -76,11 +75,9 @@ func @choose {
     x64.jmp ifcont#2
   critsplit#5:
     x64.movRegReg r13, r12
-    x64.jmp ifcont#2
   ifcont#2:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc equal, branch2
-    x64.jmp critsplit#6
+    x64.jcc notEqual, critsplit#6
   branch2:
     x64.movRegImm32 rcx, 2
     x64.callDirect Box.create
@@ -91,7 +88,6 @@ func @choose {
     x64.jmp ifcont#4
   critsplit#6:
     x64.movRegReg rcx, r13
-    x64.jmp ifcont#4
   ifcont#4:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
     x64.callDirect __mm_decref
@@ -213,17 +209,6 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @print {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __write_stdout
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -43,11 +43,9 @@ func @risky {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]
     x64.callDirect mrt_panic
@@ -60,8 +58,7 @@ func @risky {
     x64.ret
   __rc_ok:
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, fail
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   fail:
     x64.leaRegRdata rbx, [rip + __str_rec_1]
     x64.movRegImm32 rcx, 16
@@ -98,11 +95,9 @@ func @pick {
     x64.prologue 40
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#8
-    x64.jmp __rc_chk#9
   __rc_chk#9:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic#8
-    x64.jmp __rc_ok#7
+    x64.jcc lessEqual, __rc_ok#7
   __rc_panic#8:
     x64.leaRegRdata rcx, [rip + __str_blob_3]
     x64.callDirect mrt_panic
@@ -114,13 +109,11 @@ func @pick {
   __rc_ok#7:
     x64.movRegImm32 rbx, 0
     x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
+    x64.jcc notEqual, matchdefault
   matcharm:
     x64.callDirect risky
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
+    x64.jcc equal, tryok
   tryerr:
     x64.movRegReg rcx, r10
     x64.callDirect __destruct_Err
@@ -131,16 +124,13 @@ func @pick {
     x64.jmp matchcont
   matchdefault:
     x64.movRegImm32 rax, 50
-    x64.jmp matchcont
   matchcont:
     x64.leaRegRegImm32 r8, rax, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#11
-    x64.jmp __rc_chk#12
   __rc_chk#12:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc greater, __rc_panic#11
-    x64.jmp __rc_ok#10
+    x64.jcc lessEqual, __rc_ok#10
   __rc_panic#11:
     x64.leaRegRdata rcx, [rip + __str_blob_4]
     x64.callDirect mrt_panic
@@ -154,7 +144,6 @@ func @pick {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  afterbreak:
 }
 
 func @main {
@@ -171,11 +160,9 @@ func @main {
     x64.leaRegRegReg r8, rbx, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_5]
     x64.callDirect mrt_panic

@@ -1,9 +1,9 @@
 // Test: live-across-idiv-and-call
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x + 1
 end 'sink'
 
-function f(p int) returns int
+function f(p Integer) returns Integer
 	let a = p + 100
 	let q = a / 7
 	let s = sink(3)
@@ -17,6 +17,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -25,18 +26,15 @@ func @f {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.leaRegRegImm32 rcx, rcx, 100
-    x64.movRegImm32 rsi, 7
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegImm32 rdx, 3
-    x64.jmp __il_body
-  __il_body:
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp __il_cont
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg rcx
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
   __il_cont:
     x64.leaRegRegReg rax, rcx, rax
-    x64.leaRegRegReg r8, rax, rdx
+    x64.leaRegRegImm32 r8, rax, 4
     x64.popReg rbp
     x64.ret
 }
@@ -49,8 +47,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect f
     x64.cmpRegImm32 r8, 118
-    x64.jcc equal, ok
-    x64.jmp ifcont
+    x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

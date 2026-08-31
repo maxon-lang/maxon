@@ -1,5 +1,5 @@
 // Test: idle-across-loop
-function idleAcrossLoop(p int) returns int
+function idleAcrossLoop(p Integer) returns Integer
 	let k1 = p + 1
 	let k2 = p + 2
 	let k3 = p + 3
@@ -27,6 +27,7 @@ end 'idleAcrossLoop'
 function main() returns ExitCode
 	return idleAcrossLoop(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 126
 ---
@@ -60,11 +61,9 @@ func @idleAcrossLoop {
     x64.storeSlotReg slot1, rcx
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 r15, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 r15, 4
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.leaRegRegReg rcx, rcx, r15
     x64.leaRegRegImm32 r15, r15, 1
@@ -107,11 +106,9 @@ func @main {
     x64.callDirect idleAcrossLoop
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

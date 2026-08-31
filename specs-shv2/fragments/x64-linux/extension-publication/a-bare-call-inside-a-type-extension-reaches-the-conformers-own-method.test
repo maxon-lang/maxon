@@ -41,10 +41,8 @@ func @Box.bareCall {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.movRegImm32 r8, 5
-    x64.jmp __il_cont
   __il_cont:
     x64.popReg rbp
     x64.ret
@@ -54,10 +52,8 @@ func @Box.qualifiedCall {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jmp __il_body
   __il_body:
     x64.movRegImm32 r8, 5
-    x64.jmp __il_cont
   __il_cont:
     x64.popReg rbp
     x64.ret
@@ -78,15 +74,12 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect Box.qualifiedCall
-    x64.imulRegRegImm32 rax, r8, 2
-    x64.leaRegRegReg r8, r12, rax
+    x64.leaRegBaseIndexScale r8, [r12 + r8*2]
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-    x64.jmp __rc_chk
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-    x64.jmp __rc_ok
+    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic

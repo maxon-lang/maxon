@@ -1,8 +1,8 @@
 // Test: owned-struct-in-block
 type Box
-	var v as int
+	var v as Integer
 
-	static function create(v int) returns Box
+	static function create(v Integer) returns Box
 		return Self{v: v}
 	end 'create'
 end 'Box'
@@ -17,6 +17,7 @@ function main() returns ExitCode
 	end 'loop'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -33,19 +34,15 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 16
     x64.movRegImm32 rax, 0
-    x64.jmp whilehdr
   whilehdr:
     x64.cmpRegImm32 rax, 3
-    x64.jcc less, loop
-    x64.jmp whileexit
+    x64.jcc greaterEqual, whileexit
   loop:
     x64.cmpRegImm32 rax, 2
-    x64.jcc less, b
-    x64.jmp ifcont
+    x64.jcc greaterEqual, ifcont
   b:
     x64.leaRegSlot rcx, slot0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.jmp ifcont
   ifcont:
     x64.leaRegRegImm32 rax, rax, 1
     x64.jmp whilehdr
