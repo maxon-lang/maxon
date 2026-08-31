@@ -34,7 +34,7 @@
 // ⚠ Deliberately NOT a case per runtime ENTRY POINT. `__gt_now_ns` and `__Builtins.currentTimeMs` are one
 // facility asked twice, and a target that lowers the monotonic clock lowers both or neither — so splitting
 // them would invite a table with two answers to one question.
-export enum HostFacility
+enum HostFacility
 	// The scheduler's monotonic counter (`osReadClock`) — `__gt_now_ns` and every `Clock.*` above it.
 	monotonicClock
 	// The calendar (`osReadWallClock`) — `__clock_now_unix_s`. Split from the monotonic clock because a
@@ -77,7 +77,7 @@ end 'HostFacility'
 
 // The answer `calleeHostFacility` returns. A union rather than a bool-plus-out-param so that "this callee
 // needs nothing" is a case the caller must handle, not a sentinel it can forget to test.
-export union CalleeFacility
+union CalleeFacility
 	needs(facility HostFacility)
 	none
 end 'CalleeFacility'
@@ -241,7 +241,7 @@ end 'CalleeFacility'
 // ⚠ **THE DOOR IS THIS PREDICATE AND NOT `requireTargetSupportsServiceEntry`, which SV1 built for the
 // same class one construct over.** That twin exists for an op whose callee is MINTED AT LOWERING and
 // which therefore reaches `checkCalls` with no name to key on; `awaitAny` is an ordinary named `call` op
-export function calleeHostFacility(callee ByteArray) returns CalleeFacility
+function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	// The four scheduler entries named individually: their bands hold calls the compiler inserts, so a
 	// prefix test over `__gt_` would blame a drop the user never wrote (measured — see the header above).
 	if callee.equals(GtNowNsName) 'monotonic'
@@ -354,7 +354,7 @@ end 'calleeHasHostFacility'
 // are refusals of a different KIND from "not yet" — that distinction is carried by
 // `SemanticCheck.targetCanHostSubprocess` and its E3074, which reads this table's subject and not its
 // answer. One table, two consumers, no second copy.
-export function targetProvidesFacility(target Target, facility HostFacility) returns bool
+function targetProvidesFacility(target Target, facility HostFacility) returns bool
 	if target.cpu == CpuArch.x64 and target.os == Os.windows 'theFullRow'
 		return true
 	end 'theFullRow'
