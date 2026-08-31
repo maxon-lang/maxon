@@ -1,0 +1,80 @@
+// Test: overloaded-generic-method-is-not-range-checked
+typealias Byte = int(0 to 255)
+typealias BA = Array with Byte
+
+function main() returns ExitCode
+	var a = BA.create()
+	a.push(3)
+	a.push(4)
+	var needle = BA.create()
+	needle.push(4)
+	if a.contains(needle) 'has'
+		return 7
+	end 'has'
+	return 9
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.leaRdata x2, __layout_Array_Byte
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Array.contains#struct
+    arm64.cbnz x0, has
+    arm64.b ifcont
+  has:
+    arm64.movImm x21, 7
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x21, 9
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

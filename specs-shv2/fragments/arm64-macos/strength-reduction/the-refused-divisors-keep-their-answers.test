@@ -1,0 +1,108 @@
+// Test: the-refused-divisors-keep-their-answers
+typealias Word = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let lo = i64.min as Word
+	if lo mod -1 != 0 'minModMinusOne'
+		return 1
+	end 'minModMinusOne'
+	if lo / 1 != lo 'divByOne'
+		return 2
+	end 'divByOne'
+	if lo mod 1 != 0 'modByOne'
+		return 3
+	end 'modByOne'
+	if lo / i64.min != 1 'minDividedByItself'
+		return 4
+	end 'minDividedByItself'
+	if 7 / i64.min != 0 'smallDividedByMin'
+		return 5
+	end 'smallDividedByMin'
+	if 7 mod i64.min != 7 'smallModMin'
+		return 6
+	end 'smallModMin'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 9223372036854775808
+    arm64.movImm x1, 18446744073709551615
+    arm64.movImm x2, 0
+    arm64.sdiv x16, x2, x1
+    arm64.msub x1, x16, x1, x2
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, minModMinusOne
+    arm64.b ifcont#2
+  minModMinusOne:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x1, 1
+    arm64.sdiv x1, x0, x1
+    arm64.cmp x1, x0
+    arm64.cset x1, ne
+    arm64.cbnz x1, divByOne
+    arm64.b ifcont#4
+  divByOne:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x1, 1
+    arm64.sdiv x16, x0, x1
+    arm64.msub x1, x16, x1, x0
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, modByOne
+    arm64.b ifcont#6
+  modByOne:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x1, 9223372036854775808
+    arm64.sdiv x0, x0, x1
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, minDividedByItself
+    arm64.b ifcont#8
+  minDividedByItself:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 7
+    arm64.movImm x1, 9223372036854775808
+    arm64.sdiv x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, smallDividedByMin
+    arm64.b ifcont#10
+  smallDividedByMin:
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 7
+    arm64.movImm x1, 9223372036854775808
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.cmp x0, 7
+    arm64.cset x0, ne
+    arm64.cbnz x0, smallModMin
+    arm64.b ifcont#12
+  smallModMin:
+    arm64.movImm x0, 6
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

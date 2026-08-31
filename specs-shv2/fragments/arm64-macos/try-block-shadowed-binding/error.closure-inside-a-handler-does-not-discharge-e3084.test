@@ -1,0 +1,49 @@
+// Test: error.closure-inside-a-handler-does-not-discharge-e3084
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    bad
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+enum Inner
+    bad
+    splat
+end 'Inner'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.bad
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callA(true)
+        let b = callB(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        let pick = function(e Inner) gives match e 'inner'
+            bad gives 3
+            splat gives 8
+        end 'inner'
+        sum = pick(Inner.splat)
+    end 'h'
+    return sum
+end 'main'
+---
+CompilerError:
+error E3084: <fragment>:38:19: otherwise block must contain a match on the error binding 'e'

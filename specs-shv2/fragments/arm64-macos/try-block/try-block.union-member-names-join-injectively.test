@@ -1,0 +1,259 @@
+// Test: try-block.union-member-names-join-injectively
+// --- file: errors.maxon
+typealias Score = int(0 to 100)
+
+enum A_B implements Error
+    kaboom
+end 'A_B'
+
+enum C implements Error
+    splat
+end 'C'
+
+enum A implements Error
+    zonk
+end 'A'
+
+enum B_C implements Error
+    whap
+end 'B_C'
+
+export function callAB(x bool) returns Score throws A_B
+    if x 'c'
+        throw A_B.kaboom
+    end 'c'
+    return 5
+end 'callAB'
+
+export function callC(x bool) returns Score throws C
+    if x 'c'
+        throw C.splat
+    end 'c'
+    return 6
+end 'callC'
+
+export function callA(x bool) returns Score throws A
+    if x 'c'
+        throw A.zonk
+    end 'c'
+    return 7
+end 'callA'
+
+export function callBC(x bool) returns Score throws B_C
+    if x 'c'
+        throw B_C.whap
+    end 'c'
+    return 8
+end 'callBC'
+
+// --- file: main.maxon
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callAB(true)
+        let b = callC(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        try 'inner'
+            let p = callA(false)
+            let q = callBC(false)
+            sum = p + q
+        end 'inner'
+        otherwise (f) 'ih'
+            match f 'ik'
+                A.zonk then sum = 1
+                B_C.whap then sum = 2
+            end 'ik'
+        end 'ih'
+        match e 'k'
+            A_B.kaboom then sum = 11
+            C.splat then sum = 22
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 11
+---
+func @callAB {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, c
+    arm64.b ifcont
+  c:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 5
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @callC {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, c
+    arm64.b ifcont
+  c:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 6
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @callA {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, c
+    arm64.b ifcont
+  c:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 7
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @callBC {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, c
+    arm64.b ifcont
+  c:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 8
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl callAB
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, critsplit#22
+    arm64.b tryblkok#2
+  critsplit#22:
+    arm64.movRegReg x19, x9
+    arm64.b tryblkerr#1
+  tryblkok#2:
+    arm64.movImm x0, 0
+    arm64.bl callC
+    arm64.add x20, x9, 1
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, critsplit#24
+    arm64.b tryblkok#3
+  critsplit#24:
+    arm64.movRegReg x19, x20
+    arm64.b tryblkerr#1
+  tryblkerr#1:
+    arm64.movImm x0, 0
+    arm64.bl callA
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, critsplit#23
+    arm64.b tryblkok#5
+  critsplit#23:
+    arm64.b tryblkerr#4
+  tryblkok#5:
+    arm64.movImm x0, 0
+    arm64.bl callBC
+    arm64.add x1, x9, 1
+    arm64.cmp x9, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, critsplit#25
+    arm64.b tryblkok#6
+  critsplit#25:
+    arm64.movRegReg x9, x1
+    arm64.b tryblkerr#4
+  tryblkerr#4:
+    arm64.cmp x9, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#7
+    arm64.b matchnext#10
+  matcharm#7:
+    arm64.b matchcont#11
+  matchnext#10:
+    arm64.cmp x9, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#8
+    arm64.b matchdead#9
+  matcharm#8:
+    arm64.b matchcont#11
+  matchcont#11:
+    arm64.b tryblkcont#12
+  matchdead#9:
+  tryblkok#6:
+    arm64.add x0, x20, x0
+    arm64.b tryblkcont#12
+  tryblkcont#12:
+    arm64.cmp x19, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#13
+    arm64.b matchnext#16
+  matcharm#13:
+    arm64.movImm x0, 11
+    arm64.b matchcont#17
+  matchnext#16:
+    arm64.cmp x19, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#14
+    arm64.b matchdead#15
+  matcharm#14:
+    arm64.movImm x0, 22
+    arm64.b matchcont#17
+  matchcont#17:
+    arm64.b tryblkcont#18
+  matchdead#15:
+  tryblkok#3:
+    arm64.add x0, x19, x0
+    arm64.b tryblkcont#18
+  tryblkcont#18:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

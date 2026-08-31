@@ -1,0 +1,82 @@
+// Test: nested-struct-backing-three-levels
+typealias Latency = int(0 to 50)
+
+type Cost
+	export let cycles as Latency
+
+	static function create(cycles Latency) returns Self
+		return Self{cycles: cycles}
+	end 'create'
+end 'Cost'
+
+type OpMeta
+	export let cost as Cost
+	export let isCall as bool
+
+	static function create(cost Cost, isCall bool) returns Self
+		return Self{cost: cost, isCall: isCall}
+	end 'create'
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta as OpMeta
+
+	static function create(meta OpMeta) returns Self
+		return Self{meta: meta}
+	end 'create'
+end 'X64OpMeta'
+
+enum X64Op
+	add = X64OpMeta.create(OpMeta.create(Cost.create(4), isCall: false))
+	call = X64OpMeta.create(OpMeta{cost: Cost.create(9), isCall: true})
+end 'X64Op'
+
+function cyclesOf(op X64Op) returns Latency
+	return op.rawValue.meta.cost.cycles
+end 'cyclesOf'
+
+function main() returns ExitCode
+	return cyclesOf(X64Op.call) - cyclesOf(X64Op.add)
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.movImm x0, 9
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.sub x0, x0, 4
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -664,8 +664,8 @@ type StdToArm64Lowering
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only at this rung — its QueryPerformanceCounter clock and Windows `Sleep` have no arm64 primitive
 			// yet, and a `sleep` program is spec-gated to x64-windows, so neither op ever reaches arm64 lowering.
-			osReadClock then panic("lowerStdToArm64: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
-			osSleepMs then panic("lowerStdToArm64: `osSleepMs` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstRef: dstRef)
+			osSleepMs(msId) then self.lowerOsSleepMs(msId, dstRef: dstRef)
 			// P1.5 subprocess (`osProcessSpawn`/`osProcessExitCode`/`osWaitHandles`/`osCloseHandle`/`osWaitHandle`)
 			// is x64-windows only — CreateProcessA and the wait/handle imports have no arm64 primitive at this rung,
 			// and an `async runProcess` program is spec-gated to x64-windows, so none reaches arm64 lowering.
@@ -694,7 +694,7 @@ type StdToArm64Lowering
 			// The `__Builtins` WALL clock reads `GetSystemTimeAsFileTime`, a Win32 import with no arm64
 			// counterpart at this rung; SemanticCheck refuses such a program at its source span (E3104), so
 			// this is the backstop for a compiler bug rather than the user-facing rejection.
-			osReadWallClock then panic("lowerStdToArm64: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
+			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstRef: dstRef)
 			osFileOpenRead to osFileAttributes then panic("lowerStdToArm64: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstRef: dstRef)
 			// The command line is x64-windows only: `GetCommandLineA` is a Win32 import, and macOS hands argv to
@@ -740,7 +740,7 @@ type StdToArm64Lowering
 			// ⛔ The thread-CPU read is x64-windows only on the same terms: `QueryThreadCycleTime` is a Win32
 			// import, and the POSIX answer (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`) is a different API in a
 			// different unit — a rung rather than a lowering. A stub here would fabricate a cost.
-			osThreadCpuTicks then panic("lowerStdToArm64: `osThreadCpuTicks` is x64-windows only — the thread-CPU clock is x64-windows-gated at this rung, and SemanticCheck refuses it on every other target")
+			osThreadCpuTicks(outPtrId) then self.lowerOsThreadCpuTicks(outPtrId, dstRef: dstRef)
 			// F2: the atomics and the per-thread identity word. Neither atomic is OS-routed — LDAXR/STLXR are ISA
 			// facts — while the token IS, because only one of the two OSes here has a thread-pointer register a raw
 			// static binary may read (see `lowerCurrentThreadToken`).
@@ -1557,6 +1557,47 @@ type StdToArm64Lowering
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.mmap, syscallNumber: Arm64LinuxSyscallMmap)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsAllocPages'
+
+	// ⭐⭐ **THE HOST-SURFACE LOWERINGS: ARGUMENT MOVES AND A `bl` INTO A RUNTIME CHUNK.** Every one of the
+	// four below is out-param shaped — the OS answer must be STORED THROUGH A POINTER the caller supplied —
+	// and Darwin answers in a REGISTER, so the pointer has to outlive the call. An isel cannot arrange that:
+	// an operand that dies at its op is coloured caller-saved, which is correct for every other OS lowering
+	// in this file and fatal for these. `Arm64DarwinRuntime`'s header carries the full argument; the
+	// consequence here is that these lower like ORDINARY CALLS, which is also why they need no `emitOsPrimitiveCall`.
+	//
+	// ⚠ **A `bl` TO A CHUNK IS A `CallFixup`, SO THE CHUNK MUST EXIST** — `appendArm64DarwinRuntimeChunks`
+	// emits it under the SAME `RuntimeUsage` bit that built the Std function calling into here, which is
+	// what makes "the symbol is missing" unreachable rather than merely unlikely.
+	//
+	// ⚠ **NO `os` TEST HERE, AND THAT IS THE FACILITY TABLE's JOB RATHER THAN AN OMISSION.** These ops reach
+	// this backend only on a target whose `targetProvidesFacility` row admits them, and arm64-linux's row
+	// admits none — so a `linux` program carrying one is refused at its own source span (E3104) long before
+	// lowering, exactly as a wasm one is. A defensive `os` branch here would be a second copy of that table
+	// with no way to keep the two honest.
+	function lowerOsReadWallClock(ftPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(ftPtrId)))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinWallClockName))
+	end 'lowerOsReadWallClock'
+
+	// The monotonic counter and its frequency — two out-params, two argument registers, one chunk.
+	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(ticksPtrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(freqPtrId)))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinMonotonicClockName))
+	end 'lowerOsReadClock'
+
+	function lowerOsThreadCpuTicks(outPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(outPtrId)))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinThreadCpuName))
+	end 'lowerOsThreadCpuTicks'
+
+	// The one member of this band that is NOT out-param shaped — it takes a value and returns nothing — so
+	// it could have been inline. It is a chunk anyway, because the millisecond→`timespec` split needs two
+	// frame words to hand `nanosleep` a `struct timespec *`, and a frame is exactly what a chunk has.
+	function lowerOsSleepMs(msId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(msId)))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinSleepMsName))
+	end 'lowerOsSleepMs'
 
 	// Lower `osFreePages(addr, size)` to POSIX `munmap(addr, size)` — the free counterpart of `lowerOsAllocPages`
 	// directly above, and the shape x64's `lowerOsFreePagesLinux` takes, generalized to both OSes this backend

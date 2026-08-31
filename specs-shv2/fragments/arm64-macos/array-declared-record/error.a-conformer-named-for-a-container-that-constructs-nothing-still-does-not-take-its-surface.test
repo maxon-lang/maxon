@@ -1,0 +1,23 @@
+// Test: error.a-conformer-named-for-a-container-that-constructs-nothing-still-does-not-take-its-surface
+typealias Num = int(0 to 100)
+
+type Vector uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Vector.init(managed)
+	end 'init'
+end 'Vector'
+
+typealias Vec3 = Vector with 3 Num
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.push(5 as Num)
+	return v.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:18:2: Unsupported: a member access on 'v': `Vector` is a BUILTIN whose runtime record shv2 SYNTHESIZES rather than compiling a declaration for, so a `Vector with …` is this compiler's own instance and its members are the container's — not the ones a `type Vector` declared here carries. Rename the declaration to reach its own members

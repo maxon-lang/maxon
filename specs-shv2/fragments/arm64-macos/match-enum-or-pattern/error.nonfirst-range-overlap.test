@@ -1,0 +1,22 @@
+// Test: error.nonfirst-range-overlap
+enum E
+	a
+	b
+	c
+	d
+end 'E'
+
+function classify(v E) returns ExitCode
+	return match v 'm'
+		a gives 1
+		b or c to d gives 2
+		c gives 3
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(E.a)
+end 'main'
+---
+CompilerError:
+error E2027: <fragment>:13:3: overlapping pattern in match: 'c' is already covered

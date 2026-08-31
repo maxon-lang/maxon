@@ -1,0 +1,236 @@
+// Test: an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance
+typealias Num = int(i64.min to i64.max)
+
+type HoldA uses T
+	typealias Items = Array with T
+	export var items as Items
+	export static function create(seed T) returns Self
+		var arr = Items.create()
+		arr.resize(1)
+		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
+		return Self{items: arr}
+	end 'create'
+	export function adopt(other Items)
+		self.items = other
+	end 'adopt'
+	export function isSingle() returns bool
+		return self.items.count() == 1
+	end 'isSingle'
+end 'HoldA'
+
+typealias HoldANum = HoldA with Num
+
+function main() returns ExitCode
+	let b = HoldANum.create(7)
+	var a = HoldANum.create(1)
+	a.adopt(b.items)
+	if a.isSingle() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @HoldA.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_resize
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_owned#8
+  __im_owned#8:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_bounds#9
+  __im_bounds#9:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_buffer#10
+  __im_buffer#10:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_viewed#11
+  __im_viewed#11:
+    arm64.sub x2, x0, 24
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_store#12
+  __im_store#12:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movImm x0, 0
+    arm64.b __im_cont
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_owned#13
+  __im_owned#13:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_bounds#14
+  __im_bounds#14:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_buffer#15
+  __im_buffer#15:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_viewed#16
+  __im_viewed#16:
+    arm64.sub x2, x0, 24
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_store#17
+  __im_store#17:
+    arm64.storeBaseDispReg.byte [x0 + 0], x19
+    arm64.movImm x0, 0
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __managed_set
+    arm64.movRegReg x0, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @HoldA.adopt {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.leaRdata x1, __layout_HoldA_Num
+    arm64.bl HoldA.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.leaRdata x1, __layout_HoldA_Num
+    arm64.bl HoldA.create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl HoldA.adopt
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.leaRdata x0, __str_rec_2
+    arm64.bl print
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_HoldA_Num
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HoldA_Num
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

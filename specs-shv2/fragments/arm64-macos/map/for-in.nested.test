@@ -1,0 +1,202 @@
+// Test: for-in.nested
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function innerSum(m IntMap) returns Integer
+	var total = 0
+	for (_, v) in m 'inner'
+		total = total + v
+	end 'inner'
+	return total
+end 'innerSum'
+
+function main() returns ExitCode
+	let m = [1: 1, 2: 2, 3: 3]
+	var outerTotal = 0
+	for (_, v) in m 'outer'
+		outerTotal = outerTotal + v + innerSum(m)
+	end 'outer'
+	// Each outer iteration: v + innerSum = v + 6
+	// (1+6) + (2+6) + (3+6) = 7+8+9 = 24
+	if outerTotal == 24 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @innerSum {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.bl Map.createIterator
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b forempty
+  critsplit:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, inner
+    arm64.b forexit
+  inner:
+    arm64.leaRdata x1, __layout_MapIterator_Integer_Integer
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl MapIterator.current
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x19, x19, x1
+    arm64.bl __mm_decref
+    arm64.b forstep
+  forstep:
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl MapIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_MapIterator_Integer_Integer
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forempty:
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forjoin:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 1
+    arm64.leaRdata x0, __layout_Map_int_int
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.bl Map.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x3, __layout_Map_int_int
+    arm64.leaRdata x4, __witness_int.Hashable
+    arm64.leaRdata x5, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl Map.upsert
+    arm64.movImm x1, 2
+    arm64.movImm x2, 2
+    arm64.leaRdata x3, __layout_Map_int_int
+    arm64.leaRdata x4, __witness_int.Hashable
+    arm64.leaRdata x5, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.bl Map.upsert
+    arm64.movImm x1, 3
+    arm64.movImm x2, 3
+    arm64.leaRdata x3, __layout_Map_int_int
+    arm64.leaRdata x4, __witness_int.Hashable
+    arm64.leaRdata x5, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.bl Map.upsert
+    arm64.movImm x19, 0
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.bl Map.createIterator
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b forempty
+  critsplit:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, outer
+    arm64.b forexit
+  outer:
+    arm64.leaRdata x1, __layout_MapIterator_int_int
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl MapIterator.current
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.add x19, x19, x0
+    arm64.movRegReg x0, x21
+    arm64.bl innerSum
+    arm64.add x19, x19, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.b forstep
+  forstep:
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl MapIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_MapIterator_int_int
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forempty:
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forjoin:
+    arm64.cmp x0, 24
+    arm64.cset x0, eq
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Map_int_int
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Map_int_int
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

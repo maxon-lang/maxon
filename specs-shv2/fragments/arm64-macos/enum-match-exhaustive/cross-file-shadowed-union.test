@@ -1,0 +1,210 @@
+// Test: cross-file-shadowed-union
+// --- file: ops.maxon
+export union BigOp
+	condBr
+	br
+	cmp
+	call
+	ret
+end 'BigOp'
+
+export union SmallOp
+	condBr
+	br
+end 'SmallOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SmallOp) returns Code
+	return match op 'check'
+		condBr gives 1
+		br gives 2
+	end 'check'
+end 'classify'
+
+function describeBig(op BigOp) returns Code
+	return match op 'check'
+		condBr gives 10
+		br gives 20
+		cmp gives 30
+		call gives 40
+		ret gives 50
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let small = classify(SmallOp.br)
+	let big = describeBig(BigOp.cmp)
+	if big == 30 'bigOk'
+		return small
+	end 'bigOk'
+	return 99
+end 'main'
+---
+ExitCode: 2
+---
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#1
+    arm64.b matchnext
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#2
+    arm64.b matchdead
+  matcharm#2:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 125
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @describeBig {
+  entry:
+    arm64.prologue 16
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5] @__jumptable_2
+  matchdead:
+  matcharm#1:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matcharm#2:
+    arm64.movImm x0, 20
+    arm64.b matchcont
+  matcharm#3:
+    arm64.movImm x0, 30
+    arm64.b matchcont
+  matcharm#4:
+    arm64.movImm x0, 40
+    arm64.b matchcont
+  matcharm#5:
+    arm64.movImm x0, 50
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 125
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm#7
+  matcharm#7:
+    arm64.movImm x1, 2
+    arm64.b matchcont#10
+  matchcont#10:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#13
+    arm64.b __rc_chk#12
+  __rc_chk#12:
+    arm64.cmp x1, 125
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#13
+    arm64.b __rc_ok#11
+  __il_slow#13:
+    arm64.bl classify
+    arm64.movRegReg x19, x0
+    arm64.b __il_cont#4
+  __rc_ok#11:
+    arm64.movRegReg x19, x1
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.movImm x0, 2
+    arm64.b __il_body#14
+  __il_body#14:
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#15, [1]=matcharm#16, [2]=matcharm#17, [3]=matcharm#18, [4]=matcharm#19] @__jumptable_3
+  matchdead:
+  matcharm#15:
+    arm64.movImm x1, 10
+    arm64.b matchcont#21
+  matcharm#16:
+    arm64.movImm x1, 20
+    arm64.b matchcont#21
+  matcharm#17:
+    arm64.movImm x1, 30
+    arm64.b matchcont#21
+  matcharm#18:
+    arm64.movImm x1, 40
+    arm64.b matchcont#21
+  matcharm#19:
+    arm64.movImm x1, 50
+    arm64.b matchcont#21
+  matchcont#21:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#24
+    arm64.b __rc_chk#23
+  __rc_chk#23:
+    arm64.cmp x1, 125
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#24
+    arm64.b __rc_ok#22
+  __il_slow#24:
+    arm64.bl describeBig
+    arm64.b __il_cont#3
+  __rc_ok#22:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#3
+  __il_cont#3:
+    arm64.cmp x0, 30
+    arm64.cset x0, eq
+    arm64.cbnz x0, bigOk
+    arm64.b ifcont
+  bigOk:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,79 @@
+// Test: multi-exit-three-way-split
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+union Tag
+	a
+	b
+	c
+end 'Tag'
+
+function main() returns ExitCode
+	@heap let x = Box.create(7)
+	let tag = Tag.b
+	var total = 0
+	if true 'inner'
+		let alias = x
+		match tag 'three'
+			a then total = alias.value
+			b then total = alias.value * 2
+			c then total = alias.value * 3
+		end 'three'
+	end 'inner'
+	return total
+end 'main'
+---
+ExitCode: 14
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 7
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.b inner
+  inner:
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.b matchcont
+  matchcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

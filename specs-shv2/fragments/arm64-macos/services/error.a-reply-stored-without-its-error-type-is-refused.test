@@ -1,0 +1,26 @@
+// Test: error.a-reply-stored-without-its-error-type-is-refused
+typealias Integer = int(i64.min to i64.max)
+typealias BarePromise = Promise with Integer
+typealias BarePromiseArray = Array with BarePromise
+
+type Slow
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Slow'
+
+function main() returns ExitCode
+	let h = spawn Slow.create()
+	var ps = BarePromiseArray.create()
+	ps.push(h.value())
+	return 0
+end 'main'
+---
+CompilerError:
+error E3098: <fragment>:21:5: a reply from 'Slow.value' always carries 'ServiceError' — the service can be gone, whatever the message declares — so 'BarePromise' would erase it; declare the storage as 'Promise with (T, ServiceError)' so 'try await' can bind it

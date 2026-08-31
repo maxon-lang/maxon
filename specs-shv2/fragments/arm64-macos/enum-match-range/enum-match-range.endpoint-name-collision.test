@@ -1,0 +1,151 @@
+// Test: enum-match-range.endpoint-name-collision
+// A range arm's endpoint case names (`lt`/`ge`) also exist on a DIFFERENT
+// enum (`Cond`) at other ordinals — here `ge` precedes `lt`, both high, the
+// way `Arm64CondCode` shadows `CmpPredicate` inside the compiler. The range
+// endpoints must resolve against the SCRUTINEE's enum (`Pred`: lt=2..ge=5),
+// not whichever enum a type-blind name search happens to reach first. Binding
+// to `Cond` would yield the empty ordinal span [7,6], so the exhaustive match
+// would match no arm for `Pred.gt` and fall through to a nil result.
+union Cond
+	eqc
+	nec
+	mi
+	pl
+	hic
+	ls
+	ge
+	lt
+	gtc
+	lec
+end 'Cond'
+
+union Pred
+	eq
+	ne
+	lt
+	le
+	gt
+	ge
+end 'Pred'
+
+function classify(p Pred) returns String
+	return match p 'm'
+		eq gives "eq"
+		ne gives "ne"
+		lt to ge gives "ord"
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	let s = classify(Pred.gt)
+	if s.isEmpty() 'empty'
+		return 2
+	end 'empty'
+	return 0 if s == "ord" else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#1
+    arm64.b matchnext#5
+  matcharm#1:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.b matchcont
+  matchnext#5:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchnext#6
+  matcharm#2:
+    arm64.leaRdata x0, __str_rec_4
+    arm64.b matchcont
+  matchnext#6:
+    arm64.cmp x0, 2
+    arm64.cset x1, ge
+    arm64.cmp x0, 5
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbnz x0, matcharm#3
+    arm64.b matchdead
+  matcharm#3:
+    arm64.leaRdata x0, __str_rec_5
+    arm64.b matchcont
+  matchcont:
+    arm64.bl __str_retain
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 4
+    arm64.bl classify
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl String.isEmpty
+    arm64.cbnz x0, empty
+    arm64.b ifcont
+  empty:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x1, __str_rec_5
+    arm64.movRegReg x0, x19
+    arm64.bl __str_eq
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x20, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x20, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

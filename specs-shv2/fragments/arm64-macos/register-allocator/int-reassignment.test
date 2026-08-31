@@ -1,0 +1,21 @@
+// Test: int-reassignment
+function main() returns ExitCode
+	var x = 100
+	let y = x - 80
+	x = 22
+	return x + y
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

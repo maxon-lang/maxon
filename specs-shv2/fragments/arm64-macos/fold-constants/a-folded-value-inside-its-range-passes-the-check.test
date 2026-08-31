@@ -1,0 +1,55 @@
+// Test: a-folded-value-inside-its-range-passes-the-check
+typealias Word = int(i64.min to i64.max)
+typealias Small = int(0 to 100)
+
+function scale(a Word, b Word) returns Word
+	return a * b
+end 'scale'
+
+function main() returns ExitCode
+	let v = scale(25, b: 2) as Small
+	if v != 50 'value'
+		return 1
+	end 'value'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x0, 50
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x0, 50
+    arm64.cset x0, ne
+    arm64.cbnz x0, value
+    arm64.b ifcont
+  value:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

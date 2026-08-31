@@ -1,0 +1,44 @@
+// Test: wide-unsigned-ordering
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let big = wide(u64.max)
+	let three = wide(3 as Wide)
+
+	if three < big 'ordered'
+		return 42
+	end 'ordered'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.movImm x0, 3
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.b __il_cont#3
+  __il_cont#3:
+    arm64.cmp x0, -1
+    arm64.cset x0, lo
+    arm64.cbnz x0, ordered
+    arm64.b ifcont
+  ordered:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

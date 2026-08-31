@@ -1,0 +1,182 @@
+// Test: two-type-parameters-each-with-their-own-chain
+typealias Count = int(0 to u64.max)
+typealias Small = int(0 to 1000)
+
+type Twin uses First, Second
+	typealias FirstChain = __ManagedList with First
+	typealias SecondChain = __ManagedList with Second
+	var left as FirstChain
+	var right as SecondChain
+
+	export static function create() returns Self
+		return Self{left: FirstChain.create(), right: SecondChain.create()}
+	end 'create'
+
+	export function addLeft(v First)
+		self.left.insertLast(v)
+	end 'addLeft'
+
+	export function addRight(v Second)
+		self.right.insertLast(v)
+	end 'addRight'
+
+	export function total() returns Count
+		return self.left.count() + self.right.count()
+	end 'total'
+end 'Twin'
+
+typealias SmallThenString = Twin with Small, String
+
+function main() returns ExitCode
+	var t = SmallThenString.create()
+	t.addLeft(1)
+	t.addLeft(2)
+	t.addRight("alpha")
+	return t.total() as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Twin.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.bl __list_create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 112]
+    arm64.bl __list_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Twin.addLeft {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __list_append
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Twin.addRight {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.bl __list_append
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Twin.total {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __list_count
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __list_count
+    arm64.add x0, x20, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Twin_Small_String
+    arm64.bl Twin.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __layout_Twin_Small_String
+    arm64.movRegReg x0, x19
+    arm64.bl Twin.addLeft
+    arm64.movImm x1, 2
+    arm64.leaRdata x2, __layout_Twin_Small_String
+    arm64.movRegReg x0, x19
+    arm64.bl Twin.addLeft
+    arm64.leaRdata x0, __str_rec_1
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x2, __layout_Twin_Small_String
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl Twin.addRight
+    arm64.movRegReg x0, x19
+    arm64.bl Twin.total
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Twin_Small_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

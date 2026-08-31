@@ -1,0 +1,152 @@
+// Test: one-static-initializer-reads-another
+typealias Count = int(0 to u64.max)
+
+type Inner
+	static var value = Inner.build()
+	export var n as Count
+
+	static function build() returns Inner
+		print("inner ")
+		return Inner{n: 3}
+	end 'build'
+
+	export static function get() returns Count
+		return Inner.value.n
+	end 'get'
+end 'Inner'
+
+type Outer
+	static var value = Outer.build()
+	export var n as Count
+
+	static function build() returns Outer
+		print("outer ")
+		return Outer{n: Inner.get() + 1}
+	end 'build'
+
+	export static function get() returns Count
+		return Outer.value.n
+	end 'get'
+end 'Outer'
+
+function main() returns ExitCode
+	print("start ")
+	print("{Outer.get()}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_Inner.value@0 = i64 0
+  __data_Outer.value@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @Inner.build {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl print
+    arm64.movImm x19, 3
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Inner.get {
+  entry:
+    arm64.prologue 16
+    arm64.bl __lazy_init#__data_Inner.value
+    arm64.leaGlobal x0, __data_Inner.value
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Outer.build {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_4
+    arm64.bl print
+    arm64.bl Inner.get
+    arm64.add x19, x0, 1
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Outer.get {
+  entry:
+    arm64.prologue 16
+    arm64.bl __lazy_init#__data_Outer.value
+    arm64.leaGlobal x0, __data_Outer.value
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_5
+    arm64.bl print
+    arm64.bl Outer.get
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __uint_to_string
+    arm64.movRegReg x19, x0
+    arm64.add x0, x19, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x0, x22, x19
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl print
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

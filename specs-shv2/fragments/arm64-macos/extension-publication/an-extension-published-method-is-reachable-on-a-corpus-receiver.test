@@ -1,0 +1,57 @@
+// Test: an-extension-published-method-is-reachable-on-a-corpus-receiver
+function main() returns ExitCode
+	let s = "hello"
+	let ells = s.filter(function(c Character) gives c == 'l')
+	return ells.count() as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_2
+    arm64.leaFuncAddr x1, main$closure_0
+    arm64.movImm x2, 0
+    arm64.bl String.filter
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.cmp x19, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_15
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x1, __str_rec_3
+    arm64.bl __str_eq
+    arm64.epilogue 16
+    arm64.ret
+}

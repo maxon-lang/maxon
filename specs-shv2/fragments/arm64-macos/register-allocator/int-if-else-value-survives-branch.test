@@ -1,0 +1,43 @@
+// Test: int-if-else-value-survives-branch
+function main() returns ExitCode
+	let base = 40
+	let cond = 1
+	var extra = 0
+	if cond == 1 'check'
+		extra = 2
+	end 'check' else 'other'
+		extra = 100
+	end 'other'
+	return base + extra
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b check
+  check:
+    arm64.movImm x0, 2
+    arm64.b ifcont
+  ifcont:
+    arm64.add x0, x0, 40
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

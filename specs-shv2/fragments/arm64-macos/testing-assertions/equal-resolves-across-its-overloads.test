@@ -1,0 +1,224 @@
+// Test: equal-resolves-across-its-overloads
+// --- file: main.maxon
+function main() returns ExitCode
+	let parts = "a,b,c".split(",")
+	let word = try parts.get(1) otherwise ""
+
+	try Expect.equal(parts.count(), expected: 3) otherwise ignore
+	try Expect.equal(word, expected: "b") otherwise ignore
+	try Expect.equal(parts.count() == 3, expected: true) otherwise ignore
+
+	try Expect.equal(parts.count(), expected: 99) otherwise ignore
+	try Expect.equal(word, expected: "zzz") otherwise ignore
+	try Expect.equal(parts.count() == 3, expected: false) otherwise ignore
+
+	print("done\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_20
+    arm64.leaRdata x1, __str_rec_21
+    arm64.bl String.split
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#26
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#27
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#27:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#26:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x20, __str_rec_22
+    arm64.b trycont#3
+  tryok#1:
+    arm64.movRegReg x20, x0
+    arm64.b trycont#3
+  trycont#3:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.movImm x22, 3
+    arm64.bl __paramDefault#Expect.equal#2
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x3, __str_rec_23
+    arm64.movImm x4, 5
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl Expect.equal
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.b trycont#6
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.leaRdata x21, __str_rec_24
+    arm64.bl __paramDefault#Expect.equal#String#String#String#String#SourceLineNumber#2
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x3, __str_rec_23
+    arm64.movImm x4, 6
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl Expect.equal#String#String#String#String#SourceLineNumber
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.b trycont#9
+  tryok#7:
+    arm64.b trycont#9
+  trycont#9:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 3
+    arm64.cset x21, eq
+    arm64.movImm x22, 1
+    arm64.bl __paramDefault#Expect.equal#bool#bool#String#String#SourceLineNumber#2
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x3, __str_rec_23
+    arm64.movImm x4, 7
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl Expect.equal#bool#bool#String#String#SourceLineNumber
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#11
+    arm64.b tryok#10
+  tryerr#11:
+    arm64.b trycont#12
+  tryok#10:
+    arm64.b trycont#12
+  trycont#12:
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.movImm x22, 99
+    arm64.bl __paramDefault#Expect.equal#2
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x3, __str_rec_23
+    arm64.movImm x4, 9
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl Expect.equal
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#14
+    arm64.b tryok#13
+  tryerr#14:
+    arm64.b trycont#15
+  tryok#13:
+    arm64.b trycont#15
+  trycont#15:
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.leaRdata x21, __str_rec_25
+    arm64.bl __paramDefault#Expect.equal#String#String#String#String#SourceLineNumber#2
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x3, __str_rec_23
+    arm64.movImm x4, 10
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl Expect.equal#String#String#String#String#SourceLineNumber
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#17
+    arm64.b tryok#16
+  tryerr#17:
+    arm64.b trycont#18
+  tryok#16:
+    arm64.b trycont#18
+  trycont#18:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 3
+    arm64.cset x20, eq
+    arm64.movImm x21, 0
+    arm64.bl __paramDefault#Expect.equal#bool#bool#String#String#SourceLineNumber#2
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x3, __str_rec_23
+    arm64.movImm x4, 11
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl Expect.equal#bool#bool#String#String#SourceLineNumber
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#20
+    arm64.b tryok#19
+  tryerr#20:
+    arm64.b trycont#21
+  tryok#19:
+    arm64.b trycont#21
+  trycont#21:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_26
+    arm64.bl print
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

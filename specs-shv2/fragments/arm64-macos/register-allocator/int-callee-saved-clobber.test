@@ -1,0 +1,47 @@
+// Test: int-callee-saved-clobber
+
+typealias Integer = int(i64.min to i64.max)
+
+function useRegs(a Integer, b Integer, c Integer, d Integer) returns Integer
+	let x = a + b
+	let y = c + d
+	let z = x + y
+	return z
+end 'useRegs'
+
+function main() returns ExitCode
+	let sentinel = 42
+	let result = useRegs(1, b: 2, c: 3, d: 4)
+	return sentinel + result
+end 'main'
+---
+ExitCode: 52
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x0, x0, 10
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,140 @@
+// Test: http-client.build-request
+function main() returns ExitCode
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://example.com/path?q=1") otherwise 'err'
+		return 1
+	end 'err'
+	let url = request.url()
+	let host = try url.host() otherwise ""
+	if host != "example.com" 'badHost'
+		return 2
+	end 'badHost'
+	let path = url.path()
+	if path != "/path" 'badPath'
+		return 3
+	end 'badPath'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.leaRdata x1, __str_rec_16
+    arm64.bl HttpRequest.create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl HttpRequest.url
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl URL.host
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_rec_17
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.b trycont
+  tryok#3:
+    arm64.movRegReg x21, x0
+    arm64.b trycont
+  trycont:
+    arm64.leaRdata x1, __str_rec_18
+    arm64.movRegReg x0, x21
+    arm64.bl __str_eq
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, badHost
+    arm64.b ifcont#7
+  badHost:
+    arm64.movImm x22, 2
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_URL
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpRequest
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#7:
+    arm64.movRegReg x0, x20
+    arm64.bl URL.path
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x1, __str_rec_19
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, badPath
+    arm64.b ifcont#9
+  badPath:
+    arm64.movImm x23, 3
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_URL
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpRequest
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#9:
+    arm64.movImm x23, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_URL
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpRequest
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

@@ -225,7 +225,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.unix-seconds-is-a-calendar-time -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `currentUnixTimeSeconds()` returns a real calendar time, and the bounds are the whole test.
 
 The LOWER bound catches the regression it exists for: a wall clock silently wired to the monotonic
@@ -253,7 +253,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.unix-seconds-advances -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The wall clock is live, not a constant read once at startup. Sleeping 1.1 s must cross at least one
 whole-second boundary no matter where in the current second the first reading landed.
 ```maxon
@@ -380,7 +380,7 @@ error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: i
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-monotonic -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Three reads in one program never go backwards. A thread's consumed CPU time cannot decrease, so
 this is what a capture of the wrong register, a sign-extension of a 32-bit half or a stale value
 left in the out-param word would fail.
@@ -404,7 +404,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-advances-under-work -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Two million additions move it. The direct statement of the contract, and the property a lowering
 that never called the OS — answering the `.data` scratch word's zero initializer forever — fails
 first.
@@ -431,7 +431,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-is-not-wall-time -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 **THE DISCRIMINATOR, AND THE WHOLE REASON THIS INTRINSIC EXISTS.** The program measures its own CPU
 across two intervals of comparable WALL length — one spent RUNNING, one spent asleep — and requires
 the running one to cost multiples more. A wall clock, which is the wrong lowering somebody would

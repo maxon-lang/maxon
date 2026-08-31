@@ -1,0 +1,194 @@
+// Test: try-otherwise-value-flow.try-in-call-arg-in-if-condition
+typealias Octet = int(0 to 255)
+typealias OctetArray = Array with Octet
+
+function isBig(b Octet) returns bool
+	return b > 100
+end 'isBig'
+
+function check(bytes OctetArray, i Octet) returns ExitCode
+	if isBig(try bytes.get(i) otherwise 0) 'big'
+		return 1
+	end 'big'
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	var a = OctetArray.create()
+	a.push(200)
+	return check(a, i: 0)
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @isBig {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x0, 100
+    arm64.cset x0, gt
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @check {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk#8
+  __rc_chk#8:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok#6
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#6:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
+    arm64.cmp x2, 8
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.cset x2, hs
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load#15
+  __im_load#15:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.arm64AddLsl x2, x2, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x2, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.cset x2, hs
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load#16
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, x1
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_empty
+    arm64.b critsplit#23
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_slow
+    arm64.b critsplit#24
+  critsplit#24:
+    arm64.b __im_cont
+  critsplit#23:
+    arm64.b __im_cont
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x3, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x3, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x0, x2
+    arm64.b trycont
+  trycont:
+    arm64.b __il_body
+  __il_body:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __il_slow
+    arm64.b __rc_chk#21
+  __rc_chk#21:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow
+    arm64.b __rc_ok#20
+  __il_slow:
+    arm64.bl isBig
+    arm64.b __il_cont
+  __rc_ok#20:
+    arm64.cmp x0, 100
+    arm64.cset x0, gt
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cbnz x0, big
+    arm64.b ifcont
+  big:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 200
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl check
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

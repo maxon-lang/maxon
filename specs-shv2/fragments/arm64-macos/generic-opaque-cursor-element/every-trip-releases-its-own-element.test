@@ -1,0 +1,292 @@
+// Test: every-trip-releases-its-own-element
+typealias Count = int(0 to u32.max)
+
+type BagIter uses Element implements Iterator with Element
+	var slot as Element
+	var remaining as Count
+
+	export static function create(v Element, remaining Count) returns Self
+		return Self{slot: v, remaining: remaining}
+	end 'create'
+
+	export function current() returns Element
+		return slot
+	end 'current'
+
+	export function advance() throws IterationError
+		if remaining <= 1 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		remaining = remaining - 1
+	end 'advance'
+end 'BagIter'
+
+type Bag uses Element implements Iterable with (Element, BagIter)
+	var slot as Element
+	let repeats as Count
+
+	export static function create(v Element, repeats Count) returns Self
+		return Self{slot: v, repeats: repeats}
+	end 'create'
+
+	export function createIterator() returns BagIter throws IterationError
+		return BagIter.create(slot, remaining: repeats)
+	end 'createIterator'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function isEmpty(s String) returns bool
+	return s.byteLength() == 0
+end 'isEmpty'
+
+function main() returns ExitCode
+	var b = StrBag.create("a string long enough to be heap allocated", repeats: 5)
+	if b.contains(isEmpty) 'found'
+		return 1
+	end 'found'
+	print("none of 5\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @BagIter.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x20, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @BagIter.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @BagIter.advance {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x1, 1
+    arm64.cset x1, le
+    arm64.cbnz x1, atTheLast
+    arm64.b ifcont
+  atTheLast:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.sub x1, x1, 1
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x2, 4294967295
+    arm64.cmp x1, x2
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x20, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.createIterator {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.movRegReg x1, x19
+    arm64.bl BagIter.create
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @isEmpty {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow
+    arm64.b __rc_ok
+  __il_slow:
+    arm64.bl String.byteLength
+    arm64.b __il_cont
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_2
+    arm64.movImm x19, 5
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x1, __fnref_isEmpty
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Bag_String
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.contains
+    arm64.cbnz x0, found
+    arm64.b ifcont
+  found:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl print
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

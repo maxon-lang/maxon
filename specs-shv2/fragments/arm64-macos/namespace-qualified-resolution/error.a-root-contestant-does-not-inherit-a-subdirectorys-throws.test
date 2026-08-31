@@ -1,0 +1,25 @@
+// Test: error.a-root-contestant-does-not-inherit-a-subdirectorys-throws
+// --- file: alpha/a.maxon
+enum Boom
+	bad
+end 'Boom'
+
+export function pick() returns Integer throws Boom
+	throw Boom.bad
+end 'pick'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: rootpick.maxon
+export function pick() returns Integer
+	return 5
+end 'pick'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = try pick() otherwise 0
+	return v as ExitCode
+end 'main'
+---
+CompilerError:
+error E3055: app/<fragment>:20:10: try requires a throwing function: 'pick' does not throw'

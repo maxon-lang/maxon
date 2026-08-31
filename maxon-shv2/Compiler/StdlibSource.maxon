@@ -1636,14 +1636,20 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 	end 'op'
 end 'noteSubstrateEdge'
 
-// Classify ONE callee named by a stdlib body: a runtime entry that needs the Win32 substrate SEEDS the
+// Classify ONE callee named by a stdlib body: a runtime entry that needs a HOST FACILITY SEEDS the
 // fixpoint, another stdlib function becomes a reverse edge, and anything else — a user callback, or a
 // target-neutral runtime helper — carries no substrate requirement.
 //
-// ⭐ `calleeNeedsWin32Substrate` is asked, never restated: it is the ONE place that knows which runtime
-// entries only x64-windows can provide, and a second list here would be that fact written down twice.
+// ⭐ `calleeHostFacility` is asked, never restated: it is the ONE place that knows which runtime entries
+// need a facility at all, and a second list here would be that fact written down twice.
+//
+// ⚠ **THE FIXPOINT IS TARGET-BLIND ON PURPOSE, AND ASKING WHICH FACILITY IS WHAT KEEPS IT THAT WAY.** What
+// it records is *which entry each stdlib function reaches* — a property of stdlib source, identical for
+// every target — so the target question is asked once, later, at the USER call that crossed into stdlib
+// (`SemanticCheck.requireTargetSupportsCallee`). Seeding on "does the CURRENT target lack it" instead would
+// make `project.stdlibFacts` differ per target for no gain and one more thing to invalidate.
 function noteSubstrateCallee(callee ByteArray, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
-	if calleeNeedsWin32Substrate(callee) 'substrateEntry'
+	if calleeHasHostFacility(callee) 'substrateEntry'
 		state.seed(callerNode, entry: callee)
 		return
 	end 'substrateEntry'

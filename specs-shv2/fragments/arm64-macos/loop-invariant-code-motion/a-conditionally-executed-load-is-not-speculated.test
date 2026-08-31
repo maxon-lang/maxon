@@ -1,0 +1,146 @@
+// Test: a-conditionally-executed-load-is-not-speculated
+typealias Word = int(i64.min to i64.max)
+
+type Cell
+	export var value as Word
+
+	export static function of(value Word) returns Cell
+		return Self{value: value}
+	end 'of'
+end 'Cell'
+
+function conditionalRead(c Cell, n Word) returns Word
+	var t = 0
+	var i = 0
+	while i < n 'loop'
+		if i == 3 'once'
+			t = t + c.value
+		end 'once'
+		i = i + 1
+	end 'loop'
+	return t
+end 'conditionalRead'
+
+function main() returns ExitCode
+	var trips = 0
+	for _ in 0 upto 9 'feed'
+		trips = trips + 1
+	end 'feed'
+
+	var c = Cell.of(9)
+	if conditionalRead(c, n: trips) != 9 'readOnce'
+		return 1
+	end 'readOnce'
+	if conditionalRead(c, n: 0) != 0 'noTrips'
+		return 2
+	end 'noTrips'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, 9
+    arm64.cset x2, lt
+    arm64.cbnz x2, feed
+    arm64.b forexit
+  feed:
+    arm64.add x0, x0, 1
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movImm x1, 9
+    arm64.leaRegSlot x2, slot0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x1, 0
+    arm64.movImm x3, 0
+    arm64.b whilehdr#11
+  whilehdr#11:
+    arm64.cmp x3, x0
+    arm64.cset x4, lt
+    arm64.cbnz x4, loop#12
+    arm64.b whileexit#13
+  loop#12:
+    arm64.cmp x3, 3
+    arm64.cset x4, eq
+    arm64.cbnz x4, once#14
+    arm64.b critsplit#23
+  once#14:
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 0]
+    arm64.add x1, x1, x4
+    arm64.b ifcont#15
+  critsplit#23:
+    arm64.b ifcont#15
+  ifcont#15:
+    arm64.add x3, x3, 1
+    arm64.b whilehdr#11
+  whileexit#13:
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.cmp x1, 9
+    arm64.cset x0, ne
+    arm64.cbnz x0, readOnce
+    arm64.b ifcont#6
+  readOnce:
+    arm64.movImm x0, 1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#6:
+    arm64.b __il_body#17
+  __il_body#17:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr#18
+  whilehdr#18:
+    arm64.cmp x1, 0
+    arm64.cset x3, lt
+    arm64.cbnz x3, loop#19
+    arm64.b whileexit#20
+  loop#19:
+    arm64.cmp x1, 3
+    arm64.cset x3, eq
+    arm64.cbnz x3, once#21
+    arm64.b critsplit#24
+  once#21:
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
+    arm64.add x0, x0, x3
+    arm64.b ifcont#22
+  critsplit#24:
+    arm64.b ifcont#22
+  ifcont#22:
+    arm64.add x1, x1, 1
+    arm64.b whilehdr#18
+  whileexit#20:
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, noTrips
+    arm64.b ifcont#8
+  noTrips:
+    arm64.movImm x0, 2
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+}

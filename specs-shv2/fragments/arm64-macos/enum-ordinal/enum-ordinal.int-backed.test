@@ -1,0 +1,26 @@
+// Test: enum-ordinal.int-backed
+enum HttpStatus
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'HttpStatus'
+
+function main() returns ExitCode
+	let s = HttpStatus.serverError
+	// ordinal is 2 (third case), not 500 (the raw value)
+	return s.ordinal as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

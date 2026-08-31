@@ -1,0 +1,460 @@
+// Test: partition-merge-stability
+typealias Integer = int(i64.min to i64.max)
+typealias Idx = int(0 to u64.max)
+
+type Tagged implements Comparable
+	export var key as Integer
+	export var tag as Integer
+
+	export static function init(key Integer, tag Integer) returns Self
+		return Self{key: key, tag: tag}
+	end 'init'
+
+	export function compare(other Self) returns Ordering
+		return key.compare(other.key)
+	end 'compare'
+end 'Tagged'
+
+typealias TaggedArr = Array with Tagged
+typealias ScratchArr = Array with Tagged
+
+function byKey(a Tagged, b Tagged) returns Ordering
+	return a.key.compare(b.key)
+end 'byKey'
+
+function main() returns ExitCode
+	var a = TaggedArr.create()
+	// Left run: keys 1,1,2,2,3 with tags 0..4
+	a.push(Tagged.init(1, tag: 0))
+	a.push(Tagged.init(1, tag: 1))
+	a.push(Tagged.init(2, tag: 2))
+	a.push(Tagged.init(2, tag: 3))
+	a.push(Tagged.init(3, tag: 4))
+	a.push(Tagged.init(3, tag: 5))
+	a.push(Tagged.init(4, tag: 6))
+	a.push(Tagged.init(4, tag: 7))
+	a.push(Tagged.init(5, tag: 8))
+	a.push(Tagged.init(5, tag: 9))
+	// Right run: keys 1,2,3,4,5 with tags 100..109 (interleaved values).
+	a.push(Tagged.init(1, tag: 100))
+	a.push(Tagged.init(1, tag: 101))
+	a.push(Tagged.init(2, tag: 102))
+	a.push(Tagged.init(2, tag: 103))
+	a.push(Tagged.init(3, tag: 104))
+	a.push(Tagged.init(3, tag: 105))
+	a.push(Tagged.init(4, tag: 106))
+	a.push(Tagged.init(4, tag: 107))
+	a.push(Tagged.init(5, tag: 108))
+	a.push(Tagged.init(5, tag: 109))
+	var scratch = ScratchArr.create()
+	let cap = 4 as Idx
+	scratch.growFilled(cap, value: Tagged.init(0, tag: 0))
+	a.mergePartition(0, mid: 10, hi: 20, scratch: scratch, scratchCap: cap, cmp: byKey)
+	// Check stability: within each key, all tag-< 100 elements come first.
+	var stable = true
+	var prevKey = 0
+	var seenRight = false
+	for i in 0 upto a.count() 'walk'
+		let cur = try a.get(i) otherwise return 99
+		if cur.key != prevKey 'newGroup'
+			prevKey = cur.key
+			seenRight = false
+		end 'newGroup'
+		if cur.tag >= 100 'isRight'
+			seenRight = true
+		end 'isRight' else 'isLeft'
+			if seenRight 'leftAfterRight'
+				stable = false
+			end 'leftAfterRight'
+		end 'isLeft'
+	end 'walk'
+	if stable 'ok'
+		print("stable\n")
+	end 'ok' else 'no'
+		print("unstable\n")
+	end 'no'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @Tagged.init {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @byKey {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.b __il_body
+  __il_body:
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cbnz x2, lt
+    arm64.b ifcont#4
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#4:
+    arm64.cmp x0, x1
+    arm64.cset x0, gt
+    arm64.cbnz x0, gt
+    arm64.b ifcont#6
+  gt:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  ifcont#6:
+    arm64.movImm x0, 1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 96 record@8
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 1
+    arm64.movImm x1, 1
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 2
+    arm64.movImm x1, 2
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 2
+    arm64.movImm x1, 3
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 3
+    arm64.movImm x1, 4
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 3
+    arm64.movImm x1, 5
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 4
+    arm64.movImm x1, 6
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 4
+    arm64.movImm x1, 7
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 5
+    arm64.movImm x1, 8
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 5
+    arm64.movImm x1, 9
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 1
+    arm64.movImm x1, 100
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 1
+    arm64.movImm x1, 101
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 2
+    arm64.movImm x1, 102
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 2
+    arm64.movImm x1, 103
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 3
+    arm64.movImm x1, 104
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 3
+    arm64.movImm x1, 105
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 4
+    arm64.movImm x1, 106
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 4
+    arm64.movImm x1, 107
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 5
+    arm64.movImm x1, 108
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 5
+    arm64.movImm x1, 109
+    arm64.bl Tagged.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 4
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.bl Tagged.init
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_incref
+    arm64.leaRdata x3, __layout_Array_Tagged
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl Array.growFilled
+    arm64.movImm x1, 0
+    arm64.movImm x2, 10
+    arm64.movImm x3, 20
+    arm64.leaFuncAddr x6, __fnref_byKey
+    arm64.movImm x7, 0
+    arm64.leaRdata x0, __layout_Array_Tagged
+    arm64.storeOutgoingArg [sp + arg0], x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x4, x20
+    arm64.movRegReg x5, x21
+    arm64.bl Array.mergePartition
+    arm64.movImm x21, 1
+    arm64.movImm x23, 0
+    arm64.movImm x24, 0
+    arm64.movImm x25, 0
+    arm64.loadRegBaseDisp.word64 x26, [x19 + 8]
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x25, x26
+    arm64.cset x0, lt
+    arm64.cbnz x0, walk
+    arm64.b forexit
+  walk:
+    arm64.cmp x25, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_46
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 96 record@8
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x25, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x25, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty
+    arm64.b critsplit#25
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b critsplit#26
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#26:
+    arm64.movRegReg x9, x1
+    arm64.b __im_cont
+  critsplit#25:
+    arm64.movRegReg x9, x1
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x21, 99
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 96 record@8
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, x23
+    arm64.cset x1, ne
+    arm64.cbnz x1, newGroup
+    arm64.b critsplit#23
+  newGroup:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.b ifcont#8
+  critsplit#23:
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 100
+    arm64.cset x0, ge
+    arm64.cbnz x0, isRight
+    arm64.b ifelse#10
+  isRight:
+    arm64.movImm x0, 1
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x0, x21
+    arm64.b ifcont#13
+  ifelse#10:
+    arm64.cbnz x2, leftAfterRight
+    arm64.b critsplit#24
+  leftAfterRight:
+    arm64.movImm x0, 0
+    arm64.b ifcont#12
+  critsplit#24:
+    arm64.movRegReg x0, x21
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.b ifcont#13
+  ifcont#13:
+    arm64.b forstep
+  forstep:
+    arm64.add x25, x25, 1
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x23, x1
+    arm64.movRegReg x24, x2
+    arm64.b forhdr
+  forexit:
+    arm64.cbnz x21, ok
+    arm64.b ifelse#15
+  ok:
+    arm64.leaRdata x0, __str_rec_10
+    arm64.bl print
+    arm64.b ifcont#16
+  ifelse#15:
+    arm64.leaRdata x0, __str_rec_11
+    arm64.bl print
+    arm64.b ifcont#16
+  ifcont#16:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 96 record@8
+    arm64.ret
+}

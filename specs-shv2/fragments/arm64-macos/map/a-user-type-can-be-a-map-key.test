@@ -1,0 +1,255 @@
+// Test: a-user-type-can-be-a-map-key
+typealias Val = int(i64.min to i64.max)
+
+type Point implements Hashable, Equatable
+	export var x as Val
+	export var y as Val
+
+	export static function create(x Val, y Val) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointMap = Map with (Point, Val)
+
+function main() returns ExitCode
+	var m = PointMap.create()
+	for i in 1 upto 4 'fill'
+		m.upsert(Point.create(i, y: i * 2), value: i * 7)
+	end 'fill'
+	return (try m.get(Point.create(1, y: 2)) otherwise 0) + (try m.get(Point.create(2, y: 4)) otherwise 0) + (try m.get(Point.create(3, y: 6)) otherwise 0)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Point.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Point.hash {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movImm x16, 31
+    arm64.mul x1, x1, x16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.add x0, x1, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_22
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Point.equals {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 0]
+    arm64.cmp x2, x3
+    arm64.cset x2, eq
+    arm64.movImm x3, 0
+    arm64.cbnz x2, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x3
+    arm64.b scmerge
+  scmerge:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Map_Point_Val
+    arm64.leaRdata x1, __witness_Point.Hashable
+    arm64.leaRdata x2, __witness_Point.Equatable
+    arm64.bl Map.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 1
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 4
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b forexit
+  fill:
+    arm64.movImm x16, 2
+    arm64.mul x1, x20, x16
+    arm64.movRegReg x0, x20
+    arm64.bl Point.create
+    arm64.movRegReg x21, x0
+    arm64.movImm x16, 7
+    arm64.mul x22, x20, x16
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.leaRdata x3, __layout_Map_Point_Val
+    arm64.leaRdata x4, __witness_Point.Hashable
+    arm64.leaRdata x5, __witness_Point.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl Map.upsert
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.bl Point.create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x2, __layout_Map_Point_Val
+    arm64.leaRdata x3, __witness_Point.Hashable
+    arm64.leaRdata x4, __witness_Point.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Map.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.movImm x21, 0
+    arm64.b trycont#7
+  tryok#5:
+    arm64.movRegReg x21, x0
+    arm64.b trycont#7
+  trycont#7:
+    arm64.movImm x0, 2
+    arm64.movImm x1, 4
+    arm64.bl Point.create
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x2, __layout_Map_Point_Val
+    arm64.leaRdata x3, __witness_Point.Hashable
+    arm64.leaRdata x4, __witness_Point.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl Map.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#9
+    arm64.b tryok#8
+  tryerr#9:
+    arm64.movImm x0, 0
+    arm64.b trycont#10
+  tryok#8:
+    arm64.b trycont#10
+  trycont#10:
+    arm64.add x21, x21, x0
+    arm64.movImm x0, 3
+    arm64.movImm x1, 6
+    arm64.bl Point.create
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x2, __layout_Map_Point_Val
+    arm64.leaRdata x3, __witness_Point.Hashable
+    arm64.leaRdata x4, __witness_Point.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl Map.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#12
+    arm64.b tryok#11
+  tryerr#12:
+    arm64.movImm x0, 0
+    arm64.b trycont#13
+  tryok#11:
+    arm64.b trycont#13
+  trycont#13:
+    arm64.add x21, x21, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Map_Point_Val
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_23
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

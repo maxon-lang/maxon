@@ -1,0 +1,16 @@
+// Test: error.field-read-on-the-second-builtin-base-a-declaration-also-claims
+typealias Int = int(i64.min to i64.max)
+
+type Vector uses T
+	export var value as T
+end 'Vector'
+
+typealias IntVec = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = IntVec.create()
+	return v.value
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:9: Unsupported: a field access on 'v': `Vector` is a BUILTIN whose runtime record shv2 SYNTHESIZES rather than compiling a declaration for, so a value of it carries that record's own words and not the fields `stdlib/Vector.maxon` declares. The field is missing from this compiler, not from the language; reach the contents through the methods

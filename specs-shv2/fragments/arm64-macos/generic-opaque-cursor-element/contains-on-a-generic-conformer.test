@@ -1,0 +1,155 @@
+// Test: contains-on-a-generic-conformer
+typealias Int = int(i64.min to i64.max)
+
+type BagIter uses Element implements Iterator with Element
+	var slot as Element
+
+	export static function create(v Element) returns Self
+		return Self{slot: v}
+	end 'create'
+
+	export function current() returns Element
+		return slot
+	end 'current'
+
+	export function advance() throws IterationError
+		throw IterationError.exhausted
+	end 'advance'
+end 'BagIter'
+
+type Bag uses Element implements Iterable with (Element, BagIter)
+	var slot as Element
+
+	export static function create(v Element) returns Self
+		return Self{slot: v}
+	end 'create'
+
+	export function createIterator() returns BagIter throws IterationError
+		return BagIter.create(slot)
+	end 'createIterator'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function isBig(n Int) returns bool
+	return n > 10
+end 'isBig'
+
+function main() returns ExitCode
+	var b = IntBag.create(30)
+	if b.contains(isBig) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @BagIter.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @BagIter.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @BagIter.advance {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.createIterator {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl BagIter.create
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @isBig {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 10
+    arm64.cset x0, gt
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 30
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x1, __fnref_isBig
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Bag_Int
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.contains
+    arm64.cbnz x0, yes
+    arm64.b ifcont
+  yes:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

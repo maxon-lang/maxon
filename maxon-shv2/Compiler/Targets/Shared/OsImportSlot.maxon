@@ -44,6 +44,18 @@ export enum OsImportSlot
 	mmap
 	munmap
 	madvise
+	// --- the arm64-macOS host surface (`Targets/Arm64/Arm64DarwinRuntime`) ---
+	//
+	// ⚠ **THESE ARE REACHED FROM ONE LANE ONLY, AND THE ENUM IS STILL THE RIGHT HOME.** Every slot above is
+	// reached by arm64-macOS alone too (the Linux lanes make the same calls as raw `svc`), so "only one lane
+	// uses it" was never this list's membership rule — being an OS primitive reached through an IMPORT
+	// TABLE is. What a Linux lane needs is a syscall NUMBER, which is a different fact in a different file.
+	//
+	// `clock_gettime_nsec_np` answers a Darwin clock in nanoseconds directly in x0 — the calendar, the
+	// monotonic counter and this thread's CPU time are one import asked with three different `clockid_t`s,
+	// which is why three facilities cost one slot. `nanosleep` is the timed park.
+	clockGettimeNsecNp
+	nanosleep
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor

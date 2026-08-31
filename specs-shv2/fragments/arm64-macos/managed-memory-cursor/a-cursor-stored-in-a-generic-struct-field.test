@@ -1,0 +1,262 @@
+// Test: a-cursor-stored-in-a-generic-struct-field
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+type SeqIterator uses Element
+	typealias ElementMemory = __ManagedMemory with Element
+	typealias RawCursor = __ManagedMemoryCursor with Element
+	var raw as RawCursor
+
+	export static function create(source ElementMemory) returns Self throws ArrayError
+		let cursor = try source.createCursor() otherwise throw ArrayError.indexOutOfBounds
+		return Self{raw: cursor}
+	end 'create'
+
+	export function current() returns Element
+		return raw.current()
+	end 'current'
+
+	export function index() returns Integer
+		return raw.index()
+	end 'index'
+
+	export function advance() throws ArrayError
+		try raw.advance() otherwise throw ArrayError.indexOutOfBounds
+	end 'advance'
+end 'SeqIterator'
+
+typealias ByteIter = SeqIterator with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	var it = try ByteIter.create(arr.managed) otherwise return 99
+	var total = 0
+	total = total + it.current()
+	try it.advance() otherwise return 98
+	total = total + it.current()
+	try it.advance() otherwise return 97
+	total = total + it.current()
+	return total + it.index()
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 62
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @SeqIterator.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __managed_cursor_create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_cursor_decref
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @SeqIterator.current {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_cursor_current
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __retain_type_param
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @SeqIterator.index {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_cursor_index
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @SeqIterator.advance {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_cursor_advance
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 30
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl SeqIterator.create
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x21, 99
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.leaRdata x1, __layout_SeqIterator_Byte
+    arm64.movRegReg x0, x21
+    arm64.bl SeqIterator.current
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x21
+    arm64.bl SeqIterator.advance
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movImm x20, 98
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_SeqIterator_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.leaRdata x1, __layout_SeqIterator_Byte
+    arm64.movRegReg x0, x21
+    arm64.bl SeqIterator.current
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x21
+    arm64.bl SeqIterator.advance
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.movImm x20, 97
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_SeqIterator_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#5:
+    arm64.leaRdata x1, __layout_SeqIterator_Byte
+    arm64.movRegReg x0, x21
+    arm64.bl SeqIterator.current
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x21
+    arm64.bl SeqIterator.index
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_SeqIterator_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

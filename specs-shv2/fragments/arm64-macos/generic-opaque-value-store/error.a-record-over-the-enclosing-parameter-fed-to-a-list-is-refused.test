@@ -1,0 +1,54 @@
+// Test: error.a-record-over-the-enclosing-parameter-fed-to-a-list-is-refused
+typealias Integer = int(i64.min to i64.max)
+typealias Idx = int(0 to u64.max)
+
+type Box uses T
+	export let x as T
+	export let tag as Integer
+
+	export function value() returns T
+		return x
+	end 'value'
+
+	export static function create(x T, tag Integer) returns Self
+		return Self{x: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias Store = List with EBox
+	var items as Store
+
+	export function add(x Element, tag Integer)
+		items.append(EBox.create(x, tag: tag))
+	end 'add'
+
+	export function first() returns Element
+		let slot = try items.first() otherwise panic("empty")
+		return slot.value()
+	end 'first'
+
+	static function create() returns Self
+		return Self{items: Store.create()}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function fill(b StrBag)
+	var sb = StringBuilder.create()
+	sb.append("hello ")
+	sb.append("heap world")
+	b.add(sb.build(), tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	fill(b)
+	print("{b.first()}\n")
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:24:9: Unsupported: a container element fed as a value of type 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — cannot be a CONTAINER ELEMENT: the shared generic body compiles once for every instantiation, so releasing such a record means releasing a field whose destructor is a fact about the enclosing instantiation, and the only entry that knows it takes the instantiation's layout descriptor as a second argument (`__destruct_dict_<instance>(descriptor, box)`). A container stamps ONE machine word as its element destructor and calls it with the element alone, so there is nowhere to carry that descriptor. It is refused at the two arrivals that stamp one: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, and a `Map` or `Set` column. Holding ONE such record in a FIELD of the enclosing type (`Self{one: Inner.create(x, …)}`) is admitted — the enclosing instantiation is concrete wherever it is freed, so its own destructor releases the field. Otherwise: hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation

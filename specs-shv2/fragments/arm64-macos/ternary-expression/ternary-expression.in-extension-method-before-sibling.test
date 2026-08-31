@@ -1,0 +1,217 @@
+// Test: ternary-expression.in-extension-method-before-sibling
+typealias Small = int(0 to 1000)
+
+interface Bounded
+	function lo() returns Small
+	function hi() returns Small
+end 'Bounded'
+
+extension Bounded
+	function pickSmaller() returns Small
+		let smaller = self.lo() if self.lo() < self.hi() else self.hi()
+		return smaller
+	end 'pickSmaller'
+
+	function describe() returns Small
+		return self.hi() - self.lo()
+	end 'describe'
+end 'Bounded'
+
+type Pair implements Bounded
+	let l as Small
+	let h as Small
+
+	function lo() returns Small
+		return l
+	end 'lo'
+
+	function hi() returns Small
+		return h
+	end 'hi'
+
+	static function create(l Small, h Small) returns Self
+		return Self{l: l, h: h}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, h: 12)
+	let s = p.pickSmaller()
+	let d = p.describe()
+	return s + d
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Pair.pickSmaller {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.cmp x1, x2
+    arm64.cset x1, lt
+    arm64.cbnz x1, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.b __il_body#9
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __il_cont#8
+  __il_cont#8:
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.b __il_body#11
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.b __il_cont#10
+  __il_cont#10:
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Pair.describe {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.sub x0, x1, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Pair.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#2
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x19, 1000
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#5
+    arm64.b __rc_chk#6
+  __rc_chk#6:
+    arm64.cmp x20, 1000
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#4:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.movImm x1, 12
+    arm64.bl Pair.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Pair.pickSmaller
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Pair.describe
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

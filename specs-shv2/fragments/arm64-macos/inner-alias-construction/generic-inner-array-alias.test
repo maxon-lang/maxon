@@ -1,0 +1,101 @@
+// Test: generic-inner-array-alias
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Holder uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		var n = ElementArray{}
+		n.resize(5)
+		return Self{ items: n }
+	end 'create'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+end 'Holder'
+
+typealias IntHolder = Holder with ExitCode
+
+function main() returns ExitCode
+	var h = IntHolder.create()
+	let c = h.count()
+	if c == 5 'ok'
+		return 5
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Holder_ExitCode$0_125
+    arm64.bl Holder.create
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x1, 5
+    arm64.cset x1, eq
+    arm64.cbnz x1, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x19, 5
+    arm64.bl __destruct_Holder_ExitCode$0_125
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.bl __destruct_Holder_ExitCode$0_125
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,120 @@
+// Test: an-expression-across-a-call-is-recomputed
+typealias Word = int(i64.min to i64.max)
+
+// RECURSIVE, so `inlineLeaves` refuses it and the call in `across` survives to be a barrier. A
+// non-recursive body would be spliced into the caller and the case would silently lose its call —
+// measured on the first cut of this spec, whose fragment showed no `callDirect` at all.
+function noise(v Word) returns Word
+	if v <= 0 'base'
+		return 0
+	end 'base'
+	return v + noise(v - 1)
+end 'noise'
+
+function across(x Word, y Word) returns Word
+	let first = x * 31 + y
+	let middle = noise(first)
+	return first + middle + (x * 31 + y)
+end 'across'
+
+function main() returns ExitCode
+	var seed = 0
+	for i in 0 upto 3 'feed'
+		seed = seed + across(i, y: i + 1)
+	end 'feed'
+	if seed != 2905 'wrongSum'
+		return 1
+	end 'wrongSum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @noise {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, le
+    arm64.cbnz x0, base
+    arm64.b ifcont
+  base:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.sub x0, x19, 1
+    arm64.bl noise
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @across {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x16, 31
+    arm64.mul x0, x19, x16
+    arm64.add x21, x0, x20
+    arm64.movRegReg x0, x21
+    arm64.bl noise
+    arm64.add x0, x21, x0
+    arm64.movImm x16, 31
+    arm64.mul x1, x19, x16
+    arm64.add x1, x1, x20
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 3
+    arm64.cset x0, lt
+    arm64.cbnz x0, feed
+    arm64.b forexit
+  feed:
+    arm64.add x1, x20, 1
+    arm64.movRegReg x0, x20
+    arm64.bl across
+    arm64.add x19, x19, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x19, 2905
+    arm64.cset x0, ne
+    arm64.cbnz x0, wrongSum
+    arm64.b ifcont
+  wrongSum:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

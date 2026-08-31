@@ -1,0 +1,39 @@
+// Test: int-remainder-in-arithmetic
+function main() returns ExitCode
+	let a = 100
+	let b = 7
+	let c = 10
+	let rem = a mod b
+	return rem * c
+end 'main'
+---
+ExitCode: 20
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 100
+    arm64.movImm x1, 7
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,106 @@
+// Test: a-record-in-a-fieldless-generic-releases-what-it-took
+typealias Integer = int(i64.min to i64.max)
+
+type Pack uses T
+	var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 40}
+	end 'create'
+
+	export function tag(t T) returns Integer
+		let pair = (t, n)
+		return pair.1
+	end 'tag'
+end 'Pack'
+
+typealias StrPack = Pack with String
+
+function main() returns ExitCode
+	var p = StrPack.create()
+	let s = "hello"
+	return p.tag(s) + p.tag("literal")
+end 'main'
+---
+ExitCode: 80
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Pack.tag {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.movRegReg x20, x2
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __retain_type_param
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl __destruct_dict___Tuple2.T7cffa0a77d7fac6b.int
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.leaRegSlot x19, slot0
+    arm64.movImm x0, 40
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.leaRdata x1, __str_rec_2
+    arm64.leaRdata x2, __layout_Pack_String
+    arm64.movRegReg x0, x19
+    arm64.bl Pack.tag
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_3
+    arm64.leaRdata x2, __layout_Pack_String
+    arm64.movRegReg x0, x19
+    arm64.bl Pack.tag
+    arm64.add x0, x20, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

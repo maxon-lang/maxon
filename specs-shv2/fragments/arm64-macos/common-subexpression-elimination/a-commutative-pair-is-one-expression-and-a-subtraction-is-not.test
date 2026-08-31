@@ -1,0 +1,74 @@
+// Test: a-commutative-pair-is-one-expression-and-a-subtraction-is-not
+typealias Word = int(i64.min to i64.max)
+
+function sums(a Word, b Word) returns Word
+	return (a + b) + (b + a)
+end 'sums'
+
+function differences(a Word, b Word) returns Word
+	return (a - b) * 10 + (b - a)
+end 'differences'
+
+function main() returns ExitCode
+	var total = 0
+	for i in 0 upto 4 'feed'
+		total = total + sums(i, b: i + 3) + differences(i, b: i + 3)
+	end 'feed'
+	// `sums` is `4i + 6`; `differences` is `-30 + 3`, and it is `-33` rather than `-27` exactly when
+	// `b - a` has been rewritten to `a - b`.
+	if total != -60 'wrongTotal'
+		return 1
+	end 'wrongTotal'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, 4
+    arm64.cset x2, lt
+    arm64.cbnz x2, feed
+    arm64.b forexit
+  feed:
+    arm64.add x2, x1, 3
+    arm64.b __il_body#9
+  __il_body#9:
+    arm64.add x3, x1, x2
+    arm64.add x3, x3, x3
+    arm64.b __il_cont#8
+  __il_cont#8:
+    arm64.add x0, x0, x3
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.sub x3, x1, x2
+    arm64.movImm x16, 10
+    arm64.mul x3, x3, x16
+    arm64.sub x2, x2, x1
+    arm64.add x2, x3, x2
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.add x0, x0, x2
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x0, -60
+    arm64.cset x0, ne
+    arm64.cbnz x0, wrongTotal
+    arm64.b ifcont
+  wrongTotal:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

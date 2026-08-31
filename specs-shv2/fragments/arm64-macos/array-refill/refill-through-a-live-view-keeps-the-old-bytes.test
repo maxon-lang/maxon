@@ -1,0 +1,236 @@
+// Test: refill-through-a-live-view-keeps-the-old-bytes
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	arr.push(4)
+	let view = try arr.slice(0, endIndex: 2) otherwise panic("slice: [0, 2) is inside a four-element array")
+	arr.refill(4, value: 9)
+	let v0 = try view.get(0) otherwise 0
+	let v1 = try view.get(1) otherwise 0
+	let a0 = try arr.get(0) otherwise 0
+	return v0 + v1 + a0
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.movImm x2, 2
+    arm64.leaRdata x3, __layout_Array_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl Array.slice
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_4
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 4
+    arm64.movImm x2, 9
+    arm64.leaRdata x3, __layout_Array_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl Array.refill
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#16
+    arm64.b __im_load#17
+  __im_load#17:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#18
+    arm64.b critsplit#27
+  __im_empty#18:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#16
+    arm64.b critsplit#28
+  __im_slow#16:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.b __im_cont#15
+  critsplit#28:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#15
+  critsplit#27:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#15
+  __im_cont#15:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movImm x21, 0
+    arm64.b trycont#5
+  tryok#3:
+    arm64.movRegReg x21, x0
+    arm64.b trycont#5
+  trycont#5:
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#20
+    arm64.b __im_load#21
+  __im_load#21:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#22
+    arm64.b critsplit#29
+  __im_empty#22:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#20
+    arm64.b critsplit#30
+  __im_slow#20:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.b __im_cont#19
+  critsplit#30:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#19
+  critsplit#29:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#19
+  __im_cont#19:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#7
+    arm64.b tryok#6
+  tryerr#7:
+    arm64.movImm x22, 0
+    arm64.b trycont#8
+  tryok#6:
+    arm64.movRegReg x22, x0
+    arm64.b trycont#8
+  trycont#8:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#24
+    arm64.b __im_load#25
+  __im_load#25:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#26
+    arm64.b critsplit#31
+  __im_empty#26:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#24
+    arm64.b critsplit#32
+  __im_slow#24:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#23
+  critsplit#32:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#23
+  critsplit#31:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#23
+  __im_cont#23:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#10
+    arm64.b tryok#9
+  tryerr#10:
+    arm64.movImm x0, 0
+    arm64.b trycont#11
+  tryok#9:
+    arm64.b trycont#11
+  trycont#11:
+    arm64.add x1, x21, x22
+    arm64.add x21, x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_10
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

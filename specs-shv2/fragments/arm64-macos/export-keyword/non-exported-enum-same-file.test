@@ -1,0 +1,25 @@
+// Test: non-exported-enum-same-file
+enum Direction
+	up
+	down
+end 'Direction'
+
+function main() returns ExitCode
+	let d = Direction.up
+	match d 'check'
+		up then return 42
+		down then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

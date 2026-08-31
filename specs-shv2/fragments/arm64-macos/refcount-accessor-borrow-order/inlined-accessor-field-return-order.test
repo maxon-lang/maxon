@@ -1,0 +1,367 @@
+// Test: inlined-accessor-field-return-order
+typealias TokenId = int(0 to u64.max)
+
+union Ty
+	concrete(name ByteArray)
+	stringy
+end 'Ty'
+
+union Expr
+	direct(ty Ty)
+	named(ty Ty, id TokenId)
+	unresolved
+end 'Expr'
+
+// Multi-arm accessor: the direct/named arms return the `ty` field (an interior
+// borrow of `e`); the `unresolved` arm returns a fresh `Ty.stringy` (a distinct
+// borrow root), so the inlined continuation phi drops e's borrow and the base's
+// death lands in a field-returning arm.
+function exprType(e Expr) returns Ty
+	return match e 'k'
+		direct(ty) gives ty
+		named(ty, _) gives ty
+		unresolved gives Ty.stringy
+	end 'k'
+end 'exprType'
+
+function makeDirect(ty Ty) returns Expr
+	return Expr.direct(ty)
+end 'makeDirect'
+
+function tyLen(ty Ty) returns TokenId
+	return match ty 'l'
+		concrete(name) gives name.count()
+		stringy gives 0
+	end 'l'
+end 'tyLen'
+
+// A fresh single-+1 `Expr`, like a freshly materialized parser `result`.
+function makeFresh(seed TokenId) returns Expr
+	if seed == 0 'z'
+		return Expr.unresolved
+	end 'z'
+	return Expr.direct(Ty.concrete("hello".toByteArray()))
+end 'makeFresh'
+
+function walk(rounds TokenId) returns Expr
+	var last = Expr.unresolved
+	var total = 0
+
+	for i in 1 to rounds 'loop'
+		let e = makeFresh(i)
+
+		if total == 888 'ret'
+			// Returns the fresh `e`, marking it transferred so a field loaded
+			// out of it (in `exprType`) def-acquires — the collision trigger.
+			return e
+		end 'ret'
+
+		// exprType(e) is `e`'s last use; the fresh `e` (rc 1) then dies right
+		// where its `ty` field was just loaded.
+		let ty = exprType(e)
+		total = total + tyLen(ty)
+		last = makeDirect(ty)
+	end 'loop'
+
+	return last
+end 'walk'
+
+function main() returns ExitCode
+	let r = walk(5)
+	let ty = exprType(r)
+	return tyLen(ty)
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @exprType {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#1
+    arm64.b matchnext#5
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.b matchcont
+  matchnext#5:
+    arm64.cmp x1, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#2
+    arm64.b matchnext#6
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.b matchcont
+  matchnext#6:
+    arm64.cmp x1, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#3
+    arm64.b matchdead
+  matcharm#3:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.b matchcont
+  matchcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}
+
+func @makeDirect {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @tyLen {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#1
+    arm64.b matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#2
+    arm64.b matchdead
+  matcharm#2:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}
+
+func @makeFresh {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, z
+    arm64.b ifcont
+  z:
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 2
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @walk {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 2
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x20, 0
+    arm64.movImm x21, 1
+    arm64.movRegReg x22, x20
+    arm64.movRegReg x20, x0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x21, x19
+    arm64.cset x0, le
+    arm64.cbnz x0, loop
+    arm64.b forexit
+  loop:
+    arm64.movRegReg x0, x21
+    arm64.bl makeFresh
+    arm64.movRegReg x23, x0
+    arm64.cmp x22, 888
+    arm64.cset x0, eq
+    arm64.cbnz x0, ret
+    arm64.b ifcont
+  ret:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Expr
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont:
+    arm64.movRegReg x0, x23
+    arm64.bl exprType
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x24
+    arm64.bl tyLen
+    arm64.add x22, x22, x0
+    arm64.movRegReg x0, x24
+    arm64.bl makeDirect
+    arm64.movRegReg x25, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Expr
+    arm64.movRegReg x0, x24
+    arm64.bl __destruct_Ty
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_Expr
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x25
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 5
+    arm64.bl walk
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl exprType
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl tyLen
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Ty
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Expr
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

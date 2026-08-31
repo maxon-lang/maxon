@@ -1,0 +1,115 @@
+// Test: an-array-of-arrays-decides-the-inner-conformance-first
+typealias Val = int(i64.min to i64.max)
+typealias IntArr = Array with Val
+typealias IntArrArr = Array with IntArr
+
+function main() returns ExitCode
+	var outer = IntArrArr.create()
+	var inner = IntArr.create()
+	inner.push(3)
+	outer.push(inner)
+	var other = IntArrArr.create()
+	var innerOther = IntArr.create()
+	innerOther.push(3)
+	other.push(innerOther)
+	let h = outer.hash()
+	if h == 0 'hashIsZero'
+		return 1
+	end 'hashIsZero'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_push
+    arm64.leaRdata x1, __witness_Array_Val.Hashable
+    arm64.leaRdata x2, __witness_Array_Val.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Array.hash
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, hashIsZero
+    arm64.b ifcont
+  hashIsZero:
+    arm64.movImm x23, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.movImm x23, 42
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

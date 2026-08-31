@@ -1,0 +1,62 @@
+// Test: the-remainder-at-the-overflow-pair-is-zero
+typealias Word = int(i64.min to i64.max)
+
+function pick(a Word) returns Word
+	return a
+end 'pick'
+
+function main() returns ExitCode
+	if (try (pick(i64.min) mod pick(-1)) otherwise -79) != 0 'remainderAtTheOverflowPair'
+		return 1
+	end 'remainderAtTheOverflowPair'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 9223372036854775808
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.movImm x1, 18446744073709551615
+    arm64.b __il_body#9
+  __il_body#9:
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cmp x1, -1
+    arm64.cset x1, eq
+    arm64.add x1, x1, -1
+    arm64.and x0, x0, x1
+    arm64.movImm x16, 18446744073709551615
+    arm64.orr x1, x2, x16
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.cmp x2, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 18446744073709551537
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, remainderAtTheOverflowPair
+    arm64.b ifcont
+  remainderAtTheOverflowPair:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

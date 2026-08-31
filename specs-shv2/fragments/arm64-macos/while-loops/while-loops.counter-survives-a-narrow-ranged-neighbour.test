@@ -1,0 +1,325 @@
+// Test: while-loops.counter-survives-a-narrow-ranged-neighbour
+typealias SlotTally = int(0 to 16)
+
+enum Pair
+	first
+	second
+end 'Pair'
+
+function liveCount(both bool) returns SlotTally
+	var n = 0
+	for c in Pair.allCases 'walk'
+		if c == Pair.first or both 'live'
+			n = n + 1
+		end 'live'
+	end 'walk'
+	return n
+end 'liveCount'
+
+function main() returns ExitCode
+	let scaled = 20 * (liveCount(false) + 1)
+	let seed = 100 + scaled
+
+	var guard = 0
+	var pass = 0
+	while pass < 2 'passes'
+		var running = seed
+		for c in Pair.allCases 'inner'
+			if c == Pair.first 'one'
+				running = running + 1
+			end 'one'
+		end 'inner'
+		// ⚠ `running` is NARROW-typed, so it takes a 4-byte store while this read is 8 bytes wide — the
+		// high half is slot padding. Checking it here means that padding can never be depended on
+		// SILENTLY: if it is ever non-zero this case says 98 instead of quietly computing the right
+		// answer. (Measured: exactly one variable in the whole bootstrap suite has this store/load
+		// width pair, and it is this one.)
+		if running != 141 'paddingLeakedIn'
+			return 98
+		end 'paddingLeakedIn'
+
+		guard = guard + running
+		pass = pass + 1
+		if guard > 2000 'runaway'
+			return 99
+		end 'runaway'
+	end 'passes'
+
+	return pass
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @liveCount {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movImm x22, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x22, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, walk
+    arm64.b forexit
+  walk:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.arm64AddLsl x0, x0, x22, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.add x0, x0, x22
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_get_unchecked
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#18
+    arm64.b orrhs
+  critsplit#18:
+    arm64.b scmerge
+  orrhs:
+    arm64.movRegReg x1, x19
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x1, live
+    arm64.b critsplit#17
+  live:
+    arm64.add x0, x20, 1
+    arm64.b ifcont
+  critsplit#17:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont
+  ifcont:
+    arm64.b forstep
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.movRegReg x20, x0
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 16
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl liveCount
+    arm64.add x0, x0, 1
+    arm64.movImm x16, 20
+    arm64.mul x0, x0, x16
+    arm64.add x19, x0, 100
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x21, 2
+    arm64.cset x0, lt
+    arm64.cbnz x0, passes
+    arm64.b whileexit
+  passes:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+    arm64.movImm x23, 0
+    arm64.movRegReg x24, x19
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.cmp x23, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, inner
+    arm64.b forexit
+  inner:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.arm64AddLsl x0, x0, x23, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.add x0, x0, x23
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_get_unchecked
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, one
+    arm64.b critsplit
+  one:
+    arm64.add x0, x24, 1
+    arm64.b ifcont#9
+  critsplit:
+    arm64.movRegReg x0, x24
+    arm64.b ifcont#9
+  ifcont#9:
+    arm64.b forstep
+  forstep:
+    arm64.add x23, x23, 1
+    arm64.movRegReg x24, x0
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.cmp x24, 141
+    arm64.cset x0, ne
+    arm64.cbnz x0, paddingLeakedIn
+    arm64.b ifcont#11
+  paddingLeakedIn:
+    arm64.movImm x0, 98
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#11:
+    arm64.add x20, x20, x24
+    arm64.add x21, x21, 1
+    arm64.cmp x20, 2000
+    arm64.cset x0, gt
+    arm64.cbnz x0, runaway
+    arm64.b ifcont#13
+  runaway:
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#13:
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

@@ -1,0 +1,25 @@
+// Test: error.a-diagnostic-names-the-alias-the-site-wrote
+typealias Wide = int(0 to u64.max)
+typealias Other = int(0 to u64.max)
+typealias WideCol = Array with Wide
+typealias OtherCol = Array with Other
+typealias Narrow = int(0 to 63)
+typealias NarrowCol = Array with Narrow
+
+function widthOf(c WideCol) returns ExitCode
+	return c.count() as ExitCode
+end 'widthOf'
+
+function takesNarrow(c NarrowCol) returns ExitCode
+	return c.count() as ExitCode
+end 'takesNarrow'
+
+function main() returns ExitCode
+	var o = OtherCol.create()
+	o.push(2)
+	let w = widthOf(o)
+	return takesNarrow(o) + w
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:21:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'

@@ -1,0 +1,105 @@
+// Test: a-proven-count-through-a-cast-site
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto 8 'lowBits'
+		let n = i as Bits
+		acc = acc + (1 shl n)
+	end 'lowBits'
+	if acc != 255 'sum'
+		return 1
+	end 'sum'
+
+	var top = 0
+	for i in 0 upto 2 'boundary'
+		let n = (i * 63) as Bits
+		top = top + (1 shl n)
+	end 'boundary'
+	if top != -9223372036854775807 'topSum'
+		return 2
+	end 'topSum'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x1, 8
+    arm64.cset x2, lt
+    arm64.cbnz x2, lowBits
+    arm64.b forexit#4
+  lowBits:
+    arm64.movImm x2, 1
+    arm64.lslv x2, x2, x1
+    arm64.add x0, x0, x2
+    arm64.b forstep#3
+  forstep#3:
+    arm64.add x1, x1, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.cmp x0, 255
+    arm64.cset x0, ne
+    arm64.cbnz x0, sum
+    arm64.b ifcont#6
+  sum:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr#7
+  forhdr#7:
+    arm64.cmp x1, 2
+    arm64.cset x2, lt
+    arm64.cbnz x2, boundary
+    arm64.b forexit#10
+  boundary:
+    arm64.movImm x16, 63
+    arm64.mul x2, x1, x16
+    arm64.cmp x2, 0
+    arm64.cset x3, lt
+    arm64.cbnz x3, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x2, 63
+    arm64.cset x3, gt
+    arm64.cbnz x3, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x3, 1
+    arm64.lslv x2, x3, x2
+    arm64.add x0, x0, x2
+    arm64.b forstep#9
+  forstep#9:
+    arm64.add x1, x1, 1
+    arm64.b forhdr#7
+  forexit#10:
+    arm64.movImm x1, 9223372036854775809
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, topSum
+    arm64.b ifcont#12
+  topSum:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

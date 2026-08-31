@@ -1,0 +1,142 @@
+// Test: confined-reuse-defs-at-x64s-own-scale-float
+function fsink(x Real) returns Real
+	return x + 1.0
+end 'fsink'
+
+function main() returns ExitCode
+	let n = fsink(3.0)
+	let a0 = n + 1.0
+	let a1 = n + 2.0
+	let a2 = n + 3.0
+	let a3 = n + 4.0
+	let a4 = n + 5.0
+	let a5 = n + 6.0
+	let a6 = n + 7.0
+	let a7 = n + 8.0
+	let a8 = n + 9.0
+	let a9 = n + 10.0
+	let a10 = n + 11.0
+	let a11 = n + 12.0
+	let a12 = n + 13.0
+	let a13 = n + 14.0
+	let a14 = n + 15.0
+	let a15 = n + 16.0
+	let b0 = a0 * 2.0
+	let b1 = a1 * 2.0
+	let b2 = a2 * 2.0
+	let b3 = a3 * 2.0
+	let s = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15
+	let c = fsink(s)
+	let total = b0 + b1 + b2 + b3 + c
+	return 0 if total == 253.0 else 99
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.b __il_body#9
+  __il_body#9:
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fadd d0, d0, d1
+    arm64.b __il_cont#8
+  __il_cont#8:
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fadd d1, d0, d1
+    arm64.fpLoadRdata d2, [rdata + __fconst_4]
+    arm64.fadd d2, d0, d2
+    arm64.fpLoadRdata d3, [rdata + __fconst_1]
+    arm64.fadd d3, d0, d3
+    arm64.fpLoadRdata d4, [rdata + __fconst_5]
+    arm64.fadd d4, d0, d4
+    arm64.fpLoadRdata d5, [rdata + __fconst_6]
+    arm64.fadd d5, d0, d5
+    arm64.fpLoadRdata d6, [rdata + __fconst_7]
+    arm64.fadd d6, d0, d6
+    arm64.fpLoadRdata d7, [rdata + __fconst_8]
+    arm64.fadd d7, d0, d7
+    arm64.fpLoadRdata d16, [rdata + __fconst_9]
+    arm64.fadd d16, d0, d16
+    arm64.fpLoadRdata d17, [rdata + __fconst_10]
+    arm64.fadd d17, d0, d17
+    arm64.fpLoadRdata d18, [rdata + __fconst_11]
+    arm64.fadd d18, d0, d18
+    arm64.fpLoadRdata d19, [rdata + __fconst_12]
+    arm64.fadd d19, d0, d19
+    arm64.fpLoadRdata d20, [rdata + __fconst_13]
+    arm64.fadd d20, d0, d20
+    arm64.fpLoadRdata d21, [rdata + __fconst_14]
+    arm64.fadd d21, d0, d21
+    arm64.fpLoadRdata d22, [rdata + __fconst_15]
+    arm64.fadd d22, d0, d22
+    arm64.fpLoadRdata d23, [rdata + __fconst_16]
+    arm64.fadd d23, d0, d23
+    arm64.fpLoadRdata d24, [rdata + __fconst_17]
+    arm64.fadd d0, d0, d24
+    arm64.fpLoadRdata d24, [rdata + __fconst_4]
+    arm64.fmul d24, d1, d24
+    arm64.fpLoadRdata d25, [rdata + __fconst_4]
+    arm64.fmul d25, d2, d25
+    arm64.fpLoadRdata d26, [rdata + __fconst_4]
+    arm64.fmul d26, d3, d26
+    arm64.fpLoadRdata d27, [rdata + __fconst_4]
+    arm64.fmul d27, d4, d27
+    arm64.fadd d1, d1, d2
+    arm64.fadd d1, d1, d3
+    arm64.fadd d1, d1, d4
+    arm64.fadd d1, d1, d5
+    arm64.fadd d1, d1, d6
+    arm64.fadd d1, d1, d7
+    arm64.fadd d1, d1, d16
+    arm64.fadd d1, d1, d17
+    arm64.fadd d1, d1, d18
+    arm64.fadd d1, d1, d19
+    arm64.fadd d1, d1, d20
+    arm64.fadd d1, d1, d21
+    arm64.fadd d1, d1, d22
+    arm64.fadd d1, d1, d23
+    arm64.fadd d0, d1, d0
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fadd d0, d0, d1
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.fadd d1, d24, d25
+    arm64.fadd d1, d1, d26
+    arm64.fadd d1, d1, d27
+    arm64.fadd d0, d1, d0
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 99
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

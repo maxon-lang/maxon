@@ -1,0 +1,260 @@
+// Test: every-slot-of-a-vector-at-constant-indexes
+typealias Int = int(i64.min to i64.max)
+typealias Vec5 = Vector with 5 Int
+
+function main() returns ExitCode
+	var v = Vec5.create()
+	try v.set(0, value: 1) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 2) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 4) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: 8) otherwise panic("test invariant: set OOB")
+	try v.set(4, value: 16) otherwise panic("test invariant: set OOB")
+	let a = try v.get(0) otherwise 0
+	let b = try v.get(1) otherwise 0
+	let c = try v.get(2) otherwise 0
+	let d = try v.get(3) otherwise 0
+	let e = try v.get(4) otherwise 0
+	return a + b + c + d + e
+end 'main'
+---
+ExitCode: 31
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Vector_N5_Int
+    arm64.movImm x1, 5
+    arm64.bl Vector.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.leaRdata x3, __layout_Vector_N5_Int
+    arm64.movImm x4, 5
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 2
+    arm64.leaRdata x3, __layout_Vector_N5_Int
+    arm64.movImm x4, 5
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#3:
+    arm64.movImm x1, 2
+    arm64.movImm x2, 4
+    arm64.leaRdata x3, __layout_Vector_N5_Int
+    arm64.movImm x4, 5
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_2
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#5:
+    arm64.movImm x1, 3
+    arm64.movImm x2, 8
+    arm64.leaRdata x3, __layout_Vector_N5_Int
+    arm64.movImm x4, 5
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_3
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#7:
+    arm64.movImm x1, 4
+    arm64.movImm x2, 16
+    arm64.leaRdata x3, __layout_Vector_N5_Int
+    arm64.movImm x4, 5
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#10
+    arm64.b tryok#9
+  tryerr#10:
+    arm64.leaRdata x0, __str_blob_4
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#9:
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Vector_N5_Int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#12
+    arm64.b tryok#11
+  tryerr#12:
+    arm64.movImm x20, 0
+    arm64.b trycont#13
+  tryok#11:
+    arm64.movRegReg x20, x0
+    arm64.b trycont#13
+  trycont#13:
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __layout_Vector_N5_Int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#15
+    arm64.b tryok#14
+  tryerr#15:
+    arm64.movImm x21, 0
+    arm64.b trycont#16
+  tryok#14:
+    arm64.movRegReg x21, x0
+    arm64.b trycont#16
+  trycont#16:
+    arm64.movImm x1, 2
+    arm64.leaRdata x2, __layout_Vector_N5_Int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#18
+    arm64.b tryok#17
+  tryerr#18:
+    arm64.movImm x22, 0
+    arm64.b trycont#19
+  tryok#17:
+    arm64.movRegReg x22, x0
+    arm64.b trycont#19
+  trycont#19:
+    arm64.movImm x1, 3
+    arm64.leaRdata x2, __layout_Vector_N5_Int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#21
+    arm64.b tryok#20
+  tryerr#21:
+    arm64.movImm x23, 0
+    arm64.b trycont#22
+  tryok#20:
+    arm64.movRegReg x23, x0
+    arm64.b trycont#22
+  trycont#22:
+    arm64.movImm x1, 4
+    arm64.leaRdata x2, __layout_Vector_N5_Int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#24
+    arm64.b tryok#23
+  tryerr#24:
+    arm64.movImm x0, 0
+    arm64.b trycont#25
+  tryok#23:
+    arm64.b trycont#25
+  trycont#25:
+    arm64.add x1, x20, x21
+    arm64.add x1, x1, x22
+    arm64.add x1, x1, x23
+    arm64.add x20, x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

@@ -1,0 +1,27 @@
+// Test: int-parallel-accumulation
+function main() returns ExitCode
+	var sum1 = 0
+	var sum2 = 0
+	var sum3 = 0
+	sum1 = sum1 + 10
+	sum2 = sum2 + 20
+	sum3 = sum3 + 30
+	sum1 = sum1 + 5
+	sum2 = sum2 + 10
+	sum3 = sum3 + 15
+	return sum1 + sum2 + sum3
+end 'main'
+---
+ExitCode: 90
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 90
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

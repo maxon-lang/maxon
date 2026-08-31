@@ -1,0 +1,261 @@
+// Test: the-concrete-spelling-of-the-same-constructor-feed
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	let x as T
+	let tag as Integer
+
+	export function value() returns T
+		return x
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{x: x, tag: tag}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+type Bag
+	typealias BoxArray = Array with StrBox
+	var items as BoxArray = BoxArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(x String, tag Integer)
+		items.push(StrBox.create(x, tag: tag))
+	end 'add'
+
+	export function first() returns String throws ArrayError
+		let slot = try self.items.first() otherwise 'e'
+			throw ArrayError.indexOutOfBounds
+		end 'e'
+		return slot.value()
+	end 'first'
+end 'Bag'
+
+function fill(b Bag)
+	var sb = StringBuilder.create()
+	sb.append("hello ")
+	sb.append("heap world")
+	let s = sb.build()
+	b.add(s, tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	fill(b)
+	let got = try b.first() otherwise 'e'
+		return 9 as ExitCode
+	end 'e'
+	print(got)
+	return 0 as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.value {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __fieldDefault#Bag#items
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.add {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x2
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x1 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x19
+    arm64.bl Box.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @Bag.first {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_first
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.leaRdata x1, __layout_Box_String
+    arm64.bl Box.value
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @fill {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.bl StringBuilder.create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_2
+    arm64.movRegReg x0, x20
+    arm64.bl StringBuilder.append
+    arm64.leaRdata x1, __str_rec_3
+    arm64.movRegReg x0, x20
+    arm64.bl StringBuilder.append
+    arm64.movRegReg x0, x20
+    arm64.bl StringBuilder.build
+    arm64.movRegReg x21, x0
+    arm64.movImm x2, 7
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl Bag.add
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_StringBuilder
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl fill
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.first
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl print
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @__fieldDefault#Bag#items {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_Box_String
+    arm64.bl __managed_create
+    arm64.epilogue 16
+    arm64.ret
+}

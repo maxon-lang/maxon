@@ -1,0 +1,594 @@
+// Test: held.two-conformers-bind-differently
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor uses Element
+	function current() returns Element
+	function advance() throws IterationError
+end 'Cursor'
+
+interface Bag uses Element, Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type UpCursor implements Cursor with Integer
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'UpCursor'
+
+type DownCursor implements Cursor with Integer
+	var pos as Integer
+
+	export static function create(start Integer) returns Self throws IterationError
+		if start < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: start}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos * 100
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos <= 1 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos - 1
+	end 'advance'
+end 'DownCursor'
+
+type UpBag implements Bag with (Integer, UpCursor)
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{limit: limit}
+	end 'create'
+
+	export function createIterator() returns UpCursor throws IterationError
+		return try UpCursor.create(self.limit)
+	end 'createIterator'
+end 'UpBag'
+
+type DownBag implements Bag with (Integer, DownCursor)
+	let start as Integer
+
+	export static function create(start Integer) returns Self
+		return Self{start: start}
+	end 'create'
+
+	export function createIterator() returns DownCursor throws IterationError
+		return try DownCursor.create(self.start)
+	end 'createIterator'
+end 'DownBag'
+
+typealias IntegerCursor = Cursor with Integer
+typealias IntegerBag = Bag with (Integer, IntegerCursor)
+
+function total(source IntegerBag) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'total'
+
+function makeUp() returns IntegerBag
+	return UpBag.create(4)
+end 'makeUp'
+
+function makeDown() returns IntegerBag
+	return DownBag.create(3)
+end 'makeDown'
+
+function pick(up bool) returns Integer
+	var b = makeUp()
+	if not up 'other'
+		b = makeDown()
+	end 'other'
+	return total(b)
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true)}\n")
+	print("{pick(false)}\n")
+	print("{total(UpBag.create(4)) + total(DownBag.create(3))}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @UpCursor.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 1
+    arm64.cset x0, lt
+    arm64.cbnz x0, empty
+    arm64.b ifcont
+  empty:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @UpCursor.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @UpCursor.advance {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.cset x1, ge
+    arm64.cbnz x1, atTheLast
+    arm64.b ifcont
+  atTheLast:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @DownCursor.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 1
+    arm64.cset x0, lt
+    arm64.cbnz x0, empty
+    arm64.b ifcont
+  empty:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @DownCursor.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x16, 100
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @DownCursor.advance {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 1
+    arm64.cset x1, le
+    arm64.cbnz x1, atTheLast
+    arm64.b ifcont
+  atTheLast:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.sub x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @UpBag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @UpBag.createIterator {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl UpCursor.create
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @DownBag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @DownBag.createIterator {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl DownCursor.create
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @total {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 40]
+    arm64.add x20, x1, x2
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b forempty
+  critsplit:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, walk
+    arm64.b forexit
+  walk:
+    arm64.movRegReg x0, x21
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.add x19, x19, x0
+    arm64.b forstep
+  forstep:
+    arm64.movRegReg x0, x21
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 32]
+    arm64.blr x16
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forempty:
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forjoin:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @makeUp {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4
+    arm64.bl UpBag.create
+    arm64.leaRdata x9, __witness_UpBag.Bag
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @makeDown {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.bl DownBag.create
+    arm64.leaRdata x9, __witness_DownBag.Bag
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pick {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.bl makeUp
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x9
+    arm64.eor x0, x19, 1
+    arm64.cbnz x0, other
+    arm64.b critsplit
+  other:
+    arm64.bl makeDown
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x22, x9
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl __drop_existential
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x19, x20
+    arm64.movRegReg x22, x21
+    arm64.b ifcont
+  ifcont:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl total
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl pick
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_1
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x23, x19, x22
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x25, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x19, x22
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x24
+    arm64.bl print
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.bl pick
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_1
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x23, x19, x22
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x25, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x19, x22
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x24
+    arm64.bl print
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movImm x0, 4
+    arm64.bl UpBag.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __witness_UpBag.Bag
+    arm64.movRegReg x0, x19
+    arm64.bl total
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 3
+    arm64.bl DownBag.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x1, __witness_DownBag.Bag
+    arm64.movRegReg x0, x21
+    arm64.bl total
+    arm64.add x20, x20, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_1
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x25, x20, x24
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x27, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x20, x24
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl print
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}

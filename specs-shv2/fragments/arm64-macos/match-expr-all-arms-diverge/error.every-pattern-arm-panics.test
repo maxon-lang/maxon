@@ -1,0 +1,17 @@
+// Test: error.every-pattern-arm-panics
+enum Colour
+	red
+	green
+end 'Colour'
+
+function main() returns ExitCode
+	let c = Colour.red
+	let r = match c 'e'
+		red panic("a")
+		green panic("b")
+	end 'e'
+	return r
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`

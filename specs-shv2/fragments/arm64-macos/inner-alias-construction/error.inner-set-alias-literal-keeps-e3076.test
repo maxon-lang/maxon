@@ -1,0 +1,25 @@
+// Test: error.inner-set-alias-literal-keeps-e3076
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Plain
+	typealias Nums = Set with ExitCode
+
+	static function make() returns Count
+		var s = Nums{}
+		s.insert(3)
+		s.insert(3)
+		return s.count()
+	end 'make'
+end 'Plain'
+
+function main() returns ExitCode
+	let c = Plain.make()
+	if c == 1 'ok'
+		return 8
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E3076: <fragment>:9:16: type 'Nums' can only be constructed from within its own methods; use a static factory method instead

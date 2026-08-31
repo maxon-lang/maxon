@@ -84,9 +84,9 @@ end 'arm64FrintOpcode'
 // --- Data-processing (register) base opcodes, 64-bit ---
 export let Arm64OpAdd = 0x8B000000
 export let Arm64OpSub = 0xCB000000
-let Arm64OpMul = 0x9B007C00
+export let Arm64OpMul = 0x9B007C00
 let Arm64OpSdiv = 0x9AC00C00
-let Arm64OpUdiv = 0x9AC00800
+export let Arm64OpUdiv = 0x9AC00800
 let Arm64OpAnd = 0x8A000000
 let Arm64OpOrr = 0xAA000000
 let Arm64OpEor = 0xCA000000
@@ -1750,7 +1750,7 @@ function arm64EmitLoadSlot(code ByteArray, destReg TargetVReg, slot SpillSlot)
 end 'arm64EmitLoadSlot'
 
 // MSUB Xd, Xn, Xm, Xa => Xd = Xa − Xn*Xm (the remainder builder — `rem = dividend − quotient*divisor`).
-function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
+export function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
 	emitArm64Insn(code, insn: Arm64OpMsub or (rm shl Arm64RmShift) or (ra shl Arm64MsubRaShift) or (rn shl Arm64RnShift) or rd)
 end 'arm64EmitMsub'
 
@@ -2294,6 +2294,12 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// make a violated range guard — or a user `panic("…")` — print its message and a symbolized
 	// backtrace on arm64 instead of exiting bare.
 	appendArm64PanicRuntimeChunks(chunks, globalData: globalData, os: target.os)
+	// The arm64-macOS HOST SURFACE — the libSystem sequences behind the `os*` ops whose only implementation
+	// used to be x64-windows's. macOS ONLY: arm64-linux reaches the OS by raw `svc #0` and has no import
+	// table for a single one of these to resolve against (`Arm64DarwinRuntime`'s header).
+	if target.os == Os.macos 'darwinHostSurface'
+		appendArm64DarwinRuntimeChunks(chunks, usage: usage)
+	end 'darwinHostSurface'
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)

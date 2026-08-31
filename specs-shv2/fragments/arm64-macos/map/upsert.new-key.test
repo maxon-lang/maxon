@@ -1,0 +1,94 @@
+// Test: upsert.new-key
+function main() returns ExitCode
+	var m = [1: 10]
+	m.upsert(2, value: 20)
+	return m.count()
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 10
+    arm64.leaRdata x0, __layout_Map_int_int
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.bl Map.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x3, __layout_Map_int_int
+    arm64.leaRdata x4, __witness_int.Hashable
+    arm64.leaRdata x5, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl Map.upsert
+    arm64.movImm x1, 2
+    arm64.movImm x2, 20
+    arm64.leaRdata x3, __layout_Map_int_int
+    arm64.leaRdata x4, __witness_int.Hashable
+    arm64.leaRdata x5, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.bl Map.upsert
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x19, [x21 + 32]
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __il_slow
+    arm64.b __rc_chk#7
+  __rc_chk#7:
+    arm64.movImm x0, 4611686018427387904
+    arm64.cmp x19, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, __il_slow
+    arm64.b __rc_ok#6
+  __il_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl Map.count
+    arm64.movRegReg x19, x0
+    arm64.b __il_cont
+  __rc_ok#6:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Map_int_int
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_21
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#1:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

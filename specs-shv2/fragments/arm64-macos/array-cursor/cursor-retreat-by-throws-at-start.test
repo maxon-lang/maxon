@@ -1,0 +1,113 @@
+// Test: cursor-retreat-by-throws-at-start
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advance() otherwise ignore
+
+	// Retreating by 2 from position 1 should throw — only 1 step is possible.
+	try cursor.retreatBy(2) otherwise 'caught'
+		return 1
+	end 'caught'
+
+	return 77
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 30
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl Array.cursor
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x20, 99
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x20
+    arm64.bl ArrayIterator.advance
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.b trycont
+  tryok#3:
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x20
+    arm64.bl ArrayIterator.retreatBy
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#7
+    arm64.b tryok#6
+  tryerr#7:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_ArrayIterator_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#6:
+    arm64.movImm x21, 77
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_ArrayIterator_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

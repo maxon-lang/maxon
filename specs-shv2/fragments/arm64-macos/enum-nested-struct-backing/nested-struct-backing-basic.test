@@ -1,0 +1,46 @@
+// Test: nested-struct-backing-basic
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta as OpMeta
+	export let setsFlags as bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'X64OpMeta'
+
+enum X64Op
+	add = X64OpMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = X64OpMeta.create(OpMeta.create(3), setsFlags: false)
+end 'X64Op'
+
+function main() returns ExitCode
+	let op = X64Op.add
+	return op.rawValue.meta.latency
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

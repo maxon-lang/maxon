@@ -1,0 +1,54 @@
+// Test: nested-struct-backing-multi
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency as Latency
+	export let isMemory as bool
+	export let isCall as bool
+
+	static function create(latency Latency, isMemory bool, isCall bool) returns Self
+		return Self{latency: latency, isMemory: isMemory, isCall: isCall}
+	end 'create'
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta as OpMeta
+	export let setsFlags as bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'X64OpMeta'
+
+enum X64Op
+	load = X64OpMeta.create(OpMeta.create(4, isMemory: true, isCall: false), setsFlags: false)
+	add = X64OpMeta.create(OpMeta.create(1, isMemory: false, isCall: false), setsFlags: true)
+	call = X64OpMeta.create(OpMeta.create(5, isMemory: true, isCall: true), setsFlags: false)
+end 'X64Op'
+
+function main() returns ExitCode
+	let op = X64Op.load
+	if op.rawValue.meta.isMemory 'check'
+		return op.rawValue.meta.latency
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b check
+  check:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+}

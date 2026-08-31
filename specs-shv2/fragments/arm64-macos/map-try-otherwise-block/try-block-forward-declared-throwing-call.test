@@ -1,0 +1,68 @@
+// Test: try-block-forward-declared-throwing-call
+enum BumpError implements Error
+		tooBig
+end 'BumpError'
+
+function run() returns ExitCode
+		try 'work'
+				step()
+		end 'work' otherwise (e) 'bad'
+				match e 'kind'
+						tooBig then return 7
+				end 'kind'
+		end 'bad'
+		return 3
+end 'run'
+
+function step() throws BumpError
+		throw BumpError.tooBig
+end 'step'
+
+function main() returns ExitCode
+		return run()
+end 'main'
+---
+ExitCode: 7
+---
+func @run {
+  entry:
+    arm64.prologue 16
+    arm64.bl step
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryblkerr
+    arm64.b tryblkok
+  tryblkerr:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  tryblkok:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+}
+
+func @step {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl run
+    arm64.epilogue 16
+    arm64.ret
+}

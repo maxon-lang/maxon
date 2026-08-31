@@ -1,0 +1,216 @@
+// Test: escape-into-a-container
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function churn(seed Integer) returns Integer
+	let v0 = seed + 1
+	let v1 = seed + 2
+	let v2 = seed + 3
+	let v3 = seed + 4
+	let v4 = seed + 5
+	let v5 = seed + 6
+	let v6 = seed + 7
+	let v7 = seed + 8
+	let v8 = seed + 9
+	let v9 = seed + 10
+	let v10 = seed + 11
+	let v11 = seed + 12
+	let v12 = seed + 13
+	let v13 = seed + 14
+	let v14 = seed + 15
+	let v15 = seed + 16
+	return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15
+end 'churn'
+
+function fill(arr ItemArray)
+	let item = Item.create(42)
+	arr.push(item)
+end 'fill'
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	fill(arr)
+	_ = churn(1000)
+	let got = try arr.get(0) otherwise Item.create(0)
+	return got.value
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Item.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.add x1, x0, 1
+    arm64.add x2, x0, 2
+    arm64.add x3, x0, 3
+    arm64.add x4, x0, 4
+    arm64.add x5, x0, 5
+    arm64.add x6, x0, 6
+    arm64.add x7, x0, 7
+    arm64.add x8, x0, 8
+    arm64.add x9, x0, 9
+    arm64.add x10, x0, 10
+    arm64.add x11, x0, 11
+    arm64.add x12, x0, 12
+    arm64.add x13, x0, 13
+    arm64.add x14, x0, 14
+    arm64.add x15, x0, 15
+    arm64.add x0, x0, 16
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x5
+    arm64.add x1, x1, x6
+    arm64.add x1, x1, x7
+    arm64.add x1, x1, x8
+    arm64.add x1, x1, x9
+    arm64.add x1, x1, x10
+    arm64.add x1, x1, x11
+    arm64.add x1, x1, x12
+    arm64.add x1, x1, x13
+    arm64.add x1, x1, x14
+    arm64.add x1, x1, x15
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @fill {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 42
+    arm64.bl Item.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl fill
+    arm64.movImm x0, 1000
+    arm64.bl churn
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty
+    arm64.b critsplit#11
+  __im_empty:
+    arm64.cmp x20, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b critsplit#12
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
+  critsplit#12:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  critsplit#11:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.bl Item.create
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

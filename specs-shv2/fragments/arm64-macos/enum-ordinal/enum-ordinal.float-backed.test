@@ -1,0 +1,25 @@
+// Test: enum-ordinal.float-backed
+enum Threshold
+	low = 0.1
+	medium = 0.5
+	high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let t = Threshold.high
+	return t.ordinal as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

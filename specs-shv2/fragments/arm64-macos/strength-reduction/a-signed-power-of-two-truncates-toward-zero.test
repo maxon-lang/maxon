@@ -1,0 +1,94 @@
+// Test: a-signed-power-of-two-truncates-toward-zero
+typealias Word = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	if -7 / 2 != -3 'minusSevenHalved'
+		return 1
+	end 'minusSevenHalved'
+	if -1 / 2 != 0 'minusOneHalved'
+		return 2
+	end 'minusOneHalved'
+	if -9 / 8 != -1 'minusNineEighthed'
+		return 3
+	end 'minusNineEighthed'
+	if -7 mod 2 != -1 'remainderTakesTheDividendSign'
+		return 4
+	end 'remainderTakesTheDividendSign'
+	let n = i64.min as Word
+	if n / 2 != -4611686018427387904 'minHalved'
+		return 5
+	end 'minHalved'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 18446744073709551609
+    arm64.movImm x1, 2
+    arm64.sdiv x0, x0, x1
+    arm64.cmp x0, -3
+    arm64.cset x0, ne
+    arm64.cbnz x0, minusSevenHalved
+    arm64.b ifcont#2
+  minusSevenHalved:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 18446744073709551615
+    arm64.movImm x1, 2
+    arm64.sdiv x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, minusOneHalved
+    arm64.b ifcont#4
+  minusOneHalved:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551607
+    arm64.movImm x1, 8
+    arm64.sdiv x0, x0, x1
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, minusNineEighthed
+    arm64.b ifcont#6
+  minusNineEighthed:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 18446744073709551609
+    arm64.movImm x1, 2
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, remainderTakesTheDividendSign
+    arm64.b ifcont#8
+  remainderTakesTheDividendSign:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 9223372036854775808
+    arm64.movImm x1, 2
+    arm64.sdiv x0, x0, x1
+    arm64.movImm x1, 13835058055282163712
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, minHalved
+    arm64.b ifcont#10
+  minHalved:
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

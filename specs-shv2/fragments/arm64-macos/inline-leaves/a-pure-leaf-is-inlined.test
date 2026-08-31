@@ -1,0 +1,143 @@
+// Test: a-pure-leaf-is-inlined
+typealias RegNum = int(0 to 63)
+typealias RegMask = int(0 to u64.max)
+
+function maskContains(mask RegMask, regNum RegNum) returns bool
+	return ((mask shr regNum) and 1) != 0
+end 'maskContains'
+
+function main() returns ExitCode
+	let mask = 5 as RegMask
+	var count = 0
+	var i = 0
+	while i < 8 'each'
+		if maskContains(mask, regNum: i as RegNum) 'set'
+			count = count + 1
+		end 'set'
+		i = i + 1
+	end 'each'
+	return count as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @maskContains {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.lsrv x0, x0, x1
+    arm64.and x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 5
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x21, 8
+    arm64.cset x0, lt
+    arm64.cbnz x0, each
+    arm64.b whileexit
+  each:
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#7
+    arm64.b __rc_chk#8
+  __rc_chk#8:
+    arm64.cmp x21, 63
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#7
+    arm64.b __rc_ok#6
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#6:
+    arm64.b __il_body
+  __il_body:
+    arm64.cbnz x0, __il_slow
+    arm64.b __rc_chk#15
+  __rc_chk#15:
+    arm64.cbnz x1, __il_slow
+    arm64.b __rc_ok#14
+  __il_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl maskContains
+    arm64.b __il_cont
+  __rc_ok#14:
+    arm64.lsrv x0, x19, x21
+    arm64.and x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cbnz x0, set
+    arm64.b critsplit
+  set:
+    arm64.add x0, x20, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont
+  ifcont:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#10
+    arm64.b __rc_chk#11
+  __rc_chk#11:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#10
+    arm64.b __rc_ok#9
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_2
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#9:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

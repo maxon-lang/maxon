@@ -1,0 +1,273 @@
+// Test: an-unsigned-power-of-two-reads-the-whole-bit-pattern
+typealias Unsigned = int(0 to u64.max)
+typealias UnsignedArray = Array with Unsigned
+typealias UPosDivisor = int(2 to 1000000)
+
+function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
+	return n / d
+end 'refUDiv'
+
+function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
+	return n mod d
+end 'refUMod'
+
+function main() returns ExitCode
+	var ns = UnsignedArray.create()
+	ns.push(0)
+	ns.push(1)
+	ns.push(31)
+	ns.push(9223372036854775807)
+	let top = (9223372036854775807 as Unsigned) + 1
+	ns.push(top)
+	ns.push(top + 9223372036854775807)
+	ns.push(top + 3122306832379791762)
+
+	for u in ns 'each'
+		if u / 2 != refUDiv(u, d: 2) 'divTwo'
+			return 1
+		end 'divTwo'
+		if u mod 2 != refUMod(u, d: 2) 'modTwo'
+			return 2
+		end 'modTwo'
+		if u / 32 != refUDiv(u, d: 32) 'divThirtyTwo'
+			return 3
+		end 'divThirtyTwo'
+		if u mod 32 != refUMod(u, d: 32) 'modThirtyTwo'
+			return 4
+		end 'modThirtyTwo'
+		if u / 10 != refUDiv(u, d: 10) 'divTenIsRefused'
+			return 5
+		end 'divTenIsRefused'
+	end 'each'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @refUDiv {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 2
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x16, 1000000
+    arm64.cmp x1, x16
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.udiv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @refUMod {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 2
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x16, 1000000
+    arm64.cmp x1, x16
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.udiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 31
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 9223372036854775807
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 9223372036854775808
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 18446744073709551615
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 12345678869234567570
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x20, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, each
+    arm64.b forexit
+  each:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x20, lsl #3
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.movImm x0, 2
+    arm64.udiv x22, x21, x0
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x21
+    arm64.bl refUDiv
+    arm64.cmp x22, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, divTwo
+    arm64.b ifcont#6
+  divTwo:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 2
+    arm64.udiv x16, x21, x0
+    arm64.msub x22, x16, x0, x21
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x21
+    arm64.bl refUMod
+    arm64.cmp x22, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, modTwo
+    arm64.b ifcont#8
+  modTwo:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 32
+    arm64.udiv x22, x21, x0
+    arm64.movImm x1, 32
+    arm64.movRegReg x0, x21
+    arm64.bl refUDiv
+    arm64.cmp x22, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, divThirtyTwo
+    arm64.b ifcont#10
+  divThirtyTwo:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 32
+    arm64.udiv x16, x21, x0
+    arm64.msub x22, x16, x0, x21
+    arm64.movImm x1, 32
+    arm64.movRegReg x0, x21
+    arm64.bl refUMod
+    arm64.cmp x22, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, modThirtyTwo
+    arm64.b ifcont#12
+  modThirtyTwo:
+    arm64.movImm x20, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x0, 10
+    arm64.udiv x22, x21, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x21
+    arm64.bl refUDiv
+    arm64.cmp x22, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, divTenIsRefused
+    arm64.b ifcont#14
+  divTenIsRefused:
+    arm64.movImm x20, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#14:
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

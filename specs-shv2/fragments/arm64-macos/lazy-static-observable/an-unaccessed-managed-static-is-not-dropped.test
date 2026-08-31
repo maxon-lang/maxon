@@ -1,0 +1,92 @@
+// Test: an-unaccessed-managed-static-is-not-dropped
+type Untouched
+	static var never = Untouched.build()
+	static var other = Untouched.build()
+
+	static function build() returns String
+		return "x"
+	end 'build'
+
+	export static function get() returns String
+		return Untouched.other
+	end 'get'
+end 'Untouched'
+
+function main() returns ExitCode
+	print("{Untouched.get()}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_Untouched.other@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Untouched.build {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_1
+    arm64.bl __str_retain
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Untouched.get {
+  entry:
+    arm64.prologue 16
+    arm64.bl __lazy_init#__data_Untouched.other
+    arm64.leaGlobal x0, __data_Untouched.other
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __str_retain
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Untouched.get
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl print
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

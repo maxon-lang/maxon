@@ -1,0 +1,159 @@
+// Test: an-unconstrained-overload-of-a-conditional-extension-method-is-reachable
+typealias Integer = int(i64.min to i64.max)
+
+type Opaque
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Opaque'
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder where Element is Comparable
+	export function beats(other Element) returns bool
+		return self.value.compare(other) == Ordering.greaterThan
+	end 'beats'
+end 'Holder'
+
+export extension Holder
+	export function beats(assumed bool) returns bool
+		return assumed
+	end 'beats'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+typealias OpaqueHolder = Holder with Opaque
+
+function main() returns ExitCode
+	let h = IntHolder.create(7)
+	let o = OpaqueHolder.create(Opaque.create())
+	var n = 0
+	if h.beats(3) 'cmp'
+		n = n + 1
+	end 'cmp'
+	if o.beats(true) 'fb'
+		n = n + 10
+	end 'fb'
+	return n
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Opaque.create {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.beats {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 7
+    arm64.leaRegSlot x19, slot0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.bl Opaque.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.bl Holder.create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movImm x20, 0
+    arm64.movImm x1, 3
+    arm64.leaRdata x2, __witness_int.Comparable
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.beats
+    arm64.cbnz x0, cmp
+    arm64.b critsplit
+  cmp:
+    arm64.movImm x0, 1
+    arm64.b ifcont#2
+  critsplit:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.b fb
+  fb:
+    arm64.add x19, x0, 10
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Holder_Opaque
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

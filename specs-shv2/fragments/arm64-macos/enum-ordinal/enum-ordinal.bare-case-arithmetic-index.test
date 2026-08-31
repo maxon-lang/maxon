@@ -1,0 +1,155 @@
+// Test: enum-ordinal.bare-case-arithmetic-index
+typealias Idx = int(0 to u64.max)
+typealias IdxArray = Array with Idx
+
+enum Col
+	a
+	b
+	c
+	COUNT
+end 'Col'
+
+enum Row
+	x
+	y
+	COUNT
+end 'Row'
+
+function lookup(table IdxArray, index Idx) returns Idx
+	return try table.get(index) otherwise 0
+end 'lookup'
+
+function main() returns ExitCode
+	var table = IdxArray.create()
+	var i = 0
+	while i < 100 'fill'
+		table.push(i)
+		i = i + 1
+	end 'fill'
+	let col = Col.b
+	let idx = Row.y * Col.COUNT + col
+	return lookup(table, index: idx)
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @lookup {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.cset x2, hs
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.arm64AddLsl x2, x2, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_empty
+    arm64.b critsplit#10
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_slow
+    arm64.b critsplit#11
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#11:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont
+  critsplit#10:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 100
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b whileexit
+  fill:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl lookup
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

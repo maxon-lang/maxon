@@ -1,0 +1,71 @@
+// Test: break.labeled-break-inner
+function main() returns ExitCode
+	var x = 0
+	var y = 0
+	while x < 5 'outer'
+		x = x + 1
+		while y < 10 'inner'
+			y = y + 1
+			if y == 3 'check'
+				break
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr#1
+  whilehdr#1:
+    arm64.cmp x0, 5
+    arm64.cset x2, lt
+    arm64.cbnz x2, outer
+    arm64.b whileexit#3
+  outer:
+    arm64.add x0, x0, 1
+    arm64.b whilehdr#4
+  whilehdr#4:
+    arm64.cmp x1, 10
+    arm64.cset x2, lt
+    arm64.cbnz x2, inner
+    arm64.b critsplit
+  inner:
+    arm64.add x1, x1, 1
+    arm64.cmp x1, 3
+    arm64.cset x2, eq
+    arm64.cbnz x2, check
+    arm64.b ifcont
+  check:
+    arm64.b whileexit#6
+  ifcont:
+    arm64.b whilehdr#4
+  critsplit:
+    arm64.b whileexit#6
+  whileexit#6:
+    arm64.b whilehdr#1
+  whileexit#3:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

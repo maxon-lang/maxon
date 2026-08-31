@@ -1,0 +1,26 @@
+// Test: lazy-static.struct-literal-never-read
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1, b: 2}
+end 'Pair'
+
+function main() returns ExitCode
+	print("no read")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_1
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

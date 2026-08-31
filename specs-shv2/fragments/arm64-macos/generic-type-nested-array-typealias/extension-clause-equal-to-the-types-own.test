@@ -1,0 +1,103 @@
+// Test: extension-clause-equal-to-the-types-own
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B where A is Equatable, B is Equatable
+	export var first as A
+	export var second as B
+	export static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+	export function firstIs(x A) returns bool
+		return self.first == x
+	end 'firstIs'
+end 'Pair'
+
+extension Pair where A is Equatable, B is Equatable
+	export function bothAre(x A) returns bool
+		return self.firstIs(x)
+	end 'bothAre'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.create(1, b: 2)
+	if p.firstIs(1) 'a'
+		print("a=true\n")
+	end 'a'
+	if p.bothAre(1) 'c'
+		print("both=true\n")
+	end 'c'
+	print("done\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Pair.firstIs {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Pair.bothAre {
+  entry:
+    arm64.prologue 16
+    arm64.bl Pair.firstIs
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.leaRegSlot x19, slot0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x1
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Pair.firstIs
+    arm64.cbnz x0, a
+    arm64.b ifcont#2
+  a:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Pair.bothAre
+    arm64.cbnz x0, c
+    arm64.b ifcont#4
+  c:
+    arm64.leaRdata x0, __str_rec_4
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.leaRdata x0, __str_rec_5
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

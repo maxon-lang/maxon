@@ -1,0 +1,22 @@
+// Test: error.static-struct-literal-field-type-mismatch
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: "hi", b: 2}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:8:27: cannot assign a value of type 'String' to field 'a' of 'Pair', which holds 'int'

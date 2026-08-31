@@ -1,0 +1,58 @@
+// Test: remove-out-of-range-is-index-out-of-bounds
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.reserve(16)
+	let gone = try arr.managed.remove(1) otherwise 7
+	return gone
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 16
+    arm64.movRegReg x0, x19
+    arm64.bl Array.reserve
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_remove
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 7
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x20, x0
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

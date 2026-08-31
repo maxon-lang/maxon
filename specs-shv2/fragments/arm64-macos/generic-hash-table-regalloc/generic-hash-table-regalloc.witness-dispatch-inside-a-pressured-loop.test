@@ -1,0 +1,235 @@
+// Test: generic-hash-table-regalloc.witness-dispatch-inside-a-pressured-loop
+typealias Integer = int(i64.min to i64.max)
+typealias IntKey = int(0 to u32.max)
+
+function bump(x Integer) returns Integer
+	return x + 1
+end 'bump'
+
+type Mixer uses T where T is Hashable and Equatable
+	var base as Integer
+
+	export static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	export function mix(key T) returns Integer
+		var a1 = base + 1
+		var a2 = base + 2
+		var a3 = base + 3
+		var a4 = base + 4
+		var a5 = base + 5
+		var a6 = base + 6
+		var a7 = base + 7
+		var a8 = base + 8
+		var a9 = base + 9
+		var a10 = base + 10
+		var a11 = base + 11
+		var a12 = base + 12
+		var i = 0
+		while i < 3 'loop'
+			let d = bump(i)
+			let h = key.hash()
+			var step = d
+			if key.equals(key) 'sameKey'
+				step = d + h
+			end 'sameKey'
+			a1 = a1 + step
+			a2 = a2 + step
+			a3 = a3 + step
+			a4 = a4 + step
+			a5 = a5 + step
+			a6 = a6 + step
+			a7 = a7 + step
+			a8 = a8 + step
+			a9 = a9 + step
+			a10 = a10 + step
+			a11 = a11 + step
+			a12 = a12 + step
+			i = i + 1
+		end 'loop'
+		return a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12
+	end 'mix'
+end 'Mixer'
+
+typealias IntMixer = Mixer with IntKey
+
+function main() returns ExitCode
+	var m = IntMixer.create(0)
+	if m.mix(5 as IntKey) != 330 'wrongSum'
+		return 90
+	end 'wrongSum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Mixer.mix {
+  entry:
+    arm64.prologue 160
+    arm64.storeSlotReg slot17, x28
+    arm64.storeSlotReg slot16, x27
+    arm64.storeSlotReg slot15, x26
+    arm64.storeSlotReg slot14, x25
+    arm64.storeSlotReg slot13, x24
+    arm64.storeSlotReg slot12, x23
+    arm64.storeSlotReg slot11, x22
+    arm64.storeSlotReg slot10, x21
+    arm64.storeSlotReg slot9, x20
+    arm64.storeSlotReg slot8, x19
+    arm64.movRegReg x19, x1
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x22, x1, 1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x23, x1, 2
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x24, x1, 3
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x25, x1, 4
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x26, x1, 5
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 6
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 7
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.add x3, x3, 8
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.add x4, x4, 9
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
+    arm64.add x5, x5, 10
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 0]
+    arm64.add x6, x6, 11
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 12
+    arm64.movImm x7, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.storeSlotReg slot7, x1
+    arm64.storeSlotReg slot6, x2
+    arm64.storeSlotReg slot5, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot3, x5
+    arm64.storeSlotReg slot2, x6
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot0, x7
+    arm64.cmp x7, 3
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.b __il_body
+  __il_body:
+    arm64.add x27, x7, 1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x19
+    arm64.loadRegBaseDisp.word64 x16, [x21 + 24]
+    arm64.blr x16
+    arm64.cbnz x0, sameKey
+    arm64.b critsplit
+  sameKey:
+    arm64.add x0, x27, x28
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x27
+    arm64.b ifcont
+  ifcont:
+    arm64.add x22, x22, x0
+    arm64.add x23, x23, x0
+    arm64.add x24, x24, x0
+    arm64.add x25, x25, x0
+    arm64.add x26, x26, x0
+    arm64.loadRegSlot x1, slot7
+    arm64.add x1, x1, x0
+    arm64.loadRegSlot x2, slot6
+    arm64.add x2, x2, x0
+    arm64.loadRegSlot x3, slot5
+    arm64.add x3, x3, x0
+    arm64.loadRegSlot x4, slot4
+    arm64.add x4, x4, x0
+    arm64.loadRegSlot x5, slot3
+    arm64.add x5, x5, x0
+    arm64.loadRegSlot x6, slot2
+    arm64.add x6, x6, x0
+    arm64.loadRegSlot x7, slot1
+    arm64.add x0, x7, x0
+    arm64.loadRegSlot x7, slot0
+    arm64.add x7, x7, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x0, x22, x23
+    arm64.add x0, x0, x24
+    arm64.add x0, x0, x25
+    arm64.add x0, x0, x26
+    arm64.loadRegSlot x1, slot7
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x1, slot6
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x1, slot5
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x1, slot4
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x1, slot3
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x1, slot2
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x1, slot1
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 0
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x1, __witness_int.Equatable
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x2, 5
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.movRegReg x3, x4
+    arm64.bl Mixer.mix
+    arm64.cmp x0, 330
+    arm64.cset x0, ne
+    arm64.cbnz x0, wrongSum
+    arm64.b ifcont
+  wrongSum:
+    arm64.movImm x0, 90
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+}

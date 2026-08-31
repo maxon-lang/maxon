@@ -1,0 +1,95 @@
+// Test: a-keyword-named-parameter-AS-THE-FIRST-TOKEN-OF-A-CONDITION
+typealias Integer = int(i64.min to i64.max)
+
+function twosComplementDistance(to Integer, from Integer) returns Integer
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+
+	return (from - to) * -1
+end 'twosComplementDistance'
+
+function span(to Integer, from Integer) returns Integer
+	var acc = 0
+	var k = from
+	while to > k 'spin'
+		acc = acc + 1
+		k = k + 1
+	end 'spin'
+
+	return acc
+end 'span'
+
+function weight(to Integer) returns Integer
+	return match to 'pick'
+		1 gives 100
+		2 gives 4
+		default gives 0
+	end 'pick'
+end 'weight'
+
+function main() returns ExitCode
+	return (twosComplementDistance(50, from: 8) + span(4, from: 1) + weight(2)) as ExitCode
+end 'main'
+---
+ExitCode: 49
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.b forward
+  forward:
+    arm64.movImm x0, 42
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.movImm x1, 1
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x2, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 4
+    arm64.cset x3, lt
+    arm64.cbnz x3, spin
+    arm64.b whileexit
+  spin:
+    arm64.add x2, x2, 1
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.add x0, x0, x2
+    arm64.b __il_body#14
+  __il_body#14:
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x1, 4
+    arm64.b matchcont
+  matchcont:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

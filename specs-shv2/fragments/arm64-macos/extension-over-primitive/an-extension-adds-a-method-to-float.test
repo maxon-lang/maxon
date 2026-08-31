@@ -1,0 +1,45 @@
+// Test: an-extension-adds-a-method-to-float
+extension float
+	export function tripled() returns Real
+		return self * 3.0
+	end 'tripled'
+end 'float'
+
+function main() returns ExitCode
+	let x = 4.0
+	return trunc(x.tripled()) as ExitCode
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 12
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.b __il_body
+  __il_body:
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fmul d0, d0, d1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

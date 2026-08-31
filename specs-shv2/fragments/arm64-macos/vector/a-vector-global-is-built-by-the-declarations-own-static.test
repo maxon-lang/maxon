@@ -1,0 +1,200 @@
+// Test: a-vector-global-is-built-by-the-declarations-own-static
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+var shared = Vec3.create()
+
+function fill() returns Int
+	try shared.set(0, value: 20) otherwise panic("set")
+	try shared.set(2, value: 21) otherwise panic("set")
+	return 0
+end 'fill'
+
+function main() returns ExitCode
+	_ = fill()
+	return (try shared.get(0) otherwise 0) + (try shared.get(2) otherwise 0) + shared.count()
+end 'main'
+---
+ExitCode: 44
+---
+data {
+  __data_shared@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @fill {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_shared
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movImm x20, 0
+    arm64.movImm x21, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x3, __layout_Vector_N3_Int
+    arm64.movImm x4, 3
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.leaGlobal x0, __data_shared
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movImm x20, 2
+    arm64.movImm x21, 21
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x3, __layout_Vector_N3_Int
+    arm64.movImm x4, 3
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl fill
+    arm64.leaGlobal x0, __data_shared
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x2, __layout_Vector_N3_Int
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x19, 0
+    arm64.b trycont#3
+  tryok#1:
+    arm64.movRegReg x19, x0
+    arm64.b trycont#3
+  trycont#3:
+    arm64.leaGlobal x0, __data_shared
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movImm x22, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_retain
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x2, __layout_Vector_N3_Int
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.movImm x0, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.add x19, x19, x0
+    arm64.leaGlobal x0, __data_shared
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __mm_retain
+    arm64.movImm x1, 3
+    arm64.b __il_body
+  __il_body:
+    arm64.b __rc_ok#12
+  __rc_ok#12:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x19, x19, x1
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok#7
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok#7:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

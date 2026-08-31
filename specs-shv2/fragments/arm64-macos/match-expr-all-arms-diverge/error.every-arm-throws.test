@@ -1,0 +1,23 @@
+// Test: error.every-arm-throws
+typealias Integer = int(i64.min to i64.max)
+
+enum E
+	bad
+	worse
+end 'E'
+
+function pick(x Integer) returns ExitCode throws E
+	let r = match x 'e'
+		1 throws E.bad
+		default throws E.worse
+	end 'e'
+	return r
+end 'pick'
+
+function main() returns ExitCode
+	let v = try pick(1) otherwise 7
+	return v
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`

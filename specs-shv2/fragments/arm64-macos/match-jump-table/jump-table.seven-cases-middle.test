@@ -1,0 +1,61 @@
+// Test: jump-table.seven-cases-middle
+enum Weekday
+		mon
+		tue
+		wed
+		thu
+		fri
+		sat
+		sun
+end 'Weekday'
+
+function main() returns ExitCode
+		let w = Weekday.thu
+		let name = match w 'w'
+				mon gives "Monday"
+				tue gives "Tuesday"
+				wed gives "Wednesday"
+				thu gives "Thursday"
+				fri gives "Friday"
+				sat gives "Saturday"
+				sun gives "Sunday"
+		end 'w'
+		print(name)
+		return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5, [5]=matcharm#6, [6]=matcharm#7] @__jumptable_14
+  matchdead:
+  matcharm#1:
+    arm64.leaRdata x0, __str_rec_7
+    arm64.b matchcont
+  matcharm#2:
+    arm64.leaRdata x0, __str_rec_8
+    arm64.b matchcont
+  matcharm#3:
+    arm64.leaRdata x0, __str_rec_9
+    arm64.b matchcont
+  matcharm#4:
+    arm64.leaRdata x0, __str_rec_10
+    arm64.b matchcont
+  matcharm#5:
+    arm64.leaRdata x0, __str_rec_11
+    arm64.b matchcont
+  matcharm#6:
+    arm64.leaRdata x0, __str_rec_12
+    arm64.b matchcont
+  matcharm#7:
+    arm64.leaRdata x0, __str_rec_13
+    arm64.b matchcont
+  matchcont:
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

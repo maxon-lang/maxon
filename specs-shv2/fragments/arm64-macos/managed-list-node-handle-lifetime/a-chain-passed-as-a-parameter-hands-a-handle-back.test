@@ -1,0 +1,82 @@
+// Test: a-chain-passed-as-a-parameter-hands-a-handle-back
+typealias Small = int(0 to 255)
+typealias IntChain = __ManagedList with Small
+typealias IntNode = __ManagedListNode with Small
+
+function appendTo(chain IntChain, value Small) returns IntNode
+	return chain.insertLast(value)
+end 'appendTo'
+
+function main() returns ExitCode
+	var chain = IntChain.create()
+	let node = appendTo(chain, value: 55)
+	return node.value()
+end 'main'
+---
+ExitCode: 55
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @appendTo {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.bl __list_append
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl __list_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 55
+    arm64.movRegReg x0, x19
+    arm64.bl appendTo
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __list_node_value
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __list_node_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __list_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

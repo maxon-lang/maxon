@@ -1,0 +1,82 @@
+// Test: cross-file-shadowed-union-range
+// --- file: spans.maxon
+export union BigSpan
+	condBr
+	cmp
+	call
+	br
+	ret
+end 'BigSpan'
+
+export union SpanOp
+	condBr
+	br
+end 'SpanOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SpanOp) returns Code
+	return match op 'check'
+		condBr to br gives 7
+	end 'check'
+end 'classify'
+
+function describeBig(op BigSpan) returns Code
+	return match op 'check'
+		condBr to ret gives 3
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let span = classify(SpanOp.br)
+	let big = describeBig(BigSpan.call)
+	if big == 3 'bigOk'
+		return span
+	end 'bigOk'
+	return 99
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.b matcharm#6
+  matcharm#6:
+    arm64.movImm x0, 7
+    arm64.b matchcont#8
+  matchcont#8:
+    arm64.b __rc_chk#10
+  __rc_chk#10:
+    arm64.b __rc_ok#9
+  __rc_ok#9:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.b matcharm#13
+  matcharm#13:
+    arm64.movImm x1, 3
+    arm64.b matchcont#15
+  matchcont#15:
+    arm64.b __rc_chk#17
+  __rc_chk#17:
+    arm64.b __rc_ok#16
+  __rc_ok#16:
+    arm64.b __il_cont#3
+  __il_cont#3:
+    arm64.cmp x1, 3
+    arm64.cset x1, eq
+    arm64.cbnz x1, bigOk
+    arm64.b ifcont
+  bigOk:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

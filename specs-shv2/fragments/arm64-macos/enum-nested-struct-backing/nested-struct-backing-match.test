@@ -1,0 +1,71 @@
+// Test: nested-struct-backing-match
+typealias Latency = int(0 to 50)
+
+type Inner
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+	export let fast as bool
+
+	static function create(inner Inner, fast bool) returns Self
+		return Self{inner: inner, fast: fast}
+	end 'create'
+end 'Outer'
+
+enum Op
+	add = Outer.create(Inner.create(1), fast: true)
+	div = Outer.create(Inner.create(40), fast: false)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.div
+	return match op 'dispatch'
+		add gives 10
+		div gives 20
+	end 'dispatch'
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 20
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

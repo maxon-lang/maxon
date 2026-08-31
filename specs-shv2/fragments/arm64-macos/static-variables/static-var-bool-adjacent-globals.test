@@ -1,0 +1,54 @@
+// Test: static-var-bool-adjacent-globals
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+	if flag 'checkFalse'
+		print("flag should be false\n")
+		return 1
+	end 'checkFalse'
+	if counter == 42 'checkCounter'
+		return 0
+	end 'checkCounter'
+	print("counter wrong\n")
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_counter@0 = i64 42
+  __data_flag@8 = i1 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_flag
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.cbnz x0, checkFalse
+    arm64.b ifcont#2
+  checkFalse:
+    arm64.leaRdata x0, __str_rec_2
+    arm64.bl print
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.leaGlobal x0, __data_counter
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 42
+    arm64.cset x0, eq
+    arm64.cbnz x0, checkCounter
+    arm64.b ifcont#4
+  checkCounter:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl print
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

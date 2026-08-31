@@ -1,0 +1,163 @@
+// Test: bare-generic-name-as-a-managed-field-type
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function value() returns T
+		return self.cell.get()
+	end 'value'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let h = StrHolder.create(StrCell.make("a string long enough to force a heap allocation"))
+	return h.value().count() as ExitCode
+end 'main'
+---
+ExitCode: 47
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Cell.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Cell.get {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.value {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl Cell.get
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x22, x20
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl Cell.make
+    arm64.bl Holder.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __layout_Holder_String
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.value
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl String.count
+    arm64.movRegReg x21, x0
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_13
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder_String
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

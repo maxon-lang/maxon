@@ -1,0 +1,25 @@
+// Test: cross-file-private-constant-name-collision
+// --- file: app/main.maxon
+let RESULT = AVAL + BVAL
+
+function main() returns ExitCode
+	return RESULT
+end 'main'
+
+// --- file: api/a.maxon
+let SECRET = 20
+export let AVAL = SECRET + 1
+
+// --- file: lib/b.maxon
+let SECRET = 100
+export let BVAL = SECRET + 1
+---
+ExitCode: 122
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 122
+    arm64.epilogue 16
+    arm64.ret
+}

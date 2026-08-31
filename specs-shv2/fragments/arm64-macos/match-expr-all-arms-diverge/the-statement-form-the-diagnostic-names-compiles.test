@@ -1,0 +1,32 @@
+// Test: the-statement-form-the-diagnostic-names-compiles
+enum Colour
+	red
+	green
+end 'Colour'
+
+function main() returns ExitCode
+	let c = Colour.green
+	match c 'e'
+		red then panic("a")
+		green then print("green")
+	end 'e'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.leaRdata x0, __str_rec_2
+    arm64.bl print
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

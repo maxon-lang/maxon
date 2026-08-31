@@ -1,0 +1,147 @@
+// Test: an-empty-container-still-runs-the-hoisted-load
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function total(a WordArray) returns Word
+	var t = 0
+	for v in a 'loop'
+		t = t + v
+	end 'loop'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var empty = WordArray.create()
+	if total(empty) != 0 'emptyIsZero'
+		return 1
+	end 'emptyIsZero'
+
+	var one = WordArray.create()
+	one.push(7)
+	if total(one) != 7 'oneElement'
+		return 2
+	end 'oneElement'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.b forhdr#7
+  forhdr#7:
+    arm64.cmp x1, x2
+    arm64.cset x4, lt
+    arm64.cbnz x4, loop#8
+    arm64.b forexit#10
+  loop#8:
+    arm64.arm64AddLsl x4, x3, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.b __im_cont#11
+  __im_cont#11:
+    arm64.add x0, x0, x4
+    arm64.b forstep#9
+  forstep#9:
+    arm64.add x1, x1, 1
+    arm64.b forhdr#7
+  forexit#10:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, emptyIsZero
+    arm64.b ifcont#2
+  emptyIsZero:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 0]
+    arm64.b forhdr#14
+  forhdr#14:
+    arm64.cmp x1, x2
+    arm64.cset x4, lt
+    arm64.cbnz x4, loop#15
+    arm64.b forexit#17
+  loop#15:
+    arm64.arm64AddLsl x4, x3, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.b __im_cont#18
+  __im_cont#18:
+    arm64.add x0, x0, x4
+    arm64.b forstep#16
+  forstep#16:
+    arm64.add x1, x1, 1
+    arm64.b forhdr#14
+  forexit#17:
+    arm64.b __il_cont#12
+  __il_cont#12:
+    arm64.cmp x0, 7
+    arm64.cset x0, ne
+    arm64.cbnz x0, oneElement
+    arm64.b ifcont#4
+  oneElement:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

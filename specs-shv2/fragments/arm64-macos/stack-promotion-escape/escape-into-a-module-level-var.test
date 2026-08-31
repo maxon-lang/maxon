@@ -1,0 +1,161 @@
+// Test: escape-into-a-module-level-var
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function churn(seed Integer) returns Integer
+	let v0 = seed + 1
+	let v1 = seed + 2
+	let v2 = seed + 3
+	let v3 = seed + 4
+	let v4 = seed + 5
+	let v5 = seed + 6
+	let v6 = seed + 7
+	let v7 = seed + 8
+	let v8 = seed + 9
+	let v9 = seed + 10
+	let v10 = seed + 11
+	let v11 = seed + 12
+	let v12 = seed + 13
+	let v13 = seed + 14
+	let v14 = seed + 15
+	let v15 = seed + 16
+	return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15
+end 'churn'
+
+var kept = Point.create(0, y: 0)
+
+function stash()
+	let p = Point.create(11, y: 22)
+	kept = p
+end 'stash'
+
+function main() returns ExitCode
+	stash()
+	_ = churn(1000)
+	return kept.x
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __data_kept@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Point.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @churn {
+  entry:
+    arm64.prologue 16
+    arm64.add x1, x0, 1
+    arm64.add x2, x0, 2
+    arm64.add x3, x0, 3
+    arm64.add x4, x0, 4
+    arm64.add x5, x0, 5
+    arm64.add x6, x0, 6
+    arm64.add x7, x0, 7
+    arm64.add x8, x0, 8
+    arm64.add x9, x0, 9
+    arm64.add x10, x0, 10
+    arm64.add x11, x0, 11
+    arm64.add x12, x0, 12
+    arm64.add x13, x0, 13
+    arm64.add x14, x0, 14
+    arm64.add x15, x0, 15
+    arm64.add x0, x0, 16
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x5
+    arm64.add x1, x1, x6
+    arm64.add x1, x1, x7
+    arm64.add x1, x1, x8
+    arm64.add x1, x1, x9
+    arm64.add x1, x1, x10
+    arm64.add x1, x1, x11
+    arm64.add x1, x1, x12
+    arm64.add x1, x1, x13
+    arm64.add x1, x1, x14
+    arm64.add x1, x1, x15
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @stash {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 11
+    arm64.movImm x1, 22
+    arm64.bl Point.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaGlobal x0, __data_kept
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.leaGlobal x0, __data_kept
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl stash
+    arm64.movImm x0, 1000
+    arm64.bl churn
+    arm64.leaGlobal x0, __data_kept
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

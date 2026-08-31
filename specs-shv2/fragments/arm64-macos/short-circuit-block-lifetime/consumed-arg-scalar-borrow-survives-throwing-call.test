@@ -1,0 +1,711 @@
+// Test: consumed-arg-scalar-borrow-survives-throwing-call
+typealias Num = int(0 to u64.max)
+
+enum ParseErr implements Error
+	bad
+end 'ParseErr'
+
+type Blk
+	export var id as Num
+
+	static function create(i Num) returns Blk
+		return Blk{id: i}
+	end 'create'
+
+	function bump()
+		id = id + 1
+	end 'bump'
+end 'Blk'
+
+typealias BlkArray = Array with Blk
+
+type Module
+	var blocks as BlkArray
+
+	static function create() returns Module
+		return Module{blocks: BlkArray.create()}
+	end 'create'
+
+	function addBlock(i Num) returns Blk
+		let b = Blk.create(i)
+		blocks.push(b)
+		return b
+	end 'addBlock'
+
+	function sumIds() returns Num
+		var sum = 0
+		for b in blocks 'each'
+			sum = sum + b.id
+		end 'each'
+		return sum
+	end 'sumIds'
+end 'Module'
+
+type Parser
+	var currentBlock as Blk
+	var module as Module
+
+	static function create(m Module, entry Blk) returns Parser
+		return Parser{currentBlock: entry, module: m}
+	end 'create'
+
+	function parseIdentifierExpr(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		var acc = block.id
+		if hasCall 'callArgs'
+			let args = try parseCallArgsRaw(block)
+			acc = acc + args
+		end 'callArgs'
+		return acc + block.id
+	end 'parseIdentifierExpr'
+
+	function parseCallArgsRaw(block Blk) returns Num throws ParseErr
+		currentBlock = block
+		let arg = try parseExpressionBP(block, opCount: 0, hasCall: false)
+		return arg + block.id
+	end 'parseCallArgsRaw'
+
+	function parsePrimary(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		let inner = try parseIdentifierExpr(block, hasCall: hasCall)
+		return inner + block.id
+	end 'parsePrimary'
+
+	function parseUnary(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		let inner = try parsePrimary(block, hasCall: hasCall)
+		return inner + block.id
+	end 'parseUnary'
+
+	function parseExpressionBP(block Blk, opCount Num, hasCall bool) returns Num throws ParseErr
+		var blk = block
+		currentBlock = blk
+		var left = try parseUnary(blk, hasCall: hasCall)
+		blk = currentBlock
+		var remaining = opCount
+		while remaining > 0 'prattLoop'
+			let merge = try emitShortCircuit(blk)
+			blk = currentBlock
+			left = left + merge
+			remaining = remaining - 1
+		end 'prattLoop'
+		return left
+	end 'parseExpressionBP'
+
+	function emitShortCircuit(entryBlock Blk) returns Num throws ParseErr
+		let entryId = entryBlock.id
+		let rhsBlock = module.addBlock(101)
+		let rhsId = rhsBlock.id
+		currentBlock = rhsBlock
+		let rhsResult = try parseExpressionBP(rhsBlock, opCount: 0, hasCall: true)
+		var mergeBlock = module.addBlock(102)
+		mergeBlock.bump()
+		let cond = rhsId + entryId
+		currentBlock = mergeBlock
+		return rhsResult + cond
+	end 'emitShortCircuit'
+end 'Parser'
+
+function main() returns ExitCode
+	var m = Module.create()
+	let entry = m.addBlock(1)
+	var p = Parser.create(m, entry: entry)
+	let r = try p.parseExpressionBP(entry, opCount: 1, hasCall: true) otherwise return 3
+	let sum = m.sumIds()
+	if sum != 205 'corrupt'
+		return 1
+	end 'corrupt'
+	if r == 0 'noResult'
+		return 2
+	end 'noResult'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Blk.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Module.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Module.addBlock {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.bl Blk.create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Parser.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Module
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Parser.parseIdentifierExpr {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
+    arm64.cbnz x21, callArgs
+    arm64.b critsplit
+  callArgs:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Parser.parseCallArgsRaw
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.add x0, x22, x0
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x22
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.add x0, x0, x1
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Parser.parseCallArgsRaw {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movImm x2, 0
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Parser.parseExpressionBP
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.add x0, x0, x1
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Parser.parsePrimary {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Parser.parseIdentifierExpr
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.add x0, x0, x1
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Parser.parseUnary {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Parser.parsePrimary
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.add x0, x0, x1
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Parser.parseExpressionBP {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.movRegReg x0, x1
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x22
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl Parser.parseUnary
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x23, x9
+    arm64.cmp x23, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __mm_retain
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 0
+    arm64.cset x0, hi
+    arm64.cbnz x0, prattLoop
+    arm64.b whileexit
+  prattLoop:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl Parser.emitShortCircuit
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x24, x9
+    arm64.cmp x24, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#7
+    arm64.b tryok#6
+  tryerr#7:
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x24
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#6:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __mm_retain
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.add x21, x21, x22
+    arm64.sub x20, x20, 1
+    arm64.movRegReg x23, x24
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @Parser.emitShortCircuit {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 101
+    arm64.bl Module.addBlock
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x21
+    arm64.movImm x2, 0
+    arm64.movImm x3, 1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl Parser.parseExpressionBP
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x24, x9
+    arm64.cmp x24, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x24
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 102
+    arm64.bl Module.addBlock
+    arm64.movRegReg x24, x0
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 0], x0
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x20, x22, x20
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x24
+    arm64.add x19, x23, x20
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Module.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl Module.addBlock
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Parser.create
+    arm64.movRegReg x21, x0
+    arm64.movImm x2, 1
+    arm64.movImm x3, 1
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl Parser.parseExpressionBP
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x22, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Parser
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Module
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.cbnz x5, each
+    arm64.b forexit
+  each:
+    arm64.arm64AddLsl x5, x2, x3, lsl #3
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
+    arm64.add x1, x1, x5
+    arm64.b forstep
+  forstep:
+    arm64.add x3, x3, 1
+    arm64.b forhdr
+  forexit:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x1, 205
+    arm64.cset x1, ne
+    arm64.cbnz x1, corrupt
+    arm64.b ifcont#4
+  corrupt:
+    arm64.movImm x22, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Parser
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Module
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, noResult
+    arm64.b ifcont#6
+  noResult:
+    arm64.movImm x22, 2
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Parser
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Module
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Parser
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Module
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

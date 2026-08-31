@@ -1,0 +1,595 @@
+// Test: for-in-iterable.break-and-return-leave-an-iterable-loop
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type IntCursor
+	var items as IntArray
+	var pos as Integer
+
+	export static function create(items IntArray) returns Self throws IterationError
+		if items.count() == 0 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{items: items, pos: 0}
+	end 'create'
+
+	export function current() returns Integer
+		return try self.items.get(self.pos) otherwise panic("oob")
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos + 1 >= self.items.count() 'atEnd'
+			throw IterationError.exhausted
+		end 'atEnd'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'IntCursor'
+
+type IntSeq
+	var items as IntArray
+
+	export static function create(items IntArray) returns Self
+		return Self{items: items}
+	end 'create'
+
+	export function createIterator() returns IntCursor throws IterationError
+		return try IntCursor.create(self.items)
+	end 'createIterator'
+end 'IntSeq'
+
+function firstOver(s IntSeq, floor Integer) returns Integer
+	var found = 0
+	for v in s 'each'
+		if v > floor 'hit'
+			found = v
+			break
+		end 'hit'
+	end 'each'
+	return found
+end 'firstOver'
+
+function earlyReturn(s IntSeq) returns Integer
+	for v in s 'each'
+		return v
+	end 'each'
+	return 0
+end 'earlyReturn'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(10)
+	a.push(20)
+	a.push(30)
+	let filled = IntSeq.create(a)
+	let empty = IntSeq.create(IntArray.create())
+	print("break={firstOver(filled, floor: 15)} breakEmpty={firstOver(empty, floor: 15)}\n")
+	print("return={earlyReturn(filled)} returnEmpty={earlyReturn(empty)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @IntCursor.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, empty
+    arm64.b ifcont
+  empty:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @IntCursor.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_11
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
+    arm64.cmp x2, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.arm64AddLsl x0, x0, x2, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x1 + 40]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_empty
+    arm64.b critsplit#9
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_slow
+    arm64.b critsplit#10
+  __im_slow:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#10:
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont
+  critsplit#9:
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_5
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @IntCursor.advance {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x1, x2
+    arm64.cset x1, ge
+    arm64.cbnz x1, atEnd
+    arm64.b ifcont
+  atEnd:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @IntSeq.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @IntSeq.createIterator {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.bl IntCursor.create
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @firstOver {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.movImm x20, 0
+    arm64.bl IntSeq.createIterator
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit#9
+    arm64.b forempty
+  critsplit#9:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, each
+    arm64.b critsplit#10
+  each:
+    arm64.movRegReg x0, x21
+    arm64.bl IntCursor.current
+    arm64.cmp x0, x19
+    arm64.cset x1, gt
+    arm64.cbnz x1, hit
+    arm64.b ifcont
+  hit:
+    arm64.movRegReg x19, x0
+    arm64.b forexit
+  ifcont:
+    arm64.b forstep
+  forstep:
+    arm64.movRegReg x0, x21
+    arm64.bl IntCursor.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  critsplit#10:
+    arm64.movRegReg x19, x20
+    arm64.b forexit
+  forexit:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_IntCursor
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forempty:
+    arm64.movRegReg x0, x20
+    arm64.b forjoin
+  forjoin:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @earlyReturn {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl IntSeq.createIterator
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b forempty
+  critsplit:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, each
+    arm64.b forexit
+  each:
+    arm64.movRegReg x0, x19
+    arm64.bl IntCursor.current
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_IntCursor
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_IntCursor
+    arm64.b forjoin
+  forempty:
+    arm64.b forjoin
+  forjoin:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  forstep:
+    arm64.movRegReg x0, x19
+    arm64.bl IntCursor.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+}
+
+func @main {
+  entry:
+    arm64.prologue 176
+    arm64.storeSlotReg slot19, x28
+    arm64.storeSlotReg slot18, x27
+    arm64.storeSlotReg slot17, x26
+    arm64.storeSlotReg slot16, x25
+    arm64.storeSlotReg slot15, x24
+    arm64.storeSlotReg slot14, x23
+    arm64.storeSlotReg slot13, x22
+    arm64.storeSlotReg slot12, x21
+    arm64.storeSlotReg slot11, x20
+    arm64.storeSlotReg slot10, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 30
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.bl IntSeq.create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot2, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.bl IntSeq.create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.leaRdata x0, __str_rec_6
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movImm x1, 15
+    arm64.movRegReg x0, x19
+    arm64.bl firstOver
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_7
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movImm x1, 15
+    arm64.movRegReg x0, x20
+    arm64.bl firstOver
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x27
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_8
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot8, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot6, x0
+    arm64.add x1, x22, x23
+    arm64.add x1, x1, x26
+    arm64.add x1, x1, x20
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot3, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot4, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x21, x21, x23
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x21, x21, x26
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x27
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x21, x20
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x1, slot8
+    arm64.loadRegSlot x21, slot6
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x20, x21
+    arm64.loadRegSlot x20, slot4
+    arm64.storeBaseDispReg.word64 [x20 + 0], x28
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl print
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_9
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl earlyReturn
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_10
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.loadRegSlot x0, slot1
+    arm64.bl earlyReturn
+    arm64.movRegReg x25, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x26
+    arm64.bl __int_to_string
+    arm64.movRegReg x25, x0
+    arm64.leaRdata x0, __str_rec_8
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot9, x0
+    arm64.add x1, x21, x19
+    arm64.add x1, x1, x24
+    arm64.add x1, x1, x25
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot5, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot7, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x20, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x19, x19, x24
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x19, x19, x25
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.loadRegSlot x20, slot9
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x19, x20
+    arm64.loadRegSlot x19, slot7
+    arm64.storeBaseDispReg.word64 [x19 + 0], x28
+    arm64.loadRegSlot x0, slot5
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __destruct_IntSeq
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __destruct_IntSeq
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot10
+    arm64.loadRegSlot x20, slot11
+    arm64.loadRegSlot x21, slot12
+    arm64.loadRegSlot x22, slot13
+    arm64.loadRegSlot x23, slot14
+    arm64.loadRegSlot x24, slot15
+    arm64.loadRegSlot x25, slot16
+    arm64.loadRegSlot x26, slot17
+    arm64.loadRegSlot x27, slot18
+    arm64.loadRegSlot x28, slot19
+    arm64.epilogue 176
+    arm64.ret
+}

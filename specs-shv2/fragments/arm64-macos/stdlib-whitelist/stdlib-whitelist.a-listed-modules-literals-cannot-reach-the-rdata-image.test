@@ -1,0 +1,30 @@
+// Test: stdlib-whitelist.a-listed-modules-literals-cannot-reach-the-rdata-image
+function main() returns ExitCode
+	let scale = 12.5
+	let floor = 1.5
+	if scale > floor 'gt'
+		return 8
+	end 'gt'
+	return 1
+end 'main'
+---
+ExitCode: 8
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fcmp d0, d1
+    arm64.cset x0, gt
+    arm64.cbnz x0, gt
+    arm64.b ifcont
+  gt:
+    arm64.movImm x0, 8
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

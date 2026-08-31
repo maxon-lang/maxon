@@ -1,0 +1,157 @@
+// Test: a-byte-strided-element-keeps-its-scale-1-address
+typealias Byte = int(0 to 255)
+typealias Total = int(0 to u64.max)
+
+function sumBytes(b ByteArray) returns Total
+	var t = 0
+	for v in b 'loop'
+		t = t + v
+	end 'loop'
+	return t
+end 'sumBytes'
+
+function main() returns ExitCode
+	var b = ByteArray.create()
+	for i in 0 upto 10 'seed'
+		b.push(i as Byte)
+	end 'seed'
+	if sumBytes(b) != 45 'sum'
+		return 1
+	end 'sum'
+	if b.count() != 10 'count'
+		return 2
+	end 'count'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @sumBytes {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x21, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b forexit
+  loop:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x21, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, x21
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_get_unchecked
+    arm64.b __im_cont
+  __im_cont:
+    arm64.add x20, x20, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 10
+    arm64.cset x0, lt
+    arm64.cbnz x0, seed
+    arm64.b forexit
+  seed:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl sumBytes
+    arm64.cmp x0, 45
+    arm64.cset x0, ne
+    arm64.cbnz x0, sum
+    arm64.b ifcont#6
+  sum:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#6:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 10
+    arm64.cset x0, ne
+    arm64.cbnz x0, count
+    arm64.b ifcont#8
+  count:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

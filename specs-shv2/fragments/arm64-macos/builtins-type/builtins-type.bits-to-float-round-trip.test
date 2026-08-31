@@ -1,0 +1,168 @@
+// Test: builtins-type.bits-to-float-round-trip
+// Negative zero's pattern is 0x8000000000000000, so the alias must span the
+// full signed 64-bit range to carry every IEEE 754 double's bits.
+typealias FloatBits = int(i64.min to i64.max)
+
+function roundTripBits(bits FloatBits) returns FloatBits
+	return __Builtins.floatToBits(__Builtins.bitsToFloat(bits))
+end 'roundTripBits'
+
+function main() returns ExitCode
+	// Smallest positive subnormal (0x0000000000000001). Numeric conversion of
+	// the integer 1 would give 1.0, whose bits are 4607182418800017408.
+	if roundTripBits(1) != 1 'subnormalMin'
+		return 1
+	end 'subnormalMin'
+
+	// Largest subnormal (0x000FFFFFFFFFFFFF).
+	if roundTripBits(4503599627370495) != 4503599627370495 'subnormalMax'
+		return 2
+	end 'subnormalMax'
+
+	// Positive zero (0x0000000000000000).
+	if roundTripBits(0) != 0 'positiveZero'
+		return 3
+	end 'positiveZero'
+
+	// 1.0 (0x3FF0000000000000).
+	if roundTripBits(4607182418800017408) != 4607182418800017408 'one'
+		return 4
+	end 'one'
+
+	// Negative zero: its bit pattern is 0x8000000000000000, which `==` on
+	// floats cannot detect because -0.0 == 0.0. Comparing bits does.
+	let negativeZeroBits = __Builtins.floatToBits(-0.0)
+	if roundTripBits(negativeZeroBits) != negativeZeroBits 'negativeZero'
+		return 5
+	end 'negativeZero'
+
+	// Sign bit through the float-first composition.
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(-2.5)) != -2.5 'negativeValue'
+		return 6
+	end 'negativeValue'
+
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(0.5)) != 0.5 'half'
+		return 7
+	end 'half'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.b __il_body#16
+  __il_body#16:
+    arm64.fmov d0, x0
+    arm64.fmov x0, d0
+    arm64.b __il_cont#15
+  __il_cont#15:
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, subnormalMin
+    arm64.b ifcont#2
+  subnormalMin:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 4503599627370495
+    arm64.b __il_body#18
+  __il_body#18:
+    arm64.fmov d0, x0
+    arm64.fmov x0, d0
+    arm64.b __il_cont#17
+  __il_cont#17:
+    arm64.movImm x1, 4503599627370495
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, subnormalMax
+    arm64.b ifcont#4
+  subnormalMax:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 0
+    arm64.b __il_body#20
+  __il_body#20:
+    arm64.fmov d0, x0
+    arm64.fmov x0, d0
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, positiveZero
+    arm64.b ifcont#6
+  positiveZero:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 4607182418800017408
+    arm64.b __il_body#22
+  __il_body#22:
+    arm64.fmov d0, x0
+    arm64.fmov x0, d0
+    arm64.b __il_cont#21
+  __il_cont#21:
+    arm64.movImm x1, 4607182418800017408
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, one
+    arm64.b ifcont#8
+  one:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#8:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fmov x0, d0
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.fmov d0, x0
+    arm64.fmov x1, d0
+    arm64.b __il_cont#23
+  __il_cont#23:
+    arm64.cmp x1, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, negativeZero
+    arm64.b ifcont#10
+  negativeZero:
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#10:
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.fmov x0, d0
+    arm64.fmov d0, x0
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, negativeValue
+    arm64.b ifcont#12
+  negativeValue:
+    arm64.movImm x0, 6
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#12:
+    arm64.fpLoadRdata d0, [rdata + __fconst_2]
+    arm64.fmov x0, d0
+    arm64.fmov d0, x0
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, half
+    arm64.b ifcont#14
+  half:
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#14:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

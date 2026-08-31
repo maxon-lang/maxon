@@ -1,0 +1,39 @@
+// Test: error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat()
+end 'BiCursor'
+
+typealias Pos = int(0 to 100)
+
+type Walker implements Cursor with Pos, BiCursor
+	var pos as Pos
+
+	export static function create(p Pos) returns Self
+		return Self{pos: p}
+	end 'create'
+
+	export function current() returns String
+		return "no"
+	end 'current'
+
+	export function retreat()
+		pos = pos - 1
+	end 'retreat'
+end 'Walker'
+
+function main() returns ExitCode
+	var w = Walker.create(8)
+	w.retreat()
+	print("{w.current()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+  - current() returns String (expected current() returns Pos)
+error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+  - current() returns String (expected current() returns Pos)

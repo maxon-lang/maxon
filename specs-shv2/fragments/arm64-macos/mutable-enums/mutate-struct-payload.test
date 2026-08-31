@@ -1,0 +1,169 @@
+// Test: mutate-struct-payload
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+union Shape
+	nothing
+	located(pos Point)
+end 'Shape'
+
+function main() returns ExitCode
+	var s = Shape.located(Point.create(1, y: 2))
+	match s 'update'
+		located(pos) then pos = Point.create(10, y: 32)
+		nothing then return 0
+	end 'update'
+	match s 'read'
+		located(pos) then return pos.x + pos.y
+		nothing then return 0
+	end 'read'
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Point.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.bl Point.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchnext#4
+  matcharm#2:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Shape
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchnext#4:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#1
+    arm64.b matchdead#3
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 10
+    arm64.movImm x1, 32
+    arm64.bl Point.create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 8], x21
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.b matchcont#5
+  matchcont#5:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#7
+    arm64.b matchnext#9
+  matcharm#7:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Shape
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchnext#9:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#6
+    arm64.b matchdead#8
+  matcharm#6:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.add x19, x1, x2
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Shape
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchdead#8:
+  matchdead#3:
+  matchcont#10:
+}

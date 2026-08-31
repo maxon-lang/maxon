@@ -1,0 +1,116 @@
+// Test: iteration.large-list
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	for i in 1 to 100 'build'
+		list.append(i)
+	end 'build'
+	var sum = 0
+	for item in list 'loop'
+		sum = sum + item
+	end 'loop'
+	return sum - 5050
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_List_Integer
+    arm64.bl List.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 1
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x20, 100
+    arm64.cset x0, le
+    arm64.cbnz x0, build
+    arm64.b forexit#4
+  build:
+    arm64.leaRdata x2, __layout_List_Integer
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl List.append
+    arm64.b forstep#3
+  forstep#3:
+    arm64.add x20, x20, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl List.createIterator
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b forempty
+  critsplit:
+    arm64.b forhdr#5
+  forhdr#5:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, loop
+    arm64.b forexit#9
+  loop:
+    arm64.leaRdata x1, __layout_ListIterator_Integer
+    arm64.movRegReg x0, x21
+    arm64.bl ListIterator.current
+    arm64.add x20, x20, x0
+    arm64.b forstep#8
+  forstep#8:
+    arm64.movRegReg x0, x21
+    arm64.bl ListIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr#5
+  forexit#9:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_ListIterator_Integer
+    arm64.movRegReg x0, x20
+    arm64.b forjoin
+  forempty:
+    arm64.movRegReg x0, x20
+    arm64.b forjoin
+  forjoin:
+    arm64.sub x20, x0, 5050
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_List_Integer
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

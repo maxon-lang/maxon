@@ -1,0 +1,203 @@
+// Arm64RuntimeAsm — the assembler the arm64 RUNTIME CHUNKS are hand-written with: a frame, locals,
+// chunk-local labels, and the emit fragments every such chunk repeats.
+//
+// ⭐ **IT WAS `Arm64PanicRuntime`'s PRIVATE HARNESS UNTIL THERE WERE TWO RUNTIMES.** The panic runtime was
+// the first hand-assembled arm64 code in the tree, so its assembler lived beside it; `Arm64DarwinRuntime`
+// is the second, and a `type` declared in one file is invisible to the other — Maxon's top-level namespace
+// is flat, but a non-`export`ed declaration is file-private. Copying the harness would have been the
+// project's own signature bug (ONE FACT WRITTEN DOWN TWICE) reproduced in the frame layout, where a drift
+// between two copies is a corrupted stack rather than a compile error. So it moved here, whole, and the
+// two runtimes are its two consumers.
+//
+// ⚠ **WHAT DID NOT MOVE, AND WHY.** `arm64EmitPrintConstant` stayed with the panic runtime: it branches to
+// `mrt_write_cstr_stderr`, which is that runtime's own symbol, so it is a fragment OF a runtime rather than
+// a fragment every runtime shares. The test is whether a second consumer could use it unchanged.
+
+// The 5-bit encoding field of a NAMED physical GPR. It goes through the same `arm64GprField` every
+// colored operand does (via `arm64PhysReg`) rather than reading the ordinal here, so the GPR/SIMD
+// class check that guards every other encoding guards these too.
+export function arm64RuntimeReg(reg Arm64Register) returns MachineWord
+	return arm64GprField(arm64PhysReg(reg))
+end 'arm64RuntimeReg'
+
+// ==========================================================================
+// The chunk assembler
+// ==========================================================================
+
+// Assembles ONE hand-written arm64 runtime function into a `FunctionCodeChunk`: the buffers the
+// encoders file into, a chunk-local label allocator for its branches, and the frame.
+//
+// It carries no per-instruction methods, for `X64RuntimeAsm`'s reason: `Arm64Backend`'s encoders ARE
+// the instruction vocabulary and are called directly. What lives here is only what needs STATE — the
+// frame, and the labels.
+export type Arm64RuntimeAsm
+	export var code as ByteArray
+	export var callFixups as CallFixupArray
+	export var iatRelocs as RelocationArray
+	export var rdataRelocs as RdataRelocationArray
+	export var funcAdrpRelocs as Arm64FuncAdrpRelocArray
+	export var labelOffsets as BlockOffsetTable
+	export var branchFixups as Arm64BlockBranchFixupArray
+	export var nextLabel as BlockId
+	export var frameBytes as StackSize
+	export var slotCount as StackSize
+
+	// Open a function: a real frame record (`stp x29, x30, [sp, #-N]!; mov x29, sp`) plus `slots`
+	// 8-byte locals above it. EVERY chunk here is framed, and not merely because it calls something:
+	// `mrt_panic` SEEDS the walk from its own x29, and a chunk with no record would leave a hole in
+	// the very chain it is about to print.
+	export static function beginFunction(slots StackSize) returns Arm64RuntimeAsm
+		let frameBytes = alignUp(Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
+
+		var code = ByteArray.create()
+		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: NoOutgoingArgRegion)
+
+		return Self{
+			code: code,
+			callFixups: CallFixupArray.create(),
+			iatRelocs: RelocationArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			labelOffsets: BlockOffsetTable.create(),
+			branchFixups: Arm64BlockBranchFixupArray.create(),
+			nextLabel: 0,
+			frameBytes: frameBytes,
+			slotCount: slots
+		}
+	end 'beginFunction'
+
+	// Close a RETURNING function: the epilogue (the exact mirror of the prologue, so sp comes home by
+	// balanced arithmetic and x30 is restored) and the `ret`.
+	export function finishFunction(name ByteArray) returns FunctionCodeChunk
+		arm64EmitEpilogue(self.code, frameSize: self.frameBytes, recordOffset: NoOutgoingArgRegion)
+		arm64EmitRet(self.code)
+		return self.finishChunk(name)
+	end 'finishFunction'
+
+	// Resolve the branches and seal the chunk — the tail `finishFunction` runs after its epilogue, and
+	// ALSO the whole closer for a DIVERGING function, one that ends in a process exit and a `brk`. Such a
+	// function tears down no frame: restoring it would be reachable only if the exit primitive returned,
+	// and RETURNING there is strictly worse than trapping. A diverging chunk therefore calls this
+	// directly rather than passing `finishFunction` a flag — whether the frame comes down at all is the
+	// whole of what a closer decides.
+	export function finishChunk(name ByteArray) returns FunctionCodeChunk
+		arm64ResolveBlockBranches(self.code, blockOffsets: self.labelOffsets, fixups: self.branchFixups)
+
+		var chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs, rdataConstants: GlobalDataTable.create())
+		chunk.funcAdrpRelocs = self.funcAdrpRelocs
+		return chunk
+	end 'finishChunk'
+
+	// Mint a fresh chunk-local label id.
+	export function newLabel() returns BlockId
+		let id = self.nextLabel
+		self.nextLabel = id + 1
+		return id
+	end 'newLabel'
+
+	// Fix `label` at the current offset. Every branch to it — already emitted or not — is patched by
+	// the closer.
+	export function placeLabel(label BlockId)
+		self.labelOffsets.place(label, value: self.code.count())
+	end 'placeLabel'
+
+	// The `[x29 + off]` byte offset of local slot `index`. arm64 slots grow UPWARD from the frame
+	// record (unlike x64's, which grow down from rbp), so a runtime chunk's local is at the SAME
+	// displacement the allocator's spills are — read from `arm64SlotDisplacement` rather than respelled,
+	// which is what keeps a future change to the frame layout from moving one and not the other.
+	export function slotOffset(index StackSize) returns MachineWord
+		if index >= self.slotCount 'outOfFrame'
+			panic("Arm64RuntimeAsm.slotOffset: slot {index} is outside the {self.slotCount} this frame reserved — `beginFunction` was asked for too few slots")
+		end 'outOfFrame'
+		return arm64SlotDisplacement(index)
+	end 'slotOffset'
+end 'Arm64RuntimeAsm'
+
+// A runtime chunk's frame record sits at SP: none of them passes an argument on the stack, so there
+// is no outgoing-argument region to displace it (see `Arm64PrologueEpilogue`'s `recordOffset`).
+export let NoOutgoingArgRegion = 0 as StackSize
+
+// ==========================================================================
+// Shared emit fragments
+// ==========================================================================
+
+// `str Xt, [x29, #slot]` / `ldr Xt, [x29, #slot]` — a runtime chunk's locals. Slot offsets are
+// positive and 8-aligned by construction, so the scaled unsigned form always encodes.
+export function arm64EmitStoreSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: SpillSlotBytes)
+end 'arm64EmitStoreSlot'
+
+export function arm64EmitLoadSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: SpillSlotBytes)
+end 'arm64EmitLoadSlot'
+
+// `ldr Xt, [Xn, #byteOffset]` — a 64-bit load through an arbitrary base (a frame record's two words,
+// a chain link).
+export function arm64EmitLoadWord64At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
+end 'arm64EmitLoadWord64At'
+
+// `ldr Wt, [Xn, #byteOffset]` — a `__symtable` column. 32 bits, ZERO-extended into the full X
+// register, which is what makes the count and both entry fields read as the u32s the writer emitted.
+export function arm64EmitLoadColumn(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset Imm32)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrW, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset as MachineWord, scale: SymbolTableColumnBytes)
+end 'arm64EmitLoadColumn'
+
+// `ldrb Wt, [Xn, #0]` — one byte of a C string, zero-extended, so the `cbz` that follows tests the
+// whole register against the NUL.
+export function arm64EmitLoadByte(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrB, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: 0, scale: 1)
+end 'arm64EmitLoadByte'
+
+export function arm64EmitMovRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, src Arm64Register)
+	arm64EmitMovGpr(asm.code, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(src))
+end 'arm64EmitMovRuntimeReg'
+
+// `mov Xd, #value` — the movz/movk ladder, which already answers zero with `mov Xd, XZR`.
+export function arm64EmitMovRuntimeImm(asm Arm64RuntimeAsm, dest Arm64Register, value MachineWord)
+	arm64EmitMovImm(asm.code, rd: arm64RuntimeReg(dest), value: value)
+end 'arm64EmitMovRuntimeImm'
+
+// `add Xd, Xn, Xm` / `sub Xd, Xn, Xm`.
+export function arm64EmitAddRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
+	emitArm64Rrr(asm.code, opcode: Arm64OpAdd, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
+end 'arm64EmitAddRuntimeReg'
+
+export function arm64EmitSubRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
+	emitArm64Rrr(asm.code, opcode: Arm64OpSub, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
+end 'arm64EmitSubRuntimeReg'
+
+// `add Xd, Xn, #imm` — a signed immediate, so a negative one encodes as the SUB form.
+export function arm64EmitAddRuntimeImm(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, imm Imm32)
+	arm64EmitAddImmSigned(asm.code, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(base), imm: imm)
+end 'arm64EmitAddRuntimeImm'
+
+export function arm64EmitCmpRuntimeReg(asm Arm64RuntimeAsm, lhs Arm64Register, rhs Arm64Register)
+	arm64EmitCmpReg(asm.code, rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
+end 'arm64EmitCmpRuntimeReg'
+
+export function arm64EmitCmpRuntimeImm(asm Arm64RuntimeAsm, reg Arm64Register, imm Imm32)
+	arm64EmitCmpImm(asm.code, rn: arm64RuntimeReg(reg), imm: imm)
+end 'arm64EmitCmpRuntimeImm'
+
+export function arm64EmitBranchTo(asm Arm64RuntimeAsm, label BlockId)
+	arm64EmitBranch(asm.code, fixups: asm.branchFixups, targetBlock: label)
+end 'arm64EmitBranchTo'
+
+export function arm64EmitCondBranchTo(asm Arm64RuntimeAsm, cond Arm64CondCode, label BlockId)
+	arm64EmitCondBranch(asm.code, fixups: asm.branchFixups, cond: cond, targetBlock: label)
+end 'arm64EmitCondBranchTo'
+
+export function arm64EmitCbzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
+	arm64EmitCbz(asm.code, fixups: asm.branchFixups, reg: arm64RuntimeReg(reg), targetBlock: label)
+end 'arm64EmitCbzTo'
+
+// The OS door every terminal step in this file goes through — the same one `StdToArm64Conversion`'s
+// `lowerOsExit` uses, so the panic runtime cannot grow a second opinion about which OSes this backend
+// serves or how each one is reached.
+export function arm64EmitOsPrimitive(asm Arm64RuntimeAsm, os Os, importSlot OsImportSlot, syscallNumber MachineWord)
+	match arm64OsCallKind(os) 'route'
+		importCall then arm64EmitImportCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: osImportSlotIndex(importSlot))
+		syscall then arm64EmitSyscall(asm.code, number: syscallNumber)
+	end 'route'
+end 'arm64EmitOsPrimitive'

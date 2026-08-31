@@ -1,0 +1,306 @@
+// Arm64DarwinRuntime — the arm64-macOS HOST SURFACE, hand-assembled into `.text`: the libSystem
+// sequences that stand behind the `os*` Std ops whose only implementation used to be x64-windows's.
+//
+// ⭐⭐ **WHY CHUNKS AND NOT INLINE ISEL CODE — THE REASON IS A REGISTER LIFETIME, AND IT IS STRUCTURAL.**
+// Several of these ops are OUT-PARAM shaped: `osReadWallClock(ftPtr)` means *"write the host's calendar
+// through this pointer"*. On Windows that is one import and nothing more, because `GetSystemTimeAsFileTime`
+// writes the memory ITSELF — the pointer is an ARGUMENT and is dead the instant the call is made. Darwin
+// answers the same question with a VALUE (`clock_gettime_nsec_np` returns nanoseconds in x0), so the
+// pointer must survive the call and be stored through AFTERWARDS.
+//
+// An isel cannot hold a value across a call. The register allocator colours an operand that dies at its op
+// into the caller-saved half — correctly, because for every other OS lowering in this backend the operand
+// IS dead at the call — and x16/x17 are no refuge either: x16 is the import-call trampoline's own scratch
+// (`adrp/ldr/blr x16`) and both are AAPCS64 intra-procedure-call temporaries a callee may clobber at will.
+// A REAL FUNCTION has the one thing the isel does not: a frame. It spills the pointer to a local, calls,
+// and stores through the reloaded pointer — which is what every chunk below does, and why the whole Darwin
+// surface is shaped this way rather than only the ops that happen to need it today.
+//
+// ⭐ **AND IT IS THE ONLY SHAPE THE HARD FAMILIES COULD TAKE ANYWAY.** A `FindFirstFileA` emulated over
+// `opendir`/`readdir`/`stat` is a loop with three calls and a 320-byte record to fill; there is no inline
+// isel expansion of that, on any backend. Paying for a frame at the clock buys the vehicle for the rest.
+//
+// ⚠ **EVERY CHUNK HERE IS macOS-ONLY AND IS APPENDED ONLY FOR `Os.macos`** (`appendArm64DarwinRuntimeChunks`,
+// called from `buildArm64Backend`). arm64-LINUX reaches the OS by raw `svc #0` with no import table at all
+// (`arm64OsCallKind`), so a Linux lane that lands these families writes its own chunks against its own
+// syscall numbers — it does not inherit these, and must not, because the ARGUMENTS differ as well as the
+// route (Darwin's `clock_gettime_nsec_np` has no Linux counterpart at all).
+//
+// ⚠ **THE CHUNKS ARE GATED ON `RuntimeUsage`, NOT INSTALLED UNCONDITIONALLY** — the opposite of the panic
+// runtime beside them, and for a reason that runtime does not have: a panic is reachable from any program
+// and costs a few hundred bytes, while these come one family at a time and each drags its own libSystem
+// imports into the GOT. A program that reads no clock emits no clock chunk. The bits are the SAME ones the
+// Std-tier installers read (`installClockRuntime` builds `__clock_now_unix_s` under `usesWallClock`), so a
+// chunk can never be absent for a body that calls it: one bit, two tiers.
+
+// ==========================================================================
+// Darwin ABI constants
+// ==========================================================================
+
+// ⭐ **THE `clockid_t` VALUES ARE DARWIN'S OWN AND ARE NOT POSIX-PORTABLE NUMBERS** — measured against this
+// host's SDK (`<time.h>`) rather than transcribed from a POSIX table, because Linux numbers the same names
+// differently (`CLOCK_MONOTONIC` is 1 there, 6 here) and a wrong number does not fail: it reads a DIFFERENT
+// CLOCK and answers a plausible wrong time.
+//
+// `clock_gettime_nsec_np(clockid)` returns `uint64_t` NANOSECONDS in x0 — one call, no `timespec`, no
+// second read. That is why it is preferred here over `clock_gettime`: a `timespec` would need a 16-byte
+// local and two loads to say what one register already says.
+let DarwinClockRealtime = 0
+let DarwinClockUptimeRaw = 8
+let DarwinClockThreadCpuTime = 16
+
+// A FILETIME's own two facts, restated HERE for the emitter that must PRODUCE one — `ClockRuntime` states
+// them for the Std tier that CONSUMES one. Two tiers, one encoding, and the pair is asserted rather than
+// trusted: `assertDarwinFileTimeConstants` below checks these against the Std tier's, so the producer and
+// the consumer cannot drift into two calendars.
+let DarwinFileTimeTicksPerSecond = 10000000
+let DarwinNanosPerFileTimeTick = 100
+let DarwinFileTimeEpochOffset = 116444736000000000
+
+// The monotonic clock's `freq` out-param. `__gt_now_ns` computes `ticks/freq` seconds plus a scaled
+// remainder, so reporting the reading in nanoseconds and the frequency as 1e9 makes that arithmetic the
+// IDENTITY on this lane — exact, with no rounding of its own, which is the strongest form the split
+// identity can take. (Windows reports a 10 MHz QPC and does the same arithmetic non-trivially.)
+let DarwinMonotonicTicksPerSecond = 1000000000
+
+// `nanosleep(const struct timespec *req, struct timespec *rem)`. Darwin's `timespec` is two 64-bit words —
+// `tv_sec` then `tv_nsec` — which is exactly two of this assembler's 8-byte frame slots, side by side and
+// in that order, so `&slot0` IS a `struct timespec *`.
+let DarwinTimespecSecSlot = 0 as StackSize
+let DarwinTimespecNsecSlot = 1 as StackSize
+let DarwinMillisPerSecond = 1000
+let DarwinNanosPerMilli = 1000000
+
+// ==========================================================================
+// The chunk symbol names
+// ==========================================================================
+
+// ⭐ The `mrt_` band, exactly like `mrt_panic` and `mrt_write_cstr_stderr`: these are RUNTIME symbols the
+// backend emits and the isel branches to, not Std functions and not user names. The `_darwin_` infix says
+// which lane owns the body — a Linux lane adding its own must not be able to collide with one of these by
+// picking the same verb.
+export let DarwinWallClockName = b"mrt_darwin_wall_clock"
+export let DarwinMonotonicClockName = b"mrt_darwin_monotonic_clock"
+export let DarwinThreadCpuName = b"mrt_darwin_thread_cpu"
+export let DarwinSleepMsName = b"mrt_darwin_sleep_ms"
+
+// ==========================================================================
+// Shared emit fragments
+// ==========================================================================
+
+// `str Xt, [Xn, #byteOffset]` — a 64-bit store through an arbitrary base. The out-param write every chunk
+// here ends with. (`Arm64PanicRuntime` has the LOAD twin and no store, because a backtrace only reads.)
+function arm64DarwinStoreWordAt(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
+end 'arm64DarwinStoreWordAt'
+
+// `<op> Xd, Xn, Xm` for the three-register arithmetic these chunks need (`mul`, `udiv`). The register-name
+// spelling goes through `arm64RuntimeReg` like every other operand in a runtime chunk, so the GPR class
+// check that guards an allocated operand guards these too.
+function arm64DarwinEmitRrr(asm Arm64RuntimeAsm, opcode MachineWord, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
+	emitArm64Rrr(asm.code, opcode: opcode, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
+end 'arm64DarwinEmitRrr'
+
+// `bl` a libSystem import through its GOT slot. macOS ONLY, and unconditionally so — this whole file is
+// reached only for `Os.macos`, so unlike `Arm64PanicRuntime.arm64EmitOsPrimitive` there is no route to
+// choose between and no syscall number to carry.
+function arm64DarwinCallImport(asm Arm64RuntimeAsm, slot OsImportSlot)
+	arm64EmitImportCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: osImportSlotIndex(slot))
+end 'arm64DarwinCallImport'
+
+// `x0 = clock_gettime_nsec_np(clockId)` — the one call three of the four chunks below open with.
+function arm64DarwinReadClockNanos(asm Arm64RuntimeAsm, clockId MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: clockId)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.clockGettimeNsecNp)
+end 'arm64DarwinReadClockNanos'
+
+// ==========================================================================
+// mrt_darwin_wall_clock(x0 = ftPtr)
+// ==========================================================================
+
+// Write the host's CALENDAR through `ftPtr`, as a Win32 FILETIME — 100-nanosecond ticks since 1601.
+//
+// ⭐⭐ **THE FILETIME ENCODING IS NOT A WINDOWS DETAIL LEAKING INTO A POSIX LANE — IT IS THE OP's CONTRACT,
+// AND KEEPING IT IS WHAT LEAVES THE Std TIER TARGET-NEUTRAL.** `osReadWallClock`'s consumer
+// (`ClockRuntime.buildWallClockNowUnixSeconds`) subtracts the 1601 epoch and divides by 10⁷ — arithmetic
+// built ONCE for every target. A lane that wrote raw Unix nanoseconds here would have to make that graph
+// ask which target it is compiling for, which is precisely the shape the rewrite does not have: the ops are
+// neutral and the BACKENDS hold every OS fact. So the conversion belongs on this side of the boundary.
+//
+// Darwin's reading is nanoseconds since 1970; the FILETIME is `nanos / 100 + 116444736000000000`. The
+// division is a real `udiv` (AArch64 has hardware integer divide, so no magic-multiply reciprocal is
+// needed), and it is UNSIGNED because the reading is a `uint64_t` — a signed divide would answer garbage
+// for any calendar past 2262, which is exactly the kind of "works today" the range types in this compiler
+// exist to refuse.
+function buildArm64DarwinWallClockChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
+
+	arm64DarwinReadClockNanos(asm, clockId: DarwinClockRealtime)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinNanosPerFileTimeTick)
+	arm64DarwinEmitRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinFileTimeEpochOffset)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
+	arm64DarwinStoreWordAt(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	return asm.finishFunction(DarwinWallClockName)
+end 'buildArm64DarwinWallClockChunk'
+
+// ==========================================================================
+// mrt_darwin_monotonic_clock(x0 = ticksPtr, x1 = freqPtr)
+// ==========================================================================
+
+// Write the MONOTONIC counter and its frequency — the pair `osReadClock` names, Windows's
+// QueryPerformanceCounter/QueryPerformanceFrequency.
+//
+// ⭐ **`CLOCK_UPTIME_RAW`, NOT `CLOCK_MONOTONIC`**, and the difference is observable: Darwin's
+// `CLOCK_MONOTONIC` advances across system sleep, `CLOCK_UPTIME_RAW` does not. The scheduler's deadlines
+// are the consumer, and a machine that slept for an hour must not wake with every timer already expired —
+// which is the same property QPC has and the reason the op exists separately from the wall clock.
+//
+// The frequency is a CONSTANT 1e9 because the reading is already nanoseconds; see
+// `DarwinMonotonicTicksPerSecond` for why that makes `__gt_now_ns`'s scaling exact.
+function buildArm64DarwinMonotonicClockChunk() returns FunctionCodeChunk
+	let SlotTicksPtr = 0 as StackSize
+	let SlotFreqPtr = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTicksPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFreqPtr)
+
+	arm64DarwinReadClockNanos(asm, clockId: DarwinClockUptimeRaw)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTicksPtr)
+	arm64DarwinStoreWordAt(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinMonotonicTicksPerSecond)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFreqPtr)
+	arm64DarwinStoreWordAt(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	return asm.finishFunction(DarwinMonotonicClockName)
+end 'buildArm64DarwinMonotonicClockChunk'
+
+// ==========================================================================
+// mrt_darwin_thread_cpu(x0 = outPtr)
+// ==========================================================================
+
+// Write THIS THREAD's consumed CPU time through `outPtr`, in the host's own unit.
+//
+// ⚠ **THE UNIT IS NANOSECONDS HERE AND TSC TICKS ON WINDOWS, AND NOTHING CONVERTS BETWEEN THEM** — which is
+// `ClockRuntime`'s stated contract rather than an omission of this chunk's: the two platforms answer in
+// units with no honest conversion, so `__thread_cpu_ticks` promises only that two readings may be
+// SUBTRACTED. Scaling here to look like Windows would be a guess wearing a unit's name.
+function buildArm64DarwinThreadCpuChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
+
+	arm64DarwinReadClockNanos(asm, clockId: DarwinClockThreadCpuTime)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
+	arm64DarwinStoreWordAt(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+
+	return asm.finishFunction(DarwinThreadCpuName)
+end 'buildArm64DarwinThreadCpuChunk'
+
+// ==========================================================================
+// mrt_darwin_sleep_ms(x0 = milliseconds)
+// ==========================================================================
+
+// Suspend the calling OS THREAD for `ms` milliseconds — Windows's `Sleep(ms)`.
+//
+// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a GREEN THREAD
+// on the scheduler's timer heap and only bottoms out here when there is nothing else to run
+// (`GtRuntime.buildGtSleep`), so this chunk being present says nothing about whether that scheduler exists
+// on this lane — see `TargetFacilities.targetProvidesFacility`, where `sleep` and `greenThreads` are
+// separate rows for exactly this reason.
+//
+// `nanosleep` rather than `usleep`: `usleep` takes a 32-bit `useconds_t`, so a sleep of more than ~71
+// minutes would silently wrap into a short one. The `timespec` is two adjacent frame slots — see
+// `DarwinTimespecSecSlot` — so the request is `&slot0` with no packing step.
+//
+// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT.** That matches Windows's
+// `Sleep`, which is likewise not a guarantee of a minimum elapsed time in the presence of an APC, and it
+// matches what the one consumer needs: the scheduler re-checks its deadline after every park rather than
+// trusting the sleep to have slept (`emitGtParkOnDeadline`). A restart loop here would be a second, weaker
+// copy of a check that already exists one tier up.
+function buildArm64DarwinSleepMsChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	// secs = ms / 1000 ; nanos = (ms - secs * 1000) * 1e6 — `msub` computes the remainder from the
+	// quotient with no second divide, which is the same fold `StdToArm64Conversion.lowerDivMod` makes.
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinMillisPerSecond)
+	arm64DarwinEmitRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x2, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitMsub(asm.code, rd: arm64RuntimeReg(Arm64Register.x3), rn: arm64RuntimeReg(Arm64Register.x2), rm: arm64RuntimeReg(Arm64Register.x1), ra: arm64RuntimeReg(Arm64Register.x0))
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: DarwinNanosPerMilli)
+	arm64DarwinEmitRrr(asm, opcode: Arm64OpMul, dest: Arm64Register.x3, lhs: Arm64Register.x3, rhs: Arm64Register.x4)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: DarwinTimespecSecSlot)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: DarwinTimespecNsecSlot)
+
+	// &ts — the frame slots are `[x29 + slotOffset]`, and `slotOffset(0)` is the base of the pair.
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x29, imm: asm.slotOffset(DarwinTimespecSecSlot) as Imm32)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.nanosleep)
+
+	return asm.finishFunction(DarwinSleepMsName)
+end 'buildArm64DarwinSleepMsChunk'
+
+// ==========================================================================
+// Assembly
+// ==========================================================================
+
+// ⭐ **THE PRODUCER AND THE CONSUMER OF A FILETIME ARE HELD TOGETHER HERE.** `ClockRuntime` states the two
+// constants for the Std graph that DECODES one; this file states them for the chunk that ENCODES one. That
+// is a pair, and this project's rule for a pair is that something must check it — a drifted epoch offset
+// would not fail to compile, it would report a date centuries off with every test still green.
+function assertDarwinFileTimeConstants()
+	if DarwinFileTimeTicksPerSecond * DarwinNanosPerFileTimeTick != DarwinMonotonicTicksPerSecond 'tickScale'
+		panic("Arm64DarwinRuntime: a FILETIME tick is {DarwinNanosPerFileTimeTick} ns and there are {DarwinFileTimeTicksPerSecond} per second, which multiplies to {DarwinFileTimeTicksPerSecond * DarwinNanosPerFileTimeTick} rather than the {DarwinMonotonicTicksPerSecond} nanoseconds a second has")
+	end 'tickScale'
+
+	if DarwinFileTimeEpochOffset != FileTimeTicksFrom1601To1970 'epochOffset'
+		panic("Arm64DarwinRuntime: this emitter writes FILETIMEs offset by {DarwinFileTimeEpochOffset} from the Unix epoch while `ClockRuntime` decodes them with {FileTimeTicksFrom1601To1970} — the producer and the consumer are two calendars")
+	end 'epochOffset'
+
+	if DarwinFileTimeTicksPerSecond != FileTimeTicksPerSecond 'tickRate'
+		panic("Arm64DarwinRuntime: this emitter writes {DarwinFileTimeTicksPerSecond} FILETIME ticks per second while `ClockRuntime` decodes {FileTimeTicksPerSecond}")
+	end 'tickRate'
+end 'assertDarwinFileTimeConstants'
+
+// Append the arm64-macOS host-surface chunks a program actually reaches.
+//
+// ⚠ **CALLED ONLY FOR `Os.macos`** — the caller (`buildArm64Backend`) makes that test, because arm64-Linux
+// has no import table for any of this to resolve against. Every chunk here would be an unresolved GOT slot
+// there rather than merely dead code.
+//
+// ⚠ **THE GATES ARE THE Std TIER's OWN USAGE BITS, WHICH IS WHAT MAKES A MISSING CHUNK IMPOSSIBLE.** A
+// chunk is emitted exactly when the Std function that calls it is built: `usesWallClock` builds
+// `__clock_now_unix_s` AND emits `mrt_darwin_wall_clock`. Gating the two on different questions is how a
+// `bl` to an absent symbol happens, and an unresolved `bl` is a link failure rather than a diagnostic.
+export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage)
+	assertDarwinFileTimeConstants()
+
+	if usage.usesWallClock 'wallClock'
+		chunks.push(buildArm64DarwinWallClockChunk())
+	end 'wallClock'
+
+	if usage.usesThreadCpuTicks 'threadCpu'
+		chunks.push(buildArm64DarwinThreadCpuChunk())
+	end 'threadCpu'
+
+	// The monotonic clock and the timed park both ride `usesGt`: `__gt_now_ns` and `__gt_sleep` are
+	// scheduler functions, installed together by `installGtRuntime`, so a program that has either has the
+	// whole band. Splitting them here would be a second reachability analysis that could disagree with the
+	// real one — `installGtRuntime`'s own stated reason for installing its members unconditionally.
+	if usage.usesGt 'schedulerClocks'
+		chunks.push(buildArm64DarwinMonotonicClockChunk())
+		chunks.push(buildArm64DarwinSleepMsChunk())
+	end 'schedulerClocks'
+end 'appendArm64DarwinRuntimeChunks'

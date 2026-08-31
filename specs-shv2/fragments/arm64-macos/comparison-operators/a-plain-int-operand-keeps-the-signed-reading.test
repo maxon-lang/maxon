@@ -1,0 +1,49 @@
+// Test: a-plain-int-operand-keeps-the-signed-reading
+typealias Wide = int(0 to u64.max)
+typealias Signed = int(i64.min to i64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function signed(n Signed) returns Signed
+	return n
+end 'signed'
+
+function main() returns ExitCode
+	let three = signed(3 as Signed)
+	let minusOne = signed(-1)
+
+	if three > minusOne 'ordered'
+		return 42
+	end 'ordered'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.b __il_cont#3
+  __il_cont#3:
+    arm64.cmp x0, -1
+    arm64.cset x0, gt
+    arm64.cbnz x0, ordered
+    arm64.b ifcont
+  ordered:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
