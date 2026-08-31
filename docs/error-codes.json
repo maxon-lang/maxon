@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "35e443a2774b2b06",
+  "sourceHash": "5fa18635e88507ba",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1766,6 +1766,15 @@
       "doc": "An internal compiler invariant was violated. This is a compiler bug.",
       "emittedBy": {"csharp": "InternalError"},
       "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 9002,
+      "tag": "E9002",
+      "name": "InternalDroppedSignature",
+      "stage": "internal",
+      "doc": "A member is used that the program plainly DECLARES, but the compiler's whole-program declaration index\ndoes not carry it -- the declaration sweep read the declaration's head, failed to read its return type,\nand dropped the signature.\nThat tolerance is deliberate and it is for MALFORMED SOURCE: a return type the sweep cannot read is the\nreal parse's to report, with a position, and a sweep that could veto would reject a correct program the\nmoment it failed to recognize something the parser accepts. What it must NOT absorb is a failure the\nreal parse never re-raises -- a return type the DEFERRED whole-program folds could not canonicalize\nwhile the registries those folds fill were still being filled. The declaration then simply stops\nexisting, and the first thing to notice is a USE of it, refused as though nothing had been written.\nMEASURED: `stdlib/helpers/sort/pdqsort.maxon` declares `partition` returning `(SortIndex, bool)` inside\nan `extension Array`, with `SortIndex` declared by a SIBLING `extension Array` in another file. On any\ndirectory walk that folded pdqsort first, the tuple element canonicalized to the unresolved\n`Array.SortIndex`, the element-name join refused the separator, and the method vanished -- reported as\n`E2015 ... `Array` member 'partition'` at the CALL, 138 lines below a declaration that was plainly\nthere. This code is what that program says now: the member IS declared, at the position named, and the\nindex lost it.\nIt is a COMPILER BUG wherever it fires. The position is the USE, because that is where the compile\nstops; the declaration's own file, line and column are named in the message, because that is what has\nto be read to fix it.",
+      "emittedBy": {"shv2": "internalDroppedSignature"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     }
   ]
 }

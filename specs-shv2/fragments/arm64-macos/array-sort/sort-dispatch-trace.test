@@ -1,0 +1,83 @@
+// Test: sort-dispatch-trace
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(3)
+	a.push(1)
+	a.push(2)
+	Log.startCapture()
+	a.sort()
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "insertionSort.run") 'k'
+		print("insertion-fired\n")
+	end 'k' else 'nk'
+		print("insertion-MISSING\n")
+	end 'nk'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.bl Log.startCapture
+    arm64.leaRdata x1, __layout_Array_Integer
+    arm64.leaRdata x2, __witness_int.Comparable
+    arm64.movRegReg x0, x19
+    arm64.bl Array.sort
+    arm64.bl Log.stopCapture
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_19  ; "insertionSort.run"
+    arm64.movRegReg x0, x20
+    arm64.bl Log.fired
+    arm64.cbnz x0, k
+    arm64.b ifelse
+  k:
+    arm64.leaRdata x0, __str_rec_20  ; "insertion-fired\x0a"
+    arm64.bl print
+    arm64.b ifcont
+  ifelse:
+    arm64.leaRdata x0, __str_rec_21  ; "insertion-MISSING\x0a"
+    arm64.bl print
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -265,6 +265,30 @@ export union ParseError implements Error
 	// sentence is available, so writing a private one only made one rejection read two ways.
 	builtinArgumentType(paramName String, expected String, got String, line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **A TUPLE ELEMENT THE WHOLE-PROGRAM INDEX REFUSED — `unsupported`'s payload, under a case of its
+	// own, and the ONE thing that distinguishes them is WHO CAN RAISE IT.** It renders byte-identically
+	// (`Queries.reportParseError` routes both arms through one sentence, so no message and no code moves);
+	// what it adds is that `recordScannedSignature` can tell this failure apart from a token-level one.
+	//
+	// ⚠⚠ **THAT DISTINCTION IS LOAD-BEARING AND IT WAS BEING ERASED.** A malformed return type is the REAL
+	// PARSE's to report, with a position, and the sweep's tolerance exists for exactly that. A tuple-element
+	// rejection raised inside a DEFERRED fold is the one failure the real parse does NOT re-raise — by then
+	// the registries are whole and the element canonicalizes — so the declaration silently stops existing.
+	// `tupleElementError` converted both into one `unsupported`, after which the two were indistinguishable
+	// at the tolerance, and E9002 called a user's syntax error a compiler bug (MEASURED: `returns 42` in an
+	// `extension Array` reported the correct **E2010** and, on the same run, an **E9002** asserting that
+	// malformed source could not be the cause — a self-falsifying pair).
+	//
+	// ⚠ It is minted in exactly one place (`tupleElementError`) and read in exactly one place
+	// (`recordAttributableDrop`). A second minter would be a second thing claiming the sweep may blame it.
+	tupleElementRejected(feature String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **A MEMBER THE PROGRAM DECLARES AND THE INDEX LOST (E9002).** The declaration sweep read this
+	// declaration's head, could not read its return type, and dropped the signature — see
+	// `SignatureIndex.DroppedSignature` for what that tolerance is for and what it was absorbing. The POSITION
+	// is the USE, because that is where the compile stops; `declaredIn`/`declLine`/`declColumn` name the
+	// declaration, because that is what has to be read to fix it. It is a COMPILER BUG wherever it fires,
+	// which is why it is the only 9xxx code the parser raises.
+	droppedSignature(name String, declaredIn String, declLine LineNumber, declColumn ColumnNumber, line LineNumber, column ColumnNumber)
 	// A parameter list that repeats a name (`function f(x int, x int)`). The second
 	// binding would be a dead, uncallable parameter, so it is rejected at parse time.
 	// Renders as E2014, positioned at the repeated name.
@@ -13917,6 +13941,36 @@ export type Parser
 		return self.visibilityBefore((keyword - 1) as TokenIndex) if hasStaticModifier else self.visibilityBefore(keyword)
 	end 'declaredFunctionVisibility'
 
+	// ⭐⭐ **RECORD A DROPPED SIGNATURE — BUT ONLY WHEN NOTHING ELSE WILL REPORT THE FAILURE.**
+	//
+	// ⛔⛔ **RECORDING EVERY DROP MADE E9002 CALL A USER'S TYPO A COMPILER BUG.** MEASURED: an
+	// `export function broken() returns 42` inside an `extension Array`, used from another file, reported the
+	// correct **E2010 `Expected 'a type' but got '42'`** AND, on the same run, an **E9002** whose own sentence
+	// says malformed source cannot be the cause — the positioned report of the very thing it denied was two
+	// lines above it. A 9xxx code asserting a compiler bug about a syntax error is worse than the silence it
+	// replaced.
+	//
+	// ⇒ The discriminator is the ERROR, carried rather than inferred: `tupleElementRejected` is raised only by
+	// `tupleElementError`, i.e. only by the whole-program index refusing a canonical element, and it is the
+	// ONE failure the real parse does not raise again once every fold is complete. Everything else — a
+	// malformed parameter list, a bad type token, an unrepresentable range — reaches the real parse moments
+	// later and is reported there, with a position, which is what the tolerance was written for.
+	//
+	// ⚠ **THE `default` ARM RE-RAISES, WHICH IS THE ONLY SHAPE THE LANGUAGE ALLOWS AND ALSO THE RIGHT ONE.**
+	// `ParseError` carries ~100 members and gains more every rung, so enumerating them here would be a second
+	// copy of the union, free to rot, in service of a question that is binary — and **E2046** refuses a
+	// `default` that neither throws nor panics, in a VALUE match as much as a statement one (measured, both
+	// spellings, on this tree). Re-raising says precisely what the arm means — *this failure is not mine to
+	// attribute* — and hands it back to the tolerance that was always going to absorb it. The asymmetry is what
+	// makes the classification safe in both directions: a failure wrongly re-raised merely restores the silence
+	// this door replaced, while one wrongly recorded is the self-falsifying message above.
+	function recordAttributableDrop(dropped ParseError, name ByteArray, nameTok Token) throws ParseError
+		match dropped 'attributable'
+			tupleElementRejected then self.signatures.recordDroppedSignature(name, dropped: DroppedSignature.create(nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
+			default throws dropped
+		end 'attributable'
+	end 'recordAttributableDrop'
+
 	// Cursor is just past `function`, ON the declared name. Append the declared return type of the
 	// function that name introduces, if the declaration is well-formed enough to read one off.
 	//
@@ -13965,8 +14019,23 @@ export type Parser
 		// whole-program index can answer for it.
 		let declaredSurface = self.returnDeclaredSurface()
 		let returnAliasName = self.returnAliasSpelling()
-		let returnType = try self.parseOptionalReturnType() otherwise return
+		// ⭐ Read BEFORE the return type, so the drop below has a name to file itself under. It is a pure
+		// function of the name token and the enclosing type, so reading it early cannot change what it answers.
 		let funcName = self.declaredMethodName(nameTok)
+		// ⭐⭐ **THE TOLERANCE STAYS, AND IT STOPS BEING SILENT FOR THE ONE FAILURE NOTHING ELSE REPORTS.** A
+		// malformed return type is still the real parse's to report, with a position — this scan may not veto a
+		// program it merely failed to recognize, and the drop is NOT recorded for it. But the same `otherwise`
+		// was also absorbing a return type a DEFERRED fold could not canonicalize while the registries it fills
+		// were still being filled, and the real parse never re-raises THAT: the method simply stops existing,
+		// and the first symptom is a use of it refused as though nothing had been declared. That drop is
+		// recorded, so the refusal that meets the missing member can name this declaration instead of a roster
+		// (`SignatureIndex.DroppedSignature`).
+		let returnType = try self.parseOptionalReturnType() otherwise (dropped) 'droppedTheSignature'
+			// Both exits publish nothing — the `otherwise` is the drop that door declined to attribute, which is
+			// the malformed-source case the real parse reports with a position moments later.
+			try self.recordAttributableDrop(dropped, name: funcName, nameTok: nameTok) otherwise return
+			return
+		end 'droppedTheSignature'
 		// ⭐⭐ **ONE WALK OF THE PARAMETER LIST, TWO WHOLE-PROGRAM FACTS.** The CONSUME/FEED scan (at the tail
 		// of this routine, which needs the body's start) and the OPAQUE-PARAMETER record (which rides the
 		// entry pushed on the next line) both read the SAME call-aligned names and the SAME per-parameter
@@ -18649,14 +18718,22 @@ export type Parser
 		end 'walk'
 	end 'skipPastBlockEnd'
 
-	// ⭐⭐ **WHICH NESTED `typealias` MEMBERS THIS EXTENSION BODY DECLARES, PUBLISHED ONTO EVERY CONFORMER — AND
-	// NOTHING ELSE (F10).** The first of the two passes `Queries.foldExtensionDeclarations` makes over the same
-	// sites, and it exists because the second one RESOLVES type names while it fills the alias registries: six
-	// files write `export extension Array`, `stdlib/helpers/sort/insertionSort.maxon:14` declares `SortIndex`
-	// and the other five spell it bare, so whichever body the fold reached first would resolve that name
-	// differently from the ones it reached later — a written name meaning what the directory walk says, which
-	// `StdlibLoader`'s header rules out. Names, taken from the tokens alone, are the smallest thing that has to
-	// be known ahead of the whole fold for the answer to be a property of the program.
+	// ⭐⭐ **WHICH NESTED `typealias` MEMBERS THIS EXTENSION BODY DECLARES, PUBLISHED ONTO EVERY CONFORMER, AND
+	// WHAT THE RANGED ONES MEAN (F10).** The first of the two passes `Queries.foldExtensionDeclarations` makes
+	// over the same sites, and it exists because the second one RESOLVES type names while it fills the alias
+	// registries: six files write `export extension Array`, `stdlib/helpers/sort/insertionSort.maxon:14`
+	// declares `SortIndex` and the other five spell it bare, so whichever body the fold reached first would
+	// resolve that name differently from the ones it reached later — a written name meaning what the directory
+	// walk says, which `StdlibLoader`'s header rules out.
+	//
+	// ⛔⛔ **THIS HEADER SAID NAMES WERE *"THE SMALLEST THING THAT HAS TO BE KNOWN AHEAD OF THE WHOLE FOLD"*,
+	// AND THAT WAS FALSE.** A name settles *is `SortIndex` a member of `Array`?*, which is what
+	// `parseTypeReference` needs to spell `named("Array.SortIndex")`. It settles nothing about what that name
+	// MEANS — and `canonicalTupleElement` asks exactly that of every tuple element, through `isInnerAlias`,
+	// i.e. through a registry only the fold fills. `pdqsort.maxon`'s `partition` returns `(SortIndex, bool)`
+	// and lost its whole signature on every walk order that folded it before `insertionSort.maxon`. So the
+	// RANGED declarations are read here too: see `ProgramSignatures.recordPreVerdictInnerAliasRange` for the measurement, and for
+	// why the ranged form is the only one of the four that can be settled ahead of the fold at all.
 	//
 	// ⚠ **IT READS THE HEADER RATHER THAN CARRYING THE CONFORMERS ON THE SITE**, because the conformer list is
 	// `extensionTargetConformers`' and both later passes take it from there (`foldExtensionDeclarationInto`'s
@@ -18666,12 +18743,18 @@ export type Parser
 	//
 	// TOLERANT, exactly as every other sweep entry point: a header it cannot read publishes nothing and leaves
 	// the positioned diagnostic to the real parse.
-	export function publishExtensionInnerAliasNames(index ProgramSignatures, site ExtensionDeclSite)
+	export function publishExtensionInnerAliases(index ProgramSignatures, site ExtensionDeclSite)
 		self.pos = site.tokenPos
 		let header = try self.readExtensionHeader() otherwise return
 
 		var members = ByteArrayArray.create()
-		self.collectNestedAliasMembersInBody(members)
+		// ⭐⭐ **AND THE RANGED ONES ARE READ, NOT ONLY NAMED** — see
+		// `ProgramSignatures.recordPreVerdictInnerAliasRange` for the measurement that says why a name is not
+		// enough, why the ranged form is the only one that can be settled here, and why the answer may not go
+		// into `innerAliases`. Every member's NAME still reaches the set below whatever the read did, so a
+		// range this pass could not read leaves the pre-F10b behaviour exactly as it was rather than a hole.
+		var rangedMembers = RangedTypeAliasArray.create()
+		self.collectNestedAliasMembersInBody(members, rangedOut: rangedMembers, readsRangedDeclarations: true)
 		if members.isEmpty() 'declaresNone'
 			return
 		end 'declaresNone'
@@ -18687,8 +18770,19 @@ export type Parser
 			for member in members 'eachMember'
 				index.recordExtensionInnerAliasMember(joinQualifiedName(conformer, member: member))
 			end 'eachMember'
+
+			// ⛔⛔ **THE RANGE GOES TO A REGISTRY OF THE PRE-PASS'S OWN, NEVER TO `innerAliases`, AND THAT IS NOT A
+			// TIDINESS POINT.** The set above may over-publish a NAME to a withheld conformer because nothing
+			// carries what the name MEANS, so the compile still stops at `E3011 Unknown type 'Box.Slot'` — the
+			// excess is bounded by the very registry a range would fill. Writing the range into `innerAliases`
+			// removed that stop and made a withheld conformer able to NAME the extension's types while correctly
+			// receiving none of its methods, which is what the withheld-alias rule below forbids. MEASURED, and
+			// `ProgramSignatures.recordPreVerdictInnerAliasRange` carries the program.
+			for alias in rangedMembers 'eachRangedMember'
+				index.recordPreVerdictInnerAliasRange(conformer, alias: alias)
+			end 'eachRangedMember'
 		end 'eachConformer'
-	end 'publishExtensionInnerAliasNames'
+	end 'publishExtensionInnerAliases'
 
 	// ⭐⭐ **PUBLISH THE `extension` AT `tokenPos` ONTO EVERY CONFORMER, IN THE WHOLE-PROGRAM INDEX.** The
 	// second half of `recordScannedExtension`, driven by `Queries.foldExtensionDeclarations` once every file
@@ -20707,7 +20801,10 @@ export type Parser
 
 		let resume = self.pos
 		var members = ByteArrayArray.create()
-		self.collectNestedAliasMembersInBody(members)
+		// This caller wants NAMES and nothing else — the clause it is opening the scope for resolves each
+		// binding to a `named`, and the declarations themselves are read by the body walk moments later. So it
+		// reads no ranges: see `collectNestedAliasMembersInBody`'s `readsRangedDeclarations`.
+		self.collectNestedAliasMembersInBody(members, rangedOut: RangedTypeAliasArray.create(), readsRangedDeclarations: false)
 		self.pos = resume
 
 		for member in members 'eachMember'
@@ -20718,7 +20815,7 @@ export type Parser
 	// ⭐⭐ **THE PER-INSTANCE NESTED `typealias` MEMBERS DECLARED AT THE TOP LEVEL OF THE BLOCK THE CURSOR IS
 	// CURRENTLY INSIDE** — a PEEK-shaped walk that reads names and resolves nothing, shared by the two passes
 	// that need the scope before the declarations (`openConformanceClauseAliasScope`, which needs it for the
-	// `implements` clause written ABOVE the body, and `publishExtensionInnerAliasNames`, which needs it for
+	// `implements` clause written ABOVE the body, and `publishExtensionInnerAliases`, which needs it for
 	// every OTHER FILE's `extension` body over the same type). It leaves the cursor just past the block's own
 	// `end`; a caller that must resume where it started saves and restores `self.pos` itself.
 	//
@@ -20731,7 +20828,17 @@ export type Parser
 	// answer and for the same reason: a nested `typealias Fn = function(…)` is a file-scope name written
 	// inside a body and never enters the per-instance scope (`readNestedTypeAlias`'s own arm says why). The
 	// test is the one token `readTypeAliasDeclaration` discriminates the form on, asked of the same position.
-	function collectNestedAliasMembersInBody(into ByteArrayArray)
+	//
+	// ⭐⭐ **`readsRangedDeclarations` IS WHERE THE TWO CALLERS PART, AND IT IS THE HALF OF F10 THAT WAS
+	// MISSING.** The names alone make *"does this type declare `SortIndex`?"* order-independent; they leave
+	// *"what does `Array.SortIndex` MEAN?"* to whichever `extension` body the directory walk folds first, which
+	// is the question `canonicalTupleElement` asks of every tuple element. The extension pre-pass therefore
+	// also READS each RANGED nested alias it walks past — the one form whose meaning is a pure function of its
+	// own tokens — and files it before any body's signatures are folded
+	// (`ProgramSignatures.recordPreVerdictInnerAliasRange` carries the measurement). The conformance-clause
+	// caller wants no such thing and passes `false`: it is inside the REAL parse, where every declaration is
+	// already keyed.
+	function collectNestedAliasMembersInBody(into ByteArrayArray, rangedOut RangedTypeAliasArray, readsRangedDeclarations bool)
 		var depth = 1 as BlockDepth
 		while not self.isEof() 'walk'
 			if self.functionDeclarationAt(self.pos) 'opensAMethod'
@@ -20741,8 +20848,17 @@ export type Parser
 			end 'opensAMethod'
 
 			let member = self.nestedAliasNameAt(self.pos)
-			if depth == 1 and not member.isEmpty() and not self.nestedAliasAtIsFunctionForm(self.pos) 'perInstanceNestedAlias'
+			if depth == 1 and not member.isEmpty() and not self.nestedAliasRhsBeginsWith(self.pos, kind: TokenKind.function) 'perInstanceNestedAlias'
 				into.push(member)
+
+				// The READ costs the cursor, so it is saved and put back: this is a peek-shaped walk, and the
+				// step below advances exactly one token whatever the member turned out to be.
+				if readsRangedDeclarations and self.nestedAliasDeclaresARange(self.pos) 'aRangeTheFoldWillNeedEarlier'
+					let atDeclaration = self.pos
+					self.pos = self.pastVisibilityModifier(atDeclaration)
+					self.pushRangedNestedAlias(rangedOut)
+					self.pos = atDeclaration
+				end 'aRangeTheFoldWillNeedEarlier'
 			end 'perInstanceNestedAlias'
 
 			let closes = self.closesBlockAt(self.pos)
@@ -20754,23 +20870,56 @@ export type Parser
 		end 'walk'
 	end 'collectNestedAliasMembersInBody'
 
-	// Does the nested `typealias` declaration starting at `index` — one `nestedAliasNameAt` has already
-	// recognized — have a `function(…)` right-hand side? A PEEK, walking the same header shape that reader
-	// walks (an optional visibility modifier, `typealias`, the member name) and then the `=`.
+	// Read the RANGED nested `typealias` the cursor sits on — it sits on the `typealias` keyword, the caller
+	// having stepped past any visibility modifier and owning the restore — into `rangedOut`.
 	//
-	// ⚠ It reads the ONE token `readTypeAliasDeclaration` discriminates the function form on, at the position
-	// that reader would read it, so the two cannot disagree about which declarations are per-instance.
-	function nestedAliasAtIsFunctionForm(index TokenIndex) returns bool
+	// ⚠ **IT READS THROUGH `readNestedTypeAlias`, THE SAME DOOR `foldExtensionDeclarationInto` READS A NESTED
+	// ALIAS THROUGH**, so the pre-pass and the fold cannot hold two opinions of what one range MEANS. That is
+	// the whole point of publishing early: an answer that differed between the two passes would be the
+	// file-order dependence one pass further along.
+	//
+	// TOLERANT, exactly as every other sweep entry point: a declaration it cannot read publishes nothing, the
+	// NAME its caller already pushed still reaches `extensionInnerAliasMembers`, and the positioned diagnostic
+	// is the real parse's.
+	function pushRangedNestedAlias(rangedOut RangedTypeAliasArray)
+		// `unpublished` because this pass may not KEY anything but the ranged form — see
+		// `recordPreVerdictInnerAliasRange` for why the other three forms cannot be settled ahead of the fold. The peek above has already established
+		// that the reader will take the ranged arm, so no tuple can reach the owner at all.
+		let nested = try self.readNestedTypeAlias(self.visibilityBefore(self.pos), recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) otherwise return
+
+		match nested 'form'
+			ranged(alias) then rangedOut.push(alias)
+			default panic("pushRangedNestedAlias: `nestedAliasDeclaresARange` peeked the `int`/`float` keyword `readTypeAliasDeclaration` discriminates the ranged form on, and `readNestedTypeAlias` then read a different form — the peek and the read disagree about one declaration, which is the drift a shared discrimination token exists to make impossible")
+		end 'form'
+	end 'pushRangedNestedAlias'
+
+	// Does the nested `typealias` declaration starting at `index` — one `nestedAliasNameAt` has already
+	// recognized — have a right-hand side beginning with `kind`? A PEEK, walking the same header shape that
+	// reader walks (an optional visibility modifier, `typealias`, the member name) and then the `=`.
+	//
+	// ⚠ It reads the ONE token `readTypeAliasDeclaration` discriminates the RHS forms on, at the position that
+	// reader would read it, so a peek and the read cannot disagree about which form a declaration is. The
+	// forms are told apart by that token alone — `function`, `(`, and the `int`/`float` keyword — which is why
+	// the parameter is a token kind and not a form name.
+	function nestedAliasRhsBeginsWith(index TokenIndex, kind TokenKind) returns bool
 		let at = self.pastVisibilityModifier(index)
 
 		// `typealias` at `at`, the member name at `at + 1`, and the `=` at `at + 2` — a malformed declaration
-		// that lacks the `=` simply is not the function form, and the real parse reports it with a position.
+		// that lacks the `=` is not any form, and the real parse reports it with a position.
 		if self.kindAt((at + 2) as TokenIndex) != TokenKind.equals 'noRightHandSide'
 			return false
 		end 'noRightHandSide'
 
-		return self.kindAt((at + 3) as TokenIndex) == TokenKind.function
-	end 'nestedAliasAtIsFunctionForm'
+		return self.kindAt((at + 3) as TokenIndex) == kind
+	end 'nestedAliasRhsBeginsWith'
+
+	// Does the nested `typealias` at `index` declare a RANGE — `int(low to high)` or `float(low to high)`?
+	// The two numeric keywords are asked separately because `readTypeAliasDeclaration` asks them separately
+	// (`self.at(TokenKind.int)` and `isFloat`), and they are the two remaining RHS openers once the function,
+	// generic-instance and tuple arms above them have declined.
+	function nestedAliasDeclaresARange(index TokenIndex) returns bool
+		return self.nestedAliasRhsBeginsWith(index, kind: TokenKind.int) or self.nestedAliasRhsBeginsWith(index, kind: TokenKind.float)
+	end 'nestedAliasDeclaresARange'
 
 	// ⭐⭐ **DOES THE `implements` CLAUSE AT THE CURSOR WRITE A `with` ANYWHERE? — the one question that decides
 	// whether the clause is INDEX-DEPENDENT at all.** Two readers ask it and both take the same two things off
@@ -49688,10 +49837,15 @@ export type Parser
 	// Turn a whole-program tuple-element rejection into a POSITIONED diagnostic. The index raises it (only it
 	// knows what a canonical element is); the parser is the only party holding a token to anchor it on, which
 	// is why the two halves are split at all.
+	//
+	// ⚠ **IT MINTS `tupleElementRejected` AND NOT `unsupported`, AND THE TWO RENDER IDENTICALLY** — see that
+	// case. The sentence and the code are unchanged; what the dedicated case buys is that the declaration
+	// sweep can tell this failure (which the real parse does not re-raise) from a malformed return type
+	// (which it does). This is THE one minter of it.
 	function tupleElementError(rejection TupleElementRejection, anchor Token) returns ParseError
 		return match rejection 'why'
-			unsupportedTag(position, tagName) gives ParseError.unsupported("a tuple whose element {position} is '{tagName}': a tuple's identity IS its element types, and neither a generic type parameter (whose concrete type the shared body does not know) nor an unresolved type can key one", line: anchor.line, column: anchor.column)
-			separatorInElementName(position, elementName) gives ParseError.unsupported("a tuple whose element {position} is named '{elementName}': a tuple type's name joins its elements with '{TupleElementSeparator}', so an element whose own name holds that character would make two different tuples spell one name", line: anchor.line, column: anchor.column)
+			unsupportedTag(position, tagName) gives ParseError.tupleElementRejected("a tuple whose element {position} is '{tagName}': a tuple's identity IS its element types, and neither a generic type parameter (whose concrete type the shared body does not know) nor an unresolved type can key one", line: anchor.line, column: anchor.column)
+			separatorInElementName(position, elementName) gives ParseError.tupleElementRejected("a tuple whose element {position} is named '{elementName}': a tuple type's name joins its elements with '{TupleElementSeparator}', so an element whose own name holds that character would make two different tuples spell one name", line: anchor.line, column: anchor.column)
 		end 'why'
 	end 'tupleElementError'
 
@@ -62175,11 +62329,46 @@ export type Parser
 	function requireSurfaceMember(surface MemberSurface, typeName ByteArray, methodTok Token) returns ByteArrayArray throws ParseError
 		let roster = self.surfaceMemberNames(surface)
 		if not namesInclude(roster, name: methodTok.value) 'notASurfaceMember'
+			try self.refuseMemberTheSweepDropped(typeName, methodTok: methodTok)
 			throw ParseError.unsupported(rosterRefusalSentence(typeName, member: methodTok.value, roster: roster, noun: SurfaceMemberNoun, provider: surfaceRosterProvider(surface)), line: methodTok.line, column: methodTok.column)
 		end 'notASurfaceMember'
 
 		return roster
 	end 'requireSurfaceMember'
+
+	// ⭐⭐ **THE SECOND THING THE ROSTER SENTENCE CANNOT WORD: THE MEMBER IS DECLARED AND THE INDEX LOST IT.**
+	// A surface's roster is derived from the dispatch arms, so *"that list IS the surface"* is always true
+	// about the SURFACE — and useless to a reader looking at a corpus declaration that plainly has the member.
+	// This is `refuseArrayMemberTheOtherDeclarationCarries`' shape one door up, for its reason and about a
+	// different subject: not *which* `Array` the value has, but whether the compiler ever managed to read the
+	// declaration it is refusing.
+	//
+	// ⚠ **IT IS DEAD FOR EVERY HEALTHY COMPILE, and the emptiness test is what makes it free.** A drop is a
+	// compiler bug (`SignatureIndex.DroppedSignature`), so the map is empty in every program that compiles and
+	// in every program refused for a reason of its own.
+	//
+	// ⚠⚠ **THE KEY IS `declaredMethodName`'s SPELLING — THE ONE THE SWEEP FILED UNDER — AND THIS DOOR IS HANDED
+	// A DIFFERENT ONE UNDER A CONTEST (found in review).** `recordScannedSignature` files the drop under
+	// `qualifiedMethodName(self.enclosingType, …)`, i.e. under this compile's MINT for the receiver's
+	// declaration; the `Array` caller passes `arrayReceiverDeclaredName`, which deliberately answers the
+	// PRE-CONTEST source spelling so a refusal never quotes `__Array` at a reader (ARRO). The two are EQUAL for
+	// every uncontested compile — which is every compile in the corpus — and diverge only in a program that
+	// declares its own `type Array`, where the lookup would then miss and this refusal would go dark, falling
+	// back to the roster sentence it exists to replace. That is one fact in two spellings with nothing holding
+	// them together, and it is named here rather than repaired because repairing it means deciding which
+	// spelling a drop record is keyed by — a question `refuseArrayMemberTheOtherDeclarationCarries` one door
+	// down already owns for the refusal, and which no program in the corpus can currently ask.
+	function refuseMemberTheSweepDropped(typeName ByteArray, methodTok Token) throws ParseError
+		if not self.signatures.hasDroppedSignatures() 'nothingWasDropped'
+			return
+		end 'nothingWasDropped'
+
+		let qualified = qualifiedMethodName(typeName, methodName: methodTok.value)
+		match self.signatures.droppedSignatureOf(qualified) 'lookup'
+			none then return
+			dropped(record) then throw ParseError.droppedSignature(String.from(qualified), declaredIn: "{record.filePath}", declLine: record.nameLine, declColumn: record.nameColumn, line: methodTok.line, column: methodTok.column)
+		end 'lookup'
+	end 'refuseMemberTheSweepDropped'
 
 	// ⭐⭐ **WHAT AN ARRAY RECEIVER'S DECLARATION IS CALLED IN SOURCE (ARRO)** — the noun the roster refusal is
 	// shown about. It is the instance's base name in every case but one: under a contest the corpus's

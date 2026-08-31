@@ -1006,7 +1006,7 @@ end 'foldInterfaceDeclarations'
 // (F10).** The fold below RESOLVES the type names in each body's signatures while it fills the alias
 // registries those names resolve against, so a nested `typealias` declared in one `extension` body and spelled
 // BARE from another's — `stdlib/helpers/sort/`, six files over one `extension Array` — would mean one thing in
-// a body folded first and another in a body folded later. `publishExtensionInnerAliasNames` takes the member
+// a body folded first and another in a body folded later. `publishExtensionInnerAliases` takes the member
 // NAMES from the tokens alone, for every site, before the first body is read; see it, and
 // `ProgramSignatures.extensionInnerAliasMembers`, for why names are enough and why they cannot be taken at
 // the per-file sweep instead.
@@ -1033,7 +1033,7 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 			end 'nextFile'
 
 			if namesOnly 'thePrePass'
-				reader.publishExtensionInnerAliasNames(signatures, site: site)
+				reader.publishExtensionInnerAliases(signatures, site: site)
 			end 'thePrePass' else 'theFold'
 				reader.foldExtensionDeclarationInto(signatures, site: site)
 			end 'theFold'
@@ -1839,6 +1839,12 @@ end 'unknownReservedCalleeMessage'
 // was E3010, a SEMANTIC-band number the other two compilers spend on
 // `SemanticUnneededCast` - a parser error wearing a semantic number, and colliding
 // while it did so.
+// The E2015 sentence, written once for the two `ParseError` cases that carry it — see `tupleElementRejected`
+// for why there are two cases and only one sentence.
+function reportUnsupportedFeature(project Project, feature String, line LineNumber, column ColumnNumber, path FilePath)
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
+end 'reportUnsupportedFeature'
+
 function reportParseError(project Project, path FilePath, error ParseError)
 	match error 'kind'
 		// ⚠ The `expected` half is NOT quoted here — `Lexer.expectationDisplayText` decides that, and it is
@@ -1895,7 +1901,16 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// types for them (`2-Parser.cs:1414-1440`) and run them through the ordinary argument checker, which is
 		// why `builtin-type-checking` pins that exact sentence. `argTypeMismatchSentence` is its one producer.
 		builtinArgumentType(paramName, expected, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence(quotedParamLabel(paramName), expected: expected, got: got), line: line, column: column, filePath: path)
-		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
+		unsupported(feature, line, column) then reportUnsupportedFeature(project, feature: feature, line: line, column: column, path: path)
+		// ⭐ **THE SAME SENTENCE AND THE SAME CODE, DELIBERATELY.** `tupleElementRejected` exists so the
+		// declaration sweep can tell a whole-program element refusal from a malformed return type
+		// (`Parser.noteSweepDroppedSignature`); it says nothing new to the reader, so it may not READ any
+		// differently. Both arms render through one door, which is what keeps that true as the sentence changes.
+		tupleElementRejected(feature, line, column) then reportUnsupportedFeature(project, feature: feature, line: line, column: column, path: path)
+		// ⭐⭐ **THE ONE 9xxx THE PARSER RAISES (E9002).** Positioned at the USE, because that is where the
+		// compile stops; the DECLARATION is named in the sentence, because that is what has to be read. See
+		// `SignatureIndex.DroppedSignature`.
+		droppedSignature(name, declaredIn, declLine, declColumn, line, column) then reportPositioned(project, code: ErrorCode.internalDroppedSignature, message: "'{name}' is declared at {declaredIn}:{declLine}:{declColumn}, but the declaration sweep could not read its signature and the whole-program index does not carry it — so every use of it is refused as though nothing had been declared. This is a compiler bug: the sweep's tolerance exists for MALFORMED source, which the real parse then reports with a position, and a declaration the real parse reads is not that", line: line, column: column, filePath: path)
 		duplicateParameter(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
 		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
 		// E3008 / E3088 by tier, through the producer `SemanticCheck.reportCalleeNotVisible` reports a BODY's

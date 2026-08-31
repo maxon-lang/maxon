@@ -1534,4 +1534,25 @@ export enum ErrorCode
 	// produce it -- a swallowed IO failure. A build that cannot say where its output is must not
 	// report success.
 	binaryOutputNotWritten = "E6003"
+
+	// A member is used that the program plainly DECLARES, but the compiler's whole-program declaration index
+	// does not carry it -- the declaration sweep read the declaration's head, failed to read its return type,
+	// and dropped the signature.
+	// That tolerance is deliberate and it is for MALFORMED SOURCE: a return type the sweep cannot read is the
+	// real parse's to report, with a position, and a sweep that could veto would reject a correct program the
+	// moment it failed to recognize something the parser accepts. What it must NOT absorb is a failure the
+	// real parse never re-raises -- a return type the DEFERRED whole-program folds could not canonicalize
+	// while the registries those folds fill were still being filled. The declaration then simply stops
+	// existing, and the first thing to notice is a USE of it, refused as though nothing had been written.
+	// MEASURED: `stdlib/helpers/sort/pdqsort.maxon` declares `partition` returning `(SortIndex, bool)` inside
+	// an `extension Array`, with `SortIndex` declared by a SIBLING `extension Array` in another file. On any
+	// directory walk that folded pdqsort first, the tuple element canonicalized to the unresolved
+	// `Array.SortIndex`, the element-name join refused the separator, and the method vanished -- reported as
+	// `E2015 ... `Array` member 'partition'` at the CALL, 138 lines below a declaration that was plainly
+	// there. This code is what that program says now: the member IS declared, at the position named, and the
+	// index lost it.
+	// It is a COMPILER BUG wherever it fires. The position is the USE, because that is where the compile
+	// stops; the declaration's own file, line and column are named in the message, because that is what has
+	// to be read to fix it.
+	internalDroppedSignature = "E9002"
 end 'ErrorCode'

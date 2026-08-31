@@ -2276,6 +2276,28 @@ E9001 InternalError
 	csharp InternalError
 	doc An internal compiler invariant was violated. This is a compiler bug.
 
+E9002 InternalDroppedSignature
+	shv2 internalDroppedSignature
+	doc A member is used that the program plainly DECLARES, but the compiler's whole-program declaration index
+	doc does not carry it -- the declaration sweep read the declaration's head, failed to read its return type,
+	doc and dropped the signature.
+	doc That tolerance is deliberate and it is for MALFORMED SOURCE: a return type the sweep cannot read is the
+	doc real parse's to report, with a position, and a sweep that could veto would reject a correct program the
+	doc moment it failed to recognize something the parser accepts. What it must NOT absorb is a failure the
+	doc real parse never re-raises -- a return type the DEFERRED whole-program folds could not canonicalize
+	doc while the registries those folds fill were still being filled. The declaration then simply stops
+	doc existing, and the first thing to notice is a USE of it, refused as though nothing had been written.
+	doc MEASURED: `stdlib/helpers/sort/pdqsort.maxon` declares `partition` returning `(SortIndex, bool)` inside
+	doc an `extension Array`, with `SortIndex` declared by a SIBLING `extension Array` in another file. On any
+	doc directory walk that folded pdqsort first, the tuple element canonicalized to the unresolved
+	doc `Array.SortIndex`, the element-name join refused the separator, and the method vanished -- reported as
+	doc `E2015 ... `Array` member 'partition'` at the CALL, 138 lines below a declaration that was plainly
+	doc there. This code is what that program says now: the member IS declared, at the position named, and the
+	doc index lost it.
+	doc It is a COMPILER BUG wherever it fires. The position is the USE, because that is where the compile
+	doc stops; the declaration's own file, line and column are named in the message, because that is what has
+	doc to be read to fix it.
+
 E3140 SemanticServiceReplyNotCarriable
 	shv2 semanticServiceReplyNotCarriable
 	doc A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler

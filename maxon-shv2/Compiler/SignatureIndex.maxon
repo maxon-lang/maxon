@@ -7173,6 +7173,38 @@ typealias ExtensionMethodNameSet = Set with ByteArray
 // see `ProgramSignatures.extensionInnerAliasMembers`.
 typealias ExtensionInnerAliasNameSet = Set with ByteArray
 
+// ⭐⭐ **ONE DECLARATION THE SWEEP READ THE HEAD OF AND THEN DROPPED — WHERE IT IS WRITTEN, so the loss can be
+// ATTRIBUTED.** `Parser.recordScannedSignature` is deliberately tolerant of a return type it cannot read: a
+// malformed one is the real parse's to report, with a position. The tolerance was ALSO absorbing failures the
+// real parse never re-raises — a return type the DEFERRED fold could not canonicalize while the whole-program
+// registries were still being filled — and the only trace left was a member that had silently stopped
+// existing, met later as a refusal 138 lines from its own declaration. The drop is recorded so that refusal
+// can name the declaration instead of the roster.
+//
+// ⚠ It carries no REASON text, and that is a limit rather than a choice: a `ParseError` becomes prose in
+// exactly one place (`Queries.reportParseError`), which REPORTS rather than renders, so there is no door that
+// turns one into a string. What the record carries is what a reader needs in order to FIND the declaration.
+export type DroppedSignature
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+	export var filePath as FilePath
+
+	export static function create(nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns DroppedSignature
+		return Self{nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	end 'create'
+end 'DroppedSignature'
+
+// Whether the sweep dropped the signature asked about, and where that declaration is written. See
+// `ProgramSignatures.droppedSignatureOf` — `none` is the answer for every declaration in a healthy compile.
+export union DroppedSignatureLookup
+	none
+	dropped(record DroppedSignature)
+end 'DroppedSignatureLookup'
+
+// `<Type>.<method>` (or a free function's registration name) ⇒ the declaration whose signature the sweep
+// dropped — see `ProgramSignatures.droppedSignatures`.
+typealias DroppedSignatureMap = Map with (ByteArray, DroppedSignature)
+
 // The `<Type>.<method>` SOURCE names a `static` member and an INSTANCE member both wear — see
 // `ProgramSignatures.staticInstanceContests`.
 typealias StaticInstanceContestNameSet = Set with ByteArray
@@ -9155,8 +9187,12 @@ export type ProgramSignatures
 	// `Queries.foldExtensionDeclarations`, which READS each body's signatures as it goes — so a body folded
 	// before `insertionSort.maxon`'s would resolve `SortIndex` differently from one folded after it, and the
 	// answer would be the directory walk's order (`StdlibLoader`'s header rules that out). This set is filled by
-	// a NAME-ONLY pre-pass over every extension site before the first body is read, which is what makes the
-	// answer a property of the program.
+	// a pre-pass over every extension site before the first body is read, which is what makes the answer a
+	// property of the program. ⚠ **THAT PRE-PASS IS NO LONGER NAME-ONLY.** A name settles *is `SortIndex` a
+	// member of `Array`?* and leaves *what does `Array.SortIndex` MEAN?* to the walk order — a question
+	// `canonicalTupleElement` asks of every tuple element — so the pre-pass also KEYS each RANGED nested alias
+	// it walks past. See `ProgramSignatures.recordPreVerdictInnerAliasRange` for the measurement and for why the ranged form is
+	// the only one that can be settled ahead of the fold.
 	//
 	// ⚠ **PER-INSTANCE FORMS ONLY — a nested FUNCTION alias is deliberately absent**, for the reason
 	// `readNestedTypeAlias` keeps one out of `Parser.enclosingInnerAliases`: it is a file-scope name written
@@ -9164,6 +9200,24 @@ export type ProgramSignatures
 	// cross-file `SortComparator` resolves today), and `parseTypeReference`'s inner-alias arm would stamp it
 	// `named(...)` where it must reach the `function` arm and carry a `function` tag.
 	var extensionInnerAliasMembers as ExtensionInnerAliasNameSet
+	// ⭐ **EVERY SIGNATURE THE SWEEP DROPPED FOR A RETURN TYPE IT COULD NOT READ** — see `DroppedSignature`
+	// for what that tolerance is for and what it was absorbing. EMPTY for a healthy compile, which is what
+	// lets every reader gate on `hasDroppedSignatures` and pay one emptiness test rather than a lookup per
+	// refused member.
+	//
+	// ⚠ **RETURN TYPES ONLY, AND THE OTHER DROP IS EXCLUDED ON PURPOSE.** `recordScannedSignature` has a
+	// second tolerant exit — a parameter list `skipBalancedParens` cannot balance — which loses a signature
+	// by the identical route and is deliberately NOT recorded here. A return type the DEFERRED fold could not
+	// canonicalize is a COMPILER fault the real parse never re-raises, which is why the loss needs a record to
+	// be attributable at all; an unbalanced parameter list is a SYNTAX error the real parse reports on its own,
+	// with a position, and recording it would let E9002 — an internal-error code — reach a use site ahead of
+	// that report and describe a plain typo as a compiler bug. The narrower map is the honest one, so this
+	// comment states its scope rather than letting `hasDroppedSignatures` be read as *nothing was dropped*.
+	var droppedSignatures as DroppedSignatureMap
+	// ⭐ **THE RANGES THE EXTENSION PRE-PASS READ, BEFORE ANY VERDICT WAS COMPUTABLE** — a registry of its own
+	// and NOT `innerAliases`. See `recordPreVerdictInnerAliasRange` for the measurement that says why the
+	// separation is load-bearing and for the ONE reader it has.
+	var preVerdictInnerAliasRanges as RangedTypeAliasMap
 	// ⭐ Per-method INNER-ALIAS PARAMETER info (P1.6-C) — for a method/factory that declares a parameter
 	// whose type is a bare inner alias of the enclosing generic type (`setTag(t Idx)`), the source
 	// parameter NAMES and, per source position, the inner-alias MEMBER (`Idx`) or empty. Keyed by the
@@ -9901,7 +9955,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -12968,6 +13022,60 @@ export type ProgramSignatures
 		self.hash = mix(mix(named, value: low), value: high)
 	end 'recordInnerAlias'
 
+	// ⭐⭐ **WHAT THE PRE-PASS KNOWS ABOUT AN `extension` BODY'S RANGED NESTED ALIASES *BEFORE* ANY VERDICT IS
+	// COMPUTABLE — a REGISTRY OF ITS OWN, and the separation is the whole correctness argument.**
+	//
+	// ⚠⚠ **THE F10 PRE-PASS PUBLISHED NAMES AND CLAIMED THAT WAS ENOUGH; IT IS NOT.**
+	// `extensionInnerAliasMembers` makes *"does this type declare a nested alias called `SortIndex`?"*
+	// order-independent, which is what `parseTypeReference` needs to spell `named("Array.SortIndex")`. It
+	// settles nothing about what that name MEANS, and `canonicalTupleElement` — which collapses an inner
+	// ranged alias to its underlying primitive so a tuple's identity is keyed on RESOLVED types — asks exactly
+	// that, of a registry only the fold fills. ⛔ **MEASURED: `stdlib/helpers/sort/pdqsort.maxon`'s
+	// `partition`, whose return type is `(SortIndex, bool)` and whose `SortIndex` is declared by a SIBLING
+	// `extension Array` in another file, lost its whole signature on every directory walk that reached
+	// `pdqsort.maxon` first** — the element canonicalized to `Array.SortIndex`, `requireSeparatorFreeElementName`
+	// rejected the `.`, and `recordScannedSignature`'s tolerance dropped the method. 39 cases then met
+	// `E2015 … `Array` member 'partition'` at the CALL, 138 lines from a declaration that was plainly there.
+	//
+	// ⛔⛔ **AND IT MAY NOT BE WRITTEN INTO `innerAliases`, WHICH IS WHAT THE FIRST CURE DID.** The pre-pass
+	// runs before `extensionConformerVerdict` can be taken, so it publishes for EVERY conformer including one
+	// a CONDITIONAL extension withholds its members from. The NAME set's excess is bounded by exactly this
+	// registry — a withheld conformer got a spelling and nothing carried its meaning, so the compile stopped
+	// at **E3011 Unknown type 'Box.Slot'**. Keying the RANGE removed that stop: **MEASURED, an
+	// `extension Holder where Item is Equatable` declaring `typealias Slot = int(0 to 7)` withheld from a
+	// `Box` whose binding is not `Equatable` — baseline `E3011`, first cure COMPILED AND RAN** — so the
+	// compiler withheld the extension's METHODS from `Box` while handing it the extension's TYPES, which is
+	// precisely what `Parser.foldExtensionDeclarationInto`'s withheld-alias rule forbids.
+	//
+	// ⇒ **ONE READER, NAMED HERE: `canonicalTupleElement`, as a FALLBACK AFTER `innerAliases`.** It is the
+	// only consumer that needs a range while the fold is still running — verified against the code, not
+	// assumed: `parseTypeReference`'s inner-alias arm reads `declaresInnerAlias` (the name OR, already
+	// order-independent); `innerAliasMember`'s method-return retype, `perInstanceAliasFromParts` and
+	// `qualifiedAliasOf` all run in the real parse or later, with every fold complete. So the FOLD remains the
+	// single party that decides what a conformer may NAME, and this map only decides what a tuple's identity
+	// is keyed on — which is a fact about the DECLARATION and not about any conformer's membership.
+	//
+	// ⚠ **THE RANGED FORM IS THE ONLY NESTED ALIAS FORM THAT CAN BE KNOWN AHEAD OF THE FOLD, AND THAT IS A
+	// PROPERTY OF THE FORM RATHER THAN A LIMIT OF THE PRE-PASS.** A ranged alias's meaning is a pure function
+	// of its own tokens — a primitive keyword and two bounds, neither of which can name another declaration —
+	// so reading it needs no registry. A generic-instance, tuple or function alias names OTHER declarations,
+	// so its meaning cannot be settled before the fold that settles them; publishing those ahead would move
+	// the ordering hazard down one level rather than remove it.
+	//
+	// ⚠ It folds nothing into `self.hash`, for `recordExtensionInnerAliasMember`'s reason: the fold records
+	// the same declaration a moment later, under the same qualified name, through `recordInnerAlias`.
+	export function recordPreVerdictInnerAliasRange(baseName ByteArray, alias RangedTypeAlias)
+		self.preVerdictInnerAliasRanges.upsert(joinQualifiedName(baseName, member: alias.name), value: alias)
+	end 'recordPreVerdictInnerAliasRange'
+
+	// The range the pre-pass read for `qualified`, or `undeclared`. `canonicalTupleElement`'s fallback and
+	// NOBODY else's — see `recordPreVerdictInnerAliasRange` for why widening the readership would hand a
+	// withheld conformer a type it may not name.
+	function preVerdictInnerAliasOf(qualified ByteArray) returns DeclaredAlias
+		let alias = try self.preVerdictInnerAliasRanges.get(qualified) otherwise return DeclaredAlias.undeclared
+		return DeclaredAlias.declared(alias)
+	end 'preVerdictInnerAliasOf'
+
 	// ⭐ **NOTE THAT AN `extension` BODY DECLARES A PER-INSTANCE NESTED `typealias` CALLED `qualified`** — see
 	// `extensionInnerAliasMembers`. NAMES ONLY: the declaration itself is recorded a moment later by
 	// `Parser.foldExtensionDeclarationInto`, through `recordInnerAlias` / `recordGenericAlias` /
@@ -12980,6 +13088,26 @@ export type ProgramSignatures
 	export function recordExtensionInnerAliasMember(qualified ByteArray)
 		self.extensionInnerAliasMembers.insert(qualified)
 	end 'recordExtensionInnerAliasMember'
+
+	// ⭐⭐ **NOTE THAT THE SWEEP DROPPED `name`'s SIGNATURE, AND WHERE THE DECLARATION IS** — see
+	// `DroppedSignature`. It folds nothing into `self.hash` for `recordExtensionInnerAliasMember`'s reason and
+	// a sharper one of its own: the hash keys a parse memo on the PROGRAM's declarations, and what this records
+	// is a failure of the COMPILER to read one.
+	export function recordDroppedSignature(name ByteArray, dropped DroppedSignature)
+		self.droppedSignatures.upsert(name, value: dropped)
+	end 'recordDroppedSignature'
+
+	// Did the sweep drop ANY signature? The gate every reader of the record opens with, so a healthy compile —
+	// which is every compile in the corpus — pays one emptiness test and no lookups.
+	export function hasDroppedSignatures() returns bool
+		return self.droppedSignatures.count() > 0
+	end 'hasDroppedSignatures'
+
+	// The declaration whose signature the sweep dropped under `name`, or `none`.
+	export function droppedSignatureOf(name ByteArray) returns DroppedSignatureLookup
+		let record = try self.droppedSignatures.get(name) otherwise return DroppedSignatureLookup.none
+		return DroppedSignatureLookup.dropped(record)
+	end 'droppedSignatureOf'
 
 	// ⭐⭐ **NOTE ONE FREE-FUNCTION DECLARATION, AND ANSWER WHAT THE FOLD OWES IT (N1c).**
 	//
@@ -15866,7 +15994,7 @@ export type ProgramSignatures
 	// FOR AN `extension` BODY (F10).** `foldExtensionDeclarations` fills the three registries above one site at
 	// a time WHILE reading each body's signatures, so during that pass they can only answer for the sites
 	// already visited — the directory walk's order deciding what a written name means, which is exactly what
-	// `StdlibLoader`'s header forbids. `extensionInnerAliasMembers` is filled by a name-only pre-pass ahead of
+	// `StdlibLoader`'s header forbids. `extensionInnerAliasMembers` is filled by a pre-pass ahead of
 	// the whole fold, so it answers the same for every site. It is a SUPERSET during the fold and identical
 	// afterwards, and the excess is bounded by the same tolerance every sweep entry point has: a member the
 	// fold cannot read publishes no declaration, and the program is being refused for that a moment later.
@@ -17626,12 +17754,23 @@ export type ProgramSignatures
 		end 'notNamed'
 
 		let name = self.nameOfId(typeNameIdOf(resolved))
-		if self.isInnerAlias(name) 'innerRangedAlias'
-			match self.innerAliasOf(name) 'inner'
-				declared(alias) then return alias.underlying
-				undeclared then panic("canonicalTupleElement: `isInnerAlias('{String.from(name)}')` is true but `innerAliasOf` answered undeclared — the two read one registry")
-			end 'inner'
-		end 'innerRangedAlias'
+		match self.innerAliasOf(name) 'inner'
+			declared(alias) then return alias.underlying
+			undeclared then break 'inner'
+		end 'inner'
+
+		// ⭐⭐ **AND THE PRE-PASS'S ANSWER IF THE FOLD HAS NOT REACHED THE DECLARATION YET — the ONE reader of
+		// `preVerdictInnerAliasRanges`, which is why the fallback is written here and not inside `innerAliasOf`.**
+		// `foldExtensionDeclarations` fills `innerAliases` one site at a time WHILE reading each body's
+		// signatures, so a tuple element naming a sibling `extension` body's `SortIndex` resolves here or
+		// nowhere; that door's own header carries what happened when it resolved nowhere. Every OTHER reader of
+		// an inner alias keeps asking `innerAliases` alone, so a conformer a conditional extension withholds
+		// these declarations from still cannot NAME them (E3011) — the verdict stays the fold's to take.
+		match self.preVerdictInnerAliasOf(name) 'beforeTheFold'
+			declared(alias) then return alias.underlying
+			undeclared then break 'beforeTheFold'
+		end 'beforeTheFold'
+
 		return resolved
 	end 'canonicalTupleElement'
 
