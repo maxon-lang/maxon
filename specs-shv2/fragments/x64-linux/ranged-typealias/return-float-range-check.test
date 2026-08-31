@@ -12,52 +12,17 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @clampedPct {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movsdRegRip xmm1, [rip + __fconst_0]
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, __rc_panic
-  __rc_chk:
-    x64.movsdRegRip xmm1, [rip + __fconst_100]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc belowEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at return-float-range-check.test:6: Range check failed: value outside typealias 'Pct'\x0a"
-    x64.callDirect mrt_panic
-    x64.movsdRegRip xmm0, [rip + __fconst_0]
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movsdRegRip xmm0, [rip + __fconst_42.5]
-  __il_body:
-    x64.movsdRegRip xmm1, [rip + __fconst_0]
-    x64.ucomisdRegReg xmm1, xmm0
-    x64.jcc above, __il_slow
-  __rc_chk#7:
-    x64.movsdRegRip xmm1, [rip + __fconst_100]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc belowEqual, __il_cont
-  __il_slow:
-    x64.callDirect clampedPct
   __il_cont:
     x64.cvttsd2siRegReg r8, xmm0
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
-  __rc_chk#3:
+  __rc_chk:
     x64.cmpRegImm32 r8, 255
     x64.jcc lessEqual, __rc_ok
   __rc_panic:

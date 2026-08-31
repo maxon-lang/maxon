@@ -348,10 +348,31 @@ walked before stdlib's functions, so a program literal in `main` keeps byte 0 wh
 the pin goes green on the broken compiler — MEASURED, on a first draft of this case that pinned its own
 `"MAXONPIN"` blob and passed with the gate neutralised. The payload a displacement is visible against has to
 be one the COMPILER composes.
+
+⛔⛔ **AND THE LOOP IS LOAD-BEARING: WITHOUT IT THIS PROGRAM HAS NO `.rdata` AT ALL.** The case used to read
+`let scale = 12.5` / `let floor = 1.5` / `if scale > floor`, and on 2026-08-31 `foldConstants` learned to
+fold FLOATS — so the comparison folded to a constant, `foldConstantBranches` took the arm, and both float
+`const`s were retired unread. The program still returned 8; it simply stopped materialising either float,
+the linked image lost its `.rdata` section outright, and this gate could no longer read the thing it
+gates. **MEASURED, and it is the failure that found this**: `could not read the .rdata section … has no
+.rdata section`.
+
+⇒ The loop makes `scale` a HEADER PHI, which this pass reads as unknown by construction — *"it is not a
+constant propagator; a value that is constant on every path into a phi is not constant to this pass"*. So
+`scale + floor` and `scale > floor` both keep their instructions, `12.5` is materialised as the phi's
+entering value and `1.5` as an operand (floats have no immediate form on any target, so
+`foldConstOperands` cannot absorb it either), and the two islands are registered in source order. **Do not
+simplify it back.** A folded version of this program passes its exit code and gates nothing — which is
+precisely the failure mode the paragraph above this one is about, arriving by a second route.
 ```maxon
 function main() returns ExitCode
-	let scale = 12.5
+	var scale = 12.5
 	let floor = 1.5
+	var spins = 0
+	while spins < 1 'spin'
+		scale = scale + floor
+		spins = spins + 1
+	end 'spin'
 	if scale > floor 'gt'
 		return 8
 	end 'gt'

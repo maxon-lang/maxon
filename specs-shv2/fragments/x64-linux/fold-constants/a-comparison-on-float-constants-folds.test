@@ -1,0 +1,74 @@
+// Test: a-comparison-on-float-constants-folds
+typealias Real = float(f64.min to f64.max)
+
+function greater(a Real, b Real) returns bool
+	return a > b
+end 'greater'
+
+function equal(a Real, b Real) returns bool
+	return a == b
+end 'equal'
+
+function main() returns ExitCode
+	if not greater(-1.0, b: -2.0) 'negativesOrderAsNumbers'
+		return 1
+	end 'negativesOrderAsNumbers'
+	if greater(-2.0, b: -1.0) 'andNotBackwards'
+		return 2
+	end 'andNotBackwards'
+	if not equal(-0.0, b: 0.0) 'theTwoZerosCompareEqual'
+		return 3
+	end 'theTwoZerosCompareEqual'
+
+	var taken = 0
+	if greater(2.5, b: 1.5) 'thenArm'
+		taken = 7
+	end 'thenArm' else 'elseArm'
+		taken = 11
+	end 'elseArm'
+	if taken != 7 'thenArmRan'
+		return 4
+	end 'thenArmRan'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#13:
+    x64.movRegImm32 rax, 1
+  __il_cont#12:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#17
+  negativesOrderAsNumbers:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  __il_body#17:
+    x64.movRegImm32 rax, 1
+  __il_cont#16:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, thenArm
+  theTwoZerosCompareEqual:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  thenArm:
+    x64.movRegImm32 rax, 7
+  ifcont#9:
+    x64.cmpRegImm32 rax, 7
+    x64.jcc equal, ifcont#11
+  thenArmRan:
+    x64.movRegImm32 r8, 4
+    x64.popReg rbp
+    x64.ret
+  ifcont#11:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

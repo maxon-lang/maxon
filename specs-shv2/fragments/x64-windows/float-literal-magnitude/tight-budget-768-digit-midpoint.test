@@ -17,31 +17,11 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rax, 0
-    x64.movsdRegRip xmm0, [rip + __fconst_2.2250738585072004E-308]
-    x64.movsdRegRip xmm1, [rip + __fconst_2.2250738585072004E-308]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont#2
-  fordered#8:
-    x64.jcc notEqual, ifcont#2
   tieRoundsToEven:
     x64.movRegImm32 rax, 1
-  ifcont#2:
-    x64.movsdRegRip xmm0, [rip + __fconst_2.225073858507201E-308]
-    x64.movsdRegRip xmm1, [rip + __fconst_2.225073858507201E-308]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc noParity, fordered#9
-  critsplit#11:
-    x64.movRegReg r8, rax
-    x64.jmp ifcont#4
-  fordered#9:
-    x64.jcc notEqual, critsplit#13
   stickyBitRoundsUp:
     x64.leaRegRegImm32 r8, rax, 2
-    x64.jmp ifcont#4
-  critsplit#13:
-    x64.movRegReg r8, rax
-  ifcont#4:
+  ifcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:

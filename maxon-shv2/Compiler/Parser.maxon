@@ -4808,23 +4808,11 @@ function maxonReturnTypeNameId(ref MaxonReturnType) returns TypeNameId
 	end 'k'
 end 'maxonReturnTypeNameId'
 
-// IEEE-754's sign bit — the top bit of the 64-bit pattern. Negating a float literal FLIPS it; it is
-// not an arithmetic negate, because a `ParsedInt` holding a float carries the BITS (see
-// `Parser.parseFloatLiteral`) and `0 - bits` would be nonsense.
-//
-// It rides `ParsedInt`, which is SIGNED, so the constant IS `i64.min` — the same bit pattern
-// `0x8000000000000000`, spelled as the number Maxon can write. `xor` with it flips exactly that bit
-// and leaves the other 63 alone, which is negation for every float including zero and infinity.
-let FloatSignBit = i64.min as ParsedInt
-
-// `-<float literal>` — the bits of the literal's negation. THE one spelling of a float's sign flip at
-// COMPILE time, shared by the declaration sweep (a field default has no code to emit into and must be a
-// NUMBER by the time the layout is hashed), the range-bound reader, the expression parser's
-// negated-literal fold (`parseNegatedFloatLiteral`) and the const evaluator's `-K`. A body's `-x` over a
-// non-literal is the same flip at RUN time, `MaxonUnaryOp.fneg` — so a zero keeps its sign either way.
-function negatedFloatBits(bits ParsedInt) returns ParsedInt
-	return bits xor FloatSignBit
-end 'negatedFloatBits'
+// ⚠ `negatedFloatBits` — a float literal's sign flip — MOVED to `NumberParsing.maxon` (2026-08-30), and
+// with it the `FloatSignBit` constant this file used to hold. It is one of THREE bit facts about a
+// `ParsedInt` that carries a double, and the Std tier's constant folder now asks the other two; keeping
+// the sign bit here and the NaN test there would have been the same fact in two files. Every call site
+// below is unchanged — the name is `module`-visible across `Compiler/`.
 
 // The comparison operators (M4). Each maps to a `MaxonOp.compare`. Classifier shared by
 // the precedence table (`infixPrecedence`) and the climber's op-dispatch (`parseBinary`).
@@ -21904,7 +21892,7 @@ export type Parser
 	// `MaxonType.float` = f64, so its bounds are f64 bits (`RangedTypeAlias`). The literal path reuses
 	// the one float decoder `parseFloatLiteral` does (`__float_bitsFromText`), so `0.0` reads the same bits
 	// in a bound as in an expression. A negated literal FLIPS the sign bit (`negatedFloatBits`) rather
-	// than subtracting: `0 - bits` on a bit pattern would be nonsense (see `FloatSignBit`).
+	// than subtracting: `0 - bits` on a bit pattern would be nonsense (see `NumberParsing.FloatSignBit`).
 	function parseFloatRangeBound() returns ParsedRangeBound throws ParseError
 		if self.at(TokenKind.minus) 'negative'
 			try self.consume(TokenKind.minus)
@@ -71353,12 +71341,15 @@ export type Parser
 		end 'folded'
 	end 'foldConstBinOp'
 
-	// ⭐ **THE COMPILE-TIME `cvtsi2sd`** — the f64 BIT PATTERN of a constant the parser is holding, and the
-	// CONSTANT half of the `TypeRules.widensIntToFloat` obligation (its SSA half is `promoteToFloat`). A
-	// float carries its bits already; an INT is promoted to its f64 value first, so `1 + 2.0` folds to 3.0
-	// and not to a summed bit pattern, and a `as float = 3` field default fills its slot with 3.0 rather
-	// than with eight bytes of two's complement. `0.0 + payload` is the host's own int→f64 conversion;
-	// `floatToBits` captures the result.
+	// A `ConstValue`'s payload as f64 BITS — the CONSTANT half of the `TypeRules.widensIntToFloat`
+	// obligation (its SSA half is `promoteToFloat`). A float carries its bits already; an INT is promoted
+	// to its f64 value first, so `1 + 2.0` folds to 3.0 and not to a summed bit pattern, and a
+	// `as float = 3` field default fills its slot with 3.0 rather than with eight bytes of two's
+	// complement.
+	//
+	// ⚠ **THE CONVERSION ITSELF IS `TypeRules.foldSiToFp`'s**, not this function's — `IR/Std/FoldConstants`
+	// folds the SSA `siToFp` the inliner makes constant, and the two must not compute int→f64 separately.
+	// What is this function's own is the TAG question: which side of the conversion the caller is holding.
 	//
 	// Idempotent, exactly as `promoteToFloat` is, so neither caller — the float FOLD or the field DEFAULT —
 	// has to work out which side it is holding.
@@ -71367,7 +71358,7 @@ export type Parser
 			return value.payload
 		end 'alreadyFloat'
 
-		return __Builtins.floatToBits(0.0 + value.payload)
+		return foldSiToFp(value.payload)
 	end 'constFloatBits'
 
 	// ⭐ THE SHIFT RULE, asked of a constant. Every part of the answer comes from TypeRules — the fill,

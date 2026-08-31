@@ -2237,10 +2237,16 @@ end 'foldUnsignedIntDivision'
 // reinterpreted to f64 (`__Builtins.bitsToFloat`), the host combines them, and the single result is
 // re-encoded (`__Builtins.floatToBits`) — ONE round-trip, so no double-rounding.
 //
-// Only `+ - * /` reach here. They are exactly the operators with an SSE form (`operatorIsIntegral` is
-// false for them); `requireBinOpOperands` turns a float away from `mod` / the bit ops / the shifts
-// before a fold is asked (matching shv2's own runtime, which rejects float `mod` as E3005), so the
-// integral-only band is unreachable and panics rather than folding a wrong answer.
+// From the PARSER only `+ - * /` reach here. They are exactly the operators with an SSE form
+// (`operatorIsIntegral` is false for them); `requireBinOpOperands` turns a float away from `mod` / the
+// bit ops / the shifts before a fold is asked (matching shv2's own runtime, which rejects float `mod`
+// as E3005), so the integral-only band is unreachable and panics rather than folding a wrong answer.
+//
+// ⭐ **`min`/`max` REACH HERE FROM THE Std TIER AND FROM NOWHERE ELSE.** They are builtin CALLS in the
+// source language, never binary operators, so no expression the parser folds can name one; what names
+// them is `IR/Std/FoldConstants`, which carries a `StdOp.binOp(min)` back through
+// `maxonBinOpOfStdOpcode`. Their arms are here rather than in that pass for this function's whole
+// reason — it is the ONE place a constant float answer is computed.
 //
 // ⚠ **`/` IS NOT ROUTED THROUGH THE INTEGER DIV-BY-ZERO GUARD** — a float's `rhs == 0` bit test would
 // miss `-0.0` and misread the pattern for a magnitude. Instead the division rides the HOST's own trap:
@@ -2273,8 +2279,122 @@ export function foldFloatBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) retu
 		return FoldedInt.folded(__Builtins.floatToBits(quotient))
 	end 'div'
 
+	// ⭐⭐ **`min`/`max` SELECT AN OPERAND, SO THE ANSWER IS THAT OPERAND'S ORIGINAL PATTERN AND NEVER A
+	// COMPUTED ONE.** `StdBinOpcode`'s header is the definition — `min(a, b)` is `a` when `a < b` and `b`
+	// otherwise, `max(a, b)` is `a` when `a > b` and `b` otherwise — and shv2 makes all three targets
+	// emit exactly that. Handing back `lhs`/`rhs` rather than `floatToBits` of the selected double is
+	// what keeps a NaN's payload and a zero's sign bit-for-bit: the host comparison decides WHICH, and
+	// nothing decides WHAT.
+	//
+	// ⚠ A STRICT comparison is FALSE on unordered and FALSE for two zeros of opposite sign, so both ops
+	// answer with their SECOND operand on exactly those inputs — which is why neither is commutative and
+	// why a caller that swapped the operands would change the answer.
+	if op == MaxonBinOp.min 'min'
+		return FoldedInt.folded(lhs if a < b else rhs)
+	end 'min'
+
+	if op == MaxonBinOp.max 'max'
+		return FoldedInt.folded(lhs if a > b else rhs)
+	end 'max'
+
 	panic("foldFloatBinOp: '{op.rawValue}' has no float reading — requireBinOpOperands turns a float away from `mod` / the bit ops / the shifts before this fold is reached")
 end 'foldFloatBinOp'
+
+// Fold a unary operator over a float BIT PATTERN — the float twin of `foldIntUnaryOp`, and the ONE
+// place a constant float's one-operand answer is computed. Its caller is `IR/Std/FoldConstants`, which
+// reaches it through `maxonUnaryOpOfStdOpcode`; the parser has no path here, because its own unary
+// folder runs only when the RESULT tag is an integer (`Parser.emitUnaryOp`) and every arm below answers
+// a float.
+//
+// ⭐ **THE TWO SIGN OPERATIONS ARE BIT WORK ON THE PATTERN AND THE FOUR INTRINSICS ARE HOST
+// ARITHMETIC**, and the split is the reason each group is spelled the way it is. `abs` and `fneg`
+// compute NOTHING — they clear and flip bit 63 — so `NumberParsing`'s `absFloatBits`/`negatedFloatBits`
+// are the operation itself, exact under any compiler and with a NaN's payload untouched. The four
+// intrinsics do compute, so they go out to f64 and back through ONE round trip; IEEE-754 fixes each of
+// them to a single answer (`sqrt` is required to be correctly rounded, `floor`/`ceil` are exact, and
+// `round` is ties-to-even on `roundsd 0` / `frintn` / `f64.nearest` alike), which is what makes the
+// host's answer the instruction's answer.
+//
+// ⚠ **THE THREE CONVERSIONS ARE THE CALLER'S, NOT THIS FUNCTION'S**, and they decline here rather than
+// being absent: `trunc` (`fpToSi`) needs a RANGE decided before the host may be asked, and
+// `promoteToFloat` and the two reinterpretations have no float operand to read at all. `foldFpToSi` and
+// `foldSiToFp` below are where those live.
+export function foldFloatUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns FoldedInt
+	return match op 'o'
+		// The integer/bool operators, plus BOTH conversions — and the two conversions decline for
+		// opposite reasons, which is why neither is answered here. `promoteToFloat` reads an INTEGER, so
+		// there is no float operand to take apart. `trunc` reads a float and could be answered, but only
+		// once a RANGE has been decided first: see `foldFpToSi`, which is where it lives.
+		neg to promoteToFloat gives FoldedInt.notFoldable
+		floor gives FoldedInt.folded(__Builtins.floatToBits(floor(__Builtins.bitsToFloat(operand))))
+		ceil gives FoldedInt.folded(__Builtins.floatToBits(ceil(__Builtins.bitsToFloat(operand))))
+		round gives FoldedInt.folded(__Builtins.floatToBits(round(__Builtins.bitsToFloat(operand))))
+		sqrt gives FoldedInt.folded(__Builtins.floatToBits(sqrt(__Builtins.bitsToFloat(operand))))
+		abs gives FoldedInt.folded(absFloatBits(operand))
+		fneg gives FoldedInt.folded(negatedFloatBits(operand))
+		// The two REINTERPRETATIONS compute nothing and their fold would be the identity, which is
+		// exactly why they are not answered here: what changes across one is the DOMAIN of the value,
+		// and a `ParsedInt` column cannot say which of its entries is a pattern (`foldIntUnaryOp`'s
+		// header argues this at length). The Std tier holds the types that settle it, so it folds them
+		// itself. The sign-extension family has no float operand at all.
+		floatToBits to signExtendI32 gives FoldedInt.notFoldable
+	end 'o'
+end 'foldFloatUnaryOp'
+
+// ⭐ **THE COMPILE-TIME `cvtsi2sd`** — the f64 BIT PATTERN of an integer the compiler is holding, and
+// the CONSTANT half of the `widensIntToFloat` obligation (its SSA half is `promoteToFloat`). `0.0 + n`
+// is the host's own int→f64 conversion and `floatToBits` captures the result.
+//
+// TOTAL over `i64` and correctly rounded to nearest-even on the host and on all three targets, which is
+// the property that makes folding one sound: `2^53 + 1` has no exact double and every one of them
+// answers `9007199254740992`.
+//
+// Two callers, in two tiers, and neither may restate it: `Parser.constFloatBits` promotes a constant
+// for the parser's own domain (`1 + 2.0`, an `as float = 3` field default), and
+// `IR/Std/FoldConstants.evaluateFloatUnaryOp` folds a `siToFp` the inliner made constant.
+export function foldSiToFp(value ParsedInt) returns ParsedInt
+	return __Builtins.floatToBits(0.0 + value)
+end 'foldSiToFp'
+
+// ⭐⭐ **THE COMPILE-TIME `cvttsd2si`, AND IT DECLINES EVERYWHERE THE THREE TARGETS DISAGREE.** `trunc`
+// rounds toward zero, which inside the `i64` range is one answer the host and every target compute
+// identically. OUTSIDE it there is no such answer: x64's `cvttsd2si` yields the indefinite integer
+// `0x8000000000000000`, arm64's `fcvtzs` SATURATES to `i64.min`/`i64.max`, and wasm's bare
+// `i64.trunc_f64_s` **TRAPS**. Folding one would not merely pick a target's answer over another's — on
+// wasm it would replace a trap with a number.
+//
+// ⚠ **THE RANGE TEST RUNS BEFORE THE HOST IS ASKED, AND IT IS WRITTEN AS A REFUSED `not (…)` SO THAT
+// NaN FALLS ON THE DECLINING SIDE.** Every comparison against a NaN is false, so an admitting `if
+// low <= f and f < high` would decline it too — but only by accident of which way the test points, and
+// the day someone reordered it a NaN would sail through into a host `trunc`. Both bounds are exactly
+// representable doubles (`±2^63`), so neither comparison rounds.
+//
+// ⛔ **SABOTAGE-MEASURED 2026-08-30, AND NO SUITE SEES IT.** With this test removed, `trunc(1.0e300)`
+// compiled to `wasm32-wasi` prints `-9223372036854775808` and exits 0 — the compiling x64 HOST's
+// `cvttsd2si` answer, emitted as an `i64.const` into a binary for a machine that would have TRAPPED
+// (wasmtime: `wasm trap: integer overflow`, exit 3). Every `specs-shv2` case stays green through that,
+// on x64 and on the wasm lane alike, because nothing in the corpus truncates an out-of-range constant.
+// A case COULD exist — it is the one decline here that a program can observe — and does not, because
+// pinning it means pinning wasmtime's stderr, which names the module by absolute path and
+// `SpecTestRunner.checkRunStderr` compares exactly. `specs-shv2/fold-constants.md` records both facts.
+export function foldFpToSi(operand ParsedInt) returns FoldedInt
+	let value = __Builtins.bitsToFloat(operand)
+
+	if not (value >= FpToSiLowestFoldable and value < FpToSiFirstAboveFoldable) 'noI64Answer'
+		return FoldedInt.notFoldable
+	end 'noI64Answer'
+
+	return FoldedInt.folded(trunc(value))
+end 'foldFpToSi'
+
+// `-2^63` — `i64.min` exactly, and a double holds it exactly. The lowest value `trunc` has an `i64`
+// answer for, and INCLUSIVE for that reason.
+let FpToSiLowestFoldable = -9223372036854775808.0
+
+// `2^63` — one past `i64.max`, and the first magnitude above it a double can name (`i64.max` itself is
+// NOT representable, which is why the bound is this number and the test is strict rather than `<=` on
+// a value that would have had to be rounded to be written).
+let FpToSiFirstAboveFoldable = 9223372036854775808.0
 
 // Fold a unary operator over an integer the parser already holds. `logicalNot` is a BOOL operator —
 // the parser has already resolved which `not` the source meant (see MaxonUnaryOp), so meeting it on

@@ -338,7 +338,9 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 		// The three FLOAT-ONLY opcodes (`stdBinOpcodeIsFloatOnly`). They have a `MaxonBinOp` twin and it
 		// is named here, because the round trip below is only a check when every arm answers: an arm that
 		// panicked "float-only" would be this file deciding what a CALLER may fold, which is the caller's
-		// own rule (`foldConstants` refuses a float operand type before it ever asks).
+		// own rule. ⚠ That reasoning used to rest on `foldConstants` refusing every float before it asked;
+		// since 2026-08-31 it does not, and these three arms are the LIVE path for every folded float
+		// `div`/`min`/`max`. The argument is better for it — the arms were right when nothing used them.
 		div gives MaxonBinOp.div
 		min gives MaxonBinOp.min
 		max gives MaxonBinOp.max
@@ -383,8 +385,15 @@ end 'maxonCmpOpOfStdPred'
 // The unary twin of `maxonBinOpOfStdOpcode`, checked the same way and there for the same reason:
 // `TypeRules.foldIntUnaryOp` is the compiler's ONE unary folder, and it speaks `MaxonUnaryOp`. Every Std
 // unary opcode has a source-level twin (the forward map is a 1:1 rename in every arm), so every arm
-// answers and the round trip checks all of them; it is the FOLDER, not this map, that declines the
-// conversions, the math intrinsics and the reinterpretations, each for the reason stated on its arm.
+// answers and the round trip checks all of them.
+//
+// ⚠ **WHO DECLINES WHAT MOVED ON 2026-08-31 AND THIS COMMENT USED TO SAY OTHERWISE.** It said the FOLDER
+// declines the conversions, the intrinsics and the reinterpretations. Since float folding landed, the
+// intrinsics are folded (`TypeRules.foldFloatUnaryOp`, reached through this map), and the two
+// conversions and the two reinterpretations are decided by the PASS — `foldConstants` answers them from
+// `valueType` and never asks a folder at all, because only the Std tier knows which domain a
+// `ParsedInt` is in. What is unchanged is this map's own job: it renames, it checks its inverse, and it
+// decides nothing.
 export function maxonUnaryOpOfStdOpcode(opcode StdUnaryOpcode) returns MaxonUnaryOp
 	let op = match opcode 'map'
 		neg gives MaxonUnaryOp.neg

@@ -28,12 +28,10 @@ func @inner {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movsdRegRip xmm0, [rip + __fconst_2]
   __il_body:
     x64.leaRegRegImm32 rax, rcx, 1
   __il_cont:
-    x64.cvttsd2siRegReg rcx, xmm0
-    x64.leaRegRegReg r8, rax, rcx
+    x64.leaRegRegImm32 r8, rax, 2
     x64.popReg rbp
     x64.ret
 }
@@ -42,14 +40,10 @@ func @outer {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 48
-    x64.storeSlotReg slot0, xmm6
-    x64.movsdRegRip xmm6, [rip + __fconst_42.5]
+    x64.prologue 32
     x64.callDirect inner
-    x64.cvttsd2siRegReg rax, xmm6
-    x64.leaRegRegReg r8, r8, rax
-    x64.loadRegSlot xmm6, slot0
-    x64.epilogue 48
+    x64.leaRegRegImm32 r8, r8, 42
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

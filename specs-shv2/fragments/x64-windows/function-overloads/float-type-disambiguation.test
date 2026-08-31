@@ -21,16 +21,15 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movsdRegRip xmm0, [rip + __fconst_42]
   __il_body:
-    x64.cvttsd2siRegReg r8, xmm0
+    x64.movRegImm32 r8, 42
   __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.cmpRegImm32 rax, 42
+    x64.jcc greaterEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at float-type-disambiguation.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic

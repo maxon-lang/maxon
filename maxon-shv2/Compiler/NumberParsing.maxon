@@ -81,6 +81,62 @@ module function scalarConstantText(value ParsedInt, isFloat bool) returns String
 	return "{value}"
 end 'scalarConstantText'
 
+// ⭐⭐ **THE THREE BIT FACTS ABOUT A `ParsedInt` THAT HOLDS A DOUBLE, AND THEY LIVE HERE FOR
+// `scalarConstantText`'s REASON.** A float constant rides this file's `ParsedInt` as an IEEE-754 BIT
+// PATTERN, and three separate tiers now have to take that pattern apart: the PARSER folds a leading `-`
+// into a literal's sign bit, `TypeRules` folds `abs`/`-x` over a constant, and `IR/Std/FoldConstants`
+// asks whether a folded answer came out a NaN. `module` rather than `export`, and that is enough: the
+// visibility is the `Compiler/` subtree, which is exactly the three of them.
+//
+// ⚠ **THEY ARE BIT OPERATIONS, DELIBERATELY, WHERE THE HOST'S OWN `abs`/`-` WOULD HAVE READ SHORTER.**
+// Reinterpreting to f64 and letting the host negate would make the answer depend on how the compiler
+// COMPILING THIS FILE spells a float negate — and that has been `0.0 - x` in a shipped compiler, which
+// is `+0.0` for `-(+0.0)` and loses a NaN's sign. An `xor`/`and` over the pattern is the operation
+// IEEE-754 defines and every target emits, and it computes the same answer under any compiler.
+//
+// ⚠ `stdlib/Builtins.maxon` holds `__FloatSignBit`/`__FloatMagnitudeMask` for the EMITTED program's
+// runtime, and those are not a second copy of these: they are the same facts in the other program.
+// Neither file can reach the other's — stdlib's are file-private and this one is the compiler's.
+
+// IEEE-754's sign bit — the top bit of the 64-bit pattern. It rides `ParsedInt`, which is SIGNED, so
+// the constant IS `i64.min`: the same bit pattern `0x8000000000000000`, spelled as the number Maxon
+// can write.
+let FloatSignBit = i64.min as ParsedInt
+
+// Everything BELOW the sign bit — the exponent and the significand together. DERIVED from
+// `FloatSignBit` rather than spelled `i64.max`, so the two cannot come to disagree about where the
+// boundary is.
+let FloatMagnitudeMask = (not FloatSignBit) as ParsedInt
+
+// The magnitude of ±infinity: a saturated exponent with a zero significand. It is the BOUNDARY of the
+// NaN space rather than a member of it — every larger magnitude has a non-zero significand under a
+// saturated exponent, which is what a NaN is.
+let FloatInfinityMagnitude = 0x7FF0000000000000 as ParsedInt
+
+// `-<float>` — the bits of a double's negation. THE one spelling of a float's sign flip at COMPILE
+// time, shared by the declaration sweep (a field default has no code to emit into and must be a NUMBER
+// by the time the layout is hashed), the range-bound reader, the expression parser's negated-literal
+// fold (`Parser.parseNegatedFloatLiteral`), the const evaluator's `-K` and `TypeRules.foldFloatUnaryOp`.
+// A body's `-x` over a non-literal is the same flip at RUN time, `MaxonUnaryOp.fneg` — so a zero keeps
+// its sign either way.
+module function negatedFloatBits(bits ParsedInt) returns ParsedInt
+	return bits xor FloatSignBit
+end 'negatedFloatBits'
+
+// `abs(<float>)` — the sign bit CLEARED. `negatedFloatBits`' twin, and the same operation `f64.abs`,
+// arm64's `FABS` and x64's synthesized `absF64RegReg` each perform: it computes nothing else, so a
+// NaN's payload and an infinity's exponent ride through untouched.
+module function absFloatBits(bits ParsedInt) returns ParsedInt
+	return bits and FloatMagnitudeMask
+end 'absFloatBits'
+
+// True when a pattern is a NaN — ANY NaN, quiet or signalling, either sign. The sign is masked off
+// first because it says nothing about NaN-ness, and the comparison is then between two non-negative
+// magnitudes, where `ParsedInt`'s signedness cannot bite.
+module function floatBitsAreNaN(bits ParsedInt) returns bool
+	return absFloatBits(bits) > FloatInfinityMagnitude
+end 'floatBitsAreNaN'
+
 // Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
 // Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.
 //
