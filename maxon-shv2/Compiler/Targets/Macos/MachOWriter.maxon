@@ -184,6 +184,7 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		madvise gives "_madvise"
 		clockGettimeNsecNp gives "_clock_gettime_nsec_np"
 		nanosleep gives "_nanosleep"
+		sysconf gives "_sysconf"
 	end 'sym'
 end 'machoImportSymbol'
 
@@ -258,8 +259,9 @@ end 'writeMachoSectionHeader'
 // NOTHING ELSE MAKES THAT TRUE.** dyld walks each page independently from that page's own
 // `page_start[]` entry, so a chain that runs off the end of its page is unwalkable — every slot
 // past the boundary keeps its raw BIND word (bit 63 set) and calling one jumps to
-// `0x8000000000000000 | ordinal`. Here the GOT is page-ALIGNED and 3 slots long, which is why
-// `buildMachoDataPageStarts` can push a single `0` for it, and why the cross-page cut that
+// `0x8000000000000000 | ordinal`. Here the GOT is page-ALIGNED and holds one slot per `OsImportSlot`
+// (well under the 512 a 4 KiB page fits), which is why `buildMachoDataPageStarts` can push a single
+// `0` for it, and why the cross-page cut that
 // `writeMachoStringBufferRebases` carries is not needed. The bootstrap's Mach-O writer packs its
 // GOT at an unaligned offset instead, so it DID straddle a page once the image grew ~20 KB, and
 // needed that cut (`6-MachOWriter.cs`). The invariant is silent and load-bearing, so it is checked

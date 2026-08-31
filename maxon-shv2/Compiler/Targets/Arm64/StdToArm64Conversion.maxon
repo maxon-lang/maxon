@@ -74,6 +74,16 @@ let Arm64FlagReturnReg = Arm64Register.x9
 // anonymous nor zeroed.
 let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0x2). arm64-macOS only.
 
+// ⭐ **THE ONE PLACE THE `_SC_` NUMBER IS WRITTEN, AND WHY THERE IS NO SECOND ONE.**
+// `_SC_NPROCESSORS_ONLN`, the `sysconf` parameter naming "logical processors currently online", read from
+// this machine's SDK header (`MacOSX.sdk/usr/include/unistd.h:283`) rather than from memory. ⚠ It is
+// DARWIN-NUMBERED: Linux spells the same parameter 84 — and reaches it through a libc FUNCTION rather than
+// a syscall — so the two lanes share neither the call nor the number. That is why `OsImportSlot.sysconf`
+// carries no Linux route, why `targetProvidesFacility` gives `cpuCount` to arm64-macOS alone, and why
+// `lowerOsCpuCount` asks the route oracle before emitting an import call. Those three say what they DO;
+// the number and its provenance live here, once.
+let DarwinScNprocessorsOnln = 58
+
 // The `madvise` advice that DECOMMITS a range on Darwin (F1a). Here rather than in `PosixMmap` for exactly
 // `MmapAnonPrivateMacos`'s reason one line up: arm64 is the only backend that targets macOS.
 //
@@ -540,9 +550,16 @@ type StdToArm64Lowering
 			// A frame address computes an address; it calls nothing and so passes no outgoing argument.
 			stackRecordAddr gives 0
 			osOpenNamedSegment to osTickCountMs gives 0
-			// The rest of the appended band — the four attached-subprocess host primitives, the `ws2_32` socket
-			// band, the machine query AND the thread-CPU read — is x64-windows only and never reaches an arm64
-			// frame; it reserves nothing here for the same reason every other refused op does.
+			// The rest of the appended band, and it now answers 0 for TWO different reasons rather than one.
+			// The four attached-subprocess host primitives and the `ws2_32` socket band are x64-windows only and
+			// never reach an arm64 frame, so they reserve nothing exactly as every other refused op does. The
+			// machine query and the thread-CPU read DO lower here (`lowerOsCpuCount`, `lowerOsThreadCpuTicks`) and
+			// still reserve nothing, for `osDecommitPages`' reason one arm down: each passes ONE argument, inside
+			// AAPCS64's x0..x7, so nothing overflows onto the outgoing-argument stack.
+			// ⛔ This said the whole range "is x64-windows only and never reaches an arm64 frame", which stopped
+			// being true when those two landed. The ANSWER was right throughout, which is what made the wrong
+			// reason survive — and a reason is what the next person adding a STACK-ARGUMENT OS call to this range
+			// would read before deciding they owe no reservation.
 			osHandleSetInherit to osThreadCpuTicks gives 0
 			// F1a: unlike the band above, this one DOES lower here — and it still reserves nothing, because
 			// `madvise` takes three register arguments, inside AAPCS64's x0..x7. Nothing overflows onto the
@@ -731,15 +748,12 @@ type StdToArm64Lowering
 			// past that gate, never the user-facing rejection.
 			osHandleSetInherit to osProcessTerminate then panic("lowerStdToArm64: the attached-subprocess host primitives are x64-windows only — the subprocess substrate is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104)")
 			osSocketStartup to osSocketClose then panic("lowerStdToArm64: the socket host primitives are x64-windows only — `ws2_32` is a Win32 library, and SemanticCheck refuses such a program at its own source span (E3104), so reaching here is a compiler bug that got one past that gate rather than the user-facing rejection")
-			// ⛔ The MACHINE query is x64-windows only on the same terms: `GetActiveProcessorCount` is a Win32
-			// entry point, macOS answers the same question with `sysconf(_SC_NPROCESSORS_ONLN)` — a DIFFERENT
-			// call with a different failure convention, which is a rung rather than a lowering — and
-			// `SemanticCheck.calleeNeedsWin32Substrate` refuses such a program at its own source span (E3104).
-			// A fabricated count here would be a silent wrong answer about the machine.
-			osCpuCount then panic("lowerStdToArm64: `osCpuCount` is x64-windows only — the machine query is x64-windows-gated at this rung, and SemanticCheck refuses it on every other target")
-			// ⛔ The thread-CPU read is x64-windows only on the same terms: `QueryThreadCycleTime` is a Win32
-			// import, and the POSIX answer (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`) is a different API in a
-			// different unit — a rung rather than a lowering. A stub here would fabricate a cost.
+			// ⭐ The MACHINE query: `GetActiveProcessorCount` on Windows, `sysconf(_SC_NPROCESSORS_ONLN)`
+			// here. Two APIs with two failure conventions and one question — see `lowerOsCpuCount`.
+			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstRef: dstRef)
+			// ⭐ The thread-CPU read, through a CHUNK: `QueryThreadCycleTime` writes its answer through the
+			// caller's pointer while `clock_gettime_nsec_np` returns it in x0, so the pointer must outlive the
+			// call and an isel cannot hold it there (`Arm64DarwinRuntime`'s header carries the argument).
 			osThreadCpuTicks(outPtrId) then self.lowerOsThreadCpuTicks(outPtrId, dstRef: dstRef)
 			// F2: the atomics and the per-thread identity word. Neither atomic is OS-routed — LDAXR/STLXR are ISA
 			// facts — while the token IS, because only one of the two OSes here has a thread-pointer register a raw
@@ -811,8 +825,8 @@ type StdToArm64Lowering
 			osOpenNamedSegment to osTickCountMs then panic("lowerStdToArm64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops; they are also x64-windows only)")
 			osHandleSetInherit to osProcessTerminate then panic("lowerStdToArm64: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops; they are also x64-windows only)")
 			osSocketStartup to osSocketClose then panic("lowerStdToArm64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
-			osCpuCount then panic("lowerStdToArm64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op; it is also x64-windows only)")
-			osThreadCpuTicks then panic("lowerStdToArm64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param; it is also x64-windows only)")
+			osCpuCount then panic("lowerStdToArm64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
+			osThreadCpuTicks then panic("lowerStdToArm64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
 			// F1a: a decommit is a body op, exactly as `osFreePages` above is — a page-lifecycle op transfers
 			// control nowhere.
 			osDecommitPages then panic("lowerStdToArm64: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
@@ -1557,6 +1571,46 @@ type StdToArm64Lowering
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.mmap, syscallNumber: Arm64LinuxSyscallMmap)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsAllocPages'
+
+	// ⭐⭐ **`osCpuCount(result)` ⇒ `sysconf(_SC_NPROCESSORS_ONLN)`** — one immediate into x0, one GOT call,
+	// and the count read back out of x0. NO CHUNK, and that is the whole difference from the four host-surface
+	// lowerings below: those are out-param shaped, so the caller's pointer must survive a call that answers in
+	// a register; this op has no operands and no out-param (`StdOp.osCpuCount` explains why it takes no
+	// buffer), so the answer never has to outlive anything and an ordinary inline lowering suffices — exactly
+	// `lowerOsExit`'s shape with a result. The `_SC_` parameter number is `DarwinScNprocessorsOnln`, which
+	// carries why this lane's number is not the other lane's.
+	//
+	// ⭐ **THE ANSWER IS LEFT EXACTLY AS THE OS GAVE IT, INCLUDING `sysconf`'s `-1`.** The `< 1 ⇒ 1` clamp is
+	// builder-built Std's (`CpuParallelRuntime.buildCpuCount`), whose SIGNED test was written to cover both
+	// this lane's `-1` and Windows's `0` — so clamping here as well would be one contract in two places, and
+	// the x64 lowering deliberately does not clamp either.
+	//
+	// ⛔⛔ **IT ASKS THE ROUTE ORACLE EVEN THOUGH ONLY ONE ROUTE IS SERVED, BECAUSE THE OTHER ONE FAILS
+	// SILENTLY.** Every other `arm64ImportCall` in this file is emitted through `emitOsPrimitiveCall`, so the
+	// `syscall` lanes structurally cannot reach one; this primitive has no syscall route to give that door, and
+	// emitting the import call unconditionally would put one on a lane with no import table. That failure is
+	// NOT the loud kind the four host-surface lowerings below get: `ElfWriter` never reads the import
+	// relocations at all, so an unpatched `adrp x16, #0; ldr x16, [x16]; blr x16` would ship as a jump through
+	// the first word of its own `.text` page, while a `bl <chunk>` into a chunk that lane never built is a
+	// `CallFixup` and `arm64ResolveCallFixups` PANICS on it. ⇒ their "no `os` test here" argument does not
+	// transfer, and the gap is closed by asking `arm64OsCallKind` — the same ONE door `emitOsPrimitiveCall`
+	// consults, not a second copy of the facility table.
+	//
+	// ⚠ It is the BACKSTOP and never the user-facing rejection: `targetProvidesFacility` gives `cpuCount` to
+	// arm64-macOS alone, so a source-written `__Builtins.cpuCount()` is refused at its own span with E3104 on
+	// every Linux lane (MEASURED). What this arm catches is a COMPILER-INSERTED `osCpuCount` — builder-built
+	// Std emits one in `SchedRuntime.emitResolveMaxProcs`, which no callee-name gate can see, and which an
+	// ungated `async` program really does drag into this isel on a lane whose row admits nothing.
+	function lowerOsCpuCount(resultId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: DarwinScNprocessorsOnln))
+
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.sysconf)))
+			syscall then panic("lowerStdToArm64: `osCpuCount` has no syscall route — `sysconf` is a libc function rather than a syscall on Linux and the `_SC_NPROCESSORS_ONLN` parameter is numbered differently there, so `targetProvidesFacility` gives `cpuCount` to arm64-macOS alone and SemanticCheck refuses a program that names it at its own source span (E3104). Reaching here means a COMPILER-INSERTED `osCpuCount` (`SchedRuntime.emitResolveMaxProcs`) got past that name-keyed gate, which is a compiler bug rather than the user-facing rejection")
+		end 'route'
+
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerOsCpuCount'
 
 	// ⭐⭐ **THE HOST-SURFACE LOWERINGS: ARGUMENT MOVES AND A `bl` INTO A RUNTIME CHUNK.** Every one of the
 	// four below is out-param shaped — the OS answer must be STORED THROUGH A POINTER the caller supplied —

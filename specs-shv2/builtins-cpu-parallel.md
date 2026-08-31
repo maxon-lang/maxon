@@ -98,11 +98,17 @@ default, which it does; the multi-core checks become shv2's the rung its allocat
 
 `cpuCount` is an OS query with a different API on every platform — `GetActiveProcessorCount` on
 Windows, `sysconf(_SC_NPROCESSORS_ONLN)` under POSIX, and on WASI **nothing at all**: a component
-has no OS-thread concept and no primitive that reports one. shv2 lowers it on x64-windows only, and
-every other target refuses at the call's own span with **E3104**
-(`SemanticCheck.calleeNeedsWin32Substrate`, by the `__cpu_` PREFIX, so a second entry point in that
-band is gated by construction rather than by memory). A fabricated `1` on a lane that cannot ask the
-OS would be a silent wrong answer, which is strictly worse than a refusal.
+has no OS-thread concept and no primitive that reports one. shv2 lowers it wherever a backend has
+landed that read — x64-windows and arm64-macOS — and every other target refuses at the call's own
+span with **E3104** (by the `__cpu_` PREFIX, so a second entry point in that band is gated by
+construction rather than by memory). A fabricated `1` on a lane that cannot ask the OS would be a
+silent wrong answer, which is strictly worse than a refusal.
+
+⚠ The POSIX half is not a re-spelling of the Windows one, which is why it is a rung and not a
+lowering: the two APIs fail differently (`0` against `-1`), and the `_SC_` parameter is itself
+numbered per OS, so a Linux lane inherits nothing from the macOS one. The authority on which target
+provides it is `TargetFacilities.targetProvidesFacility`; this paragraph names the lanes only to say
+that there is more than one, and the per-case `targets:` markers below are what actually gate.
 
 `schedMaxActiveWorkers` is refused NOWHERE, and for a reason of its own rather than by omission: its
 whole body is one `.data` load and a `ret`, which lowers on every target shv2 emits — the same
@@ -173,7 +179,7 @@ stops doing so.
 ## Tests
 
 <!-- test: builtins-cpu-parallel.cpu-count-is-at-least-one -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The clamp's own contract, and the property a missing lowering fails first: the call answers a number
 at least 1 rather than whatever the result register happened to hold.
 ```maxon
@@ -190,10 +196,15 @@ end 'main'
 ```
 
 <!-- test: builtins-cpu-parallel.cpu-count-is-in-range -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Windows can report at most 64 processor groups of 64 logical processors each, so `[1, 4096]` is the
 whole space of answers the API has. A capture of the wrong register, a sign-extension of a `DWORD`
-or a high half left over from an earlier call lands outside it; a real count cannot.
+or a high half left over from an earlier call lands outside it; a real count cannot. ⚠ The BOUND is
+Windows-derived and the CASE is not: `sysconf(_SC_NPROCESSORS_ONLN)` answers a small positive `long`
+on Darwin and its failure answer is `-1`, which the clamp turns into 1 — so every honest answer on
+that lane sits inside the same window, and the register-capture defects this case exists to catch
+(a clobbered x0, an unpatched GOT slot, a high half left over) land outside it there too. The local
+`windowsCeiling` names where the number came from, not which lane may run the case.
 ```maxon
 function main() returns ExitCode
 	let cpus = __Builtins.cpuCount()
@@ -213,7 +224,7 @@ end 'main'
 ```
 
 <!-- test: builtins-cpu-parallel.cpu-count-is-stable-across-calls -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Three independent calls in one process agree. A machine does not grow cores mid-run, so this is what
 a lowering that read a fresh counter, or that captured a register the call had clobbered, would
 fail.
@@ -304,9 +315,11 @@ error E3036: <fragment>:3:20: '__Builtins.cpuCount' takes exactly 0 argument, bu
 
 <!-- test: builtins-cpu-parallel.cpu-count-rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The machine query is x64-windows only at this rung. On any other target the call is refused at its
-source span with `E3104`, naming the runtime entry that has no lowering there — never a panic from
-inside the wasm backend, and never a fabricated count.
+WASI has no processor-count primitive at all, so this lane is a refusal of the permanent kind rather
+than of the not-yet kind. The call is refused at its source span with `E3104`, naming the runtime
+entry that has no lowering there — never a panic from inside the wasm backend, and never a
+fabricated count. (The diagnostic's own wording still opens "x64-windows only"; that is the pinned
+message text, not a claim this spec makes about which lanes lower the op.)
 ```maxon
 function main() returns ExitCode
 	let cpus = __Builtins.cpuCount()
@@ -337,7 +350,7 @@ error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: i
 ```
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 shv2 runs one M by default, so the high-water mark of concurrently-active worker Ms is 1 — and it is
 1 in a program that never spawns anything, exactly as the bootstrap answers 1 for the same program
 (MEASURED: `workers=1`). The `>= 1` half is the contract's floor; the `== 1` half is this runtime's

@@ -370,7 +370,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			commandLine gives false
 			consoleStdin gives false
 			processInfo gives false
-			cpuCount gives false
+			// `sysconf(_SC_NPROCESSORS_ONLN)` — the read the op was SHAPED for. `StdOp.osCpuCount` takes no
+			// buffer precisely because this lane answers a bare scalar, and the `< 1 ⇒ 1` clamp that covers
+			// both `GetActiveProcessorCount`'s 0 and `sysconf`'s -1 is already builder-built Std
+			// (`CpuParallelRuntime.buildCpuCount`), so this lane supplies only the read.
+			cpuCount gives true
 			// The green-thread floor and everything standing on it. `__gt_context_switch`,
 			// `__gt_trampoline` and `__gt_morestack` are hand-assembled x64 chunks
 			// (`X64GtRuntime.appendX64GtRuntimeChunks`) with no AAPCS64 twin, so a `true` here would

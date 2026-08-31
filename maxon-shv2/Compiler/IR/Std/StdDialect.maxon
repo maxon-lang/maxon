@@ -1993,11 +1993,16 @@ export union StdOp
 	// same arithmetic on every platform even though the read is not, and one signed test covers both
 	// failure spellings.
 	//
-	// ⭐ x64-WINDOWS ONLY at this rung. Every other target refuses at the CALL SITE with the existing E3104
-	// (`SemanticCheck.calleeNeedsWin32Substrate`, by the `__cpu_` prefix), so no backend ever sees this op
-	// — which is why the three non-Windows lowerings are absent rather than stubbed. A stub would be a
-	// silent wrong answer about the machine on a lane that cannot ask it. Full call-barrier metadata: it IS
-	// an indirect call once lowered.
+	// ⭐ **TWO LANES LOWER IT, AND THE REST REFUSE AT THE CALL SITE.** x64-windows through
+	// `GetActiveProcessorCount` and arm64-macOS through `sysconf(_SC_NPROCESSORS_ONLN)` — the very split this
+	// op's SHAPE was chosen for, above: the POSIX lane really did supply only the read, with no `SYSTEM_INFO`
+	// to fabricate. ⛔ This paragraph said "x64-WINDOWS ONLY at this rung … the three non-Windows lowerings are
+	// absent", which MAC1 falsified; it is the op's own canonical doc, so a reader who trusts it plans the
+	// wrong port. Which target has it is `TargetFacilities.targetProvidesFacility`'s to say and is NOT
+	// restated here — every other target refuses at the CALL SITE with the existing E3104 (by the `__cpu_`
+	// prefix), and the lanes that still have no lowering panic in their isel rather than stubbing one, because
+	// a stub would be a silent wrong answer about the machine on a lane that cannot ask it. Full call-barrier
+	// metadata: it IS an indirect call once lowered.
 	osCpuCount(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// --- The THREAD-CPU clock behind `__Builtins.threadCpuTicks()` ---
 	//

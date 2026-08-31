@@ -1,0 +1,65 @@
+// Test: builtins-cpu-parallel.sched-max-active-workers-is-one
+function main() returns ExitCode
+	let workers = __Builtins.schedMaxActiveWorkers()
+	var score = 0
+	if workers >= 1 'contractFloor'
+		score = score + 1
+	end 'contractFloor'
+	if workers == 1 'singleM'
+		score = score + 2
+	end 'singleM'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __sched_active_workers@0 = i64 1
+  __sched_max_active_workers@8 = i64 1
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl __sched_max_active_workers
+    arm64.movImm x1, 0
+    arm64.cmp x0, 1
+    arm64.cset x2, ge
+    arm64.cbnz x2, contractFloor
+    arm64.b critsplit#8
+  contractFloor:
+    arm64.movImm x1, 1
+    arm64.b ifcont#2
+  critsplit#8:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, singleM
+    arm64.b critsplit#9
+  singleM:
+    arm64.add x0, x1, 2
+    arm64.b ifcont#4
+  critsplit#9:
+    arm64.movRegReg x0, x1
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-cpu-parallel.sched-max-active-workers-is-one.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

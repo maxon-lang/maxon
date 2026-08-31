@@ -14,10 +14,12 @@
 // That difference decides the only thing a `__` band actually decides — *may this target run it* —
 // and the two answers are opposite:
 //
-//   • `__cpu_count` is an OS call. It lowers on x64-windows and NOWHERE else, so it must be refused at the
-//     call's own span on every other target (E3104, `SemanticCheck.calleeNeedsWin32Substrate`, by the
-//     `__cpu_` PREFIX — so an entry point added to this band later is gated by construction rather than by
-//     memory).
+//   • `__cpu_count` is an OS call, so it lowers only where a backend has landed the read — x64-windows and,
+//     since MAC1, arm64-macOS — and must be refused at the call's own span on every other target (E3104, by
+//     the `__cpu_` PREFIX, so an entry point added to this band later is gated by construction rather than
+//     by memory). ⚠ WHICH targets is `TargetFacilities.targetProvidesFacility`'s `cpuCount` row and is
+//     deliberately not counted here: this sentence read "x64-windows and NOWHERE else" for one rung past the
+//     day that stopped being true, which is the second copy of a fact earning its keep as a lie.
 //   • `__sched_max_active_workers` reaches no OS at all: its whole body is one `.data` load and a `ret`,
 //     which lowers on every target shv2 emits. Refusing it would be refusing a load. (It WAS a constant
 //     return until G1 gave the mark a writer; the argument is unchanged, because a `.data` load reaches no

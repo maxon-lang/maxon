@@ -56,6 +56,14 @@ export enum OsImportSlot
 	// which is why three facilities cost one slot. `nanosleep` is the timed park.
 	clockGettimeNsecNp
 	nanosleep
+	// `sysconf` answers a numbered system parameter in x0 — `osCpuCount` asks it
+	// `_SC_NPROCESSORS_ONLN`. ⚠ **IT IS THE FIRST SLOT HERE WITH NO LINUX TWIN AT ALL**, where every slot
+	// above merely reaches its twin as a raw `svc`: Linux serves this parameter through a libc FUNCTION and
+	// numbers it differently, so there is no syscall number to pair with this slot even in principle
+	// (`StdToArm64Conversion.DarwinScNprocessorsOnln` carries the numbers and their provenance — do not
+	// restate them here). That is why `targetProvidesFacility` gives `cpuCount` to arm64-macOS alone, and why
+	// `lowerOsCpuCount` asks `arm64OsCallKind` before emitting a call through this slot.
+	sysconf
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor
