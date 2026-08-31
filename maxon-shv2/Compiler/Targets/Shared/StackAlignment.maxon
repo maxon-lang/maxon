@@ -1,0 +1,17 @@
+// StackAlignment — the stack residue EVERY backend in this compiler keeps at a call site.
+//
+// ⭐⭐ **IT LIVED IN `Targets/X64/X64PrologueEpilogue` AND THE arm64 PROLOGUE READ IT FROM THERE.** Maxon's
+// top-level name space is flat, so that worked; it was still a leak, and the wrong kind — an ISA-neutral
+// fact filed under one ISA, which is exactly the shape that makes the OTHER ISA's reader look accidental.
+// Three arm64 sites read it today (`Arm64PrologueEpilogue.insertArm64FrameForFunction`,
+// `Arm64RuntimeAsm.beginFunction`, and the green-thread chunks) and none of them is about x64.
+//
+// ⚠ **ONE NUMBER FOR BOTH ISAs IS A COINCIDENCE OF VALUE, NOT OF REASON, AND IT IS STILL ONE FACT.** Win64
+// requires rsp ≡ 0 (mod 16) at a `call`; AAPCS64 requires SP to be 16-byte aligned at every instruction that
+// uses it as a base, which is strictly stronger. Both are 16, and a target that wanted another residue would
+// need its own name here rather than a second `= 16` somewhere — which is precisely what this file removes.
+//
+// A misaligned stack is never a compile error. On x64 it is a crash inside kernel32's SSE, arbitrarily far
+// from the code that was wrong; on arm64 it is an SP-alignment fault at the first frame access. Both are
+// unattributable, which is why the number is stated once.
+export let StackFrameAlignment = 16

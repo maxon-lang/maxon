@@ -181,7 +181,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
 	var chunks = FunctionCodeChunkArray.create()
 	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitFunctionChunk(targetModule, func: func, usesGt: usage.usesGt))
+		chunks.push(emitFunctionChunk(targetModule, func: func, usesGt: usage.usesGt, target: target))
 	end 'eachFunc'
 	// The panic runtime is hand-assembled bytes, not TargetOps, so it joins here rather than
 	// in `augmentWithRuntime` — there is no Std or Target spelling of "read CONTEXT.Rip" or
@@ -204,7 +204,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// runtime's INSTALLATION, so they ride the same bits `installGtRuntime` was gated on rather than a
 	// probe of the module (see this file's `buildBackend` header for the probe that DFE invalidated).
 	if usage.usesGt 'gtChunks'
-		appendX64GtRuntimeChunks(chunks, usesIocp: usage.usesIocp)
+		appendX64GtRuntimeChunks(chunks, usesIocp: usage.usesIocp, target: target)
 	end 'gtChunks'
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 

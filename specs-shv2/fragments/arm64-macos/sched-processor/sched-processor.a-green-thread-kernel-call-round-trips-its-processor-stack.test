@@ -1,0 +1,107 @@
+// Test: sched-processor.a-green-thread-kernel-call-round-trips-its-processor-stack
+function napper(n Integer) returns Integer
+	__Builtins.sleep(2)
+	return n + 5
+end 'napper'
+
+function main() returns ExitCode
+	let first = async napper(1)
+	let second = async napper(2)
+	let a = await first
+	let b = await second
+	return (a + b) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 13
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @napper {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 2
+    arm64.bl __gt_sleep
+    arm64.add x0, x19, 5
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.leaFuncAddr x0, napper
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movImm x19, 2
+    arm64.leaFuncAddr x0, napper
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x19
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_await
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at sched-processor.a-green-thread-kernel-call-round-trips-its-processor-stack.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

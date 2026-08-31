@@ -46,6 +46,27 @@ buffered for the next call. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
 statement of it.** The streaming reader parks its green thread on the driver, and several cases reach
 `__gt_sleep` directly — both x64-windows only at this rung.
 
+### ⭐ arm64-macOS RUNS THESE BUILTINS, AND THE READ IS WHERE THE TWO LANES GENUINELY PART
+
+`TargetFacilities` answers `subprocess gives true` for arm64-macOS, so all seven bare-name `subp*`
+builtins compile and run there. The programs above cannot be widened — they spawn `cmd`, and
+`subpSpawn(cmd)` reaches `/bin/sh -c` on that lane rather than `CreateProcessA` — so each subject
+this lane can express carries a `posix-…` sibling marked `arm64-macos`, exactly as
+`process-background-priority.md` pairs its two units.
+
+⛔ **THREE OF THE NINE CASES ABOVE HAVE NO SIBLING, AND THE REASON IS A MEASURED PROPERTY RATHER THAN
+UNFINISHED WORK.** `interleave-with-sleep`, `drop-reader-then-reread` and
+`release-while-parked-then-reuse-slot` all assert something about a reader that is PARKED — a
+concurrent sleeper making progress, a drop cancelling an in-flight `ReadFile`, a generation guard
+catching a resume after the slot was reused. **There is no netpoll a pipe read can park on here**
+(`TargetFacilities`'s MAC8 row states it, and `StdToArm64Conversion`'s `osReadOverlapped` arm is
+where a kqueue would go): `__gt_subp_read_line` blocks its M until the child writes or exits, so a
+read is never in flight and there is no park to interrupt. MEASURED with `interleave-with-sleep`'s
+own shape — a slow child against a 50 ms sleeper, each recording its completion order — this lane
+answers **12** where Windows answers **21**. Those three cases would not merely be hard to port;
+their subject does not exist on this lane yet, and a case pinning the blocking behaviour instead
+would pin a limitation as a specification.
+
 ## Tests
 
 <!-- test: streaming-subprocess.echo-read -->
@@ -72,6 +93,47 @@ end 'main'
 
 ```
 
+<!-- test: streaming-subprocess.posix-echo-read -->
+<!-- targets: arm64-macos -->
+`echo-read`'s subject on the POSIX lane, and the case that proves the seven bare-name `subp*` builtins run
+here at all. GT0 spawns `echo hello`, reads its one stdout line, waits, and releases; the line's byte
+length (`hello\n`, SIX — an LF where `cmd /c echo` writes CRLF) is returned.
+
+⛔⛔ **THIS ENTIRE FAMILY SEGFAULTED ON THIS LANE UNTIL THE CASE EXISTED, AND NOTHING REFUSED IT.**
+`subpSpawn(cmd)` is the third door that takes a whole command LINE, and it was the one that did not ask
+`SubprocessCommandShape`: it stored the raw bytes into the spawn request's command field and handed them to
+a core that, under `argumentVector`, reads that field as a `char *const argv[]`. The first eight ASCII
+bytes of `"echo hello"` were dereferenced as `argv[0]`. MEASURED: **exit 139 (SIGSEGV) at the spawn
+itself**, in a program that compiled clean — the facility table already said `subprocess gives true` here,
+so the E3104 gate that covers a target with no substrate correctly did not fire. Its two siblings
+`__gt_process_run` and `__gt_io_read` had routed their line through `emitSubpCommandFromLine` since MAC8;
+this one now does too.
+
+⚠ **THE READ DOES NOT YIELD ON THIS LANE, AND THAT IS WHY `interleave-with-sleep` HAS NO SIBLING.** There
+is no netpoll a pipe read can park on here, so `subpReadLine` blocks its M until the child writes or exits
+(`TargetFacilities`'s MAC8 row states it). MEASURED with the Windows case's own shape, a slow child against
+a 50 ms sleeper recording completion order: this lane answers **12** (reader first) where Windows answers
+**21**. The property that case pins is genuinely absent here, so pinning it would be pinning a Windows fact
+on a machine that does not have it.
+```maxon
+function main() returns ExitCode
+	let h = subpSpawn("echo hello")
+	let line = subpReadLine(h)
+	let n = line.byteLength()
+	let code = subpWait(h)
+	print("{code}")
+	subpRelease(h)
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+0
+
+```
+
 <!-- test: streaming-subprocess.eof-latched -->
 <!-- targets: x64-windows -->
 After the single line, a second read returns EOF (empty string, length 0), and a third read stays EOF
@@ -90,6 +152,37 @@ end 'main'
 ```
 ```exitcode
 7
+```
+```stdout
+0
+
+```
+
+<!-- test: streaming-subprocess.posix-read-to-eof-latched -->
+<!-- targets: arm64-macos -->
+⭐ **THE EOF EDGE, WHICH IS THE ONE MOST LIKELY TO HANG ON THIS LANE.** `poll` on a pipe whose writer has
+closed reports `POLLIN|POLLHUP` and SUCCEEDS, so the peek says "readable", the read answers 0, and the
+reader must latch EOF from that zero rather than from the poll. A reader that took the successful poll as
+"there are bytes" and looped would spin here for ever, and one that never latched would re-issue a read on
+a closed pipe on every call. After the single line, a second read returns EOF (an empty String, length 0)
+and a third stays EOF.
+
+The return is `line1 + 10 * eof1 + 10 * eof2`, so a non-empty "EOF" line of any length shows up as a
+different number rather than as a near miss.
+```maxon
+function main() returns ExitCode
+	let h = subpSpawn("echo hello")
+	let line1 = subpReadLine(h)
+	let eof1 = subpReadLine(h)
+	let eof2 = subpReadLine(h)
+	let code = subpWait(h)
+	print("{code}")
+	subpRelease(h)
+	return (line1.byteLength() + eof1.byteLength() * 10 + eof2.byteLength() * 10) as ExitCode
+end 'main'
+```
+```exitcode
+6
 ```
 ```stdout
 0
@@ -222,6 +315,44 @@ end 'main'
 
 ```
 
+<!-- test: streaming-subprocess.posix-write-echo -->
+<!-- targets: arm64-macos -->
+`write-echo`'s round trip on this lane: the parent WRITES two lines into the child's stdin, closes the
+write end so the child sees EOF, and reads the sorted output back. `sort` orders `1` before `22`
+lexicographically, so the first line back is the SHORTER one. The three clauses — both writes succeeded, a
+non-empty first line came back, and it is shorter than the second — are the same line-terminator-invariant
+facts the Windows sibling asserts, for the same reason: `1\n` / `22\n` here and `1\r\n` / `22\r\n`
+there both satisfy `first < second`.
+
+⚠ **`subpCloseStdin` IS LOAD-BEARING AND ITS ABSENCE IS A HANG, NOT A WRONG ANSWER.** `sort` cannot emit
+its first byte until it has read EOF, and this lane's read blocks its M — so a close that closed the wrong
+descriptor, or closed nothing, parks this program for ever rather than failing it.
+```maxon
+function main() returns ExitCode
+	let h = subpSpawn("sort")
+	let w1 = subpWriteLine(h, line: "22")
+	let w2 = subpWriteLine(h, line: "1")
+	subpCloseStdin(h)
+	let first = subpReadLine(h)
+	let second = subpReadLine(h)
+	let code = subpWait(h)
+	print("{code}")
+	subpRelease(h)
+	var result = 0
+	if w1 == 0 and w2 == 0 and first.byteLength() > 0 and first.byteLength() < second.byteLength() 'roundtrip'
+		result = 23
+	end 'roundtrip'
+	return result as ExitCode
+end 'main'
+```
+```exitcode
+23
+```
+```stdout
+0
+
+```
+
 <!-- test: streaming-subprocess.drop-reader-then-reread -->
 <!-- targets: x64-windows -->
 A streaming reader is DROPPED mid-read, then the SAME handle is re-read and must still work. `reader(h)` runs
@@ -320,3 +451,31 @@ end 'main'
 ```exitcode
 84
 ```
+
+<!-- test: streaming-subprocess.posix-spawn-release-loop -->
+<!-- targets: arm64-macos -->
+`spawn-release-loop` on this lane: twelve spawn+read+release cycles reuse the same table slot (and its line
+buffer) each iteration, proving no descriptor leak and no per-iteration buffer leak across a many-iteration
+loop. ⚠ It is a sharper check here than on Windows, because every cycle also allocates the
+`/bin/sh -c <line>` argument vector and the two `posix_spawn_file_actions` this lane's spawn needs; twelve
+of those going unreleased is what the leak gate (exit **101**) would catch. Each iteration reads `hello\n`
+(6 bytes), so the accumulator returns 12x6 = 72.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 12 'loop'
+		let h = subpSpawn("echo hello")
+		let line = subpReadLine(h)
+		total = total + line.byteLength()
+		_ = subpWait(h)
+		subpRelease(h)
+		i = i + 1
+	end 'loop'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+72
+```
+

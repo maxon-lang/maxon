@@ -40,7 +40,13 @@ Windows answers a priority CLASS (`BELOW_NORMAL_PRIORITY_CLASS` = 16384, against
 `NORMAL_PRIORITY_CLASS` = 32); POSIX answers a NICE value (10, against 0). The two scales even run in
 opposite directions — larger is LOWER priority under POSIX. That is `threadCpuTicks`'s situation
 exactly, and it is handled the same way: compare against the constant for the platform you are on,
-never across platforms. Every case below is therefore pinned `x64-windows`.
+never across platforms.
+
+⇒ **THE CASES BELOW COME IN PAIRS RATHER THAN ONE WIDENED SET, AND THE UNIT IS WHY.** A Windows case
+asserts 16384 and a POSIX case asserts 10; there is no number both could name and no conversion that
+would make one, so widening a marker here would be asserting a Windows constant on a machine that
+never produces it. The PROPERTIES the two halves assert are the same two — a live reading at the
+background level, and stability across repeated calls — and each pair spells them in its own unit.
 
 ### The answer is a SECOND READING, and that is the whole reason it returns anything
 
@@ -75,12 +81,36 @@ de-prioritised). It must print **16384**; with the SET removed it prints **32**.
 the evidence that the write happens, and it is why this section exists instead of a case that would
 look like proof and be none.
 
-### The substrate is x64-windows only at this rung
+⚠ **THE arm64-macOS LANE HAS THE IDENTICAL BLIND SPOT AND THE IDENTICAL PROCEDURE**, one unit over:
+the suite's own harness is already at nice **10** and a test binary inherits it, so `getpriority`
+answers 10 there whether or not the set ran. The hand check is the same program from a shell at nice
+**0** — it must print **10**, and a lowering that called nothing would print **0**. MEASURED
+2026-08-31 on this host: a C probe reported the launching shell at nice 0 and the compiled Maxon
+program answered 10 twice, which is both halves at once (the write happened, and it did not drift).
 
-The intrinsic lowers to `__proc_bg_priority`, which joins the pid and executable-path entries under
-`SemanticCheck.calleeNeedsWin32Substrate` — by the `__proc_` PREFIX, so it is gated by construction
-rather than by memory, and this is the second time that promise has been collected without an edit
-there. A program reaching it on another target is refused at the call's own span with `E3104`.
+### `setpriority`, NEVER `nice` — and the POSIX lane's thread question
+
+The intrinsic lowers to `__proc_bg_priority`, one of the three entries behind the `processInfo` host
+facility — gated by the `__proc_` PREFIX, so it is covered by construction rather than by memory, and
+a program reaching it on a target that does not provide the facility is refused at the call's own
+span with `E3104`. Which targets provide it is `TargetFacilities.targetProvidesFacility`'s to say.
+
+⛔ **THE POSIX SPELLING IS `setpriority(PRIO_PROCESS, 0, 10)`, AND `nice(10)` WOULD BE WRONG.** `nice`
+is RELATIVE: two calls give 10 and then 20, so a process that asked twice would sink twice as far.
+`setpriority` states an ABSOLUTE value, which is what makes asking twice idempotent —
+`is-stable-across-calls` and its POSIX sibling exist to catch exactly that substitution, and each one
+still passes the "answers the background level" case beside it while failing this one.
+
+⚠ **THE READ-BACK IS `getpriority`, WHICH ANSWERS `-1` BOTH AS A VALUE AND AS ITS ERROR SPELLING** —
+distinguished through `errno` in C. That ambiguity cannot arise at this call site: `PRIO_PROCESS` is
+a valid selector and `who = 0` names a process that is by construction alive, so the read cannot
+fail, and the value it reports is the one just written.
+
+⚠ **CHILD INHERITANCE IS A DARWIN PROPERTY AND NOT A POSIX ONE.** Darwin scopes a nice value to the
+PROCESS, so one call covers every thread and every child, exactly as `SetPriorityClass` does. LINUX
+scopes it to the THREAD: a running thread keeps its old value and a new one inherits only its
+creator's. So a Linux lane owes work at thread creation as well as a call here, which is why that
+lane is not served by re-spelling this one.
 
 ⚠ On wasm the refusal is more than "not yet", as it is for the pid: a WASI component has no process
 and no scheduler priority, so a lowering there could only pretend to have done something.
@@ -89,6 +119,9 @@ and no scheduler priority, so a lowering there could only pretend to have done s
 
 <!-- test: process-background-priority.answers-the-below-normal-class -->
 <!-- targets: x64-windows -->
+⚠ The marker stays Windows-only because the ASSERTION is a Windows priority CLASS, which no POSIX
+machine produces; its sibling below asserts the same postcondition as a nice value.
+
 The POSTCONDITION: after the call the process is at `BELOW_NORMAL_PRIORITY_CLASS` (16384), and the
 answer is a live reading rather than 0 — which is what `GetPriorityClass` answers on failure, and what
 a lowering that passed a bad handle would produce. ⚠ It does NOT prove the SET happened; see the
@@ -129,6 +162,58 @@ function main() returns ExitCode
 	if second == belowNormalPriorityClass 'stillBelowNormal'
 		score = score + 2
 	end 'stillBelowNormal'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: process-background-priority.answers-the-posix-nice-value -->
+<!-- targets: arm64-macos -->
+`answers-the-below-normal-class`'s postcondition in the POSIX unit: after the call the process sits
+at the background NICE value (10), and the answer is a live reading rather than the 0 a normal-priority
+process reports or the `-1` `getpriority` answers when it is asked about a process that is not there.
+⚠ It does NOT prove the SET happened when run under this suite — the harness has already lowered
+itself and a child inherits — see the section above for the hand procedure that does, and for the
+measurement that discharged it on this lane.
+```maxon
+function main() returns ExitCode
+	let backgroundNiceValue = 10
+	let normalNiceValue = 0
+	let priority = __Builtins.enterBackgroundPriority()
+	var score = 0
+	if priority == backgroundNiceValue 'isBackground'
+		score = score + 1
+	end 'isBackground'
+	if priority != normalNiceValue 'isNotStillNormal'
+		score = score + 2
+	end 'isNotStillNormal'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: process-background-priority.posix-value-is-stable-across-calls -->
+<!-- targets: arm64-macos -->
+⭐ **THE CASE THAT CATCHES `nice`.** Asking twice re-applies the same absolute value and reads back the
+same answer. A lowering built on `nice(10)` instead of `setpriority(PRIO_PROCESS, 0, 10)` sinks one
+step per call — 10 then 20 — so it fails here while still passing the case above, which is exactly
+the split its Windows sibling was written to make.
+```maxon
+function main() returns ExitCode
+	let backgroundNiceValue = 10
+	let first = __Builtins.enterBackgroundPriority()
+	let second = __Builtins.enterBackgroundPriority()
+	var score = 0
+	if first == second 'agree'
+		score = score + 1
+	end 'agree'
+	if second == backgroundNiceValue 'stillBackground'
+		score = score + 2
+	end 'stillBackground'
 	return score as ExitCode
 end 'main'
 ```

@@ -26,11 +26,11 @@ so a later reader can tell a live holder from an abandoned one.
 There is no literal to compare against — the value differs on every run of every case — so the
 properties asserted below are all that cannot vary:
 
-- it is POSITIVE. Zero is not a Windows process id, and a call that never happened would leave
-  whatever the result register held;
-- it FITS IN A DWORD. `GetCurrentProcessId` answers a 32-bit `DWORD` in `EAX`, so a sign-extension
-  or a stale high half shows up here as a value past `2^32` (or as a negative one) rather than as a
-  plausible-looking id nobody would question;
+- it is POSITIVE. Zero is not a process id on either platform, and a call that never happened would
+  leave whatever the result register held;
+- it FITS IN A DWORD. `GetCurrentProcessId` answers a 32-bit `DWORD` and `getpid()` a 32-bit
+  `pid_t`, so a sign-extension or a stale high half shows up here as a value past `2^32` (or as a
+  negative one) rather than as a plausible-looking id nobody would question;
 - it is STABLE. Every call in one process answers the same id, which is what makes it usable as a
   lock token at all;
 - it DIFFERS FROM A CHILD'S. A spawned child has an id of its own, and `__Builtins.subprocessGetPid`
@@ -38,7 +38,7 @@ properties asserted below are all that cannot vary:
 
 ### The child comparison is the only in-language ORACLE, and it is a discriminator rather than an equality
 
-Nothing a Maxon program can reach reports "the id Windows has for this process" independently of the
+Nothing a Maxon program can reach reports "the id the OS has for this process" independently of the
 intrinsic itself, so there is no equality to assert against an outside authority. What IS reachable
 is a SECOND live process whose id the OS reports through a different entry point entirely
 (`subprocessGetPid`, off the `CreateProcessA` `PROCESS_INFORMATION`), and two live processes never
@@ -46,25 +46,32 @@ share an id. That falsifies every wrong answer of the shape "a constant", "the s
 everybody" and "the child's id" — which is the whole class a stable, positive, DWORD-sized number
 could otherwise hide in.
 
-### The substrate is x64-windows only at this rung, and the reason is NOT `executablePath`'s
+### It is the SIMPLEST member of the `processInfo` band, and its gate was never `executablePath`'s
 
-`__Builtins.currentProcessId` lowers to `__proc_pid`, which joins the file, directory, command-line
-and executable-path families under `SemanticCheck.calleeNeedsWin32Substrate` — by the `__proc_`
-PREFIX, so it is gated by construction rather than by memory — and a program that reaches it on
-another target is refused with `E3104` at the call's own span.
+`__Builtins.currentProcessId` lowers to `__proc_pid`, one of the three entries behind the
+`processInfo` host facility — gated by the `__proc_` PREFIX, so it is covered by construction rather
+than by memory, and a program that reaches it on a target that does not provide the facility is
+refused with `E3104` at the call's own span. Which targets provide it is
+`TargetFacilities.targetProvidesFacility`'s to say and is not counted here.
 
-⚠ `process-executable-path.md` argues that its own intrinsic is host-only because the three
+⚠ `process-executable-path.md` argues that its own intrinsic was host-only because the three
 platforms genuinely DISAGREE about the API's shape (a fill-and-count, an in-out size, a symlink).
-That argument does not reach this one and is not borrowed: `getpid()` and `GetCurrentProcessId()`
-are the same call with two spellings, and neither can fail. What gates this intrinsic is narrower
-and honest — shv2's arm64-macos and wasm32-wasi lanes have no OS-primitive substrate at all at this
-rung, so there is nowhere for the one instruction to go. WASI is the one target where the refusal is
-more than "not yet": a component has no process identity to report.
+That argument never reached this one and was never borrowed: `getpid()` and `GetCurrentProcessId()`
+are the same call with two spellings, and neither can fail. What gated it was narrower — the lane
+had no OS-primitive substrate for the one instruction to go through — and that is what a port
+removes. WASI stays refused for a reason no port removes: a component has no process identity to
+report.
+
+⚠ **`fits-in-a-dword` IS FREE ON ONE LANE AND BOUGHT ON THE OTHER.** Writing `EAX` zeroes the upper
+half of `RAX` architecturally, so `GetCurrentProcessId`'s `DWORD` arrives clean; AAPCS64 leaves the
+upper half of a register holding an `int` return UNSPECIFIED, so the arm64 lowering must widen
+`getpid`'s `pid_t` itself. The case below is what makes that difference visible instead of a stale
+high word passing as a plausible id.
 
 ## Tests
 
 <!-- test: process-id.is-positive -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The weakest property, and the one a missing lowering fails first: the call answers a number above
 zero rather than whatever the result register happened to hold.
 ```maxon
@@ -81,11 +88,12 @@ end 'main'
 ```
 
 <!-- test: process-id.fits-in-a-dword -->
-<!-- targets: x64-windows -->
-`GetCurrentProcessId` answers a 32-bit `DWORD`. The id must therefore land in `[1, 2^32)` — which is
-what a plain 32-bit write to `EAX` gives for free and what a sign-extension, or a high half left
-over from a previous call, would break. A wrong answer of that shape is still positive and still
-stable, so this is the case that separates it from a real id.
+<!-- targets: x64-windows, arm64-macos -->
+`GetCurrentProcessId` answers a 32-bit `DWORD` and `getpid()` a 32-bit `pid_t`. The id must therefore
+land in `[1, 2^32)` — which is what a plain 32-bit write to `EAX` gives for free and what a stale
+high half, on either lane, would break. A wrong answer of that shape is still positive and still
+stable, so this is the case that separates it from a real id. ⚠ On arm64 it is the WIDENING at the
+call site that keeps it true, not the ABI; see the section above.
 ```maxon
 function main() returns ExitCode
 	let pid = __Builtins.currentProcessId()
@@ -105,7 +113,7 @@ end 'main'
 ```
 
 <!-- test: process-id.is-stable-across-calls -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Three independent calls in one process agree. This is the property `TreeLock` actually leans on — a
 token written at `takeLock` and re-read at the release has to name the same process — and it is what
 a lowering that read a THREAD id, or that answered a fresh counter, would fail.
@@ -130,6 +138,10 @@ end 'main'
 
 <!-- test: process-id.differs-from-a-child -->
 <!-- targets: x64-windows -->
+⚠ The marker stays Windows-only for a reason that is not about the pid at all: the case SPAWNS, and
+the `subprocess` facility is a separate row from `processInfo` in
+`TargetFacilities.targetProvidesFacility`. The pid half of it runs anywhere; the oracle does not.
+
 The only oracle a program can reach: spawn a child and ask a DIFFERENT entry point
 (`__Builtins.subprocessGetPid`, off `CreateProcessA`'s `PROCESS_INFORMATION`) for ITS id. Two live
 processes never share one, so a constant — or an intrinsic that answered the child's id, or the same

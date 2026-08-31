@@ -407,20 +407,26 @@ error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: '
 
 <!-- test: stdlib-whitelist.target-refusal-blames-the-crossing-call-arm64 -->
 <!-- targets: arm64-macos -->
-The attribution is a property of the whitelist mechanism, not of one backend: the same program
-compiled for arm64 is refused at the same user span, naming the same whitelisted function and the
-same missing runtime entry.
+The attribution is a property of the whitelist mechanism, not of one backend: a program compiled for
+arm64 is refused at the same user span, naming the whitelisted function it wrote and the runtime entry
+that has no lowering there.
+
+⚠ **THE SUBJECT IS THE ATTRIBUTION, AND THE CROSSING IT USES HAD TO MOVE.** This case was written over
+`Clock.nowMs` → `__gt_now_ns`, and the arm64-macOS monotonic clock landed — so the program stopped being
+refused at all and the case went red, pinning a diagnostic the compiler was right not to emit. It is now
+written over `TcpClient.connect` → `__ms_tcp_connect`, a band that lane still does not serve (`ws2_32` is
+a Win32 library). The wasm twin above keeps `Clock.nowMs`, which WASI still refuses, so the pair still
+shows the same mechanism through two entries on two lanes. ⇒ **Whichever crossing this case names, it has
+to be one the target genuinely lacks; a landed facility makes the case red rather than stale, which is the
+outcome to want.**
 ```maxon
 function main() returns ExitCode
-	let t = Clock.nowMs()
-	if t > 0 'chk'
-		return 4
-	end 'chk'
+	let c = try TcpClient.connect("127.0.0.1", port: 9) otherwise return 4
 	return 5
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no arm64-macos implementation
+error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: 'TcpClient.connect' lowers to the runtime entry '__ms_tcp_connect', which has no arm64-macos implementation
 ```
 
 <!-- test: stdlib-whitelist.target-refusal-is-transitive -->

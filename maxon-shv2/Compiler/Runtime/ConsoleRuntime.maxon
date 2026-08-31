@@ -12,18 +12,25 @@
 // truncate real input at the first zero. That is the one place this file's shape differs from
 // `__cl_arg`/`__md_current_path`, which genuinely do receive NUL-terminated text from Win32.
 //
-// ⭐ **HOST-ONLY BY THE R4 RULING (2026-07-30).** `x64-windows` is real; every other target refuses at the
-// call site with the EXISTING `E3104 targetUnsupportedConstruct` via `SemanticCheck.calleeNeedsWin32Substrate`,
+// ⭐⭐ **TWO LANES AS OF MAC6** — `x64-windows` and arm64-macOS, where the handle fetch is one subtraction
+// and the read is `read(2)`. This paragraph used to read "HOST-ONLY BY THE R4 RULING (2026-07-30)"; the
+// roster it points at is now `TargetFacilities.targetProvidesFacility`'s `consoleStdin` row. A target that
+// provides neither still refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`,
 // which matches on the `__con_` PREFIX — so an entry point added later is gated by construction rather than
 // by memory.
 //
-// ⚠ **THE EXTRA REASON, because "nobody wrote the lowering yet" would be the wrong one to record.** Under
-// POSIX and under WASI there is no HANDLE to fetch at all: fd 0 *is* the handle on Linux/macOS, and a WASI
-// component reaches standard input through `wasi:cli/stdin`'s input-stream RESOURCE. Neither shape has a
-// `GetStdHandle` step, so serving them is not a lowering for `osStdHandle` — it is a DIFFERENT Std graph
-// that never asks this op anything. That is a rung, and until it lands this file builds the Windows half and
-// REFUSES the rest LOUDLY, which is the one thing that must not be traded for a target that compiles and
-// answers a permanent EOF.
+// ⭐⭐ **arm64-macOS SERVES IT AS OF MAC6, AND THE PARAGRAPH THIS REPLACES OVERSTATED THE PROBLEM.** It
+// read: *"Under POSIX and under WASI there is no HANDLE to fetch at all: fd 0 *is* the handle … so serving
+// them is not a lowering for `osStdHandle` — it is a DIFFERENT Std graph that never asks this op anything.
+// That is a rung."* The premise is correct and the conclusion does not follow. An op with no OS work to do
+// is an op whose lowering is PURE ARITHMETIC: `GetStdHandle`'s three selectors and POSIX's three
+// descriptors are two consecutive runs, so one subtraction carries the whole map and no call is made at
+// all. The graph below is untouched, and `SubprocessRuntime`'s `inherit` stdio kind — which picks among the
+// three at RUNTIME, and is why the selector is a value operand rather than an immediate — gets the right
+// descriptors for free the day that band lands on this lane.
+//
+// ⚠ WASI is a different question and stays refused: a component holds an input-stream RESOURCE, which is
+// neither a handle nor a descriptor, so there really is no arithmetic that produces one.
 
 // The `__con_` prefix that identifies EVERY console runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesConsoleStdin`, and the one `SemanticCheck` reads for E3104.
@@ -66,6 +73,29 @@ export let StdInputHandleSelector = 0xFFFFFFF6 as ParsedInt
 export let StdOutputHandleSelector = 0xFFFFFFF5 as ParsedInt
 export let StdErrorHandleSelector = 0xFFFFFFF4 as ParsedInt
 
+// ⭐⭐ **THE POSIX LOWERING OF `osStdHandle` IS ONE SUBTRACTION, AND THIS IS THE PROPERTY THAT MAKES IT
+// CORRECT.** `StdToArm64Conversion.lowerOsStdHandle` computes `fd = StdInputHandleSelector - which`, which
+// is the whole three-way map ONLY IF the selectors descend exactly as the descriptors ascend and the input
+// pair coincides at zero. Nothing else in the compiler states that; the two families are declared in two
+// files for two different platforms, and a lane that got it wrong would not fail to compile — it would read
+// standard OUTPUT when a program asked for standard input.
+//
+// ⚠ It is checked at INSTALL rather than asserted in the backend, because the relation is a property of the
+// two CONSTANT SETS and not of any one target's code generation.
+function assertStdHandleSelectorsMapToPosixFds()
+	if PosixStdinFd != 0 'inputNotZero'
+		panic("ConsoleRuntime: the POSIX lowering of `osStdHandle` subtracts the selector from `StdInputHandleSelector` and therefore answers 0 for standard input, but `PosixStdinFd` is {PosixStdinFd} — the map's base and its first descriptor have to be the same point")
+	end 'inputNotZero'
+
+	if StdInputHandleSelector - StdOutputHandleSelector != PosixStdoutFd - PosixStdinFd 'outputStep'
+		panic("ConsoleRuntime: Win32's input and output selectors are {StdInputHandleSelector - StdOutputHandleSelector} apart while POSIX's two descriptors are {PosixStdoutFd - PosixStdinFd} apart — the two families are no longer consecutive runs, so the one-subtraction lowering of `osStdHandle` would answer the wrong stream")
+	end 'outputStep'
+
+	if StdInputHandleSelector - StdErrorHandleSelector != StderrFd - PosixStdinFd 'errorStep'
+		panic("ConsoleRuntime: Win32's input and error selectors are {StdInputHandleSelector - StdErrorHandleSelector} apart while POSIX's two descriptors are {StderrFd - PosixStdinFd} apart — the two families are no longer consecutive runs, so the one-subtraction lowering of `osStdHandle` would answer the wrong stream")
+	end 'errorStep'
+end 'assertStdHandleSelectorsMapToPosixFds'
+
 function buildConsoleReadStdin(module StdModule)
 	var func = IrFunction.createFromStd(ConsoleReadStdinName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -107,6 +137,7 @@ export function installConsoleRuntime(module StdModule, usage RuntimeUsage)
 		return
 	end 'noConsole'
 
+	assertStdHandleSelectorsMapToPosixFds()
 	buildConsoleReadStdin(module)
 end 'installConsoleRuntime'
 

@@ -54,7 +54,12 @@ end 'OsOutputStream'
 // and the panic writer's are the same number and must stay one declaration; that they belong to two
 // unrelated MECHANISMS (see `StdOp.osWriteStderr`) is a fact about the code that reads them, not about
 // the number.
-let PosixStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO)
+// ⚠ **STANDARD INPUT IS HERE TOO SINCE MAC6, EVEN THOUGH NO `write` NAMES IT.** `osStdHandle` maps Win32's
+// three selectors onto these three descriptors, so the SET has to be complete for the mapping to be
+// checkable — `ConsoleRuntime.assertStdHandleSelectorsMapToPosixFds` reads all three. Keeping stdin out
+// would have left that check comparing two of three numbers.
+export let PosixStdinFd = 0x0  // fd = 0 (STDIN_FILENO)
+export let PosixStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO)
 export let StderrFd = 0x2  // fd = 2 (STDERR_FILENO) — also the panic/backtrace writer's destination
 
 // ⭐ THE ONE MAP from a standard stream to the POSIX descriptor a `write` names — asked by BOTH native
@@ -636,6 +641,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// search HANDLE), so a GPR; the find-close defines nothing, exactly as the file close does.
 		osReadFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileOpenWrite(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileOpenWriteExecutable(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileSize(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileDelete(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileRename(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -1084,6 +1090,7 @@ export type ScaledIndexFolds
 			loadIndirect(_, addrId, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
 			storeIndirect(addrId, _, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
 			osAllocPages to osEnterBackgroundPriority then break 'mem'
+			osFileOpenWriteExecutable then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 

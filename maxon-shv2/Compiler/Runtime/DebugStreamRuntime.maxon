@@ -687,8 +687,8 @@ function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray
 	// The two scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
 	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
 	// buffer naming the EMPTY string, and `OpenFileMappingA("")` fails exactly as a missing segment does. The
-	// lock outlives this function; the env buffer does not — see `CriticalSectionBytes`.
-	let lockSize = emitConst(module, block: entry, value: CriticalSectionBytes, ids: ids)
+	// lock outlives this function; the env buffer does not — see `OsLockBytes`.
+	let lockSize = emitConst(module, block: entry, value: OsLockBytes, ids: ids)
 	let lock = ids.mint()
 	module.appendOp(entry, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockSize)))
 	module.appendOp(entry, op: StdOp.osLockInit(lock))

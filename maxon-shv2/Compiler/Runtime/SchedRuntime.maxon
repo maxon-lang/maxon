@@ -724,10 +724,43 @@ let MaxProcsEnvName = b"MAXON_MAX_PROCS"
 // is not a processor count, and the read DECLINES rather than retrying.
 let MaxProcsEnvBufBytes = 32 as ParsedInt
 
-// The byte offset of a thread's first 64 TLS slots within its TEB. `gs:` addresses the TEB on Win64, so
-// `gs:[WindowsTebTlsSlotsOffset + index*8]` IS `TlsGetValue(index)` for those slots — which is the whole
-// reason the read costs no call. Both references bake exactly this number.
+// ⭐⭐ **THE BASE OF THIS OS THREAD'S PER-THREAD SLOT ARRAY — the one number that turns `tlsAlloc`'s answer
+// into the byte offset `tlsSlotLoad` reads at.** `__sched_init_procs` computes `index * 8 + base` once and
+// publishes it in `__sched_tls_teb_offset`; every later read is a base-register load at that offset, with no
+// call at all. That is the whole reason the current-P read is cheap enough to sit in a prologue guard.
+//
+// **Windows — 0x1480.** The byte offset of a thread's first 64 TLS slots within its TEB, which `gs:`
+// addresses; `gs:[0x1480 + index*8]` IS `TlsGetValue(index)` for those slots. Both references bake exactly
+// this number.
+//
+// **Darwin — 0.** `pthread_getspecific(key)` is `tsd[key]`, and the TSD array's base IS the masked thread
+// pointer. MEASURED on this host: `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`, so the offset a slot index turns
+// into is `key*8` with nothing added. ⚠ **A ZERO BASE MAKES OFFSET 0 AMBIGUOUS IN A WAY WINDOWS'S IS NOT** —
+// there, 0 can only mean "`__sched_init_procs` has not run"; here it would ALSO be key 0's slot. It is not,
+// because Darwin's dynamic keys start well above 0 (measured: the first three this host hands out are 258,
+// 259, 260), and `StdToArm64Conversion.lowerTlsAlloc` ASSERTS that at run time rather than trusting it —
+// which is what keeps the "offset 0 means no scheduler" test every reader makes honest.
+//
+// ⚠ It is keyed on the OS rather than the CPU: it is an operating system's thread-local storage layout, and
+// a hypothetical arm64-Windows would want 0x1480 exactly as x64-Windows does.
+function tlsSlotArrayBase(target Target) returns ParsedInt
+	return match target.os 'os'
+		windows gives WindowsTebTlsSlotsOffset
+		linux gives noTlsSlotArray(target.os)
+		macos gives DarwinTsdArrayBase
+		wasi gives noTlsSlotArray(target.os)
+	end 'os'
+end 'tlsSlotArrayBase'
+
+// The refusal the two OSes without a per-OS-thread slot share. One function rather than two `panic` arms,
+// because `Os`'s declaration order puts `macos` BETWEEN them — so they cannot be one contiguous arm, and two
+// arms spelling the same sentence is the duplication this codebase keeps finding.
+function noTlsSlotArray(os Os) returns ParsedInt
+	panic("tlsSlotArrayBase: {os.name} has no per-OS-thread slot this scheduler could publish a P in — the Linux images are raw static binaries with no libc to write a thread pointer, and a WASI component has no OS-thread concept at all. `targetProvidesFacility` denies `greenThreads` on both, so a source-written `async` is refused at its own span; reaching here means a COMPILER-INSERTED `__sched_init_procs` got past that name-keyed gate")
+end 'noTlsSlotArray'
+
 let WindowsTebTlsSlotsOffset = 0x1480 as ParsedInt
+let DarwinTsdArrayBase = 0 as ParsedInt
 
 // ⭐ **THE PARK TIMEOUT, IN MILLISECONDS — v1's adaptive pair, and it is a MISSED-WAKEUP SAFETY NET rather
 // than a schedule.** A parked M is normally woken by `SetEvent`; the timeout bounds how long a wakeup that
@@ -773,8 +806,8 @@ end 'schedRuntimeGlobals'
 
 // Install the P/M half of the scheduler. Called from `installGtRuntime`, so it rides `usesGt` exactly as the
 // green-thread half does — there is no program that wants one without the other.
-export function installSchedRuntime(module StdModule)
-	buildSchedInitProcs(module)
+export function installSchedRuntime(module StdModule, target Target)
+	buildSchedInitProcs(module, target: target)
 	buildSchedDrainPending(module)
 	// The three publish doors, from two bodies: the two unlocked ones differ only in WHICH END a green
 	// thread's publish uses, so they share `buildSchedPublish`; the locked one answers a wake debt instead of
@@ -1085,7 +1118,7 @@ end 'emitSchedDeferPark'
 // ⚠ **THE RUN-QUEUE LOCK IS ALLOCATED HERE AND NOT IN `__io_init`.** It guards the queue for every M, not
 // only for the IOCP completion thread, so a green-thread program that never touches a pipe must still have
 // it. See `SchedLockLabel`.
-function buildSchedInitProcs(module StdModule)
+function buildSchedInitProcs(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -1101,7 +1134,7 @@ function buildSchedInitProcs(module StdModule)
 	emitStoreGlobalWord(module, block: entry, label: SchedTlsIndexLabel, value: tlsIndex, ids: ids)
 	let slotStride = emitConst(module, block: entry, value: PointerSlotBytes, ids: ids)
 	let slotBytes = emitBin(module, block: entry, a: tlsIndex, b: slotStride, opcode: StdBinOpcode.mul, ids: ids)
-	let tebBase = emitConst(module, block: entry, value: WindowsTebTlsSlotsOffset, ids: ids)
+	let tebBase = emitConst(module, block: entry, value: tlsSlotArrayBase(target), ids: ids)
 	emitStoreGlobalWord(module, block: entry, label: SchedTlsTebOffsetLabel, value: emitBin(module, block: entry, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids), ids: ids)
 
 	// How many Ps: `DefaultMaxProcs` unless `MAXON_MAX_PROCS` names more, never above the machine's count.
@@ -1114,7 +1147,7 @@ function buildSchedInitProcs(module StdModule)
 
 	// The run-queue CRITICAL_SECTION, in a slab region whose pointer the `.data` word holds. Its lifetime is
 	// the process's, exactly as the completion port's and the wake events' are — see `SchedLockLabel`.
-	let lockBytes = emitConst(module, block: settled, value: CriticalSectionBytes, ids: ids)
+	let lockBytes = emitConst(module, block: settled, value: OsLockBytes, ids: ids)
 	let lock = ids.mint()
 	module.appendOp(settled, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockBytes)))
 	module.appendOp(settled, op: StdOp.osLockInit(lock))

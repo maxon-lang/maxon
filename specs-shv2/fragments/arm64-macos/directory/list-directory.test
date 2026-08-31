@@ -1,0 +1,151 @@
+// Test: list-directory
+function main() returns ExitCode
+	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
+		return 0
+	end 'err'
+	// bin directory should contain the maxon executable
+	var foundMaxon = false
+	for f in files 'loop'
+		let name = f.filename()
+		if name == "maxon.exe" or name == "maxon" 'check'
+			foundMaxon = true
+		end 'check'
+	end 'loop'
+	if foundMaxon 'result'
+		return 42
+	end 'result'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_num_procs@144 = i64 0
+  __sched_shutdown_flag@152 = i64 0
+  __sched_lock@160 = i64 0
+  __slab_arena_list@168 = i64 0
+  __slab_arena_map_l1@176 = i64 0
+  __slab_state@184 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_20  ; "../bin"
+    arm64.bl FilePath.init
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Directory.list
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movImm x19, 0
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x21, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b forexit
+  loop:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.arm64AddLsl x0, x0, x21, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.bl FilePath.filename
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x1, __str_rec_21  ; "maxon.exe"
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#15
+    arm64.b orrhs
+  critsplit#15:
+    arm64.b scmerge
+  orrhs:
+    arm64.leaRdata x1, __str_rec_22  ; "maxon"
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.movRegReg x1, x0
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x1, check
+    arm64.b critsplit#14
+  check:
+    arm64.movImm x19, 1
+    arm64.b ifcont#10
+  critsplit#14:
+    arm64.b ifcont#10
+  ifcont#10:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cbnz x19, result
+    arm64.b ifcont#12
+  result:
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

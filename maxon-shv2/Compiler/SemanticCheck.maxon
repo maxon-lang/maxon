@@ -4078,6 +4078,23 @@ function requireTargetSupportsServiceEntry(project Project, func IrFunction, opI
 		return
 	end 'nothingRefusableHere'
 
+	// ⭐⭐ **IT ASKS THE FACILITY TABLE NOW, AND IT USED TO REFUSE BLIND.** This door reported on EVERY target
+	// it was allowed to blame, without consulting `targetProvidesFacility` at all — which is precisely the
+	// target-blind shape `TargetFacilities` replaced everywhere else (see its header on
+	// `calleeNeedsWin32Substrate`). It read correctly only while x64-windows was the one lane providing
+	// anything.
+	//
+	// ⭐ **`greenThreads` IS THE RIGHT QUESTION, AND IT IS THE WHOLE QUESTION.** A service is a green thread
+	// with a mailbox: `MailboxRuntime` and `ServiceLoop` reach **no `StdOp.os*` op whatsoever** — every OS
+	// fact they touch arrives through the scheduler beneath them. So "can this target host a service?" IS
+	// "does it have the green-thread floor?", asked of the one table that knows, rather than restated here.
+	// ⚠ MEASURED: `specs-shv2/services.md`'s own arm64 refusal case recorded the reason as
+	// `lowerTlsAlloc: TlsAlloc is x64-windows only` — a scheduler primitive, not a service one — and it is
+	// exactly what the arm64-macOS green-thread floor supplied.
+	if targetProvidesFacility(project.target, facility: HostFacility.greenThreads) 'theSubstrateIsHere'
+		return
+	end 'theSubstrateIsHere'
+
 	reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: subject, entry: entry)
 end 'requireTargetSupportsServiceEntry'
 
@@ -4101,7 +4118,6 @@ end 'reportTargetUnsupportedCallee'
 // case reaching a substrate nobody thought to list nor express a PARTIAL landing. The harness now reads the
 // compiler's E3104 verdict itself, which is the table's own consequence rather than a second copy of it —
 // and a partial landing is exactly what arm64-macOS now is.
-
 
 // ⭐⭐ **WHICH OF TWO SUBSTRATE ENTRIES A STDLIB BODY REACHES IS THE ONE ITS CROSSING IS REPORTED FOR — AND
 // SINCE E3074 THAT IS A SEMANTIC CHOICE, NOT A TIE-BREAK.**

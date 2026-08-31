@@ -123,20 +123,21 @@ end 'gtXmmSaveAreaBytes'
 // unrelated reason — so widening the prologue's slots to 16 would have left THIS still passing while the
 // context switch saved 8 of every 16 bytes: the upper halves of xmm6-15 destroyed across every `await`,
 // under a comment promising this assert would catch exactly that.
-function assertGtFrameConsistent()
+function assertGtFrameConsistent(target Target)
 	let gprBytes = calleeSavedOrder.count() * StackWordBytes
 	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + StackWordBytes
 
-	if framedBytes != GtInitialFrameBytes 'drift'
-		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words ({gprBytes} bytes) + {calleeSavedXmmOrder.count()} callee-saved XMM words ({gtXmmSaveAreaBytes()} bytes) + 1 return-address word = {framedBytes} bytes, but GtInitialFrameBytes (the frame __gt_spawn lays) is {GtInitialFrameBytes} — a mismatch is a wild ret on the first switch-in")
+	let declared = gtInitialFrameBytes(target)
+	if framedBytes != declared 'drift'
+		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words ({gprBytes} bytes) + {calleeSavedXmmOrder.count()} callee-saved XMM words ({gtXmmSaveAreaBytes()} bytes) + 1 return-address word = {framedBytes} bytes, but `gtInitialFrameBytes` (the frame __gt_spawn lays for this target) is {declared} — a mismatch is a wild ret on the first switch-in")
 	end 'drift'
 end 'assertGtFrameConsistent'
 
 // `__gt_context_switch(from = rcx, to = rdx)` — save the current GT's callee-saved register + rsp/rbp state
 // into `from`, restore `to`'s, and `ret` into `to`'s saved return address (a resumed GT's await-loop
 // continuation, or — for a fresh GT — the trampoline). No frame, no `.data`.
-function buildGtContextSwitchChunk() returns FunctionCodeChunk
-	assertGtFrameConsistent()
+function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
+	assertGtFrameConsistent(target)
 	var code = ByteArray.create()
 
 	// Save callee-saved on the current (from) stack, in push order.
@@ -721,7 +722,7 @@ let OpcodeMovsb = 0xA4
 // saved-rbp chain + the entry rsp by the relocation offset, update the GT struct + TIB, free the old stack, and
 // `ret` onto the new (larger) stack so the prologue guard that called us now passes. All of it runs on the system
 // stack (entered r10 = system-stack top), so the near-overflow GT stack never holds this frame.
-function buildGtMorestackChunk() returns FunctionCodeChunk
+function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var iatRelocs = RelocationArray.create()
 
@@ -845,7 +846,7 @@ function buildGtMorestackChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackBase as Imm32, srcReg: GtMoreNewBaseReg)
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackSize as Imm32, srcReg: GtMoreNewSizeReg)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
-	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: GtStackGuardMargin as Imm32)  // rcx = new_base + margin
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: gtStackGuardMargin(target) as Imm32)  // rcx = new_base + margin
 	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackGuard as Imm32, srcReg: X64Register.rcx)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: GtMoreNewSizeReg, wide: true)  // rcx = new_top
@@ -936,7 +937,7 @@ end 'emitGtMorestackChainWalk'
 // of instructions that fall through. A no-op for GT0/main (stackGuard 0 ⇒ `jae` always taken) and off a GT
 // entirely (currentGt 0 ⇒ `jz` taken). Clobbers ONLY r10/r11 (volatile, non-arg), so the incoming argument
 // registers (rcx/rdx/rax/r9/rsi/rdi) are untouched, and `__gt_morestack` preserves everything.
-export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize)
+export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt)
 	var guardFixups = ChunkRel32FixupArray.create()
 	var guardLabels = BlockOffsetTable.create()
 
@@ -946,7 +947,7 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 
 	// projectedRsp (r10) = rsp - (frameBytes + margin) ; enough room (>= stackGuard) → skip.
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
-	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: ShimGtRspReg, imm: (frameBytes + (GtStackGuardMargin as StackSize)) as Imm32)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: ShimGtRspReg, imm: (frameBytes + (margin as StackSize)) as Imm32)
 	encodeCmpRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtReg, disp: GtOffStackGuard as Imm32)  // projected - stackGuard
 	encodeJcc(code, rel32Fixups: guardFixups, cond: X64CondCode.aboveEqual, targetBlockId: GuardSkipLabel)
 
@@ -1181,10 +1182,10 @@ end 'buildIoCompletionLoopChunk'
 // `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other runtime chunk, so
 // `mrt_start` stays at `.text` offset 0. `usesIocp` (P1.5 slice 1a-ii) additionally appends the IOCP completion-drain
 // thread entry.
-export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp bool)
-	chunks.push(buildGtContextSwitchChunk())
+export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp bool, target Target)
+	chunks.push(buildGtContextSwitchChunk(target))
 	chunks.push(buildGtTrampolineChunk())
-	chunks.push(buildGtMorestackChunk())
+	chunks.push(buildGtMorestackChunk(target))
 
 	if usesIocp 'io'
 		chunks.push(buildIoCompletionLoopChunk())

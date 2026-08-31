@@ -87,8 +87,8 @@ export let Arm64OpSub = 0xCB000000
 export let Arm64OpMul = 0x9B007C00
 let Arm64OpSdiv = 0x9AC00C00
 export let Arm64OpUdiv = 0x9AC00800
-let Arm64OpAnd = 0x8A000000
-let Arm64OpOrr = 0xAA000000
+export let Arm64OpAnd = 0x8A000000
+export let Arm64OpOrr = 0xAA000000
 let Arm64OpEor = 0xCA000000
 let Arm64OpLslv = 0x9AC02000
 let Arm64OpAsrv = 0x9AC02800
@@ -126,6 +126,15 @@ let Arm64StlxrRsShift = 16
 // raw-static Linux lane — see `StdOp.currentThreadToken` for what that lane does instead.
 let Arm64OpMrsTpidrro = 0xD53BD060
 
+// `LDR Xt, [Xn, Xm, LSL #0]` — the register-offset 64-bit load (size=11, opc=01, option=011 LSL, S=0).
+// MAC3's Darwin TSD read is its only producer; every other access in this compiler has an immediate
+// displacement.
+let Arm64OpLdrRegOffset = 0xF8606800
+
+// `CSEL Xd, Xn, Xm, cond` (64-bit). The condition rides bits 15..12 — `Arm64CondFieldShift`, the same field
+// the `FCSEL` and `CSINC` forms below carry it in.
+let Arm64OpCsel = 0x9A800000
+
 // The CPU number Darwin packs into TPIDRRO_EL0's low bits, cleared by a shift-down/shift-up pair. Three
 // bits, so the thread pointer itself is 8-byte aligned — which is what makes the masking lossless.
 let Arm64ThreadPointerCpuBits = 3
@@ -144,7 +153,7 @@ let Arm64XzrField = 31
 
 // --- Data-processing (immediate) ---
 let Arm64OpAddImm = 0x91000000
-let Arm64OpSubImm = 0xD1000000
+export let Arm64OpSubImm = 0xD1000000
 let Arm64ImmShift = 10
 
 // The WIDTH of the imm12 field. It is TWO facts in one number and they cannot be allowed to drift: how
@@ -179,6 +188,14 @@ let Arm64WordBitMax = 63
 
 // The machine word is 64 bits wide — the iteration cap of the leading/trailing bit-count loops.
 let Arm64WordBits = 64
+
+// ⭐ **THE SHIFT THAT WIDENS A 32-BIT C RESULT INTO THE 64-BIT VALUE THE Std TIER READS.** AAPCS64
+// leaves the UPPER half of a register holding an `int` return UNSPECIFIED, so a libSystem call that
+// answers `int` — `getpid`, `getpriority`, `_NSGetExecutablePath` — must be widened at the call site
+// before its answer is a number: `lsl #32` then `asr #32` sign-extends it, and `lsl #32` alone is
+// enough when all that follows is a test against zero. EXPORTED because the isel spells that in
+// `TargetOp`s and a runtime chunk spells it in raw encoders, and neither may pick its own 32.
+export let Arm64NarrowResultShift = 32
 
 // The 64-bit word's sign bit (bit 63), as an UNSIGNED `MachineWord` — the number 9223372036854775808,
 // which is what both readers below want: a mask to `and` against, and the threshold above which an
@@ -287,9 +304,18 @@ export let Arm64OpLdrX = 0xF9400000
 // `__symtable` columns are u32, so the panic runtime reads them with this and never with a
 // 64-bit load (which would drag in the neighbouring column) or a sign-extending one.
 export let Arm64OpLdrW = 0xB9400000
+
+// STR Wt, [Xn, #imm12*4] — the 32-bit STORE twin, and it exists because a C `int` really is four
+// bytes: the Darwin host surface publishes `errno` through `*__error()`, and a 64-bit store there
+// would write four bytes past a field the C library owns.
+export let Arm64OpStrW = 0xB9000000
 let Arm64OpStrD = 0xFD000000
 let Arm64OpLdrD = 0xFD400000
-let Arm64OpStrB = 0x39000000
+
+// STRB Wt / LDRB Wt, [Xn, #imm12] — the byte pair, EXPORTED because a runtime chunk assembles a C
+// string one byte at a time (`Arm64RuntimeAsm`'s `arm64EmitLoadByte`/`arm64EmitStoreByte`) and this
+// file's declarations are otherwise file-private.
+export let Arm64OpStrB = 0x39000000
 export let Arm64OpLdrB = 0x39400000
 let Arm64LoadStoreImm12Shift = 10
 let Arm64LoadStoreImm12Mask = 0xFFF
@@ -328,6 +354,18 @@ let Arm64OpStpPreX = 0xA9800000
 let Arm64OpLdpPostX = 0xA8C00000
 let Arm64OpStpOffX = 0xA9000000
 let Arm64OpLdpOffX = 0xA9400000
+
+// ⭐ **THE SIMD&FP TWINS (MAC3), FOR THE GREEN-THREAD CONTEXT SWITCH.** Same instruction class, `V=1` and
+// `opc=01` (the 64-bit D form): `STP Dt1, Dt2, [Xn, #imm]!` and `LDP Dt1, Dt2, [Xn], #imm`. The imm7 field
+// and its scale are IDENTICAL to the X forms above — a D register is 8 bytes too — which is why
+// `arm64EmitPairOffset` serves all four with no width parameter.
+//
+// ⚠ They exist because d8..d15 are CALLEE-SAVED and the switch must preserve exactly what a call preserves.
+// The ordinary prologue spills them to frame slots one at a time (`Arm64PrologueEpilogue`'s header says why);
+// the switch cannot, having no frame — it lays a fixed 160-byte block whose size `__gt_spawn` must byte-match.
+let Arm64OpStpPreD = 0x6D800000
+let Arm64OpLdpPostD = 0x6CC00000
+
 let Arm64PairImm7Shift = 15
 let Arm64PairImm7Mask = 0x7F
 
@@ -461,7 +499,7 @@ end 'arm64GprField'
 // The SIMD field value (0..31) of a colored operand, panicking if it is a GPR. d`k` has RegNum
 // `firstVector + k`, so the field is `RegNum − Arm64FirstVectorRegister` — the constant, not a
 // freshly-built `arm64RegisterFile()`, for the per-operand-allocation reason `arm64RegNumIsGpr` gives.
-function arm64FpField(vreg TargetVReg) returns MachineWord
+export function arm64FpField(vreg TargetVReg) returns MachineWord
 	let reg = arm64ResolveRegNum(vreg)
 	if arm64RegNumIsGpr(reg) 'notFp'
 		panic("arm64 emitter: register number {reg} is a GPR where a SIMD register is required — this encoding would name the wrong register file")
@@ -725,7 +763,7 @@ end 'arm64ImmIsEncodableCmp'
 // silently truncates any value ≥ 0x1000, corrupting a large stack-slot address or frame size (M1
 // trap). Splits into a high (<<12) and low part; `rd` doubles as the running accumulator, so it is
 // safe even when `rd == rn`. `opcode` selects ADD (`Arm64OpAddImm`) or SUB (`Arm64OpSubImm`).
-function arm64EmitAddSubImmWide(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, imm MachineWord)
+export function arm64EmitAddSubImmWide(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, imm MachineWord)
 	if imm > Arm64AddSubImmWideMax 'tooLarge'
 		panic("arm64EmitAddSubImmWide: immediate {imm} exceeds the {Arm64AddSubImmWideMax} the hi/lo imm12 split reaches — an ALU immediate this wide is the ISEL's obligation (it asks `arm64ImmIsEncodableAddSub` and materialises the constant into a register: StdToArm64Conversion.lowerAddSubImm), and a FRAME this large has no encodable form at all")
 	end 'tooLarge'
@@ -768,7 +806,7 @@ export function arm64EmitLslImm(code ByteArray, rd MachineWord, rn MachineWord, 
 end 'arm64EmitLslImm'
 
 // LSR Xd, Xn, #sh = UBFM Xd, Xn, #sh, #63.
-function arm64EmitLsrImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
+export function arm64EmitLsrImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
 	let shift = shiftCountBits(sh)
 	arm64EmitBitfield(code, opcode: Arm64OpUbfm, rd: rd, rn: rn, immr: shift, imms: Arm64WordBitMax)
 end 'arm64EmitLsrImm'
@@ -828,7 +866,7 @@ function imm32ToWord(imm Imm32) returns MachineWord
 end 'imm32ToWord'
 
 // CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond) — one register set from the flags.
-function arm64EmitCset(code ByteArray, rd MachineWord, cond Arm64CondCode)
+export function arm64EmitCset(code ByteArray, rd MachineWord, cond Arm64CondCode)
 	let inverted = (cond.rawValue as MachineWord) xor Arm64CondInvertBit
 	emitArm64Insn(code, insn: Arm64OpCsinc or (inverted shl Arm64CondFieldShift) or rd)
 end 'arm64EmitCset'
@@ -1226,7 +1264,7 @@ export function arm64EmitCbz(code ByteArray, fixups Arm64BlockBranchFixupArray, 
 	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCbz(code, reg: reg), targetBlock: targetBlock, wide: false))
 end 'arm64EmitCbz'
 
-function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
+export function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
 	fixups.push(Arm64BlockBranchFixup.create(arm64EmitLocalCbnz(code, reg: reg), targetBlock: targetBlock, wide: false))
 end 'arm64EmitCbnz'
 
@@ -1304,7 +1342,7 @@ end 'arm64RelInstructions'
 // x64-only arms panic (the x64 encoder owns them — `buildBackend` dispatches on `target.cpu`), and the
 // SHARED arms arm64 reuses (`movRegReg`, the spill/reload and base+disp forms, `xchgRegReg`) are encoded
 // here.
-function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray)
+function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, shimmed bool)
 	match op 'emit'
 		// --- x64-only control/frame band ---
 		prologue to movRegImm32 then panic("emitArm64TargetOp: an x64 control/frame op reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
@@ -1390,7 +1428,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// The GOT-indirect libSystem import call (`osAllocPages`→mmap, `osWriteStdout`→write). The same
 		// `arm64EmitImportCall` the hand-assembled entry stub uses for `_exit`, so a call inside a
 		// register-allocated function and one in the stub file the SAME relocation shape.
-		arm64ImportCall(slotIndex) then arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+		arm64ImportCall(slotIndex) then emitArm64GtGatedImportCall(code, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, slotIndex: slotIndex, shimmed: shimmed)
 		// The Linux raw supervisor call (`osExit`/`osWriteStdout`/`osAllocPages` on arm64-linux). The
 		// same `arm64EmitSyscall` the hand-assembled entry stub uses for `exit_group`, so a syscall
 		// inside a register-allocated function and one in the stub encode identically.
@@ -1734,7 +1772,11 @@ end 'arm64EmitAtomicRmw'
 //
 // It needs no scratch at all: all three instructions read and write `dest`, so there is no operand for a
 // premature write to destroy — the property the two loops above have to work for.
-function arm64EmitThreadPointer(code ByteArray, dest MachineWord)
+// ⭐ EXPORTED for MAC3: the masked thread pointer IS the base of this thread's Darwin TSD array
+// (measured — `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`), so the hand-assembled green-thread chunks and the
+// `tlsSlotLoad` lowering read a thread's per-thread slots through the SAME sequence `currentThreadToken`
+// answers with. One register read, asked for two reasons; a second spelling could only drift.
+export function arm64EmitThreadPointer(code ByteArray, dest MachineWord)
 	emitArm64Insn(code, insn: Arm64OpMrsTpidrro or dest)
 	arm64EmitLsrImm(code, rd: dest, rn: dest, sh: Arm64ThreadPointerCpuBits)
 	arm64EmitLslImm(code, rd: dest, rn: dest, sh: Arm64ThreadPointerCpuBits)
@@ -1798,6 +1840,97 @@ end 'arm64EmitRet'
 export function arm64EmitBrk(code ByteArray)
 	emitArm64Insn(code, insn: Arm64OpBrk)
 end 'arm64EmitBrk'
+
+// ==========================================================================
+// The primitives the hand-assembled GREEN-THREAD chunks need (MAC3)
+// ==========================================================================
+//
+// ⭐ **EVERY ONE OF THESE NAMES SP OR A REGISTER PAIR, WHICH IS WHY IT IS HERE AND NOT A `TargetOp`.** The
+// allocator has no SP (`Arm64Register.sp` is above the register file — see `TargetDialect`), and the register
+// pairs the context switch moves are fixed by an ABI list rather than by a colouring. So the green-thread
+// chunks call the encoder directly, exactly as the panic runtime and the Darwin host surface do.
+
+// `MOV Xd, SP` — and it MUST be the `ADD Xd, SP, #0` alias, never the ORR/XZR MOV: field value 31 is SP in
+// an ADD and XZR in an ORR, so the ORR form would move the ZERO register (the M1 trap `arm64EmitAddFpFromSp`
+// records one screen down, in the direction that matters here as well).
+export function arm64EmitMovFromSp(code ByteArray, dest MachineWord)
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: dest, rn: Arm64SpBaseField, imm12: 0, shiftHi: false)
+end 'arm64EmitMovFromSp'
+
+// `MOV SP, Xn` — the same alias in the other direction, and the same trap: `ORR SP, XZR, Xn` does not exist.
+export function arm64EmitMovToSp(code ByteArray, src MachineWord)
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64SpBaseField, rn: src, imm12: 0, shiftHi: false)
+end 'arm64EmitMovToSp'
+
+// `STP Xt1, Xt2, [SP, #-16]!` — the pre-indexed GPR push the context switch lays its saved block with.
+export function arm64EmitPushPairGpr(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpStpPreX, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: -Arm64GtPairBytes as Imm32)
+end 'arm64EmitPushPairGpr'
+
+// `LDP Xt1, Xt2, [SP], #16` — its post-indexed mirror.
+export function arm64EmitPopPairGpr(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpLdpPostX, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: Arm64GtPairBytes as Imm32)
+end 'arm64EmitPopPairGpr'
+
+// `STP Dt1, Dt2, [SP, #-16]!` / `LDP Dt1, Dt2, [SP], #16` — the SIMD&FP twins, for the callee-saved d8..d15.
+export function arm64EmitPushPairFp(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpStpPreD, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: -Arm64GtPairBytes as Imm32)
+end 'arm64EmitPushPairFp'
+
+export function arm64EmitPopPairFp(code ByteArray, rt1 MachineWord, rt2 MachineWord)
+	arm64EmitPairOffset(code, opcode: Arm64OpLdpPostD, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: Arm64GtPairBytes as Imm32)
+end 'arm64EmitPopPairFp'
+
+// The bytes ONE pushed register pair moves SP by — two 8-byte registers. Named because it is the stride the
+// context switch's frame is DERIVED from (`Arm64GtRuntime.assertArm64GtFrameConsistent` multiplies it by the
+// pair count), and a bare 16 in that derivation would be indistinguishable from the stack's 16-byte ALIGNMENT,
+// which is a different fact that happens to share the number.
+export let Arm64GtPairBytes = 2 * SpillSlotBytes
+
+// `str`/`ldr Xt, [SP, #byteOffset]` — a hand-assembled chunk addressing its own frame off SP. The ONE pair
+// that names SP as a load/store base outside this file's own frame ops, and the reason it is here rather
+// than beside its caller: SP is encoding field 31 — the same value XZR takes in a data-processing
+// instruction — and a chunk restating that 31 would be the M1 trap this file's frame ops already document,
+// written down a second time.
+//
+// ⚠ Its one caller is `__gt_morestack`, the single runtime chunk with a frame and no frame RECORD: it
+// switches to the P's system stack itself, so there is no x29 for `arm64EmitStoreSlot` to address off.
+export function arm64EmitStoreWord64Sp(code ByteArray, src MachineWord, byteOffset MachineWord)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: src, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+end 'arm64EmitStoreWord64Sp'
+
+export function arm64EmitLoadWord64Sp(code ByteArray, dest MachineWord, byteOffset MachineWord)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: dest, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+end 'arm64EmitLoadWord64Sp'
+
+// The SIMD twins, for the relocating grower's float-argument save area.
+export function arm64EmitStoreFpSp(code ByteArray, src MachineWord, byteOffset MachineWord)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: src, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+end 'arm64EmitStoreFpSp'
+
+export function arm64EmitLoadFpSp(code ByteArray, dest MachineWord, byteOffset MachineWord)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: dest, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+end 'arm64EmitLoadFpSp'
+
+// `BLR Xn` — an indirect call through a register. The trampoline calls the spawned function through a pointer
+// it loaded out of the GT struct; `arm64EmitImportCall` above uses the same instruction through x16.
+export function arm64EmitBranchLinkReg(code ByteArray, reg MachineWord)
+	emitArm64Insn(code, insn: Arm64OpBlr or (reg shl Arm64RnShift))
+end 'arm64EmitBranchLinkReg'
+
+// `LDR Xt, [Xn, Xm]` — a 64-bit load at a REGISTER offset (option=LSL, S=0, so the index is unscaled bytes).
+// The one access in this compiler whose displacement is not an immediate: Darwin's TSD read indexes the
+// thread pointer by a per-thread slot offset the program computed at run time (`lowerTlsSlotLoad`).
+export function arm64EmitLoadRegOffset(code ByteArray, dest MachineWord, base MachineWord, index MachineWord)
+	emitArm64Insn(code, insn: Arm64OpLdrRegOffset or (index shl Arm64RmShift) or (base shl Arm64RnShift) or dest)
+end 'arm64EmitLoadRegOffset'
+
+// `CSEL Xd, Xn, Xm, cond` — Xd = cond ? Xn : Xm, branchlessly. The TSD read's pre-initialisation gate uses it
+// to answer NULL for a slot offset of zero, which is the "the scheduler has not run yet" case (see
+// `StdToArm64Conversion.lowerTlsSlotLoad`).
+export function arm64EmitCsel(code ByteArray, dest MachineWord, ifTrue MachineWord, ifFalse MachineWord, cond Arm64CondCode)
+	emitArm64Insn(code, insn: Arm64OpCsel or (ifFalse shl Arm64RmShift) or ((cond.rawValue as MachineWord) shl Arm64CondFieldShift) or (ifTrue shl Arm64RnShift) or dest)
+end 'arm64EmitCsel'
 
 // ADRP Rd, page(label) + ADD Rd, Rd, #pageoff(label) — the ±4 GiB PIE address-materialisation pair
 // the M1 traps mandate for ALL func/global/rdata addresses (NEVER a bare ADR, whose ±1 MiB reach
@@ -1962,12 +2095,12 @@ end 'arm64EmitAddFpFromSp'
 // SUB sp, sp, #amount — reserve a large frame, splitting across the imm12 limit (a frame past 4 KiB
 // needs the hi/lo pair; the pre-index STP could not encode it at all). SP cannot be a shifted-register
 // operand, so the ADD/SUB-immediate `sh` split is the only scratch-free form.
-function arm64EmitStackAlloc(code ByteArray, amount StackSize)
+export function arm64EmitStackAlloc(code ByteArray, amount StackSize)
 	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount)
 end 'arm64EmitStackAlloc'
 
 // ADD sp, sp, #amount — free the frame (mirror of `arm64EmitStackAlloc`).
-function arm64EmitStackFree(code ByteArray, amount StackSize)
+export function arm64EmitStackFree(code ByteArray, amount StackSize)
 	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount)
 end 'arm64EmitStackFree'
 
@@ -1980,7 +2113,16 @@ end 'arm64EmitStackFree'
 // (`rdataRelocs`) and `leaFuncAddr` code→`.text`-function pairs (`funcAdrpRelocs`) are rebased by concat;
 // within-function block branches are resolved HERE, since a function's blocks are contiguous within its
 // one chunk.
-function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
+// ⭐ **`usesGt` DECIDES TWO INLINE INSERTIONS (MAC3), BOTH BELOW THE `TargetOp` TIER**, exactly as the x64
+// twin's does: the prologue STACK GUARD at a guarded function's entry, and the import-call STACK SHIM around
+// every `arm64ImportCall`. It is `RuntimeUsage.usesGt` — the bit `installGtRuntime` was gated on — read once
+// by the caller and never re-derived per function, so this stays O(1) per function.
+//
+// ⚠ **BOTH ARE macOS-ONLY, AND THE CALLER FOLDS THAT IN.** Each reads this OS thread's slot through Darwin's
+// TSD layout; an arm64-Linux image has no libc to have written a thread pointer, so the sequence would read
+// garbage rather than fail. `targetProvidesFacility` denies `greenThreads` on that lane, so a green-thread
+// program cannot be built for it — the fold is a belt, and `Arm64GtRuntime`'s lowerings carry the buckle.
+function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
@@ -1997,20 +2139,34 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns Fu
 	// resolved after the block loop, when `blockOffsets` holds every block's chunk-local offset.
 	var jumpTables = JumpTablePendingArray.create()
 	var blockOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
+	let guarded = greenThreads and not skipsGreenThreadStackGuard(func)
+	var isFirstBlock = true
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitArm64FunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
 		blockOffsets.place(block.id, value: code.count())
 
+		// ⭐ THE GREEN-THREAD STACK GUARD, at the very START of a guarded function's entry block — BEFORE the
+		// prologue — so a green thread whose stack would overflow grows and relocates it first. It is EXEMPT
+		// for the compiler's own scaffolding: the scheduler core must never trip the grower, and its own
+		// libSystem calls are already moved onto the P's system stack by the shim below. ⚠ The exemption is
+		// asked of the FUNCTION's PROVENANCE and never of its name — `skipsGreenThreadStackGuard`'s header
+		// carries the measurement (a `__`-name test handed the guard to a user function declared in
+		// `stdlib/Builtins.maxon` and segfaulted a green thread) and the split from `isRuntimeFunction`.
+		if isFirstBlock and guarded 'guard'
+			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target))
+		end 'guard'
+		isFirstBlock = false
+
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
-			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables)
+			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, shimmed: greenThreads)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
-			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables)
+			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, shimmed: greenThreads)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -2026,6 +2182,25 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns Fu
 	return chunk
 end 'emitArm64FunctionChunk'
 
+// ⭐ **THE FRAME THE GUARD PROJECTS, READ OFF THE PROLOGUE OP RATHER THAN RE-DERIVED.** x64's guard
+// recomputes the number with `computeGuardFrameBytes`, because its prologue is a `push`/`sub` sequence with
+// no single op carrying the total. arm64's IS one op — `insertArm64PrologueAtEntry` prepends
+// `arm64Prologue(frameSize, recordOffset)` at index 0 of the entry block — so the guard reads the very word
+// the prologue will reserve. That is DERIVE rather than CHECK: the two cannot come to disagree, where two
+// derivations of one frame size could.
+//
+// ⚠ Every arm64 function is framed (`Arm64PrologueEpilogue`'s first paragraph — leaves included, because a
+// chain with a hole is not a chain), so the op is always there and its size is never 0. The guard therefore
+// has no "reserves no frame" exemption to make, which is the one arm x64's `emitGuard` needs and this does not.
+function arm64PrologueFrameBytes(module TargetModule, block IrBlock) returns StackSize
+	let opIdx = try block.opRefs.get(0) otherwise panic("arm64PrologueFrameBytes: the entry block of '{String.from(block.label)}' has no ops — `insertArm64PrologueAtEntry` prepends an `arm64Prologue` to every function's entry block, so an empty entry block means the frame pass did not run")
+	let op = try module.ops.get(opIdx) otherwise panic("arm64PrologueFrameBytes: opIdx {opIdx} not in module.ops")
+	return match op 'prologue'
+		arm64Prologue(frameSize, _) gives frameSize
+		default panic("arm64PrologueFrameBytes: the entry block's first op is not an `arm64Prologue` — the green-thread stack guard must project the frame the prologue is about to reserve, and it reads that number off the prologue itself rather than deriving a second one")
+	end 'prologue'
+end 'arm64PrologueFrameBytes'
+
 // Append the hand-assembled arm64 runtime chunks. At the scalar core the runtime is JUST the entry
 // stub `mrt_start` (no fault handler — arm64 `sdiv`-by-0 is defined to return 0; no MM/scheduler
 // floor — the scalar core allocates and spawns nothing). It is appended to the STILL-EMPTY chunk list
@@ -2037,8 +2212,8 @@ end 'emitArm64FunctionChunk'
 // managed top-level `var`), and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, os Os)
-	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, os: os))
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, os Os)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, os: os))
 end 'appendArm64RuntimeChunks'
 
 // ==========================================================================
@@ -2285,9 +2460,9 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	//
 	// ⚠ It is no longer the WHOLE arm64 runtime: the panic runtime below is the rest of it, and this
 	// comment said "the scalar core needs no panic handler" until A3n landed one three lines away.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, os: target.os)
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, os: target.os)
 	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
+		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt and target.os == Os.macos, target: target))
 	end 'eachFunc'
 	// The panic runtime lays out ABOVE user code (x64's placement, and for x64's reason: only the entry
 	// stub has to lead `.text`). Its four chunks and the `__symtable` concat appends after them are what
@@ -2298,8 +2473,13 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// used to be x64-windows's. macOS ONLY: arm64-linux reaches the OS by raw `svc #0` and has no import
 	// table for a single one of these to resolve against (`Arm64DarwinRuntime`'s header).
 	if target.os == Os.macos 'darwinHostSurface'
-		appendArm64DarwinRuntimeChunks(chunks, usage: usage)
+		appendArm64DarwinRuntimeChunks(chunks, usage: usage, globalData: globalData)
 	end 'darwinHostSurface'
+	// MAC3: the three hand-assembled green-thread chunks, on the same `usesGt` bit `installGtRuntime` was
+	// gated on rather than a probe of the module — the reason `BackendDispatch` gives for the x64 twin.
+	if usage.usesGt 'gtChunks'
+		appendArm64GtRuntimeChunks(chunks, target: target)
+	end 'gtChunks'
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)

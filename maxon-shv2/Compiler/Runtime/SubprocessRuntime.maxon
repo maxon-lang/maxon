@@ -11,7 +11,7 @@
 // `__gt_subp_spawn_core` creates the pipes, fills a `STARTUPINFO`, calls `CreateProcessA` with
 // `bInheritHandles=TRUE` and claims a slot in the 64-entry handle table — with the register-pressure
 // discipline, the slot GENERATION and the buffer reuse that took a rung to get right. Every spelling a
-// program can spawn a child with fills a REQUEST RECORD (`SubpReqCmdline`) and calls that one core, so both
+// program can spawn a child with fills a REQUEST RECORD (`SubpReqCommand`) and calls that one core, so both
 // spawns claim a slot in the SAME table and `subprocessReleaseHandle` / `subprocessCloseStdin` serve either
 // without knowing which minted the handle. Two cores would have been two places for the pipe-inheritance
 // rules to drift apart.
@@ -69,7 +69,11 @@ export let SubpResultDurationName = b"__gt_subp_result_duration"
 export let SubpResultReleaseName = b"__gt_subp_result_release"
 export let SubpResolvePathName = b"__gt_subp_resolve_path"
 export let SubpLastErrorName = b"__gt_subp_last_error"
-let SubpArgvCmdlineName = b"__gt_subp_argv_cmdline"
+
+// ⭐⭐ **ONE NAME, TWO BODIES (MAC8).** `SubprocessCommandShape` decides which is built; nothing downstream
+// of the install ever asks which target it is compiling for. See that enum for the whole argument.
+let SubpArgvCommandName = b"__gt_subp_argv_command"
+let SubpShellCommandName = b"__gt_subp_shell_command"
 
 // The failure answer every one of these entries shares — `stdlib/Subprocess.maxon` tests `handle == -1`,
 // `result == -1` and `rc == -1` against exactly this, and the bootstrap's table documents the same.
@@ -103,7 +107,7 @@ let FileAttributeDirectory = 0x10 as ParsedInt
 // the translation between them lives in one place (`emitSubpCreationFlags`).
 let CreateNoWindow = 0x08000000 as ParsedInt
 let CreateNewProcessGroup = 0x00000200 as ParsedInt
-let DetachedProcess = 0x00000008 as ParsedInt
+export let DetachedProcess = 0x00000008 as ParsedInt
 
 // The surface bitfield's own three bits, as the shifts that extract them.
 let SpawnFlagHideWindowShift = 0 as ParsedInt
@@ -255,6 +259,209 @@ function emitSubpScratch(module StdModule, block IrBlock, ids ValueMinter, size 
 	return rec
 end 'emitSubpScratch'
 
+// ⭐⭐⭐ **THE ONE FACT THIS FAMILY FORKS ON: WHAT A PLATFORM's PROCESS-CREATION PRIMITIVE TAKES (MAC8).**
+// It is asked ONCE, at install, and each answer builds a complete Std graph; nothing downstream ever asks
+// which target it is compiling for, which is what keeps `StdOp.osProcessSpawn`'s operands target-neutral
+// while the SURFACE stays one surface. `CommandLineRuntime.CommandLineShape` is the same shape one family
+// over, and for the mirror-image reason — that one is about how a process RECEIVES its arguments, this one
+// about how it PASSES them on.
+//
+// ⛔⛔ **A QUOTED COMMAND LINE CANNOT BE HANDED TO A POSIX SHELL, AND CALLING THAT "CLOSE ENOUGH" WOULD BE A
+// SILENT WRONG ANSWER.** The tempting shortcut is to keep ONE graph — build the Win32 command line
+// everywhere and let `/bin/sh -c` re-split it — and it is wrong at the first argument that is not a plain
+// word. The quoting rule below (the bootstrap's, to the byte) quotes a token only if it is empty or holds a
+// space, a tab or a `"`; a token like `$HOME`, `a*b` or `a;b` therefore reaches the child UNQUOTED, and a
+// shell would EXPAND, GLOB or SPLIT it. The very argument vector a caller wrote out explicitly would come
+// apart on the way to the child, with no diagnostic anywhere.
+//
+// ⇒ a target whose primitive takes a VECTOR gets a vector, built from the same blob and quoting nothing.
+export enum SubprocessCommandShape
+	// Windows: `CreateProcessA` takes ONE command line and splits it itself, by the CRT's rules.
+	commandLine
+	// SysV: `posix_spawnp`/`execv` take a NULL-terminated `char *const argv[]` and split nothing.
+	argumentVector
+end 'SubprocessCommandShape'
+
+// ⚠ **KEYED ON THE OS AND NOT ON THE CPU**, exactly as `commandLineShape` is: which shape a spawn primitive
+// takes is an ABI fact about the platform, not about the instruction set.
+//
+// ⚠ **wasm ANSWERS `argumentVector` AND THAT IS A SHAPE ANSWER, NOT A CAPABILITY CLAIM.** WASI has no
+// process-spawn primitive at all; `targetProvidesFacility` is where that refusal lives, and
+// `SemanticCheck.targetCanHostSubprocess` is where its PERMANENCE is recorded. A shape function that lied
+// about the shape in order to express a capability would put the same fact in two places.
+export function subprocessCommandShape(target Target) returns SubprocessCommandShape
+	return match target.os 'os'
+		windows gives SubprocessCommandShape.commandLine
+		linux to wasi gives SubprocessCommandShape.argumentVector
+	end 'os'
+end 'subprocessCommandShape'
+
+// ⭐ **THE COMMAND A `runProcess(cmd)`-SHAPED ENTRY BUILDS.** Two entry points hand the spawn a whole
+// COMMAND LINE a user wrote rather than an argv blob — `__gt_process_run` and the one-shot read probe — and
+// on a lane whose primitive takes a vector that line has to become one. `/bin/sh -c <line>` is what "run
+// this command line" MEANS on POSIX, and it is the same interpreter `system()` names; the shell then applies
+// its own splitting to a string the caller wrote AS a shell command, which is the one place that is correct.
+//
+// Under `commandLine` the line already IS the command, so this emits nothing at all rather than a call that
+// hands a buffer back unchanged.
+export function emitSubpCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, linePtr ValueId) returns ValueId
+	return match shape 'shape'
+		commandLine gives linePtr
+		argumentVector gives emitSubpShellVectorCall(module, block: block, ids: ids, linePtr: linePtr)
+	end 'shape'
+end 'emitSubpCommandFromLine'
+
+// Its own function because a `gives` arm carries one expression, and a call is three statements.
+function emitSubpShellVectorCall(module StdModule, block IrBlock, ids ValueMinter, linePtr ValueId) returns ValueId
+	let command = ids.mint()
+	module.appendOp(block, op: StdOp.call(command, callee: SubpShellCommandName, args: argsOf(linePtr)))
+	return command
+end 'emitSubpShellVectorCall'
+
+// The interpreter a command LINE is run through under the vector shape, and its "the next argument is the
+// command" flag. Written into a slab buffer byte by byte for `emitSubpNulDeviceName`'s stated reason: this
+// compiler has no `.rdata` producer reachable from a runtime builder.
+let ShellPathBytes = b"/bin/sh"
+let ShellCommandFlagBytes = b"-c"
+
+// ⭐ `__gt_subp_shell_command(linePtr) -> argv` — `{"/bin/sh", "-c", linePtr, NULL}`, four pointer slots.
+// Built ONLY under `SubprocessCommandShape.argumentVector`; under the other shape a command line needs no
+// conversion and `emitSubpCommandFromLine` emits nothing.
+//
+// ⚠ The line is pointed AT, never copied: it is a slab buffer the caller owns for the length of the spawn,
+// which is exactly how long `posix_spawnp` reads it for.
+function buildSubpShellCommand(module StdModule)
+	var func = IrFunction.createFromStd(SubpShellCommandName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let linePtr = 0 as ValueId
+
+	let vecSize = emitConst(module, block: entry, value: (ShellArgvSlots * PointerFieldBytes) as ParsedInt, ids: ids)
+	let vec = ids.mint()
+	module.appendOp(entry, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
+
+	let shellPath = emitSubpLiteralCString(module, block: entry, ids: ids, bytes: ShellPathBytes)
+	emitStoreField(module, block: entry, record: vec, offset: 0, value: shellPath)
+	let commandFlag = emitSubpLiteralCString(module, block: entry, ids: ids, bytes: ShellCommandFlagBytes)
+	emitStoreField(module, block: entry, record: vec, offset: PointerFieldBytes as ByteOffset, value: commandFlag)
+	emitStoreField(module, block: entry, record: vec, offset: (2 * PointerFieldBytes) as ByteOffset, value: linePtr)
+	// The terminating NULL is the slab's own zero — the allocation is sized for it above.
+	module.setTerminator(entry, op: StdOp.ret(vec))
+
+	module.functions.push(func)
+end 'buildSubpShellCommand'
+
+// `/bin/sh`, `-c`, the line, and the terminating NULL.
+let ShellArgvSlots = 4
+
+// ⭐ A fixed ASCII constant as NUL-terminated bytes in a fresh slab buffer — `emitSubpNulDeviceName`
+// generalised, which is what a second and third caller made it. The slab zeroes, so the terminator is the
+// allocator's and only the payload is stored.
+export function emitSubpLiteralCString(module StdModule, block IrBlock, ids ValueMinter, bytes ByteArray) returns ValueId
+	let sizeConst = emitConst(module, block: block, value: bytes.count() + TrailingNulBytes, ids: ids)
+	let buf = ids.mint()
+	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+
+	var offset = 0 as ByteOffset
+	for ch in bytes 'each'
+		let value = emitConst(module, block: block, value: ch, ids: ids)
+		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: offset, valueId: value, valueType: StdType.u8))
+		offset = offset + 1
+	end 'each'
+
+	return buf
+end 'emitSubpLiteralCString'
+
+// ⭐ `__gt_subp_argv_command(argvRec, argc) -> argv` under `SubprocessCommandShape.argumentVector` — the
+// blob turned into a NULL-terminated pointer vector, with NO quoting and NO copying.
+//
+// The blob is `argc` NUL-terminated tokens back to back (`stdlib/Subprocess.maxon`'s `buildArgvBlob`), which
+// is already the byte layout an `argv[]` points INTO — so this walks it once, records where each token
+// starts, and writes `argc + 1` slots. That the vector shape needs no escaping rule at all is the whole
+// reason it is the honest lowering: there is no quoting to agree with the bootstrap about, because nothing
+// is ever re-split.
+function buildSubpArgvVector(module StdModule)
+	var func = IrFunction.createFromStd(SubpArgvCommandName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var argHdr = module.addBlock(func, label: b"avarghdr")
+	var recordSlot = module.addBlock(func, label: b"avslot")
+	var scanHdr = module.addBlock(func, label: b"avscanhdr")
+	var scanNext = module.addBlock(func, label: b"avscannext")
+	var scanDone = module.addBlock(func, label: b"avscandone")
+	var finish = module.addBlock(func, label: b"avfinish")
+
+	emitParams(module, block: entry, count: 2)
+	let argvRec = 0 as ValueId
+	let argc = 1 as ValueId
+
+	// The same in-memory loop state every walk in this file keeps — see the file header for why none of it is
+	// a block argument.
+	let state = emitSubpScratch(module, block: entry, ids: ids, size: AvBytes)
+	let argvBuf = emitLoadField(module, block: entry, record: argvRec, offset: ManagedRecordBufferOffset, ids: ids)
+	emitStoreField(module, block: entry, record: state, offset: AvArgvBuf, value: argvBuf)
+	emitStoreField(module, block: entry, record: state, offset: AvArgc, value: argc)
+	let slotBytes = emitConst(module, block: entry, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let slots = emitBin(module, block: entry, a: argc, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
+	let terminatorRoom = emitConst(module, block: entry, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let vecSize = emitBin(module, block: entry, a: slots, b: terminatorRoom, opcode: StdBinOpcode.add, ids: ids)
+	let vec = ids.mint()
+	module.appendOp(entry, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
+	emitStoreField(module, block: entry, record: state, offset: AvVec, value: vec)
+	module.setTerminator(entry, op: StdOp.branch(argHdr.id))
+
+	// argHdr: every token recorded? The terminating NULL is the slab's zero, so there is nothing to write.
+	let argIdx = emitLoadField(module, block: argHdr, record: state, offset: AvArg, ids: ids)
+	let argcH = emitLoadField(module, block: argHdr, record: state, offset: AvArgc, ids: ids)
+	let argsDone = emitCmp(module, block: argHdr, a: argIdx, b: argcH, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(argHdr, op: StdOp.condBranch(argsDone, thenBlockId: finish.id, elseBlockId: recordSlot.id))
+
+	// recordSlot: `vec[arg] = &blob[pos]`.
+	let bufR = emitLoadField(module, block: recordSlot, record: state, offset: AvArgvBuf, ids: ids)
+	let posR = emitLoadField(module, block: recordSlot, record: state, offset: AvPos, ids: ids)
+	let tokenPtr = emitBin(module, block: recordSlot, a: bufR, b: posR, opcode: StdBinOpcode.add, ids: ids)
+	let vecR = emitLoadField(module, block: recordSlot, record: state, offset: AvVec, ids: ids)
+	let argR = emitLoadField(module, block: recordSlot, record: state, offset: AvArg, ids: ids)
+	let strideR = emitConst(module, block: recordSlot, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let slotOff = emitBin(module, block: recordSlot, a: argR, b: strideR, opcode: StdBinOpcode.mul, ids: ids)
+	let slotAddr = emitBin(module, block: recordSlot, a: vecR, b: slotOff, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: recordSlot, record: slotAddr, offset: 0, value: tokenPtr)
+	module.setTerminator(recordSlot, op: StdOp.branch(scanHdr.id))
+
+	// scanHdr: walk to this token's NUL.
+	let bufS = emitLoadField(module, block: scanHdr, record: state, offset: AvArgvBuf, ids: ids)
+	let posS = emitLoadField(module, block: scanHdr, record: state, offset: AvPos, ids: ids)
+	let byteS = emitLoadByte(module, block: scanHdr, base: bufS, index: posS, ids: ids)
+	let zeroB = emitConst(module, block: scanHdr, value: 0, ids: ids)
+	let atNul = emitCmp(module, block: scanHdr, a: byteS, b: zeroB, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atNul, thenBlockId: scanDone.id, elseBlockId: scanNext.id))
+
+	emitSubpBumpField(module, block: scanNext, ids: ids, record: state, offset: AvPos)
+	module.setTerminator(scanNext, op: StdOp.branch(scanHdr.id))
+
+	// scanDone: step past the NUL — which the blob already carries, so the token is terminated in place and
+	// nothing is copied — and take the next argument.
+	emitSubpBumpField(module, block: scanDone, ids: ids, record: state, offset: AvPos)
+	emitSubpBumpField(module, block: scanDone, ids: ids, record: state, offset: AvArg)
+	module.setTerminator(scanDone, op: StdOp.branch(argHdr.id))
+
+	let vecF = emitLoadField(module, block: finish, record: state, offset: AvVec, ids: ids)
+	module.setTerminator(finish, op: StdOp.ret(vecF))
+
+	module.functions.push(func)
+end 'buildSubpArgvVector'
+
+// The vector builder's state, in memory — the file header's rule, one walk further on.
+let AvArgvBuf = 0 as ByteOffset
+let AvArgc = 8 as ByteOffset
+let AvVec = 16 as ByteOffset
+let AvPos = 24 as ByteOffset  // read cursor into the argv blob
+let AvArg = 32 as ByteOffset  // which argument is being recorded
+let AvBytes = 40 as ParsedInt
+
 // ⭐ `__gt_subp_argv_cmdline(argvRec, argc) -> cmdlineBuf` — join an argv blob into ONE mutable
 // NUL-terminated Windows command line.
 //
@@ -269,7 +476,7 @@ end 'emitSubpScratch'
 // rule on both compilers, identically; diverging here would make the same argv produce two different command
 // lines on the two compilers, which is worse than a shared, stated limitation.
 function buildSubpArgvCmdline(module StdModule)
-	var func = IrFunction.createFromStd(SubpArgvCmdlineName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpArgvCommandName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -597,7 +804,7 @@ function buildSubpAttachedSpawn(module StdModule)
 	module.setTerminator(noCustomEnv, op: StdOp.ret(failure))
 
 	let cmdline = ids.mint()
-	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCmdlineName, args: twoArgs(argv, second: argc)))
+	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
 	let req = emitSubpNewRequest(module, block: build, ids: ids, cmdline: cmdline)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinKind)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinData, value: stdinData)
@@ -632,7 +839,7 @@ function buildSubpStreamSpawn(module StdModule)
 	let surfaceFlags = 3 as ValueId
 
 	let cmdline = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cmdline, callee: SubpArgvCmdlineName, args: twoArgs(argv, second: argc)))
+	module.appendOp(entry, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
 	let req = emitSubpNewRequest(module, block: entry, ids: ids, cmdline: cmdline)
 	let stdinPipe = emitConst(module, block: entry, value: SubpStdinPipe, ids: ids)
 	emitStoreField(module, block: entry, record: req, offset: SubpReqStdinKind, value: stdinPipe)
@@ -1780,8 +1987,13 @@ end 'emitSubpBuildCandidate'
 // Install the attached-subprocess runtime. Called from `installSubpRuntime` — the streaming half's installer —
 // because the two halves share one handle table, one spawn core and one release, and a program that reaches
 // either reaches both through the same `__gt_subp_` prefix scan.
-export function installSubprocessRuntime(module StdModule)
-	buildSubpArgvCmdline(module)
+export function installSubprocessRuntime(module StdModule, target Target)
+	// ⭐ **THE ONE PLACE THE SHAPE IS ASKED.** Each arm builds a complete body under the SAME entry-point
+	// name, so every caller below is written once and none of them knows there are two.
+	match subprocessCommandShape(target) 'shape'
+		commandLine then buildSubpArgvCmdline(module)
+		argumentVector then buildSubpArgvVector(module)
+	end 'shape'
 	buildSubpAttachedSpawn(module)
 	buildSubpStreamSpawn(module)
 	buildSubpGetPid(module)
@@ -1799,3 +2011,15 @@ export function installSubprocessRuntime(module StdModule)
 	buildSubpLastError(module)
 	buildSubpResolvePath(module)
 end 'installSubprocessRuntime'
+
+// ⭐ **THE SHELL WRAPPER IS INSTALLED ONE TIER UP, WITH `__gt_process_run`, AND NOT HERE.** Its callers are
+// `__gt_process_run` and the one-shot read probe, which `installGtRuntime` builds for every green-thread
+// program — where the ATTACHED family this function installs rides `usesStreaming`. Building it here would
+// leave `runProcess(cmd)` branching to a symbol nothing laid out, which is a link failure rather than a
+// diagnostic (MEASURED, as `bl to unknown function '__gt_subp_shell_command'`).
+export function installSubpShellCommandBuilder(module StdModule, target Target)
+	match subprocessCommandShape(target) 'shape'
+		commandLine then break 'shape'
+		argumentVector then buildSubpShellCommand(module)
+	end 'shape'
+end 'installSubpShellCommandBuilder'

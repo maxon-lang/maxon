@@ -39,7 +39,7 @@ being pinned is target-neutral and is covered without a marker by `try-otherwise
 ## Tests
 
 <!-- test: async-try-await.otherwise-default -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Two throwing async calls: one succeeds (its result flows through) and one throws (its `otherwise` fallback
 value stands in). The two `try await` sites use the ordinary `try` fallback-value desugar.
 ```maxon
@@ -69,7 +69,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-try-await.propagate -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A bare `try await p` inside a throwing function propagates the awaited thunk's error to the caller — here
 the thunk succeeds, so the propagate is not taken and the result flows through.
 ```maxon
@@ -102,7 +102,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-try-await.otherwise-panic -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `otherwise panic(…)` on a succeeding `try await` — the panic is unreachable and the result flows through.
 ```maxon
 enum WorkError implements Error
@@ -126,7 +126,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-try-await.void -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A void-returning throwing async function has no result — only an error flag. `try await p otherwise ignore`
 awaits it for its side effect; the thunk succeeds and sets the global.
 ```maxon
@@ -156,7 +156,7 @@ end 'main'
 ```
 
 <!-- test: async-try-await.otherwise-bind -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `otherwise (e)` binds the error the awaited thunk THREW, typed at the thunk's declared `throws` enum — the
 promise carries its callee's error type — so `match e` dispatches on the thrown case.
 ```maxon
@@ -193,7 +193,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-try-await.otherwise-bind-assoc-value -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The thrown error is an associated-value union, so the error flag IS a heap pointer to the payload. The
 `(e)` binding takes ownership and scope-end releases it exactly once — a leak (the payload never decref'd)
 or a double-free would surface under the runtime's allocation accounting (exit 101). The payload is a
@@ -227,7 +227,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-try-await.otherwise-bind-cross-block -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The `async` and its `try await` sit in different basic blocks — an intervening `if` separates them — so the
 promise (and its error type) must reach the await across the block boundary. In shv2 the promise is the
 same SSA value throughout, so its error type is carried with no rebuild.
@@ -264,7 +264,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-try-await.otherwise-bind-void -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A void-returning throwing async awaited with `try await … otherwise (e)`: there is no result, only the error
 flag, and the `(e)` binding is still typed at the thunk's `throws` enum.
 ```maxon
@@ -334,7 +334,7 @@ error E3059: <fragment>:17:10: try propagates 'AError' but enclosing function th
 ```
 
 <!-- test: async-try-await.error.double-try-await -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `try await` is LINEAR exactly as plain `await` is — awaiting one throwing promise twice would release its
 green thread twice. The linearity pass counts `tryAwait` sites, not only plain `await`, so the second
 `try await` of the same promise is refused. This locks in the soundness that the exhaustive

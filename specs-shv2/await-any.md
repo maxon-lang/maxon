@@ -130,20 +130,22 @@ parameter can be proven to be. That is a stdlib-generics question and not this p
 BARE-name `awaitAny` builtin instead would be the wart `print`/`sleep`/`runProcess` were moved into the
 reserved `__Builtins.` space to remove.
 
-### Targets — x64-windows only at this rung, refused by name everywhere else
+### Targets — the lanes with a green-thread substrate, refused by name everywhere else
 
-`__gt_await_any` is the green-thread scheduler, whose substrate is Win32-only at this rung. It is named in
-`SemanticCheck.calleeNeedsWin32Substrate` beside `__gt_sleep` and `__gt_resched`, so a program that calls
-it on another target reads **E3104 at the call's own span**, naming the runtime entry — never a panic from
-inside a backend. `error.rejected-on-wasm` pins that attribution.
+`__gt_await_any` is the green-thread scheduler. It is named on the `greenThreads` facility's roster beside
+`__gt_sleep` and `__gt_resched`, so a program that calls it on a target whose row denies that facility reads
+**E3104 at the call's own span**, naming the runtime entry — never a panic from inside a backend.
+`error.rejected-on-wasm` pins that attribution. Two lanes provide it: x64-windows, and arm64-macOS since its
+scheduler landed.
 
 The two front-end cases (`arity-checked`, `error.operand-type`) reach no substrate at all and carry no
-marker.
+marker. `over-service-replies` keeps the narrow marker for a reason of its OWN: it spawns a SERVICE, and
+`__svc_spawn` is refused on every lane but x64-windows whatever the scheduler under it provides.
 
 ## Tests
 
 <!-- test: await-any.returns-the-first-completed-index -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE DISCRIMINATING CASE — the index returned is the one that FINISHED, not the one that is first in
 the array.** Slot 0 and slot 2 park on timers; slot 1 only yields, so it is the one that reaches
 `completed`. A scan that looked at slot 0 alone, or that returned the first slot it could read rather than
@@ -188,7 +190,7 @@ end 'main'
 ```
 
 <!-- test: await-any.no-park-when-one-is-already-complete -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE EXIT TEST IS AT THE TOP OF THE LOOP, AND THIS IS WHAT SAYS SO.** The promise is driven to
 completion by `Runtime.yield()` before `awaitAny` is called, and it is the only one in the program — so at
 the moment of the call nothing is runnable, no timer is pending and no child is parked. A drive loop that
@@ -235,7 +237,7 @@ end 'main'
 ```
 
 <!-- test: await-any.leaves-the-others-awaitable -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE CENTRAL CASE.** `awaitAny` names one index and RETIRES NOTHING: every promise in the array,
 winner included, is still awaitable afterwards, and a program that awaits them all is leak-free. This is
 the shape the motivating consumer has — a pool selects, serves the ready drain, and eventually awaits
@@ -276,7 +278,7 @@ end 'main'
 ```
 
 <!-- test: await-any.over-a-mixed-array-of-sleeps -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE NETPOLL CASE — nothing is runnable at all, so the shared body BLOCKS on the earliest timer.**
 Three sleepers and no other work: the drive loop finds no coroutine, nothing on the ring, nothing to
 steal, no parked child — and sleeps on the nearest deadline rather than spinning. The index that comes
@@ -382,7 +384,7 @@ end 'main'
 ```
 
 <!-- test: await-any.selects-from-inside-an-async-body -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **A SELECT INSIDE A COROUTINE — the NESTED driver, which is where a drive loop's own identity goes
 wrong.** `selfGt` is the running driver and `owner` is the green thread whose coroutines it may run, and
 both are read once in `entry`; for a top-level `awaitAny` they are GT0, and here the driver is itself an
@@ -424,7 +426,7 @@ end 'main'
 ```
 
 <!-- test: await-any.a-slot-nobody-filled-is-skipped -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE NULL-SLOT GUARD, AND IT IS REACHABLE RATHER THAN DEFENSIVE.** `Array.resize` refuses a MANAGED
 element type at compile time (E3106) — but a `Promise with …` is not managed (its value IS the green-thread
 pointer, `PromiseType.maxon`'s first fact), so `resize` is legal here and publishes length over slots nobody
@@ -457,7 +459,7 @@ end 'main'
 ```
 
 <!-- test: await-any.an-empty-array-is-a-scheduler-deadlock -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE ONE SHAPE IN WHICH `awaitAny` IS A PROGRAM'S FIRST SCHEDULER CALL**, because an array with a
 promise in it has already spawned one. Two things are pinned at once: the drive loop's lazy `__gt_init`
 runs (without it this program reads `currentP` through a TLS slot nobody allocated and **segfaults**), and
@@ -543,8 +545,9 @@ error E3005: <fragment>:8:25: '__Builtins.awaitAny' requires a promise array —
 
 <!-- test: await-any.error.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The green-thread scheduler is x64-windows only at this rung, so a program that selects over promises is
-refused at its own source span with `E3104` naming `__gt_await_any` — never a panic from inside a backend.
+A WASI component has no addressable call stack for a context switch to move, so it has no green-thread
+scheduler and a program that selects over promises is refused at its own source span with `E3104` naming
+`__gt_await_any` — never a panic from inside a backend.
 
 ⚠ **THE THUNK YIELDS THROUGH `__Builtins.parallelBoundary()` AND NOT `Runtime.yield()`, WHICH IS THE
 DIFFERENCE BETWEEN PINNING THIS RULE AND PINNING A NEIGHBOUR'S.** A legal `async` needs a callee that can

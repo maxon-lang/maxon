@@ -1054,12 +1054,20 @@ export let DecimalRadix = 10 as ParsedInt
 export let AsciiZeroDigit = 0x30 as ParsedInt
 export let AsciiNineDigit = 0x39 as ParsedInt
 
-// ⭐ **A Win64 CRITICAL_SECTION IS 40 BYTES — the size of the region `InitializeCriticalSection` initializes
-// in place.** ⚠ Declared once because getting it wrong is not a compile error: the kernel writes the struct
-// into whatever it is handed, so an under-allocated region corrupts whatever the allocator put after it. Two
-// runtime families slab-allocate one (the scheduler's run-queue lock, the DebugStream ring's), and they used
-// to carry a copy of the number each.
-export let CriticalSectionBytes = 40 as ParsedInt
+// ⭐⭐ **THE BYTES AN OS LOCK NEEDS — the region a caller allocates and `osLockInit` initializes IN PLACE.**
+// ⚠ Declared once because getting it wrong is not a compile error: the OS writes its struct into whatever it
+// is handed, so an under-allocated region corrupts whatever the allocator put after it. Three runtime
+// families allocate one (the scheduler's run-queue lock, the DebugStream ring's, and the slab's own state
+// header, whose layout is computed from this number).
+//
+// ⭐ **IT IS THE MAXIMUM OVER THE TARGETS THIS COMPILER SERVES, NOT A PER-TARGET ANSWER, AND THAT IS
+// DELIBERATE (MAC3).** A Win64 `CRITICAL_SECTION` is 40 bytes; a Darwin `pthread_mutex_t` is 64 (MEASURED on
+// this host). Making the number target-dependent would make `SlabRuntime.SlabStateMcentralOffset` — a
+// top-level `let` deriving a STRUCT LAYOUT from it — target-dependent too, which is a layout fork paid for by
+// every allocation in the program to save 24 bytes on ONE lock per family. So there is one number, sized for
+// the widest lock, and each backend ASSERTS that its own primitive fits (`Arm64DarwinRuntime`'s
+// `assertDarwinLockFits`) rather than trusting this comment.
+export let OsLockBytes = 64 as ParsedInt
 
 // A fresh i64 constant.
 export function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId

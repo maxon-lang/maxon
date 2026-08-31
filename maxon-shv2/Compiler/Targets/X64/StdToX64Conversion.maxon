@@ -1073,6 +1073,7 @@ type StdToX64Lowering
 			// register-only under Win64's rcx/rdx/r8/r9 and neither lands anything on the stack.
 			osStdHandle gives 0
 			osExecutablePath gives 0
+			osFileOpenWriteExecutable gives win64OutgoingArgBytes(CreateFileStackArgWords)
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1261,6 +1262,7 @@ type StdToX64Lowering
 				atomicCas to currentThreadToken then break 'term'
 				// G1: the TLS ops and the event signal are body ops, never terminators — nothing to fuse.
 				tlsAlloc to osEnterBackgroundPriority then break 'term'
+				osFileOpenWriteExecutable then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1363,6 +1365,7 @@ type StdToX64Lowering
 				// `clobbersFlags: false` and so cannot be the last flag-writer either. None is the compare, so the
 				// scan stops — declining to fuse is always safe.
 				tlsAlloc to osEnterBackgroundPriority then break 'isTheCompare'
+				osFileOpenWriteExecutable then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1528,6 +1531,12 @@ type StdToX64Lowering
 			// x64-windows gate, then emits its one import call.
 			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsReadFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			// ⭐ **`openWriteExecutable` REACHES THE SAME LOWERING ON THIS LANE, AND NOW BY A DIFFERENT ROUTE.**
+			// It used to be the same OP; MAC4 split the two because POSIX has a permission mask and Win32 does
+			// not, so the two intents are now two ops that happen to be ONE `CreateFileA` call here. That
+			// coincidence is a fact about Windows — an executable bit is not part of an NTFS file's mode — and
+			// stating it as a shared arm is what keeps it a decision rather than an omission.
+			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerOsFileSize(resultId, handleId: handleId, sizeOutPtrId: sizeOutPtrId, dstBlock: dstBlock)
 			osFileDelete(resultId, pathPtrId) then self.lowerOsFileDelete(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
@@ -1638,6 +1647,7 @@ type StdToX64Lowering
 			// inside one macro-op's encoder, never between IR blocks — the same division `memFill` states above.
 			atomicCas to currentThreadToken then panic("lowerStdToX64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			tlsAlloc to osEnterBackgroundPriority then panic("lowerStdToX64: a TLS op, an event signal or the priority door appeared as a block terminator (lowering bug — none of them is a terminator)")
+			osFileOpenWriteExecutable then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -4191,6 +4201,7 @@ type StdToX64Lowering
 			atomicCas to currentThreadToken gives false
 			// G1: nor is a TLS op or an event signal.
 			tlsAlloc to osEnterBackgroundPriority gives false
+			osFileOpenWriteExecutable gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -4349,6 +4360,7 @@ type StdToX64Lowering
 			memFill panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `memFill`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			atomicCas to currentThreadToken panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an atomic or a thread-token read, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			tlsAlloc to osEnterBackgroundPriority panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a TLS op, an event signal or the priority door, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osFileOpenWriteExecutable panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

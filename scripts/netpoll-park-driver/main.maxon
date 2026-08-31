@@ -21,39 +21,39 @@ typealias Count = int(0 to 1000000)
 // does reads as a short count, i.e. as the very defect being hunted. Keep it a foreign process.
 function reader(lines Count) returns Count
 	#if os(Windows)
-	// ⚠ THIS ARM EXISTED NOWHERE UNTIL 2026-08-01, AND ITS ABSENCE IS WHY B3 COULD NOT START.
-	// The driver hardcoded `/bin/sh`, which lives only inside Git Bash's virtual filesystem — a
-	// native Windows process gets `spawn failed`, measured 3 runs of 3. So the knob this driver
-	// exists to arm (`MAXON_GT_CLAIM_DELAY_MS`, DEFINED as what takes it 5/5 clean to 0/5) had
-	// never been armed on the one backend B2 shipped unexecuted.
-	//
-	// `Start-Sleep -Milliseconds 2` asks for the same 2 ms the POSIX arm does; Windows' timer
-	// granularity rounds it to ~15.6 ms MEASURED (a flat 64 lines/s, timed at the consuming end,
-	// 2026-08-01) — so this producer is genuinely slow and genuinely un-bursty.
-	//
-	// ⚠⚠ AND YET "EVERY READ FINDS AN EMPTY PIPE AND PARKS" IS FALSE ON THIS BACKEND. That
-	// sentence stood at the top of this file as the justification for the 2 ms and it was never
-	// measured on Windows; B3 measured it and it is wrong by ~50x. Off the PARK knob's slope,
-	// ~8 of a reader's 400 reads reach the parker's commit — the rest return synchronously. It is
-	// NOT a pacing problem and cannot be paced away: 2 / 10 / 25 / 50 / 200 ms, an explicitly
-	// flushed producer and a 1-40 ms jittered one all land in the same 1-8 range. Slowing this arm
-	// down buys almost no park coverage and costs the run linearly, so it stays at 2 ms.
-	// ⇒ What the Windows arm of this driver drives hard is the COMPLETER side, which is this row's
-	// acceptance anyway; see run.sh's header for the numbers behind both halves.
-	//
-	// PATH-resolved, not an absolute path: `Executable.name` hands the bare name to CreateProcessW,
-	// which applies PATH + PATHEXT itself. An absolute `C:/Windows/System32/...` stood here and
-	// assumed both the system drive letter and the 32/64-bit flavour of the install.
-	let exe = Executable.name("powershell")
-	var argv = StringArray.create()
-	argv.push("-NoProfile")
-	argv.push("-Command")
-	argv.push("for($i=0;$i -lt {lines};$i++)\{ 'x'; Start-Sleep -Milliseconds 2 \}")
+		// ⚠ THIS ARM EXISTED NOWHERE UNTIL 2026-08-01, AND ITS ABSENCE IS WHY B3 COULD NOT START.
+		// The driver hardcoded `/bin/sh`, which lives only inside Git Bash's virtual filesystem — a
+		// native Windows process gets `spawn failed`, measured 3 runs of 3. So the knob this driver
+		// exists to arm (`MAXON_GT_CLAIM_DELAY_MS`, DEFINED as what takes it 5/5 clean to 0/5) had
+		// never been armed on the one backend B2 shipped unexecuted.
+		//
+		// `Start-Sleep -Milliseconds 2` asks for the same 2 ms the POSIX arm does; Windows' timer
+		// granularity rounds it to ~15.6 ms MEASURED (a flat 64 lines/s, timed at the consuming end,
+		// 2026-08-01) — so this producer is genuinely slow and genuinely un-bursty.
+		//
+		// ⚠⚠ AND YET "EVERY READ FINDS AN EMPTY PIPE AND PARKS" IS FALSE ON THIS BACKEND. That
+		// sentence stood at the top of this file as the justification for the 2 ms and it was never
+		// measured on Windows; B3 measured it and it is wrong by ~50x. Off the PARK knob's slope,
+		// ~8 of a reader's 400 reads reach the parker's commit — the rest return synchronously. It is
+		// NOT a pacing problem and cannot be paced away: 2 / 10 / 25 / 50 / 200 ms, an explicitly
+		// flushed producer and a 1-40 ms jittered one all land in the same 1-8 range. Slowing this arm
+		// down buys almost no park coverage and costs the run linearly, so it stays at 2 ms.
+		// ⇒ What the Windows arm of this driver drives hard is the COMPLETER side, which is this row's
+		// acceptance anyway; see run.sh's header for the numbers behind both halves.
+		//
+		// PATH-resolved, not an absolute path: `Executable.name` hands the bare name to CreateProcessW,
+		// which applies PATH + PATHEXT itself. An absolute `C:/Windows/System32/...` stood here and
+		// assumed both the system drive letter and the 32/64-bit flavour of the install.
+		let exe = Executable.name("powershell")
+		var argv = StringArray.create()
+		argv.push("-NoProfile")
+		argv.push("-Command")
+		argv.push("for($i=0;$i -lt {lines};$i++)\{ 'x'; Start-Sleep -Milliseconds 2 \}")
 	#else
-	let exe = Executable.name("/bin/sh")
-	var argv = StringArray.create()
-	argv.push("-c")
-	argv.push("i=0; while [ $i -lt {lines} ]; do echo x; sleep 0.002; i=$((i+1)); done")
+		let exe = Executable.name("/bin/sh")
+		var argv = StringArray.create()
+		argv.push("-c")
+		argv.push("i=0; while [ $i -lt {lines} ]; do echo x; sleep 0.002; i=$((i+1)); done")
 	#endif
 
 	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise panic("spawn failed")

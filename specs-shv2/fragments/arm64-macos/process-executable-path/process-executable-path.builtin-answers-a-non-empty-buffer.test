@@ -1,0 +1,43 @@
+// Test: process-executable-path.builtin-answers-a-non-empty-buffer
+function main() returns ExitCode
+	let mm = __Builtins.executablePath()
+	if mm.length() > 0 'gotAPath'
+		return 5
+	end 'gotAPath'
+	return 1
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __proc_exe_path
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x1, gt
+    arm64.cbnz x1, gotAPath
+    arm64.b ifcont
+  gotAPath:
+    arm64.movImm x19, 5
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

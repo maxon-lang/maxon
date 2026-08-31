@@ -5,10 +5,19 @@
 // points. The bootstrap declares the same two (`2-Parser.cs:10952-10957`) with the same arity, the same
 // types and the same ownership, so the SURFACE here is the reference's; only the implementation differs.
 //
-// ⭐ **HOST-ONLY BY THE R4 RULING (2026-07-30), AND FOR A REASON OF ITS OWN ON TOP.** `x64-windows` is real;
-// every other target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` via
-// `SemanticCheck.calleeNeedsWin32Substrate`, which matches on the `__cl_` PREFIX — so an entry point added
-// later is gated by construction rather than by memory.
+// ⭐⭐ **TWO LANES AS OF MAC7, AND THEY RUN DIFFERENT Std GRAPHS — the only family in this compiler that
+// does.** This paragraph used to read "HOST-ONLY BY THE R4 RULING (2026-07-30), AND FOR A REASON OF ITS OWN
+// ON TOP", and that reason of its own is exactly why the fork exists rather than a lowering. A target that
+// provides neither still refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`,
+// which matches on the `__cl_` PREFIX — so an entry point added later is gated by construction rather than
+// by memory.
+//
+// ⭐⭐ **arm64-macOS SERVES IT AS OF MAC7, AND THE PARAGRAPH BELOW IS WHY THAT TOOK A RUNG RATHER THAN A
+// LOWERING.** It ends *"serving them honestly means a per-target capture plus a target-neutral surface over
+// it — a rung, not a lowering"*, and that is exactly what landed: the ENTRY STUB captures `argc`/`argv`
+// into two `.data` words, and this file builds ONE of TWO Std graphs over them depending on which shape the
+// target's process start-up has. Neither graph contains a target test; `commandLineShape` asks once, at
+// install.
 //
 // ⚠⚠ **THE EXTRA REASON MATTERS, because it is not "nobody wrote the lowering yet": THE SHAPE OF argv IS
 // NOT THE SAME ON THE OTHER PLATFORMS.** Windows hands a process ONE UNSPLIT STRING and the splitting is
@@ -51,6 +60,73 @@
 // ⚠ **ENCODING: ANSI, NOT UTF-8, AND ON PURPOSE** — see `IatSlot.GetCommandLineA` for the whole argument.
 // The short form: shv2's Windows lane is `A`-entry-point end to end, so argv must be too, or the first
 // `openRead(args.get(1))` misreads its own path.
+
+// ⭐⭐ **THE TWO SHAPES A PLATFORM CAN HAND A PROCESS ITS ARGUMENTS IN — the one fact this family forks on.**
+// It is asked ONCE, at install, and each answer builds a complete Std graph; nothing downstream of that ever
+// asks which target it is compiling for, which is what keeps the ops target-neutral while the SURFACE stays
+// one surface.
+//
+// ⚠ It is keyed on the OS and not on the CPU, because it is an ABI fact: every SysV platform hands `_start`
+// a pre-split vector and Windows hands `GetCommandLineA` one string, whatever the ISA.
+enum CommandLineShape
+	// Windows: ONE unsplit string, split here by the CRT's rules (see the scanner below).
+	unsplitString
+	// SysV: a pre-split vector the process start-up already holds. `argc` and `argv` reach the Std tier
+	// through the two `.data` words below, which the target's entry stub fills before `main` runs.
+	argumentVector
+end 'CommandLineShape'
+
+// ⚠ **WASI ANSWERS `argumentVector` AND THAT IS A SHAPE ANSWER, NOT A CAPABILITY CLAIM.**
+// `args_sizes_get`/`args_get` hand a component a pre-split vector exactly as SysV hands a process one, so
+// the SHAPE really is that one — what that lane lacks is the entry-stub capture and a reachable consumer
+// (`args()` answers an `Array with String`), and `targetProvidesFacility` is where that refusal lives. A
+// shape function that lied about the shape to express a capability would put the same fact in two places.
+function commandLineShape(target Target) returns CommandLineShape
+	return match target.os 'os'
+		windows gives CommandLineShape.unsplitString
+		linux to wasi gives CommandLineShape.argumentVector
+	end 'os'
+end 'commandLineShape'
+
+// ⭐ **THE THREE `.data` WORDS THE VECTOR SHAPE READS.** Two are the captured vector; the third is the
+// answer an out-of-range index gets.
+//
+// ⚠ **`__cl_empty_arg` IS A WORD OF ZEROES USED AS A C STRING, AND THAT IS WHY IT IS A GLOBAL RATHER THAN
+// AN ALLOCATION.** `__cl_arg` answers the empty string for an index outside the vector (the bootstrap's
+// documented answer), and every OTHER exit hands `emitCStringToManaged` a pointer it does not own — so an
+// allocated empty string would be the ONE exit with a release to remember, on the coldest path in the file.
+// A `.data` word is zero by construction and is never written.
+//
+// ⚠ **THEY ARE SEALED BEFORE ANY WORKER M EXISTS** — the entry stub writes them before `main`, and nothing
+// writes them again — which is `MultiMSharing.sealedBeforeWorkers` exactly.
+export let CommandLineArgcLabel = b"__cl_argc"
+export let CommandLineArgvLabel = b"__cl_argv"
+let CommandLineEmptyArgLabel = b"__cl_empty_arg"
+
+// The `.data` slots this family lays out — nothing at all under the Windows shape, where the command line
+// is fetched by a call rather than captured at entry.
+export function commandLineRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if not usage.usesCommandLine 'noCommandLine'
+		return out
+	end 'noCommandLine'
+
+	match commandLineShape(target) 'shape'
+		unsplitString then break 'shape'
+		argumentVector then pushCapturedArgvGlobals(out)
+	end 'shape'
+
+	return out
+end 'commandLineRuntimeGlobals'
+
+// The three words the captured shape reads. Its own function because a match arm carries one statement, and
+// because the three belong together: two are the capture and the third is what an index outside it answers.
+function pushCapturedArgvGlobals(out DataSectionEntryArray)
+	pushRuntimeGlobal(out, label: CommandLineArgcLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: CommandLineArgvLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: CommandLineEmptyArgLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+end 'pushCapturedArgvGlobals'
 
 // The `__cl_` prefix that identifies EVERY command-line runtime entry point — the one test
 // `scanRuntimeUsage` reads to set `usesCommandLine`, and the one `SemanticCheck` reads for E3104.
@@ -622,15 +698,104 @@ function emitFoundAnArgument(module StdModule, block IrBlock, next ValueId, ids 
 	return emitCmp(module, block: block, a: next, b: zero, pred: StdCmpPred.ge, ids: ids)
 end 'emitFoundAnArgument'
 
-export function installCommandLineRuntime(module StdModule, usage RuntimeUsage)
+// ⭐⭐ **`__cl_count()` AND `__cl_arg(i)` OVER A PRE-SPLIT VECTOR (MAC7).** The two entry points and their
+// contracts are the Windows half's exactly — the raw count with argv[0] included, and the empty string for
+// an index outside it — and the BODIES have nothing in common with it, because there is nothing to scan.
+//
+// ⚠ **`__cl_scan_one` IS NOT BUILT ON THIS SHAPE AT ALL.** It is the CRT's quoting rules, and applying them
+// to a vector the kernel has already split would re-interpret bytes the SHELL has already interpreted: an
+// argument that genuinely contains a `"` would come back with it removed.
+function buildCommandLineVectorCount(module StdModule)
+	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let count = emitLoadGlobalWord(module, block: entry, label: CommandLineArgcLabel, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(count))
+
+	module.functions.push(func)
+end 'buildCommandLineVectorCount'
+
+// ⭐ **THE BOUNDS CHECK IS TWO-SIDED, AND BOTH SIDES ARE REACHABLE FROM SOURCE.** `stdlib/CommandLine.maxon`
+// never asks out of range, but nothing stops a caller — and here an out-of-range index would be a load from
+// a wild address rather than the Windows half's walk simply running out. A NEGATIVE index is checked as well
+// as a past-the-end one: the parameter is an ordinary `int`, so `args.get(-1)` reaches this.
+function buildCommandLineVectorArg(module StdModule)
+	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var upperBound = module.addBlock(func, label: b"clvupper")
+	var fromVector = module.addBlock(func, label: b"clvload")
+	var outOfRange = module.addBlock(func, label: b"clvoob")
+	var copyOut = module.addBlock(func, label: b"clvcopy")
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0 as ValueId
+
+	// The cstring reaching `copyOut` is one of two — a slot of the vector, or the empty-string word — so it
+	// rides a block arg, which is the only way a value crosses a merge at this tier.
+	let cstr = ids.mint()
+	copyOut.blockArgs.push(IrBlockArg.create(cstr, argType: StdType.i64))
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let negative = emitCmp(module, block: entry, a: index, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: outOfRange.id, elseBlockId: upperBound.id))
+
+	let count = emitLoadGlobalWord(module, block: upperBound, label: CommandLineArgcLabel, ids: ids)
+	let pastEnd = emitCmp(module, block: upperBound, a: index, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(upperBound, op: StdOp.condBranch(pastEnd, thenBlockId: outOfRange.id, elseBlockId: fromVector.id))
+
+	let base = emitLoadGlobalWord(module, block: fromVector, label: CommandLineArgvLabel, ids: ids)
+	let stride = emitConst(module, block: fromVector, value: ArgvPointerBytes, ids: ids)
+	let offset = emitBin(module, block: fromVector, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
+	let slot = emitBin(module, block: fromVector, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let found = emitLoadField(module, block: fromVector, record: slot, offset: 0, ids: ids)
+	module.setTerminator(fromVector, op: StdOp.branch(copyOut.id))
+	fromVector.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(found)))
+
+	let empty = ids.mint()
+	module.appendOp(outOfRange, op: StdOp.globalAddr(empty, label: CommandLineEmptyArgLabel))
+	module.setTerminator(outOfRange, op: StdOp.branch(copyOut.id))
+	outOfRange.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(empty)))
+
+	let record = ids.mint()
+	var built = emitCStringToManaged(module, func: func, cur: copyOut, cstr: cstr, record: record, ids: ids)
+	module.setTerminator(built, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildCommandLineVectorArg'
+
+// `argv` is an array of POINTERS, so an index scales by the width of one.
+let ArgvPointerBytes = 8 as ParsedInt
+
+// ⚠ **THE INSTALL FORKS ON THE TARGET, AND THAT IS THIS FAMILY'S WHOLE DIVERGENCE FROM THE OTHERS.** Every
+// other runtime installer builds ONE graph for every target; argv cannot, because the two platforms do not
+// hand a process the same THING (see `CommandLineShape`). `installSchedRuntime` already takes a `target` for
+// a smaller version of the same reason, so the seam exists.
+export function installCommandLineRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if not usage.usesCommandLine 'noCommandLine'
 		return
 	end 'noCommandLine'
 
+	match commandLineShape(target) 'shape'
+		unsplitString then installCommandLineSplitter(module)
+		argumentVector then installCommandLineVector(module)
+	end 'shape'
+end 'installCommandLineRuntime'
+
+// The Windows half: the CRT scanner and the two walkers built on it.
+function installCommandLineSplitter(module StdModule)
 	buildCommandLineScanOne(module)
 	buildCommandLineCount(module)
 	buildCommandLineArg(module)
-end 'installCommandLineRuntime'
+end 'installCommandLineSplitter'
+
+// The SysV half: a `.data` load and an indexed one. There is no scanner, because there is nothing to scan.
+function installCommandLineVector(module StdModule)
+	buildCommandLineVectorCount(module)
+	buildCommandLineVectorArg(module)
+end 'installCommandLineVector'
 
 // Every callee this file installs — what `scanRuntimeUsage` reads to set `usesCommandLine`, and what
 // `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows target. A PREFIX test rather than a

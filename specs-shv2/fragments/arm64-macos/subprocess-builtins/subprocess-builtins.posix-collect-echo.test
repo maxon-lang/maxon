@@ -1,0 +1,569 @@
+// Test: subprocess-builtins.posix-collect-echo
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/echo")
+	appendToken(argv, token: "hello")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let err = String.init(__Builtins.subprocessResultStderr(r))
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	let code = __Builtins.subprocessResultStatusCode(r)
+	let n = out.byteLength()
+	let expected = "hello"
+	let matches = out.startsWith(expected)
+	print("kind={kind} code={code} outLen={n} errLen={err.byteLength()} matches={matches}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __io_iocp@160 = i64 0
+  __io_done_event@168 = i64 0
+  __io_init_done@176 = i64 0
+  __io_pending@184 = i64 0
+  __io_pipe_seq@192 = i64 0
+  __subp_table@200 = i64 0
+  __subp_last_error@208 = i64 0
+  __slab_arena_list@216 = i64 0
+  __slab_arena_map_l1@224 = i64 0
+  __slab_state@232 = i64 0
+}
+
+func @appendToken {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
+    arm64.movImm x22, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x22, x21
+    arm64.cset x0, lt
+    arm64.cbnz x0, byteLoop
+    arm64.b forexit
+  byteLoop:
+    arm64.cmp x22, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_22  ; "panic at subprocess-builtins.posix-collect-echo.test:9: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x22, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#15
+  __im_load#15:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.arm64AddLsl x0, x0, x22, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x22, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#16
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.add x0, x0, x22
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty
+    arm64.b critsplit#18
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b critsplit#19
+  critsplit#19:
+    arm64.xchgRegReg x1, x0
+    arm64.b __im_cont
+  critsplit#18:
+    arm64.xchgRegReg x1, x0
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at subprocess-builtins.posix-collect-echo.test:9: appendToken: get is in range\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.b forstep
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 304 record@48
+    arm64.storeSlotReg slot29, x28
+    arm64.storeSlotReg slot28, x27
+    arm64.storeSlotReg slot27, x26
+    arm64.storeSlotReg slot26, x25
+    arm64.storeSlotReg slot25, x24
+    arm64.storeSlotReg slot24, x23
+    arm64.storeSlotReg slot23, x22
+    arm64.storeSlotReg slot22, x21
+    arm64.storeSlotReg slot21, x20
+    arm64.storeSlotReg slot20, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x1, __str_rec_9  ; "/bin/echo"
+    arm64.movRegReg x0, x19
+    arm64.bl appendToken
+    arm64.leaRdata x1, __str_rec_10  ; "hello"
+    arm64.movRegReg x0, x19
+    arm64.bl appendToken
+    arm64.leaRdata x20, __str_rec_11  ; ""
+    arm64.movImm x0, 1
+    arm64.movImm x1, 1
+    arm64.bl __managed_mem_create
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot1, x21
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_17  ; "panic at subprocess-builtins.posix-collect-echo.test:19: create(1, 1) cannot fail\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot20
+    arm64.loadRegSlot x20, slot21
+    arm64.loadRegSlot x21, slot22
+    arm64.loadRegSlot x22, slot23
+    arm64.loadRegSlot x23, slot24
+    arm64.loadRegSlot x24, slot25
+    arm64.loadRegSlot x25, slot26
+    arm64.loadRegSlot x26, slot27
+    arm64.loadRegSlot x27, slot28
+    arm64.loadRegSlot x28, slot29
+    arm64.epilogue 304 record@48
+    arm64.ret
+  tryok:
+    arm64.movImm x22, 2
+    arm64.movRegReg x0, x20
+    arm64.bl String.cstr
+    arm64.movRegReg x23, x0
+    arm64.movImm x24, 1
+    arm64.movRegReg x0, x20
+    arm64.bl String.cstr
+    arm64.movRegReg x25, x0
+    arm64.movRegReg x0, x20
+    arm64.bl String.cstr
+    arm64.movRegReg x26, x0
+    arm64.movImm x27, 0
+    arm64.movImm x28, 2
+    arm64.movRegReg x0, x20
+    arm64.bl String.cstr
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.storeOutgoingArg [sp + arg0], x26
+    arm64.storeOutgoingArg [sp + arg1], x27
+    arm64.storeOutgoingArg [sp + arg2], x28
+    arm64.storeOutgoingArg [sp + arg3], x0
+    arm64.storeOutgoingArg [sp + arg4], x1
+    arm64.storeOutgoingArg [sp + arg5], x2
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.movRegReg x3, x21
+    arm64.movRegReg x4, x24
+    arm64.movImm x5, 0
+    arm64.movRegReg x6, x25
+    arm64.movImm x7, 2
+    arm64.bl __gt_subp_attached_spawn
+    arm64.storeSlotReg slot5, x0
+    arm64.movImm x1, 0
+    arm64.bl __gt_subp_wait_collect
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot6, x19
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_subp_result_stdout
+    arm64.bl String.init
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot2, x20
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_subp_result_stderr
+    arm64.bl String.init
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot3, x21
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_subp_result_kind
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_subp_result_code
+    arm64.movRegReg x19, x0
+    arm64.b __il_body#11
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x23, [x20 + 8]
+    arm64.cmp x23, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __il_slow#13
+    arm64.b __rc_ok#12
+  __il_slow#13:
+    arm64.movRegReg x0, x20
+    arm64.bl String.byteLength
+    arm64.movRegReg x23, x0
+    arm64.b __il_cont#10
+  __rc_ok#12:
+    arm64.b __il_cont#10
+  __il_cont#10:
+    arm64.storeSlotReg slot4, x23
+    arm64.leaRdata x1, __str_rec_10  ; "hello"
+    arm64.movRegReg x0, x20
+    arm64.bl String.startsWith
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_12  ; "kind="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot18, x1
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot17, x1
+    arm64.movRegReg x0, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_13  ; " code="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot16, x1
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot15, x1
+    arm64.movRegReg x0, x19
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_14  ; " outLen="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot14, x1
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot13, x1
+    arm64.movRegReg x0, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_15  ; " errLen="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot12, x1
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
+    arm64.b __il_body#14
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x28, [x21 + 8]
+    arm64.cmp x28, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __il_slow#16
+    arm64.b __rc_ok#15
+  __il_slow#16:
+    arm64.movRegReg x0, x21
+    arm64.bl String.byteLength
+    arm64.movRegReg x21, x0
+    arm64.b __il_cont#9
+  __rc_ok#15:
+    arm64.movRegReg x21, x28
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot11, x1
+    arm64.movRegReg x0, x21
+    arm64.bl __uint_to_string
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __str_rec_16  ; " matches="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot10, x1
+    arm64.loadRegBaseDisp.word64 x28, [x0 + 8]
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot19, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __bool_to_string
+    arm64.storeSlotReg slot9, x0
+    arm64.add x1, x24, x22
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x19
+    arm64.add x1, x1, x26
+    arm64.add x1, x1, x23
+    arm64.add x1, x1, x27
+    arm64.add x1, x1, x21
+    arm64.add x1, x1, x28
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot7, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot8, x0
+    arm64.add x20, x0, 56
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x1, slot18
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x24, x20, x24
+    arm64.movRegReg x0, x24
+    arm64.loadRegSlot x1, slot17
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x22, x24, x22
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x1, slot16
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x22, x22, x25
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x24, slot15
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x22, x19
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x1, slot14
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x19, x19, x26
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x22, slot13
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x1, slot12
+    arm64.movRegReg x2, x27
+    arm64.bl __str_copy
+    arm64.add x19, x19, x27
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x23, slot11
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x19, x21
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x1, slot10
+    arm64.movRegReg x2, x28
+    arm64.bl __str_copy
+    arm64.add x19, x19, x28
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x21, slot19
+    arm64.movRegReg x1, x21
+    arm64.loadRegSlot x25, slot9
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.loadRegSlot x19, slot8
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.loadRegSlot x0, slot7
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.loadRegSlot x0, slot17
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot6
+    arm64.bl __gt_subp_result_release
+    arm64.loadRegSlot x0, slot5
+    arm64.bl __gt_subp_release
+    arm64.loadRegSlot x0, slot4
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#4
+    arm64.b __rc_chk#5
+  __rc_chk#5:
+    arm64.loadRegSlot x0, slot4
+    arm64.cmp x0, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#4
+    arm64.b __rc_ok#3
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_23  ; "panic at subprocess-builtins.posix-collect-echo.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot20
+    arm64.loadRegSlot x20, slot21
+    arm64.loadRegSlot x21, slot22
+    arm64.loadRegSlot x22, slot23
+    arm64.loadRegSlot x23, slot24
+    arm64.loadRegSlot x24, slot25
+    arm64.loadRegSlot x25, slot26
+    arm64.loadRegSlot x26, slot27
+    arm64.loadRegSlot x27, slot28
+    arm64.loadRegSlot x28, slot29
+    arm64.epilogue 304 record@48
+    arm64.ret
+  __rc_ok#3:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot4
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#7
+    arm64.b __rc_chk#8
+  __rc_chk#8:
+    arm64.loadRegSlot x0, slot4
+    arm64.cmp x0, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#7
+    arm64.b __rc_ok#6
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_23  ; "panic at subprocess-builtins.posix-collect-echo.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot20
+    arm64.loadRegSlot x20, slot21
+    arm64.loadRegSlot x21, slot22
+    arm64.loadRegSlot x22, slot23
+    arm64.loadRegSlot x23, slot24
+    arm64.loadRegSlot x24, slot25
+    arm64.loadRegSlot x25, slot26
+    arm64.loadRegSlot x26, slot27
+    arm64.loadRegSlot x27, slot28
+    arm64.loadRegSlot x28, slot29
+    arm64.epilogue 304 record@48
+    arm64.ret
+  __rc_ok#6:
+    arm64.loadRegSlot x0, slot4
+    arm64.loadRegSlot x19, slot20
+    arm64.loadRegSlot x20, slot21
+    arm64.loadRegSlot x21, slot22
+    arm64.loadRegSlot x22, slot23
+    arm64.loadRegSlot x23, slot24
+    arm64.loadRegSlot x24, slot25
+    arm64.loadRegSlot x25, slot26
+    arm64.loadRegSlot x26, slot27
+    arm64.loadRegSlot x27, slot28
+    arm64.loadRegSlot x28, slot29
+    arm64.epilogue 304 record@48
+    arm64.ret
+}

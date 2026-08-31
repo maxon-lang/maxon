@@ -90,7 +90,7 @@ end
 ## Tests
 
 <!-- test: managed-directory.exists -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
@@ -107,7 +107,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.not-exists -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let exists = __ManagedDirectory.exists("nonexistent_dir_xyz_99999".toByteArray().managed)
@@ -122,7 +122,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.current-path -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
@@ -138,7 +138,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.open-search-nonexistent -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888/*".toByteArray().managed) otherwise 'notFound'
@@ -156,7 +156,7 @@ not found
 ```
 
 <!-- test: managed-directory.open-search-throws -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888_throws/*".toByteArray().managed) otherwise 'err'
@@ -170,7 +170,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.create-throws -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedDirectory.create("nonexistent_parent_xyz_88888/child".toByteArray().managed) otherwise 'err'
@@ -184,7 +184,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.next-without-try -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
@@ -197,7 +197,7 @@ error E3057: specs/fragments/managed-directory/managed-directory.next-without-tr
 ```
 
 <!-- test: managed-directory.search-and-list -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -296,7 +296,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.open-search-not-found-variant -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 The errno→variant mapping ensures that opening a search on a path that does
 not exist routes to the `notFound` arm (rather than the catch-all
@@ -320,7 +320,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.error-direct-construction -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let d = __ManagedDirectory{_block: 0}
@@ -343,7 +343,7 @@ cases above do not reach — and every one of them was written because a probe
 found the mechanism, not to restate a passing one.
 
 <!-- test: managed-directory.next-does-not-skip-the-first-match -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 ⭐ **The advance-first PENDING flag.** `FindFirstFileA` does not merely open a
 search, it returns the FIRST entry — so a `next()` that fetches immediately
@@ -405,7 +405,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.filename-round-trip -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 ⭐ **`filename()` — which NO ported case reaches.** It answers with a FRESH
 owned `__ManagedMemory` copy rather than a pointer into the find block (the
@@ -467,7 +467,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.next-after-close-throws-closed -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 ⚠ **shv2's ONE deliberate divergence from both references.** Neither throws
 `closed` — and neither guards, so `close()` followed by `next()` reaches Win32
@@ -494,7 +494,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.exists-discriminates-file-from-directory -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 `exists()` asks whether the path is a DIRECTORY, so an existing plain file is
 `false` — a `GetFileAttributesA` that merely succeeded is not the answer. The
@@ -532,7 +532,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.create-existing-is-create-failed -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 `CreateDirectoryA` on a path that already exists reports
 `ERROR_ALREADY_EXISTS`, which is neither of the two errno codes the shared
@@ -570,7 +570,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.auto-close -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 The RAII half: a search opened and NEVER closed explicitly, reclaimed only by
 the destructor at the scope exit. The exit code proves the memory half (a leaked
@@ -595,7 +595,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.error-enum-name-is-reserved -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 ⚠ **SEEDED IS NOT RESERVED** — the R4.4 trap, verified rather than assumed.
 `__ManagedDirectoryError` is seeded into the enum registry unconditionally, and
@@ -617,7 +617,7 @@ error E2051: <fragment>:2:13: identifier '__ManagedDirectoryError' is reserved: 
 ```
 
 <!-- test: managed-directory.dotfiles-are-entries-not-dot-pseudo-entries -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 ⭐ **THE DOT FILTER IS THREE BYTES, AND ALL SEVENTEEN CASES ABOVE PASS IF IT IS
 ONE.** `.` is byte0 `.` + NUL, `..` is `.` `.` + NUL — so a filter that tested
@@ -706,7 +706,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.eof-and-close-are-both-idempotent -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 
 Two contracts nothing above states. **EOF is a plain 0 and stays one**: an empty
 directory's very first `next()` is the end of the iteration, and a `next()` past

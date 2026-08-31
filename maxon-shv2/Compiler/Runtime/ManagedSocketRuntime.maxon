@@ -43,9 +43,15 @@
 export let ManagedSocketHandleOffset = 0 as ByteOffset
 export let ManagedSocketBoxBytes = 8 as ParsedInt
 
-// The handle value a CLOSED box carries — `ManagedFileClosedHandle`'s twin, and zero for its reason: the box
-// is allocated zeroed, so a box whose `socket()` never ran and one that has been closed carry the same value
-// and ONE guard covers both.
+// The value a handle SLOT carries when it holds no socket — `ManagedFileClosedHandle`'s twin, and zero for
+// its reason: the box is allocated zeroed, so a box whose `socket()` never ran and one that has been closed
+// carry the same value and ONE guard covers both.
+//
+// ⚠ **THE SLOT HOLDS `socket + HandleSlotBias`, WHICH IS WHAT MAKES THAT SENTINEL TOTAL (MAC4).** A Win32
+// `SOCKET` is never 0, so the bias buys this family nothing TODAY — but the guard it reads
+// (`ManagedFileRuntime.emitLiveHandleOrClosedThrow`) is shared with two families where a descriptor of 0 is
+// ordinary, so the ENCODING has to be one encoding. A POSIX `socket(2)` answers the lowest free descriptor
+// exactly as `open(2)` does, so this is also the same latent defect one library over.
 let ManagedSocketClosedHandle = 0 as ParsedInt
 
 // ⚠ **`INVALID_SOCKET` IS ITS OWN CONSTANT EVEN THOUGH IT EQUALS `INVALID_HANDLE_VALUE`.** Both are -1 and
@@ -429,7 +435,7 @@ function buildManagedSocketTcpConnect(module StdModule)
 	// machinery drops it — and the drop it takes is `__ms_destruct`, which CLOSES the socket before freeing
 	// the memory (`SignatureIndex.managedNameDropCallee`). That is the whole RAII half of this type.
 	let box = emitRawAlloc(module, block: connected, byteCount: emitConst(module, block: connected, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
-	emitStoreField(module, block: connected, record: box, offset: ManagedSocketHandleOffset, value: socket)
+	emitStoreHandleSlot(module, block: connected, record: box, handleOffset: ManagedSocketHandleOffset, handle: socket, ids: ids)
 	emitOkReturn(module, block: connected, value: box, ids: ids)
 
 	module.functions.push(func)
@@ -626,9 +632,12 @@ function buildManagedSocketClose(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	let socket = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
+	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: ManagedSocketClosedHandle, ids: ids)
-	let alreadyClosed = emitCmp(module, block: entry, a: socket, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	// `entry` dominates `doClose`, so the decoded socket is simply in scope there — the dominance argument
+	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for its own.
+	let socket = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
 
 	emitIoPark(module, block: doClose, operation: GtIoOperation.netClose, ids: ids)

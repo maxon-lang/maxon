@@ -715,7 +715,7 @@ end 'main'
 ```
 
 <!-- test: wide-byte-program-still-round-trips-a-file -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### The stdlib's own byte buffer stays byte-PACKED while the program's `Byte` is two bytes wide
 x64-windows only, and it is the ONE case here that genuinely needs a file: it is the RUNTIME proof
 that `stdlib/File.maxon`'s own read buffer strides 1 while the caller's `Byte` strides 2, so it has
@@ -753,7 +753,7 @@ Hello 1
 ```
 
 <!-- test: a-wide-byte-still-reads-a-compiler-synthesized-buffer -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### A buffer the COMPILER minted answers to no file's `Byte` — not even the file that asked for it
 The case above proves a WHITELISTED MODULE's buffer survives a wide `Byte`. This one proves the
 harder half: a buffer that no source line describes at all. `__ManagedDirectory.currentPath()` is a
@@ -1223,7 +1223,7 @@ downstream"*), and it too has a distinguishing case —
 `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`, at the end of this file.
 
 <!-- test: a-synthesized-buffer-crosses-every-declared-byte-buffer-door -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### One synthesized buffer, through six declared byte-buffer doors
 x64-windows only for `a-wide-byte-still-reads-a-compiler-synthesized-buffer`'s reason: `currentPath`
 lowers to `GetCurrentDirectoryA`. The cwd differs per machine, so every assertion is on a LENGTH — the
@@ -1315,7 +1315,7 @@ name of the two. ⇒ the declared element's DECLARED BOUNDS are the third questi
 what receives one must admit every value a byte has.
 
 <!-- test: a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### A one-byte slot that cannot hold 255 is refused at the boundary
 ```maxon
 typealias Byte = int(0 to 200)
@@ -1352,7 +1352,7 @@ and picks the `__ManagedMemory` candidate. So the eighth site is load-bearing ex
 and it is now pinned rather than argued about.
 
 <!-- test: overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### Overload scoring picks the byte-buffer candidate for a compiler-synthesized buffer
 x64-windows only for `a-wide-byte-still-reads-a-compiler-synthesized-buffer`'s reason: `currentPath` lowers
 to `GetCurrentDirectoryA`. The `Ints` candidate is declared FIRST, so a resolver that scores the
@@ -1776,7 +1776,7 @@ error E3005: <fragment>:13:4: argument type mismatch for 'other': expected 'Byte
 ```
 
 <!-- test: a-byte-that-holds-every-byte-still-appends-a-synthesized-buffer -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### A `Byte` that holds every byte still takes one
 The other half of the boundary, and the case that keeps the door LIVE: refusing this would convert a
 correct program into a compile error. x64-windows only for
@@ -1809,7 +1809,7 @@ the value set it has always had (`ProgramSignatures.elementIntegerValueRange`), 
 answers in both directions on its own.
 
 <!-- test: a-synthesized-buffer-takes-a-byte-array-appended-to-it -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### A synthesized buffer takes a declared byte array appended to it
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -1829,7 +1829,7 @@ end 'main'
 ```
 
 <!-- test: a-synthesized-buffer-takes-a-NARROWER-byte-array-appended-to-it -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### …and a NARROWER one too, because every one of its values is a byte
 The asymmetry that makes `error.append-narrower-element-array` a refusal runs the other way here: an
 `int(0 to 100)` value stored into a raw byte buffer can never be read back out of range, because the

@@ -332,7 +332,7 @@ let GtTeardownBytes = 8
 // One machine word — the width of each of the three pointer-valued GT fields EC10 appends below. NAMED for
 // `GtTeardownBytes`' reason: a literal `8` spelled three times is one fact written three times, and an edit
 // to any one of them would silently move the other two.
-let PointerFieldBytes = 8
+export let PointerFieldBytes = 8
 
 // ⭐⭐ **THE GREEN THREAD THIS GT BELONGS TO — THE FIELD THE WHOLE PIN RESTS ON (EC10).** A GT that `async`
 // created is a COROUTINE: it is driven only by its owner's chain of drivers and is published only to its
@@ -461,12 +461,32 @@ let GtStackSize = 0x800
 
 // The GUARD MARGIN (P1.5-B1a′): the cushion a function's prologue projects below its frame before comparing
 // against the stack guard, and the offset `__gt_spawn`/`__gt_morestack` place the guard above the stack base. It
-// appears TWICE in the effective trigger (`projectedRsp = rsp - frameBytes - GtStackGuardMargin`, guard =
-// `stackBase + GtStackGuardMargin`), so morestack fires while `rsp - frameBytes` is still `2*GtStackGuardMargin`
+// appears TWICE in the effective trigger (`projectedSp = sp - frameBytes - margin`, guard = `stackBase + margin`),
+// so morestack fires while `sp - frameBytes` is still `2*margin`
 // above the true overflow point — the slack that covers the guarded function's pushes plus any UN-guarded runtime
 // (`__`/`mrt_`) frames that free-ride on the caller's margin between guard checkpoints. 0x3A0 (928 B) is v1's
 // value (`X64Backend.maxon:7293`), carried because the same frames it was sized for run here.
-export let GtStackGuardMargin = 0x3A0
+//
+// ⭐⭐ **arm64 KEEPS THE SAME NUMBER, AND THAT IS A RE-DERIVATION RATHER THAN A COPY (MAC3).** The margin's two
+// terms answer differently on the two ISAs and they go OPPOSITE ways, so the sum is re-argued rather than assumed:
+//   • **the guarded function's own un-projected stack.** On x64 `push rbp` and every callee-saved push sit
+//     OUTSIDE the `sub rsp` the guard projects, so that term is real there. On arm64 the frame RESERVATION
+//     already contains the x29/x30 record and every callee-saved slot (`Arm64PrologueEpilogue` opens the whole
+//     frame with ONE `sub sp`), so the term is ZERO — this lane needs strictly LESS margin for it.
+//   • **un-guarded `__`/`mrt_` frames free-riding between checkpoints.** The same set of runtime functions with
+//     comparable frames on both ISAs, so this term is unchanged.
+// ⇒ x64's number is an OVER-estimate here, and over-estimating is the safe direction: a larger margin fires the
+// grower EARLIER, never later. The one thing arm64 adds is the guard's own saved-x30 cell, and that is added to
+// the PROJECTION explicitly (`Arm64GtRuntime.Arm64GuardSaveBytes`) rather than folded into this number, so the
+// two ISAs' guards stay readable against each other.
+export function gtStackGuardMargin(target Target) returns ParsedInt
+	return match target.cpu 'cpu'
+		x64 to arm64 gives GtStackGuardMarginBytes
+		wasm32 panic("gtStackGuardMargin: wasm32 has no stack guard — a WASI component's call stack is not addressable, so nothing can project a frame against a guard word. `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
+	end 'cpu'
+end 'gtStackGuardMargin'
+
+let GtStackGuardMarginBytes = 0x3A0 as ParsedInt
 
 // The single global SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB
 // region allocated once PER P by `__sched_init_procs`, its TOP held in `P->systemStackSP`. The syscall shim
@@ -476,18 +496,36 @@ export let GtStackGuardMargin = 0x3A0
 // subtracts it from the system-stack top to compute the TIB StackLimit it publishes for the call.
 export let GtSystemStackSize = 0x10000
 
-// The saved-register frame `__gt_context_switch` builds on a GT stack: the five callee-saved GPRs
-// (rbx, r12, r13, r14, r15 — `calleeSavedOrder`) as pushed words, the ten callee-saved XMMs (xmm6-15 —
-// `calleeSavedXmmOrder`) as `movsd` words below them, plus the return-address slot = 16 words = 128 bytes.
-// Both lists are spelled once in X64PrologueEpilogue and mirror `RegisterAllocator.calleeSavedMask`.
-// `__gt_spawn` lays a fresh such frame whose TOP word is `&__gt_trampoline`, so the first switch-in's final
-// `ret` enters the trampoline; every word below it is the MEM_COMMIT zeros, which is correct because they
-// become this GT's initial callee-saved registers and the user function establishes each before reading it.
-// It MUST byte-match the context switch's save/restore layout — a mismatch is a wild `ret` — so the Target
-// tier's `assertGtFrameConsistent` (X64GtRuntime) CHECKS this constant against BOTH ordered lists at
-// chunk-build time; if a callee-saved register of EITHER file is added without moving this number, an async
-// compile panics rather than miscompiling.
-export let GtInitialFrameBytes = 128  // 5 GPR words + 10 XMM words + the return-address word (checked in X64GtRuntime)
+// The saved-register frame `__gt_context_switch` builds on a GT stack, and the ONE fact the Std tier and the
+// Target tier share about a fresh green thread. `__gt_spawn` lays a frame of exactly this size with the
+// trampoline's address in the word the first switch-in takes its return address from; every other word is the
+// fresh mapping's zeros, which is correct because they become this GT's initial callee-saved registers and the
+// user function establishes each before reading it.
+//
+// **x64 — 128 bytes.** The five callee-saved GPRs (rbx, r12-r15 — `calleeSavedOrder`) as pushed words, the ten
+// callee-saved XMMs (xmm6-15 — `calleeSavedXmmOrder`) as `movsd` words below them, plus the RETURN-ADDRESS
+// word, which sits at the TOP because the switch ends in `ret` and `ret` POPS.
+//
+// **arm64 — 160 bytes.** Ten `stp` PAIRS: x19..x28, d8..d15, and the x29/x30 frame record. There is no
+// return-address WORD at all — AArch64's `ret` branches to x30 — so the trampoline's address rides the frame
+// record, which the switch pushes LAST and therefore places at the LOWEST address. That is a STRUCTURAL
+// difference in how a fresh frame is seeded rather than merely a different number, and
+// `emitGtSeedInitialFrame` below is where the two shapes are written out.
+//
+// ⚠ It MUST byte-match the context switch's save/restore layout — a mismatch is a wild return on the first
+// switch-in — so EACH backend CHECKS this against its OWN callee-saved lists at chunk-build time
+// (`X64GtRuntime.assertGtFrameConsistent`, `Arm64GtRuntime.assertArm64GtFrameConsistent`). Add a callee-saved
+// register to either file without moving its number and the next async compile panics rather than miscompiling.
+export function gtInitialFrameBytes(target Target) returns ParsedInt
+	return match target.cpu 'cpu'
+		x64 gives X64GtInitialFrameBytes
+		arm64 gives Arm64GtInitialFrameBytes
+		wasm32 panic("gtInitialFrameBytes: wasm32 has no context switch — a WASI component's call stack is not addressable, so there is no saved-register frame to lay. `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
+	end 'cpu'
+end 'gtInitialFrameBytes'
+
+let X64GtInitialFrameBytes = 128 as ParsedInt  // 5 GPR words + 10 XMM words + the return-address word
+let Arm64GtInitialFrameBytes = 160 as ParsedInt  // 5 GPR pairs + 4 SIMD pairs + the x29/x30 frame record
 
 // The argument buffer holds MaxAsyncArgs i64 slots. The trampoline loads ALL of them into the GPR
 // argument registers unconditionally (a callee reads only the slots it declares; the rest are the
@@ -563,7 +601,16 @@ let ProcStoreBytes = ProcStoreCapacity * ProcSlotBytes
 // --- Win32 wait / process constants (P1.5 subprocess seed) ---
 // `WAIT_OBJECT_0` (0) is what `WaitForSingleObject`/`WaitForMultipleObjects` return for a SIGNALED handle (an
 // exited child); `__gt_proc_check` polls each handle with a zero timeout and tests for it.
-let WaitObject0 = 0
+// EXPORTED since MAC3: the arm64-macOS lane EMULATES these waits over a pthread condition variable
+// (`Arm64DarwinRuntime`'s `DarwinWaitObject`), so its chunk has to ANSWER the same two codes the Std tier
+// tests for. A second spelling on that side would be one fact written twice, in a place where the two
+// copies disagreeing means a poll that never sees a signalled handle.
+export let WaitObject0 = 0
+
+// `WAIT_TIMEOUT` — what a wait that ran out of time answers. Windows numbers it 258, and the value is not
+// arbitrary on the emulating lane either: it must simply be DISTINCT from `WaitObject0`, which no caller
+// could rely on if each side picked its own.
+export let WaitTimeout = 258
 let WaitPollTimeout = 0  // WaitForSingleObject timeout=0 — poll, never block (the netpoll owns the blocking wait)
 
 // INFINITE — the netpoll's block when no timer bounds the wait, and the teardown's when it joins a worker M
@@ -579,12 +626,12 @@ let StartupInfoCbOffset = 0
 
 // PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8 (dwProcessId@16, dwThreadId@20 are unused here).
 let ProcInfoSize = 0x18
-let ProcInfoHProcessOffset = 0
-let ProcInfoHThreadOffset = 8
+export let ProcInfoHProcessOffset = 0
+export let ProcInfoHThreadOffset = 8
 
 // `PROCESS_INFORMATION.dwProcessId` — a DWORD after the two HANDLEs, which is why it is read at `u32` width
 // and not `i64`: the `dwThreadId` beside it would otherwise ride in the high half of the answer.
-let ProcInfoDwProcessIdOffset = 16
+export let ProcInfoDwProcessIdOffset = 16
 
 // The low 32 bits of a machine word — how a DWORD is read out of an eight-byte load. See `dwProcessId`'s use.
 let DwordMask = 0xFFFFFFFF as ParsedInt
@@ -594,7 +641,7 @@ let DwordMask = 0xFFFFFFFF as ParsedInt
 // slot must arrive with its high half already zero — which a fresh `__slab_alloc` slot does. #92's reused slot
 // needed an explicit `store 0` in `reap` to re-establish that; S3's per-call slot does not.
 let ExitCodeSlotBytes = 8
-let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
+export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
 
 // ⭐ **`runProcess` IS A THROWING BUILTIN (P1.5 #93) — its two USER-REACHABLE failure paths THROW, they no
 // longer ABORT.** Both used to `emitRuntimeAbort` (spawn failure exit 1, store overflow exit 70); now each hands
@@ -1429,9 +1476,9 @@ let SecurityAttributesInheritable = 1
 // STARTF_USESTDHANDLES (0x100) @0x3C, hStdInput @0x50, hStdOutput @0x58, hStdError @0x60. Every other field 0.
 let StartfUseStdHandles = 0x100
 let StartupInfoDwFlagsOffset = 0x3C
-let StartupInfoHStdInputOffset = 0x50
-let StartupInfoHStdOutputOffset = 0x58
-let StartupInfoHStdErrorOffset = 0x60
+export let StartupInfoHStdInputOffset = 0x50
+export let StartupInfoHStdOutputOffset = 0x58
+export let StartupInfoHStdErrorOffset = 0x60
 
 // ReadFile / GetLastError classification: ERROR_IO_PENDING (997) → the read yields; ERROR_BROKEN_PIPE (109) →
 // clean EOF (0 bytes). Any other GetLastError value is treated as EOF/0 for the slice-1a probe.
@@ -1905,7 +1952,41 @@ end 'ioRuntimeGlobals'
 // substrate: `__io_init` seeds the completion port/thread/event/lock in `__gt_init`, the run-queue mutations take the
 // CRITICAL_SECTION that excludes the completion thread's cross-thread `__gt_enqueue`, the netpoll wakes on the event,
 // and `__gt_io_read` is built. A non-IOCP GT program stays byte-identical (no lock, no event wait, no io functions).
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesIocp bool, usesStreaming bool, rawFree ByteArray)
+// ⭐⭐⭐ **HOW A READ ON THIS TARGET FINISHES — the fact the IOCP substrate exists to serve, and the only
+// one of it that is not target-neutral (MAC8).**
+//
+// Windows's overlapped `ReadFile` may answer `ERROR_IO_PENDING`: the read is IN FLIGHT and its completion
+// will be delivered LATER, to a completion port, on another thread. Everything `__io_init` builds is there
+// to receive that — the port, the auto-reset wake event, and the drain thread that re-readies the parked
+// green thread. A descriptor read on a POSIX lane cannot be in flight: it either moves bytes or it does not,
+// in the caller, before it returns.
+//
+// ⇒ under `inlineCompletion` there is nothing to create, nothing to poll and nothing to wake, so `__io_init`
+// is not built at all, `__gt_init` does not call it, the netpoll grows no IO arm and
+// `__gt_promise_drop`'s cancel arm is unreachable. `__gt_subp_yield_read`'s PARK arm is still emitted (it is
+// one graph for both lanes) and is simply never taken, because no errno on such a lane translates to
+// `ERROR_IO_PENDING`.
+//
+// ⚠ **THIS IS NOT `usesIocp`, AND CONFLATING THE TWO IS WHAT THE SPLIT FIXES.** `usesIocp` asks *"does this
+// module read a pipe?"* and still gates the reader itself (`__gt_io_read`, `__gt_subp_yield_read`); this asks
+// *"does a read on this target complete somewhere else?"*, and only the second one is about the target.
+enum IoCompletionShape
+	// Windows: a completion port, a wake event and a drain thread.
+	completionPort
+	// POSIX and WASI: a read completes in its caller.
+	inlineCompletion
+end 'IoCompletionShape'
+
+// ⚠ Keyed on the OS, like every other shape question in this compiler: whether a read can be in flight is a
+// property of the platform's IO model, not of its instruction set.
+function ioCompletionShape(target Target) returns IoCompletionShape
+	return match target.os 'os'
+		windows gives IoCompletionShape.completionPort
+		linux to wasi gives IoCompletionShape.inlineCompletion
+	end 'os'
+end 'ioCompletionShape'
+
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesIocp bool, usesStreaming bool, rawFree ByteArray, target Target)
 	// The tag records exist only in a traced build; an untraced one registers no rdata and emits no calls.
 	let tags = GtTraceTags.register(globalData) if asyncTrace else GtTraceTags.none()
 
@@ -1922,14 +2003,16 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// `usesGt` exactly as everything else here does: there is no program that wants green threads without a
 	// processor to run them on. FIRST in the list because `__gt_init` calls `__sched_init_procs` before it
 	// does anything else, so the dependency order and the install order read the same way.
-	installSchedRuntime(module)
-	buildGtInit(module, usesIocp: usesIocp)
+	installSchedRuntime(module, target: target)
+	// The substrate a COMPLETION PORT needs, as opposed to the reader itself — see `IoCompletionShape`.
+	let usesCompletionPort = usesIocp and ioCompletionShape(target) == IoCompletionShape.completionPort
+	buildGtInit(module, usesCompletionPort: usesCompletionPort)
 	// ⭐ BOTH spawn doors, from one body (SV1). The green one is installed unconditionally beside the
 	// coroutine one for `buildGtCoroEnqueue`'s stated reason: whether a program can REACH it is
 	// `DeadFunctionElimination`'s question, and answering it here would be a second reachability analysis
 	// that could disagree with the real one.
-	buildGtSpawn(module, kind: GtSpawnKind.coroutine, asyncTrace: asyncTrace, tags: tags)
-	buildGtSpawn(module, kind: GtSpawnKind.greenThread, asyncTrace: asyncTrace, tags: tags)
+	buildGtSpawn(module, kind: GtSpawnKind.coroutine, asyncTrace: asyncTrace, tags: tags, target: target)
+	buildGtSpawn(module, kind: GtSpawnKind.greenThread, asyncTrace: asyncTrace, tags: tags, target: target)
 	buildGtReady(module)
 	buildGtEnqueue(module)
 	buildGtDequeue(module)
@@ -1949,13 +2032,13 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// ANY of these has"* and the teardown's *"until nobody owns a green thread"*. See `buildGtDriveLoop`.
 	// The select's exit test is installed first because the loop calls it.
 	buildGtAnyCompleted(module)
-	buildGtDriveLoop(module, name: GtDriveUntilName, exit: DriveExit.statusEquals, usesIocp: usesIocp)
-	buildGtDriveLoop(module, name: GtAwaitAnyName, exit: DriveExit.anyCompleted, usesIocp: usesIocp)
-	buildGtDriveLoop(module, name: GtDriveExitName, exit: DriveExit.liveCountZero, usesIocp: usesIocp)
+	buildGtDriveLoop(module, name: GtDriveUntilName, exit: DriveExit.statusEquals, usesCompletionPort: usesCompletionPort)
+	buildGtDriveLoop(module, name: GtAwaitAnyName, exit: DriveExit.anyCompleted, usesCompletionPort: usesCompletionPort)
+	buildGtDriveLoop(module, name: GtDriveExitName, exit: DriveExit.liveCountZero, usesCompletionPort: usesCompletionPort)
 	buildGtDrainAtExit(module)
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
 	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
-	buildGtPromiseDrop(module, usesIocp: usesIocp, rawFree: rawFree)
+	buildGtPromiseDrop(module, usesCompletionPort: usesCompletionPort, rawFree: rawFree)
 	// The three halves of the teardown rendezvous, beside the drop and the two await drivers that step it.
 	// `__gt_reclaim` last, because it is what the other two call. See `GtOffTeardown` for the protocol.
 	buildGtRunnerDone(module)
@@ -1979,18 +2062,24 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// dependency order like the rest of this list.
 	buildGtResched(module)
 	buildGtIoPark(module)
-	buildGtProcessRun(module, rawFree: rawFree)
+	buildGtProcessRun(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
+	// The shell wrapper `__gt_process_run` and the one-shot read probe take a command LINE through, on a lane
+	// whose spawn primitive takes a vector. Beside its callers, for the reason its own header carries.
+	installSubpShellCommandBuilder(module, target: target)
+
+	if usesCompletionPort 'completionPort'
+		buildIoInit(module)
+	end 'completionPort'
 
 	if usesIocp 'io'
-		buildIoInit(module)
 		buildSubpYieldRead(module)
-		buildGtIoRead(module, rawFree: rawFree)
+		buildGtIoRead(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
 	end 'io'
 
 	// The streaming subprocess API (slice 1b) rides the same IOCP substrate (`usesStreaming` implies `usesIocp`),
 	// so `__gt_subp_yield_read` is already installed above; only the API surface is added here.
 	if usesStreaming 'streaming'
-		installSubpRuntime(module)
+		installSubpRuntime(module, target: target)
 	end 'streaming'
 
 	// ⭐ **THE MAILBOX RIDES `usesGt` EXACTLY AS THE SCHEDULER DOES (SV1 wave 3), AND FOR THE SAME REASON:
@@ -2023,7 +2112,7 @@ end 'installGtRuntime'
 // ⚠ **IT TAKES NO `asyncTrace` FLAG ANY MORE (G2).** Its one traced-build duty was allocating the shared
 // 24-byte digit scratch, and that scratch is now `__gt_trace_emit`'s own FRAME (`GtTraceDigitsSlot`) — so a
 // traced build's bring-up is byte-identical to an untraced one and there is nothing left for the flag to gate.
-function buildGtInit(module StdModule, usesIocp bool)
+function buildGtInit(module StdModule, usesCompletionPort bool)
 	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -2099,7 +2188,7 @@ function buildGtInit(module StdModule, usesIocp bool)
 	// P1.5 slice 1a-ii: seed the IOCP substrate (port + completion thread + event + run-queue lock) HERE, at the
 	// first scheduler init — BEFORE any `__gt_spawn`/`__gt_enqueue` can take the run-queue lock, and before any read
 	// completes on the thread. A void call mints an unread result id.
-	if usesIocp 'ioInit'
+	if usesCompletionPort 'ioInit'
 		let ioInitResult = ids.mint()
 		module.appendOp(doInit, op: StdOp.call(ioInitResult, callee: IoInitName, args: ValueIdArray.create()))
 	end 'ioInit'
@@ -2152,7 +2241,7 @@ end 'gtSpawnNameOf'
 // STORE.** Everything else a spawn does — the struct, the seed stack, the guard, the TIB bounds, the initial
 // context-switch frame, the live count, the trace id — is identical for the two kinds, so building them from
 // two bodies would be one algorithm written twice with nothing making the copies agree.
-function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags GtTraceTags)
+function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags GtTraceTags, target Target)
 	var func = IrFunction.createFromStd(gtSpawnNameOf(kind), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -2219,35 +2308,15 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 	// stackTop = stackBase + GtStackSize.
 	let stackTop = ids.mint()
 	module.appendOp(initBlock, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	// Seed this GT's saved TIB bounds so the syscall shim's after-call restore repoints the Windows TIB to THIS
-	// GT's own stack: `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low). The GT's bounds
-	// are `[stackBase, stackTop)`; `__gt_morestack` updates them (and the guard) when it grows the stack.
-	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffTibStackBase, valueId: stackTop, valueType: StdType.i64))
-	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffTibStackLimit, valueId: stackBase, valueType: StdType.i64))
-	// gt.stackGuard = stackBase + GtStackGuardMargin — the low-water mark the guarded function's prologue compares
-	// its projected rsp against (P1.5-B1a′). Below it, the prologue calls `__gt_morestack` to grow+relocate first.
+	// gt.stackGuard = stackBase + margin — the low-water mark the guarded function's prologue compares its
+	// projected stack pointer against (P1.5-B1a′). Below it, the prologue calls `__gt_morestack` to grow +
+	// relocate first.
 	let guardMarginConst = ids.mint()
-	module.appendOp(initBlock, op: StdOp.const(guardMarginConst, value: GtStackGuardMargin, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.const(guardMarginConst, value: gtStackGuardMargin(target), valueType: StdType.i64))
 	let stackGuard = ids.mint()
 	module.appendOp(initBlock, op: StdOp.binOp(stackGuard, lhs: stackBase, rhs: guardMarginConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffStackGuard, valueId: stackGuard, valueType: StdType.i64))
-	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). The FIFTEEN callee-saved slots
-	// below it — five GPR words and ten XMM words since Wave 2 — are the MEM_COMMIT zeros, DON'T-CARE, because
-	// they become this GT's initial callee-saved registers, which the user function establishes before it reads
-	// them. Only the trampoline return-address slot must be written.
-	let retWordConst = ids.mint()
-	module.appendOp(initBlock, op: StdOp.const(retWordConst, value: StackWordBytes, valueType: StdType.i64))
-	let retSlotAddr = ids.mint()
-	module.appendOp(initBlock, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: retWordConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let trampAddr = ids.mint()
-	module.appendOp(initBlock, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
-	module.appendOp(initBlock, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
-	// gt.sp = stackTop - GtInitialFrameBytes (points at the lowest saved-register slot); gt.fp is 0 (zeroed).
-	let frameConst = ids.mint()
-	module.appendOp(initBlock, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
-	let spVal = ids.mint()
-	module.appendOp(initBlock, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
+	emitGtSeedInitialFrame(module, block: initBlock, gt: gt, stackBase: stackBase, stackTop: stackTop, target: target, ids: ids)
 
 	// ⭐ P1.5-B2 #88: this spawn adds one green thread to the live count (GT0 is not counted — it is
 	// created by `__gt_init` via `__slab_alloc`, never through here). Every reclaim — the `__gt_await`
@@ -2269,6 +2338,57 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 
 	module.functions.push(func)
 end 'buildGtSpawn'
+
+// ⭐⭐⭐ **SEED A FRESH GREEN THREAD'S INITIAL CONTEXT-SWITCH FRAME — the ONE place the two ISAs disagree
+// STRUCTURALLY rather than numerically, which is why it is a per-target ARM and not a per-target constant.**
+//
+// Both lanes lay `gtInitialFrameBytes(target)` bytes at the top of the fresh stack, leave every word the
+// mapping's zeros (they become this green thread's initial callee-saved registers, each established by the
+// user function before it is read), write `&__gt_trampoline` into the ONE word the first switch-in takes its
+// return address from, and point `gt.sp` at the bottom of the block. What differs is WHICH word that is:
+//
+//   • **x64** ends its switch in `ret`, which POPS. So the trampoline's address is the frame's TOP word,
+//     `[stackTop - 8]`, and the fifteen saved-register words sit below it.
+//   • **arm64**'s `ret` branches to x30, which the switch's LAST `ldp` restores — and the switch pushes the
+//     x29/x30 record last, so that pair sits at the LOWEST address. The trampoline's address therefore goes
+//     to `[frameBase + 8]`, the record's second word, with `frameBase == gt.sp` itself. x29's slot beside it
+//     stays zero, which is what stops the panic backtrace at a green thread's boundary.
+//
+// ⚠ **THE TIB BOUNDS ARE SEEDED ON x64 ONLY, AND THAT IS NOT AN OMISSION HERE.** `GtOffTibStackBase`/
+// `GtOffTibStackLimit` exist because a Win32 kernel call PROBES `gs:[0x08]`/`gs:[0x10]` and faults when RSP
+// is outside them, so the syscall shim and the context switch must keep those two words describing the stack
+// that is executing. Darwin has no such contract: nothing reads the fields on that lane, and writing them
+// would be two stores maintaining a fact with no reader — see `Arm64GtRuntime`'s header, which states the
+// same split from the other side.
+function emitGtSeedInitialFrame(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, target Target, ids ValueMinter)
+	let frameBase = emitBin(module, block: block, a: stackTop, b: emitConst(module, block: block, value: gtInitialFrameBytes(target), ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let trampAddr = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
+
+	match target.cpu 'cpu'
+		x64 then emitGtSeedX64ReturnWord(module, block: block, gt: gt, stackBase: stackBase, stackTop: stackTop, trampAddr: trampAddr, ids: ids)
+		arm64 then emitStoreField(module, block: block, record: frameBase, offset: Arm64GtSeedLinkRegisterOffset, value: trampAddr)
+		wasm32 then panic("emitGtSeedInitialFrame: wasm32 has no context switch to seed a frame for — `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted `__gt_spawn` got past that gate")
+	end 'cpu'
+
+	// gt.sp = the bottom of the saved block; gt.fp is the slab zero on both lanes.
+	emitStoreField(module, block: block, record: gt, offset: GtOffSp, value: frameBase)
+end 'emitGtSeedInitialFrame'
+
+// The trampoline address's offset within the arm64 seed frame: the SECOND word of the x29/x30 record the
+// context switch pushes last, i.e. the x30 half. `StackWordBytes` rather than a bare 8 — it is a stack word,
+// which is exactly what that constant names.
+let Arm64GtSeedLinkRegisterOffset = StackWordBytes as ByteOffset
+
+// x64's half of the seed: the trampoline address in the frame's TOP word, plus the NT_TIB bounds this GT's
+// stack occupies. `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low);
+// `__gt_morestack` moves both when it grows the stack.
+function emitGtSeedX64ReturnWord(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, trampAddr ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackBase, value: stackTop)
+	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackLimit, value: stackBase)
+	let retSlotAddr = emitBin(module, block: block, a: stackTop, b: emitConst(module, block: block, value: StackWordBytes, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: block, record: retSlotAddr, offset: 0, value: trampAddr)
+end 'emitGtSeedX64ReturnWord'
 
 // `__gt_ready(gt)` — make a spawned GT discoverable. See `GtReadyName` for why this is not the tail of
 // `__gt_spawn`.
@@ -3298,7 +3418,7 @@ end 'DriveExit'
 // drives until its own GT is `ready` (woken by its timer / its child's exit); the exit drain runs until
 // nobody owns a green thread. The loop state lives entirely in memory (the current GT, the queues, the timer
 // + process stores), so this is phi-free — each iteration reloads it.
-function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, usesIocp bool)
+function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, usesCompletionPort bool)
 	// ⭐ **THE PARAMETER LIST IS STATED ONCE AND THE COUNT IS ITS LENGTH.** It used to be two `match`es on
 	// this enum — one signature written twice, whose drift a mismatched call would show only as a wrong
 	// register.
@@ -3475,7 +3595,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// never co-schedule here (that combined wait set is a later slice). Without `usesIocp` the arm is byte-identical
 	// to the pre-slice form (straight to `timerOnly`).
 	var pcZeroTargetId = timerOnly.id
-	if usesIocp 'ioNetpoll'
+	if usesCompletionPort 'ioNetpoll'
 		var checkIo = module.addBlock(func, label: b"checkio")
 		var ioPending = module.addBlock(func, label: b"iopending")
 		var ioInfinite = module.addBlock(func, label: b"ioinfinite")
@@ -4226,7 +4346,7 @@ end 'buildGtCellComplete'
 // tombstone the fall-through leaves is reclaimed by whoever pops it. `emitGtIoCancelArm`'s
 // `IoParkedNormalDone` exit is the SAME fall-through by the SAME argument, which is why the two share
 // `queuedArm` rather than each having its own.
-function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
+function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree ByteArray)
 	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -4296,7 +4416,7 @@ function buildGtPromiseDrop(module StdModule, usesIocp bool, rawFree ByteArray)
 	module.setTerminator(waitingArm, op: StdOp.condBranch(parkedOnAMailbox, thenBlockId: mailboxParked.id, elseBlockId: waitingStores.id))
 	emitRuntimeAbort(module, func: func, block: mailboxParked, abort: RuntimeAbort.schedulerPromiseParkedOnAMailbox, ids: ids)
 
-	if usesIocp 'ioAware'
+	if usesCompletionPort 'ioAware'
 		var waitingTimer = module.addBlock(func, label: b"waitingtimer")
 		var ioArm = module.addBlock(func, label: b"ioarm")
 		let ioParked = ids.mint()
@@ -5751,7 +5871,7 @@ end 'buildGtProcCheck'
 // `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`, and a full process store propagates
 // the `storeOverflow` flag (`(0, flag)`). The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
-function buildGtProcessRun(module StdModule, rawFree ByteArray)
+function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(RunProcessErrorTypeName))
 	var ids = ValueMinter.create(1)
 
@@ -5817,7 +5937,11 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray)
 	// and 0 `dwCreationFlags` asks for no special creation — the exact two values this op's isel used to hard-zero
 	// before `stdlib/Subprocess.maxon`'s `Configuration` gave a caller something to say there.
 	let spawnDefaultsConst = emitConst(module, block: afterCopy, value: 0, ids: ids)
-	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(cmBuf, cwdPtrId: spawnDefaultsConst, creationFlagsId: spawnDefaultsConst, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	// MAC8: `cmBuf` is a whole COMMAND LINE the caller wrote, so on a lane whose primitive takes a vector it
+	// becomes `/bin/sh -c <line>` — see `SubprocessRuntime.emitSubpCommandFromLine`, which emits nothing at
+	// all under the command-line shape.
+	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
+	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(command, cwdPtrId: spawnDefaultsConst, creationFlagsId: spawnDefaultsConst, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
@@ -6148,7 +6272,7 @@ end 'buildPipeName'
 //     thread is suspended. It is freed after the yielding read returns, and its pointer is published to
 //     `gt.ioScratch` so `__gt_promise_drop`'s cancel arm can free it on the path this function never returns
 //     from.
-function buildGtIoRead(module StdModule, rawFree ByteArray)
+function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -6244,7 +6368,9 @@ function buildGtIoRead(module StdModule, rawFree ByteArray)
 	module.appendOp(afterCopy, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
 	// The one-shot read probe configures neither cwd nor creation flags — see `__gt_process_run`'s twin note.
 	let probeSpawnDefaults = emitConst(module, block: afterCopy, value: 0, ids: ids)
-	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(cmBuf, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	// MAC8: the probe's input is a command LINE too — `__gt_process_run`'s twin note carries the reason.
+	let probeCommand = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
+	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(probeCommand, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
@@ -6792,10 +6918,14 @@ export let SubpStdinPipe = 4 as ParsedInt
 // The NUL device, as the bytes an `A` entry point reads. `none` (stdin) and `discard` (stdout/stderr) both open
 // it — a child whose stream is wired to NUL reads instant EOF and writes into nothing, which is exactly what
 // those two kinds promise, and it costs no pipe and no drain.
-let SubpNulDeviceBytes = 4  // "NUL" + the terminator
-let SubpNulByte0 = 78  // 'N'
-let SubpNulByte1 = 85  // 'U'
-let SubpNulByte2 = 76  // 'L'
+// ⭐⭐ **THE NULL DEVICE IS NAMED DIFFERENTLY ON THE TWO PLATFORMS, AND MAC8 FOUND THAT AS A SPAWN FAILURE.**
+// `InputSource.none` and `OutputDestination.discard` open this path for the child; `"NUL"` is a Windows
+// device name and `open("NUL")` on POSIX is an ordinary relative path that does not exist — so an
+// `InputSource.none` spawn (which is `Subprocess.run`'s DEFAULT) failed with `ENOENT` before it reached
+// `posix_spawnp` at all. It rides `SubprocessCommandShape` because it is the same platform split asked
+// about a different thing, and forking on it twice would be two answers to one question.
+let SubpWindowsNullDeviceName = b"NUL"
+let SubpPosixNullDeviceName = b"/dev/null"
 
 // ⭐ `__gt_subp_spawn_core(reqPtr) -> handle` — spawn a Windows child with its three standard streams wired as
 // the request asks, allocate a handle-table slot, and return its index (or -1 on failure; or the child's PID
@@ -6809,7 +6939,7 @@ let SubpNulByte2 = 76  // 'L'
 // ⚠ It is also why the command line is a field of the REQUEST rather than a String this function copies: the
 // copy loop used to live here and carried four values across itself; each caller now builds the buffer before
 // any handle exists.
-function buildSubpSpawnCore(module StdModule)
+function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -6893,7 +7023,7 @@ function buildSubpSpawnCore(module StdModule)
 	let childScratchSizeConst = emitConst(module, block: gotSlot, value: SubpChildScratchBytes as ParsedInt, ids: ids)
 	let childScratch = ids.mint()
 	module.appendOp(gotSlot, op: StdOp.call(childScratch, callee: SlabAllocName, args: argsOf(childScratchSizeConst)))
-	let nulName = emitSubpNulDeviceName(module, block: gotSlot, ids: ids)
+	let nulName = emitSubpLiteralCString(module, block: gotSlot, ids: ids, bytes: subpNullDeviceName(commandShape))
 
 	// ⚠ **THE FAILURE EXIT IS CREATED BEFORE THE STDIO SETUP BECAUSE THE SETUP CAN REACH IT.** A `file` or
 	// `discard` stream opens a real file, and `CreateFileA` can fail; see `emitSubpNonPipeChildHandle`.
@@ -7010,18 +7140,12 @@ end 'buildSubpSpawnCore'
 // `"NUL"` in a fresh slab buffer, as the NUL-terminated bytes `CreateFileA` reads. Three stores and a
 // slab-zeroed terminator — a four-byte `.rdata` blob would need a relocation and a symbol for what is three
 // immediates.
-function emitSubpNulDeviceName(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let sizeConst = emitConst(module, block: block, value: SubpNulDeviceBytes as ParsedInt, ids: ids)
-	let buf = ids.mint()
-	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
-	let n = emitConst(module, block: block, value: SubpNulByte0 as ParsedInt, ids: ids)
-	module.appendOp(block, op: StdOp.storeIndirect(buf, offset: 0, valueId: n, valueType: StdType.u8))
-	let u = emitConst(module, block: block, value: SubpNulByte1 as ParsedInt, ids: ids)
-	module.appendOp(block, op: StdOp.storeIndirect(buf, offset: 1, valueId: u, valueType: StdType.u8))
-	let l = emitConst(module, block: block, value: SubpNulByte2 as ParsedInt, ids: ids)
-	module.appendOp(block, op: StdOp.storeIndirect(buf, offset: 2, valueId: l, valueType: StdType.u8))
-	return buf
-end 'emitSubpNulDeviceName'
+function subpNullDeviceName(commandShape SubprocessCommandShape) returns ByteArray
+	return match commandShape 'shape'
+		commandLine gives SubpWindowsNullDeviceName
+		argumentVector gives SubpPosixNullDeviceName
+	end 'shape'
+end 'subpNullDeviceName'
 
 // ⭐ **THE TWO NON-PIPE STDIO ARMS, WHICH ALL THREE STREAMS SHARE EXACTLY.** `inherit` hands the child the
 // PARENT's own standard handle for this stream; every other non-pipe kind opens a FILE — the caller's path for
@@ -7210,7 +7334,17 @@ end 'emitSubpOutputSetup'
 // its `lpCommandLine`), fills a spawn request asking for three pipes and nothing else, and hands it to the
 // core. It configures no working directory and no creation flags: NULL and 0 are exactly what the isel used to
 // hard-code for every spawn.
-function buildSubpSpawn(module StdModule)
+//
+// ⛔ **IT IS THE THIRD DOOR THAT TAKES A COMMAND *LINE*, AND IT WAS THE ONE THAT DID NOT ASK THE SHAPE.**
+// `__gt_process_run` and `__gt_io_read` both route their line through `emitSubpCommandFromLine`; this one
+// stored the raw bytes into `SubpReqCmdline` and handed them to a core that, under
+// `SubprocessCommandShape.argumentVector`, reads that field as a `char *const argv[]`. MEASURED on
+// arm64-macOS before the fix: `subpSpawn("echo hello")` — and every one of the seven bare-name `subp*`
+// builtins above it — died with SIGSEGV (exit 139) at the spawn itself, because the first eight ASCII bytes
+// of the command were dereferenced as `argv[0]`. The facility table already said `subprocess gives true`
+// there, so nothing refused the program either; `streaming-subprocess`'s POSIX cases are what now hold this
+// door shut.
+function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(SubpSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -7251,7 +7385,10 @@ function buildSubpSpawn(module StdModule)
 	let zeroT = emitConst(module, block: afterCopy, value: 0, ids: ids)
 	let nulAddr = emitBin(module, block: afterCopy, a: cmBuf, b: cmdLen, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: zeroT, valueType: StdType.u8))
-	let req = emitSubpNewRequest(module, block: afterCopy, ids: ids, cmdline: cmBuf)
+	// The line the caller wrote becomes `/bin/sh -c <line>` on a lane whose primitive takes a vector, and
+	// stays exactly itself under the command-line shape — the same one call `__gt_process_run` makes.
+	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
+	let req = emitSubpNewRequest(module, block: afterCopy, ids: ids, cmdline: command)
 	let stdinPipe = emitConst(module, block: afterCopy, value: SubpStdinPipe, ids: ids)
 	emitStoreField(module, block: afterCopy, record: req, offset: SubpReqStdinKind, value: stdinPipe)
 	let collect = emitConst(module, block: afterCopy, value: SubpOutCollect, ids: ids)
@@ -7690,10 +7827,10 @@ end 'buildSubpRelease'
 // which also implies `usesIocp` (the yielding read rides the completion thread + `__io_init`) — so
 // `buildSubpYieldRead` is installed under `usesIocp` alongside `__gt_io_read`, and only the streaming API surface
 // lives here.
-function installSubpRuntime(module StdModule)
+function installSubpRuntime(module StdModule, target Target)
 	buildSubpStrFromBytes(module)
-	buildSubpSpawnCore(module)
-	buildSubpSpawn(module)
+	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target))
+	buildSubpSpawn(module, commandShape: subprocessCommandShape(target))
 	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase)
 	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase)
 	buildSubpWriteLine(module)
@@ -7702,5 +7839,5 @@ function installSubpRuntime(module StdModule)
 	buildSubpRelease(module)
 	// The ATTACHED half rides the same table, the same spawn core and the same release — see
 	// `SubprocessRuntime`'s header for why it is one substrate and not two.
-	installSubprocessRuntime(module)
+	installSubprocessRuntime(module, target: target)
 end 'installSubpRuntime'

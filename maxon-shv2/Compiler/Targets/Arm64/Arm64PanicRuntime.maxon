@@ -36,11 +36,9 @@
 // every user literal, so it APPENDS to `.rdata` — which is why it moves no label id and no pinned
 // prefix (see `specs-shv2/rdata-section.md`).
 function arm64EmitPrintConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
-	let label = registerStringBlob(globalData, bytes: bytes)
-	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(Arm64Register.x0), label: label.toByteArray(), adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: bytes)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 end 'arm64EmitPrintConstant'
-
 
 // ==========================================================================
 // mrt_write_cstr_stderr(x0 = NUL-terminated string)
@@ -296,4 +294,3 @@ export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	chunks.push(buildArm64PrintFrameChunk(globalData))
 	chunks.push(buildArm64WriteStderrChunk(os))
 end 'appendArm64PanicRuntimeChunks'
-

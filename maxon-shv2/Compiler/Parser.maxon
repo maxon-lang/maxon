@@ -45865,13 +45865,22 @@ export type Parser
 			return true
 		end 'exitCode'
 
+		// ⚠⚠ **`domainDeclaringAlias` — THE SAME DOOR THE DIVIDE AND THE DECIMAL RENDERER ASK, AND IT USED
+		// TO BE A SECOND ONE.** X10's note (kept below) retired the file's THIRD copy of the alias walk in
+		// favour of `declaredAliasOfValue`; the two SURVIVING readers were still not one. `domainDeclaringAlias`
+		// is `declaredAliasOfValue` PLUS the alias a cast recorded, and the shift is the other half of the very
+		// question its header names — *"signedness ... selects an INSTRUCTION from the type the program WROTE"*.
+		// Reading the narrower door here made ONE value have two signednesses: MEASURED on this tree, over two
+		// `int(0 to u64.max)` parameters, `let m = a and b` then `m shr 60` filled with the SIGN (18446744073709551608)
+		// while `"{m}"` and `m / 3` on the same `m` both read it UNSIGNED — one value, one declared type, two answers.
+		//
 		// ⚠ **`declaredAliasOfValue`, NOT A SECOND SPELLING OF IT (X10 review).** X10 landed a private
 		// `rangedAliasOfValueType` here — tag-guard on `named`, then `signatures.aliasOf(internedName(
 		// valueNameId(v)))` — whose header said it existed so the shift rule and the division rule
 		// "cannot come to disagree about which alias a value has". It was the file's THIRD copy of that
 		// walk: `declaredAliasOfValue` had already been it since P1.9, statement for statement. Two
 		// spellings of one lookup are the very thing the header was written against.
-		return match self.declaredAliasOfValue(value) 'a'
+		return match self.domainDeclaringAlias(value) 'a'
 			declared(alias) gives rangeIsUnsigned(alias.low)
 			undeclared gives false
 		end 'a'
@@ -48447,10 +48456,81 @@ export type Parser
 		let result = self.mintValue(resultTag, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: left, rhs: right, op: op), range: SourceRange.ofToken(opTok))
 
+		// ⭐ **THE ONE OPERATOR WHOSE RESULT KEEPS ITS OPERANDS' RANGED ALIAS.** See
+		// `bitAndInheritedAlias` — and `rangeIsClosedUnderBitAnd`, which is the proof that makes the
+		// inheritance a fact about the VALUE rather than a label on it.
+		self.recordValueDeclaredAlias(result, alias: self.bitAndInheritedAlias(op, lhs: lhs, rhs: rhs, resultTag: resultTag))
+
 		self.recordBinOpFold(result, lhs: lhs, rhs: rhs, op: op, resultTag: resultTag)
 
 		return result
 	end 'emitBinOpOverCheckedOperands'
+
+	// ⭐⭐ **THE RANGED ALIAS `a and b` INHERITS FROM ITS OPERANDS — and `and` is the ONLY operator that
+	// hands one down.** `and` can only CLEAR bits, so the result is bounded by each operand and the AND of
+	// two `MachineWord`s genuinely IS a `MachineWord`: `rangeIsClosedUnderBitAnd` states the proof, and
+	// names the two low bounds it does not hold for.
+	//
+	// ⚠ **WITHOUT IT, `let imm = value and elementMask` MINTS A VALUE WITH NO TYPE — AND EVERY LATER
+	// QUESTION ABOUT ITS SIGNEDNESS ANSWERS "SIGNED".** That is not one wrong instruction, it is three, and
+	// all three were MEASURED on this tree over two `int(0 to u64.max)` parameters: `imm shr 16` filled with
+	// the SIGN (arm64 `asrv`, x64 `sar`, wasm `i64.shr_s`), `imm / 3` divided SIGNED, and `"{imm}"` printed
+	// `-1` where the runnable oracle prints `18446744073709551615`. The first of those is what mis-encoded
+	// AArch64's own logical-immediate encoder — `arm64EncodeLogicalImm` is exactly this expression, and its
+	// `imms` came out 63 (the RESERVED encoding) instead of 47.
+	//
+	// It reads `valueDenotedAlias` of each operand rather than the tag column, so an operand that acquired
+	// its alias through an `as` cast hands it down too — and an operand that is a merge nothing proved hands
+	// down nothing. See `aliasClosedUnderBitAnd` for why that door and not the signedness one: the answer is
+	// RECORDED, and a recorded alias is spent as a proof.
+	//
+	// The gate is the BITWISE reading (`tagIsInteger(resultTag)`), not the operator alone: `wordOpResultTag`
+	// answers `boolean` for `flagA and flagB`, and a bool carries no ranged-integer identity to inherit.
+	function bitAndInheritedAlias(op MaxonBinOp, lhs ValueId, rhs ValueId, resultTag ValueTypeTag) returns DeclaredAlias
+		if op != MaxonBinOp.bitAnd or not tagIsInteger(resultTag) 'notABitwiseAnd'
+			return DeclaredAlias.undeclared
+		end 'notABitwiseAnd'
+
+		let fromLeft = self.aliasClosedUnderBitAnd(lhs)
+
+		return match fromLeft 'l'
+			declared gives fromLeft
+			undeclared gives self.aliasClosedUnderBitAnd(rhs)
+		end 'l'
+	end 'bitAndInheritedAlias'
+
+	// One operand's contribution to the rule above: the alias it declares, WITHHELD unless that alias is
+	// closed under `and`. A float alias is withheld too — `and` has no float reading at all, so a `named`
+	// float value reaching here would be handing down an identity its own operator does not admit.
+	//
+	// ⛔⛔ **`valueDenotedAlias`, NOT `domainDeclaringAlias` — WHAT THIS FUNCTION HANDS BACK IS WRITTEN INTO
+	// THE RECORDED-ALIAS MAP, AND THAT MAP IS SPENT AS A PROOF (G14; caught by MAC's review).** The two
+	// readers of `valueDeclaredAlias` do not carry the same burden: `domainDeclaringAlias` answers a
+	// DECLARED-TYPE question (signedness — which instruction the type the program WROTE selects), and it
+	// deliberately does NOT withhold a merge nothing proved. `valueDenotedAlias` answers the PROOF question,
+	// and withholds one. Reading the declared-type door here and then RECORDING the answer laundered an
+	// unproven phi's alias into a recorded-cast alias — which `valueDenotedAlias` takes AHEAD of
+	// `provenAliasOfValue`, so the withhold was not merely bypassed, it was outranked.
+	//
+	// MEASURED on this tree, the `a-merged-count-is-not-proven-around-a-loop` program with the count
+	// laundered through `and`: `n` is a phi declaring `int(0 to 63)` and holding **71**, and `m = n and 127`
+	// holds the SAME 71 — yet `1 shl n` answered the saturated **0** while `1 shl m` answered **128**, the
+	// hardware's masked `1 shl 7`. One value, one declared type, two answers, differing only by an `and`
+	// that changed nothing. Pinned by `an-and-does-not-launder-an-unproven-merge-into-a-proof`.
+	//
+	// ⭐ It costs the rule NOTHING it was landed for. A parameter is guarded at the callee's entry and a
+	// cast site guards its result, so every operand the encoder case is built from — `arm64EncodeLogicalImm`'s
+	// `value and elementMask`, and `bitwise-operators.md`'s `andThenShift`/`andThenDivide` — is proven and
+	// still hands its alias down. Only a merge nothing proved is withheld, and a withheld operand leaves the
+	// `and` result exactly where it was before this rule existed: a bare `int`.
+	function aliasClosedUnderBitAnd(value ValueId) returns DeclaredAlias
+		let declaring = self.valueDenotedAlias(value)
+
+		return match declaring 'a'
+			undeclared gives DeclaredAlias.undeclared
+			declared(alias) gives declaring if not aliasIsFloat(alias) and rangeIsClosedUnderBitAnd(alias.low) else DeclaredAlias.undeclared
+		end 'a'
+	end 'aliasClosedUnderBitAnd'
 
 	// Fold, when the parser holds both operands — so `x shl 63 + 1` is a count of 64 and not an unknown.
 	// RECORDED, not rewritten: the fold's answer lands in the parser's CONSTANT DOMAIN, where diagnostics
@@ -57537,12 +57617,16 @@ export type Parser
 		if methodTok.value.equals(ManagedFileOpenReadMethod) 'openRead'
 			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenReadName, methodTok: methodTok, range: range)
 		end 'openRead'
-		// ⭐ **TWO METHODS, ONE CALLEE.** `openWriteExecutable`'s only difference in either reference is a Unix
-		// 0755 permission bit, and shv2's file IO is host-only Windows by the R4.1 ruling — so there is
-		// nothing for a second entry point to carry. A POSIX lane splits them on the day it exists.
-		if methodTok.value.equals(ManagedFileOpenWriteMethod) or methodTok.value.equals(ManagedFileOpenWriteExecutableMethod) 'openWrite'
+		// ⭐ **TWO METHODS, TWO CALLEES (MAC4).** This arm used to route both spellings to
+		// `__mf_open_write`, on the argument that *"`openWriteExecutable`'s only difference in either
+		// reference is a Unix 0755 permission bit, and shv2's file IO is host-only Windows"*. A POSIX lane
+		// exists now, so the permission bit is observable and the two are two calls.
+		if methodTok.value.equals(ManagedFileOpenWriteMethod) 'openWrite'
 			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenWriteName, methodTok: methodTok, range: range)
 		end 'openWrite'
+		if methodTok.value.equals(ManagedFileOpenWriteExecutableMethod) 'openWriteExecutable'
+			return try self.parseManagedFileOpen(func, callee: ManagedFileOpenWriteExecutableName, methodTok: methodTok, range: range)
+		end 'openWriteExecutable'
 		if methodTok.value.equals(ManagedFileExistsMethod) 'exists'
 			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ManagedFileExistsName, args: singletonArgs(path), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)

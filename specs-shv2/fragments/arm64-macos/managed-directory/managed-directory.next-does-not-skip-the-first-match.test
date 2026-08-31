@@ -1,0 +1,633 @@
+// Test: managed-directory.next-does-not-skip-the-first-match
+export enum ProbeError implements Error
+	failed
+end 'ProbeError'
+
+function writeFile(path String) throws ProbeError
+	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+		throw ProbeError.failed
+	end 'openFail'
+	try f.write("x".toByteArray().managed) otherwise 'writeFail'
+		f.close()
+		throw ProbeError.failed
+	end 'writeFail'
+	f.close()
+end 'writeFile'
+
+function main() returns ExitCode
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_first_match"
+	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
+		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
+	end 'needCreate'
+	try writeFile("{dirPath}/alpha.txt") otherwise return 2
+	try writeFile("{dirPath}/beta.txt") otherwise return 2
+
+	var dir = try __ManagedDirectory.openSearch("{dirPath}/*.txt".toByteArray().managed) otherwise return 3
+	var count = 0
+	while (try dir.next() otherwise return 4) != 0 'loop'
+		count = count + 1
+	end 'loop'
+	dir.close()
+
+	try __ManagedFile.delete("{dirPath}/alpha.txt".toByteArray().managed) otherwise return 5
+	try __ManagedFile.delete("{dirPath}/beta.txt".toByteArray().managed) otherwise return 5
+	if count == 2 'both'
+		return 42
+	end 'both'
+	return count
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @writeFile {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_open_write
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.leaRdata x0, __str_rec_6  ; "x"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __mf_write
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_close
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_destruct
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_close
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_destruct
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot9, x28
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_7  ; "temp"
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_create
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __md_exists
+    arm64.eor x21, x0, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cbnz x21, noScratchRoot
+    arm64.b ifcont#4
+  noScratchRoot:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  ifcont#4:
+    arm64.b trycont
+  tryok#1:
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.leaRdata x19, __str_rec_8  ; "temp/test_md_first_match"
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_exists
+    arm64.eor x21, x0, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.cbnz x21, needCreate
+    arm64.b ifcont#9
+  needCreate:
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_create
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#7:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.b ifcont#9
+  ifcont#9:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_9  ; "/alpha.txt"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x26, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl writeFile
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#11
+    arm64.b tryok#10
+  tryerr#11:
+    arm64.movImm x19, 2
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#10:
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_10  ; "/beta.txt"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x26, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl writeFile
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#13
+    arm64.b tryok#12
+  tryerr#13:
+    arm64.movImm x19, 2
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#12:
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_11  ; "/*.txt"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x26, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_open_search
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#15
+    arm64.b tryok#14
+  tryerr#15:
+    arm64.movImm x19, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#14:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.movRegReg x0, x21
+    arm64.bl __md_next
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#18
+    arm64.b tryok#17
+  tryerr#18:
+    arm64.movImm x19, 4
+    arm64.movRegReg x0, x21
+    arm64.bl __md_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#17:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x21
+    arm64.bl __md_close
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_9  ; "/alpha.txt"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x26, x23, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x22, x28, x23
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x22, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl String.toByteArray
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_delete
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#22
+    arm64.b tryok#21
+  tryerr#22:
+    arm64.movImm x19, 5
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __md_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#21:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_10  ; "/beta.txt"
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x25, x19, x24
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x27, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x19, x24
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.movRegReg x0, x26
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_delete
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#24
+    arm64.b tryok#23
+  tryerr#24:
+    arm64.movImm x20, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __md_destruct
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#23:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.cmp x20, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, both
+    arm64.b ifcont#26
+  both:
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x21
+    arm64.bl __md_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  ifcont#26:
+    arm64.movRegReg x0, x21
+    arm64.bl __md_destruct
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_13  ; "panic at managed-directory.next-does-not-skip-the-first-match.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+}

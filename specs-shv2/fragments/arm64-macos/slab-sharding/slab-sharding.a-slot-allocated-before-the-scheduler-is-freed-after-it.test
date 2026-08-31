@@ -1,0 +1,520 @@
+// Test: slab-sharding.a-slot-allocated-before-the-scheduler-is-freed-after-it
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+typealias Integer = int(i64.min to i64.max)
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(48)
+	for i in 0 upto 48 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function work() returns Integer
+	var acc = 0
+	for j in 0 upto 200 'alloc'
+		let tmp = "post-scheduler-{j}"
+		if not tmp.isEmpty() 'nonEmpty'
+			acc = acc + 1
+		end 'nonEmpty'
+	end 'alloc'
+	return acc
+end 'work'
+
+function main() returns ExitCode
+	// Allocated with no processor: the raw row.
+	var early = Bufs.create()
+	for k in 0 upto 3000 'preScheduler'
+		early.push(build(k as Seed))
+	end 'preScheduler'
+
+	// The scheduler comes up here, and main becomes P[0].
+	let p = async work()
+	if await p != 200 'workLost'
+		return 1
+	end 'workLost'
+
+	// Read the pre-scheduler population back, THEN drop it — every one of these frees is of a
+	// slot on a span that no processor owns, with a scheduler running.
+	var bad = 0
+	for (iter, b) in early.withIterator() 'check'
+		let seed = iter.index()
+		if b.count() != 48 'length'
+			bad = bad + 1
+		end 'length'
+		for i in 0 upto 48 'bytes'
+			let got = try b.get(i) otherwise return 2
+			if got != ((seed + i) mod 251) 'value'
+				bad = bad + 1
+			end 'value'
+		end 'bytes'
+	end 'check'
+
+	early = Bufs.create()
+
+	if bad != 0 'corrupted'
+		return 3
+	end 'corrupted'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @build {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#6
+    arm64.b __rc_chk#7
+  __rc_chk#7:
+    arm64.cmp x19, 65536
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#6
+    arm64.b __rc_ok#5
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at slab-sharding.a-slot-allocated-before-the-scheduler-is-freed-after-it.test:8: Range check failed: value outside typealias 'Seed'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#5:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 48
+    arm64.movRegReg x0, x20
+    arm64.bl Array.reserve
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x21, 48
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b forexit
+  fill:
+    arm64.add x0, x19, x21
+    arm64.movImm x1, 251
+    arm64.sdiv x16, x0, x1
+    arm64.msub x1, x16, x1, x0
+    arm64.cmp x1, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#9
+    arm64.b __rc_chk#10
+  __rc_chk#10:
+    arm64.cmp x1, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#9
+    arm64.b __rc_ok#8
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at slab-sharding.a-slot-allocated-before-the-scheduler-is-freed-after-it.test:12: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#8:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @work {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 200
+    arm64.cset x0, lt
+    arm64.cbnz x0, alloc
+    arm64.b forexit
+  alloc:
+    arm64.leaRdata x0, __str_rec_1  ; "post-scheduler-"
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.bl __int_to_string
+    arm64.movRegReg x24, x0
+    arm64.add x25, x22, x24
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x27, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x21, x24
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl String.isEmpty
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, nonEmpty
+    arm64.b critsplit
+  nonEmpty:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x20, 3000
+    arm64.cset x0, lt
+    arm64.cbnz x0, preScheduler
+    arm64.b forexit#4
+  preScheduler:
+    arm64.movRegReg x0, x20
+    arm64.bl build
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.b forstep#3
+  forstep#3:
+    arm64.add x20, x20, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.cmp x0, 200
+    arm64.cset x0, ne
+    arm64.cbnz x0, workLost
+    arm64.b ifcont#6
+  workLost:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl Array.withIterator
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit#34
+    arm64.b forempty
+  critsplit#34:
+    arm64.b forhdr#7
+  forhdr#7:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, check
+    arm64.b forexit#11
+  check:
+    arm64.leaRdata x1, __layout_WithIterIterator_ArrayIterator_ByteArray_ByteArray
+    arm64.leaRdata x2, __witness_ArrayIterator_ByteArray.Iterator
+    arm64.movRegReg x0, x21
+    arm64.bl WithIterIterator.current
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x22 + 8]
+    arm64.bl ArrayIterator.index
+    arm64.movRegReg x24, x0
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x0, 48
+    arm64.cset x0, ne
+    arm64.cbnz x0, length
+    arm64.b critsplit#35
+  length:
+    arm64.add x0, x20, 1
+    arm64.b ifcont#13
+  critsplit#35:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont#13
+  ifcont#13:
+    arm64.movImm x20, 0
+    arm64.movRegReg x25, x0
+    arm64.b forhdr#14
+  forhdr#14:
+    arm64.cmp x20, 48
+    arm64.cset x0, lt
+    arm64.cbnz x0, bytes
+    arm64.b forexit#17
+  bytes:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x20, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#31
+  __im_load#31:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.arm64AddLsl x0, x0, x20, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x20, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#32
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.add x0, x0, x20
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x23 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty
+    arm64.b critsplit#37
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b critsplit#38
+  critsplit#38:
+    arm64.b __im_cont
+  critsplit#37:
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct___Tuple2.ArrayIterator_ByteArray.Array_Byte
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_ByteArray_ByteArray
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  tryok:
+    arm64.add x1, x24, x20
+    arm64.movImm x2, 251
+    arm64.sdiv x16, x1, x2
+    arm64.msub x1, x16, x2, x1
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, value
+    arm64.b critsplit#36
+  value:
+    arm64.add x0, x25, 1
+    arm64.b ifcont#21
+  critsplit#36:
+    arm64.movRegReg x0, x25
+    arm64.b ifcont#21
+  ifcont#21:
+    arm64.b forstep#16
+  forstep#16:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x25, x0
+    arm64.b forhdr#14
+  forexit#17:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct___Tuple2.ArrayIterator_ByteArray.Array_Byte
+    arm64.b forstep#10
+  forstep#10:
+    arm64.leaRdata x1, __witness_ArrayIterator_ByteArray.Iterator
+    arm64.movRegReg x0, x21
+    arm64.bl WithIterIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.movRegReg x20, x25
+    arm64.b forhdr#7
+  forexit#11:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_WithIterIterator_ArrayIterator_ByteArray_ByteArray
+    arm64.b forjoin
+  forempty:
+    arm64.b forjoin
+  forjoin:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, corrupted
+    arm64.b ifcont#24
+  corrupted:
+    arm64.movImm x19, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#24:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+}

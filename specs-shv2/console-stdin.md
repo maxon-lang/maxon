@@ -83,19 +83,22 @@ Once `eofSeen` is set, `fillOnce` returns without a syscall, so repeated `readLi
 each throw `ConsoleError.endOfFile` rather than the second one blocking, faulting, or answering a
 stale buffer. `repeat-reads-at-eof-are-idempotent` drives it three times.
 
-### The substrate is x64-windows only at this rung
+### The substrate is x64-windows and arm64-macOS at this rung
 
-`__Builtins.readStdin` lowers to `__con_read_stdin`, which reads the console handle through Win32
-imports (`GetStdHandle` + `ReadFile`). It joins the file, directory and command-line families under
-`SemanticCheck.calleeNeedsWin32Substrate`, so a program that reaches it on another target is
-refused with `E3104` at the call's own span rather than panicking inside a backend — see
-`Compiler/Runtime/ConsoleRuntime.maxon`'s header for why a WASI `fd_read` lowering is a rung and
-not a lowering.
+`__Builtins.readStdin` lowers to `__con_read_stdin`, which fetches the standard handle and reads it —
+`GetStdHandle` + `ReadFile` on Windows, and on arm64-macOS the same two ops with no handle call at all:
+`osStdHandle` becomes ONE subtraction (Win32's three selectors and POSIX's three descriptors are
+consecutive runs) and the read is `read(2)`. It shares the `TargetFacilities` gate with the file,
+directory and command-line families, so a program that reaches it on a lane that has neither is refused
+with `E3104` at the call's own span rather than panicking inside a backend — see
+`Compiler/Runtime/ConsoleRuntime.maxon`'s header for why a WASI `fd_read` lowering is still a rung: a
+component holds an input-stream RESOURCE, which is neither a handle nor a descriptor, so there is no
+arithmetic that produces one.
 
 ## Tests
 
 <!-- test: console-stdin.read-line-at-eof-throws -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The first `readLine()` on a closed stdin throws `ConsoleError.endOfFile`. If it instead SUCCEEDED
 with an empty line — the failure a NUL-scanned length would produce — the program falls through to
 `return 1`.
@@ -114,7 +117,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.error.a-non-exported-method-is-refused -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE ONE CASE IN THE SUITE THAT ASKS VISIBILITY OF AN INSTANCE METHOD.** `eof()` carries no
 `export`, and a user program holding a `Stdin` value is refused it — the fact the section above
 MEASURED under both compilers and left unpinned. It is pinned here because the method-dispatch door
@@ -131,7 +134,7 @@ error E3008: <fragment>:4:20: function 'Stdin.eof' is not exported
 ```
 
 <!-- test: console-stdin.a-second-reader-also-sees-eof -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `Stdin` is STATEFUL and its state is PER INSTANCE: a second `Console.stdin()` is a fresh reader with
 its own empty buffer and its own `eofSeen`, so it asks the OS itself and reaches the same answer.
 That is what makes the module's own warning — *"constructing a new one silently drops anything
@@ -159,7 +162,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.repeat-reads-at-eof-are-idempotent -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `fillOnce` returns without a syscall once `eofSeen` is set, so the second and third `readLine()`
 throw exactly as the first did. A reader that re-issued the read would still be correct here; one
 that answered a stale buffer, or that stopped throwing, would not.
@@ -185,7 +188,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-answers-zero-bytes-at-eof -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The intrinsic under the module, driven directly: EOF is a length of 0, not a failure and not a
 1-byte NUL buffer. A capacity leaking into the length would answer 64.
 ```maxon
@@ -202,7 +205,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-result-is-owned -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Each call answers a FRESH owned `__ManagedMemory`, dropped at the end of the statement that bound
 it. A hundred of them in a loop is the leak gate's shape: a missing drop is a non-zero mm balance
 at exit, which the runtime reports as exit 101 rather than as a wrong number.
@@ -223,7 +226,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-takes-a-ranged-count -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The byte budget may be spelled with a RANGED typealias, which carries the `named` tag until
 TypeResolution collapses it. The narrow `tag == integer` test would refuse this argument by naming
 one type twice; the operand check is `tagIsIntegral`, which is the measured-correct predicate for
@@ -270,9 +273,9 @@ error E3005: <fragment>:3:20: '__Builtins.readStdin' requires a int, but its arg
 
 <!-- test: console-stdin.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The stdin substrate is x64-windows only at this rung. On any other target the call is refused at
-its source span with `E3104`, naming the runtime entry that has no lowering there — never a panic
-from inside the wasm backend.
+The stdin substrate is x64-windows and arm64-macOS at this rung. On a target with neither the call is
+refused at its source span with `E3104`, naming the runtime entry that has no lowering there — never a
+panic from inside the wasm backend.
 ```maxon
 function main() returns ExitCode
 	let mm = __Builtins.readStdin(64)

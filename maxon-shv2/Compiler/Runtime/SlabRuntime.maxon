@@ -265,9 +265,16 @@ let SlabStateMetaFreeOffset = 16 as ByteOffset
 // committed by the main thread while it is still the only one. That is the same argument v1 makes for its
 // explicit `__slab_init()`, made from the lazy commit shv2 already had rather than from a new entry point.
 //
-// The 40 bytes are RESERVED on every lane, sharded or not, so the layout — and `checkSlabRuntimeGeometry`'s
-// arithmetic over it — is one thing rather than two. Only the `osLockInit`/`osLockEnter` OPS are build-time
-// gated; those are the half that does not lower on wasm or arm64.
+// `OsLockBytes` are RESERVED on every lane, sharded or not, so the layout — and `checkSlabRuntimeGeometry`'s
+// arithmetic over it — is one thing rather than two. ⚠ That constant is the MAXIMUM over the targets this
+// compiler serves (64, a Darwin `pthread_mutex_t`) rather than any one target's own lock size, and
+// `MmRuntime.OsLockBytes` carries why: making it target-dependent would fork THIS offset, a struct layout
+// every allocation in the program is addressed through, to save 24 bytes on one lock per family.
+//
+// Only the `osLockInit`/`osLockEnter` OPS are build-time gated, and that half has shrunk: wasm refuses them
+// still, but arm64-macOS lowers all three (`pthread_mutex_init` with a RECURSIVE attribute — see
+// `Arm64DarwinRuntime.buildArm64DarwinLockInitChunk` for why the attribute is load-bearing and how its
+// absence was measured, as a hang in this very function's refill path).
 //
 // ⛔⛔ **THE LOCK ORDER IS `__sched_lock` → `__slab_lock`, AND IT HOLDS BECAUSE THIS SIDE NEVER TAKES THE
 // OTHER ONE.** The scheduler allocates while holding its run-queue lock (`__gt_spawn`, `__gt_init`), so that
@@ -276,7 +283,7 @@ let SlabStateMetaFreeOffset = 16 as ByteOffset
 // makes the allocator call into `GtRuntime` while holding this lock introduces a deadlock**, which is why
 // the direction is written down here rather than left to be re-derived.
 let SlabStateLockOffset = 24 as ByteOffset
-let SlabStateMcentralOffset = ((SlabStateLockOffset as ParsedInt) + CriticalSectionBytes) as ByteOffset
+let SlabStateMcentralOffset = ((SlabStateLockOffset as ParsedInt) + OsLockBytes) as ByteOffset
 
 // The value the state `.data` word holds until the region is committed. Named because it is READ in two
 // places (the probe below) and WRITTEN in one (`buildSlabStateBase`'s publishing store), and a bare 0 at

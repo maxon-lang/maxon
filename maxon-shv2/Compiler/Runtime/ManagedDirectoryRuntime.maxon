@@ -4,9 +4,15 @@
 // `ManagedFileRuntime`'s header records for the file family: `run_program compiler=csharp` crashes (`E9001`)
 // on a standalone `__Managed*` call, so the ten committed cases are the whole of what can be asked.
 //
-// ⭐ **HOST-ONLY BY THE SAME RULING (2026-07-30).** `x64-windows` is real; every other target refuses at the
-// call site with the EXISTING `E3104 targetUnsupportedConstruct` via `calleeNeedsWin32Substrate`, which
-// matches on the `__md_` PREFIX — so a method added later is gated by construction rather than by memory.
+// ⭐⭐ **TWO LANES AS OF MAC5** — `x64-windows` and arm64-macOS, whose `FindFirstFileA` is emulated over
+// `opendir`/`readdir`/`fnmatch` because Win32 takes a GLOB where POSIX takes a DIRECTORY
+// (`Arm64DarwinRuntime.buildArm64DarwinDirFindFirstChunk` carries the split and the one semantic difference
+// the corpus does not reach). This paragraph used to read "HOST-ONLY BY THE SAME RULING (2026-07-30)"; the
+// roster it points at is now `TargetFacilities.targetProvidesFacility`'s `managedDirectory` row.
+//
+// ⚠ Everything below is unchanged by that. A target that provides NEITHER still refuses at the call site
+// with the EXISTING `E3104 targetUnsupportedConstruct`, which matches on the `__md_` PREFIX — so a method
+// added later is gated by construction rather than by memory.
 //
 // ---
 //
@@ -104,7 +110,9 @@ let DirectoryIterationComplete = 0 as ParsedInt
 // not the stdlib**: both references filter inside `next` (bootstrap `:2433-2451`, v1 `runtime.std:3093-3122`),
 // and the spec states it as the method's contract ("The runtime owns all dot-filtering, so `filename()` never
 // returns `.` or `..`").
-let DotByte = 0x2E as ParsedInt
+// ⚠ **EXPORTED FOR THE POSIX LANE** — `Arm64DarwinRuntime` spells the CURRENT DIRECTORY `"."` when a
+// search pattern carries no `/`, which is the same character this filter tests for.
+export let DotByte = 0x2E as ParsedInt
 
 // The NUL that ends a cstring — what ends `cFileName`, what tells `.` from `.x` and `..` from `..x`, what
 // `emitCStringLength` walks to, and what `CommandLineRuntime` terminates each scanned argument with.
@@ -114,11 +122,17 @@ export let NulByte = 0 as ParsedInt
 
 // `ERROR_NO_MORE_FILES` — the ONE `GetLastError` reading that makes a FALSE from `FindNextFileA` an ordinary
 // end of iteration rather than a failure. Everything else is a real error and throws `nextFailed`.
-let ErrorNoMoreFiles = 18 as ParsedInt
+// ⚠ **EXPORTED FOR THE LANE THAT MUST *PRODUCE* IT (MAC5).** `FindNextFileA` reports end-of-iteration by
+// failing with this code; `readdir` reports it by answering NULL with `errno` UNCHANGED, so a POSIX lane
+// has to synthesize the number — `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` maps a cleared
+// `errno` onto exactly this, and reads it from here rather than transcribing it.
+export let ErrorNoMoreFiles = 18 as ParsedInt
 
 // `INVALID_FILE_ATTRIBUTES` — what `GetFileAttributesA` answers for a path that names nothing. It is the
 // full DWORD, so it is compared against a DWORD-masked load rather than against -1.
-let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
+// ⚠ **EXPORTED FOR THE SAME REASON** — `GetFileAttributesA` answers it and a POSIX lane's `stat` failure
+// must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
+export let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
 
 // ⭐ **`MAX_PATH` — THE FIRST BUFFER EVERY Win32 PATH FILL IN THIS COMPILER ASKS FOR.** `GetCurrentDirectoryA(n, buf)`
 // answers three different things: `0` is failure, `< n` is "written, NUL included", and `>= n` is "too
@@ -133,6 +147,16 @@ let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
 // and nothing would make the other follow. The two loops differ in their RETRY POLICY, not in what
 // `MAX_PATH` is.
 export let MaxPathBytes = 260 as ParsedInt
+
+// ⭐ **THE OTHER HALF OF THAT POLICY: HOW MUCH BIGGER THE NEXT ATTEMPT IS.** A left shift of one — the
+// buffer doubles — which bounds the number of attempts at log₂(path length / 260) and the wasted bytes at
+// under one buffer's worth.
+//
+// ⚠ It lived in `ProcessRuntime` while only `__proc_exe_path` grew. `__md_current_path` grows too since
+// MAC5 (`getcwd` cannot name a required size — see that builder), so it moved beside `MaxPathBytes`: the
+// first attempt's size and the growth step are ONE policy, and this file is where the first half already
+// was.
+export let PathGrowthShift = 1 as ParsedInt
 
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the enum
@@ -397,7 +421,7 @@ function buildManagedDirectoryOpenSearch(module StdModule)
 	emitRawFree(module, block: failed, ptr: findBlock, ids: ids)
 	emitDirectoryErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedDirectoryOpenSearchFailedFlag, ids: ids)
 
-	emitStoreField(module, block: opened, record: findBlock, offset: FindBlockHandleOffset, value: search)
+	emitStoreHandleSlot(module, block: opened, record: findBlock, handleOffset: FindBlockHandleOffset, handle: search, ids: ids)
 	let pending = emitConst(module, block: opened, value: FindEntryPending, ids: ids)
 	emitStoreField(module, block: opened, record: findBlock, offset: FindBlockPendingOffset, value: pending)
 
@@ -574,9 +598,12 @@ function buildManagedDirectoryClose(module StdModule)
 	let box = 0 as ValueId
 
 	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
-	let handle = emitLoadField(module, block: entry, record: findBlock, offset: FindBlockHandleOffset, ids: ids)
+	let slot = emitLoadField(module, block: entry, record: findBlock, offset: FindBlockHandleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: ManagedDirectoryClosedHandle, ids: ids)
-	let alreadyClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	// `entry` dominates `doClose`, so the decoded handle is simply in scope there — the dominance argument
+	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for its own.
+	let handle = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
 
 	emitIoPark(module, block: doClose, operation: GtIoOperation.fileExists, ids: ids)
@@ -723,71 +750,68 @@ function buildManagedDirectoryCreate(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDirectoryCreate'
 
-// ⭐⭐ **`__md_current_path() -> (arrRec, flag)` — `GetCurrentDirectoryA` WITH ITS GROW-AND-RETRY.**
+// ⭐⭐ **`__md_current_path() -> (arrRec, flag)` — THE WORKING DIRECTORY, THROUGH A GROW-AND-RETRY LOOP.**
 //
 // The API's answer means three different things (see `MaxPathBytes`), so the body is: try `MAX_PATH`; if it
-// fits, copy out; if the OS names a larger size, free and try again at exactly that size; if either attempt
-// answers 0, free and throw `currentPathFailed`.
+// fits, copy out; if it did not, DOUBLE and try again; if any attempt answers 0, free and throw
+// `currentPathFailed`.
 //
-// ⚠ **THE RETRY IS STRAIGHT-LINE RATHER THAN A LOOP, AND ITS THIRD EDGE IS A REFUSAL RATHER THAN DEAD
-// CODE.** The second buffer is the size the OS itself named, so a second "too small" would be the OS
-// contradicting its own answer — not something this code can rule out, and not something it may paper over
-// either, because the buffer's contents in that case are UNDEFINED. So attempt 2's "did not fit" edge goes
-// to the FAILURE exit: a thrown `currentPathFailed` rather than a copy out of an undefined buffer. The
-// bootstrap loops instead (`X86CodeEmitter.Runtime.cs:4088-4110`), which a `goto` makes free for it; here a
-// loop would need the buffer AND its size carried through a merge for an iteration count that is one in
-// every reachable case.
+// ⛔⛔ **IT WAS A STRAIGHT-LINE PAIR OF ATTEMPTS AND IT COULD NOT STAY ONE, BECAUSE THE SECOND ATTEMPT'S
+// SIZE HAS NO POSIX SOURCE (MAC5).** `GetCurrentDirectoryA` answers the REQUIRED size when the buffer is
+// too small, which is what made two attempts provably enough — the second buffer was the size the OS
+// itself named. `getcwd(buf, n)` names nothing: it answers the buffer or NULL with `ERANGE`, and there is
+// no call that reports the length of a working directory. So a lane serving this op can only report "too
+// small", and a retry at a size nobody named must come from the CALLER doubling. Two honest places to put
+// that doubling existed and this is the one the op's own contract demands: `StdOp.osDirCurrentPath` states
+// that the retry lives in Std *precisely so a backend does not own a buffer policy*, so hiding a doubling
+// loop inside the Darwin chunk would be the backend growing an allocation strategy the Std tier is holding
+// for it.
+//
+// ⭐ It is now `ProcessRuntime.buildProcessExecutablePath`'s loop exactly — same carried pair, same shared
+// three-way verdict, same doubling constant — and the two differ only in what "unavailable" means: an
+// executable path answers the empty string, a working directory THROWS. That convergence is the point:
+// there was one retry policy written two ways, and the Win32-only half of the difference has gone.
 //
 // ⚠ The raw cstring buffer is a scratch allocation this function owns end to end: it is freed before EVERY
-// exit, the throwing ones included, and what the caller receives is the independent `__ManagedMemory` copy.
+// exit, the throwing one included, and what the caller receives is the independent `__ManagedMemory` copy.
 function buildManagedDirectoryCurrentPath(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryCurrentPathName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var retry = module.addBlock(func, label: b"mdretry")
+	var attempt = module.addBlock(func, label: b"mdattempt")
+	var fitTest = module.addBlock(func, label: b"mdcpfit")
+	var grow = module.addBlock(func, label: b"mdgrow")
 	var failed = module.addBlock(func, label: b"mdfail")
 	var copyOut = module.addBlock(func, label: b"mdcopy")
 
-	// The buffer that reaches `retry`/`copyOut`/`failed` is one of two, so it rides a block-arg at each —
-	// the phi model is the only way a value crosses a merge at this tier, and giving `retry` one as well is
-	// what lets ONE verdict helper serve both attempts.
-	let doomed = ids.mint()
-	failed.blockArgs.push(IrBlockArg.create(doomed, argType: StdType.i64))
+	// The buffer and its capacity are the loop's carried pair — the phi model is the only way a value
+	// crosses a merge at this tier, and `attempt` is the only block with more than one predecessor.
 	let buffer = ids.mint()
-	copyOut.blockArgs.push(IrBlockArg.create(buffer, argType: StdType.i64))
-	let outgrown = ids.mint()
-	retry.blockArgs.push(IrBlockArg.create(outgrown, argType: StdType.i64))
+	let capacity = ids.mint()
+	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))
 
-	// Attempt 1, at MAX_PATH.
 	let firstSize = emitConst(module, block: entry, value: MaxPathBytes, ids: ids)
 	let firstBuf = emitRawAlloc(module, block: entry, byteCount: firstSize, ids: ids)
-	let firstLen = ids.mint()
-	emitIoPark(module, block: entry, operation: GtIoOperation.fileExists, ids: ids)
-	module.appendOp(entry, op: StdOp.osDirCurrentPath(firstLen, bufLenId: firstSize, bufPtrId: firstBuf))
-	// This attempt's buffer rides every exit as a block arg — the shared verdict classifies, the caller says
-	// what crosses each merge (see `emitFilledBufferVerdict`'s seam paragraph).
-	var firstFit = module.addBlock(func, label: b"mdcpfit")
-	emitFilledBufferVerdict(module, block: entry, check: firstFit, written: firstLen, capacity: firstSize, whenRefused: failed, whenFits: copyOut, whenTooSmall: retry, ids: ids)
-	entry.branchEdges.push(BranchEdge.create(failed.id, argIds: argsOf(firstBuf)))
-	firstFit.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(firstBuf)))
-	firstFit.branchEdges.push(BranchEdge.create(retry.id, argIds: argsOf(firstBuf)))
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+	entry.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(firstBuf, second: firstSize)))
 
-	// Attempt 2, at exactly the size the OS named (which INCLUDES the NUL, so it is one more than the path).
-	// `firstLen` is defined in `entry`, which dominates this block.
-	emitRawFree(module, block: retry, ptr: outgrown, ids: ids)
-	let secondBuf = emitRawAlloc(module, block: retry, byteCount: firstLen, ids: ids)
-	let secondLen = ids.mint()
-	module.appendOp(retry, op: StdOp.osDirCurrentPath(secondLen, bufLenId: firstLen, bufPtrId: secondBuf))
-	// Attempt 2's "did not fit" edge goes to the FAILURE exit — see this builder's header for why a second
-	// "too small" is the OS contradicting itself and must not be copied out of.
-	var secondFit = module.addBlock(func, label: b"mdcpfit")
-	emitFilledBufferVerdict(module, block: retry, check: secondFit, written: secondLen, capacity: firstLen, whenRefused: failed, whenFits: copyOut, whenTooSmall: failed, ids: ids)
-	retry.branchEdges.push(BranchEdge.create(failed.id, argIds: argsOf(secondBuf)))
-	secondFit.branchEdges.push(BranchEdge.create(copyOut.id, argIds: argsOf(secondBuf)))
-	secondFit.branchEdges.push(BranchEdge.create(failed.id, argIds: argsOf(secondBuf)))
+	// ⚠ `fitTest`, `grow`, `failed` and `copyOut` carry NO block args and take no edge arguments: `attempt`
+	// dominates all four, so `buffer`, `capacity` and `written` are simply in scope.
+	let written = ids.mint()
+	emitIoPark(module, block: attempt, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(attempt, op: StdOp.osDirCurrentPath(written, bufLenId: capacity, bufPtrId: buffer))
+	emitFilledBufferVerdict(module, block: attempt, check: fitTest, written: written, capacity: capacity, whenRefused: failed, whenFits: copyOut, whenTooSmall: grow, ids: ids)
 
-	emitRawFree(module, block: failed, ptr: doomed, ids: ids)
+	// Too small: release this attempt's buffer, double the capacity and go round again.
+	emitRawFree(module, block: grow, ptr: buffer, ids: ids)
+	let shift = emitConst(module, block: grow, value: PathGrowthShift, ids: ids)
+	let grownCapacity = emitBin(module, block: grow, a: capacity, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let grownBuf = emitRawAlloc(module, block: grow, byteCount: grownCapacity, ids: ids)
+	module.setTerminator(grow, op: StdOp.branch(attempt.id))
+	grow.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(grownBuf, second: grownCapacity)))
+
+	emitRawFree(module, block: failed, ptr: buffer, ids: ids)
 	emitErrorReturn(module, block: failed, flag: ManagedDirectoryCurrentPathFailedFlag, ids: ids)
 
 	let record = ids.mint()

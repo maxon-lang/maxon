@@ -142,12 +142,14 @@ let InlineOwnedLabel = b"__im_owned"
 let InlineBufferLabel = b"__im_buffer"
 let InlineViewedLabel = b"__im_viewed"
 let InlineStoreLabel = b"__im_store"
+
 // The stride fork's own three: the block that asks the SECOND of `emitStrideDispatch`'s two questions, and
 // the entry of each accepted arm. Named here rather than left to the runtime's `esbyte` default so every
 // block this pass puts inside a user function still reads as this pass's.
 let InlineStrideLabel = b"__im_stride"
 let InlineWordLabel = b"__im_word"
 let InlineByteLabel = b"__im_byte"
+
 // Where the two widths of a checked `get` rejoin, carrying the loaded element as a block arg.
 let InlineLoadedLabel = b"__im_loaded"
 
@@ -360,6 +362,7 @@ type PrimitiveInliner
 			// primitive to expand — this pass dispatches on a callee NAME and they have none. Placed
 			// consciously, which is what the band-append invariant asked for.
 			errorReturn to osEnterBackgroundPriority then break 'op'
+			osFileOpenWriteExecutable then break 'op'
 		end 'op'
 
 		return blockRef
@@ -918,9 +921,7 @@ type PrimitiveInliner
 		let opIdx = self.opIndexAt(blockRef, pos: pos)
 		return try self.module.ops.get(opIdx) otherwise panic("PrimitiveInliner: op index {opIdx} named by block {blockRef} of '{String.from(self.func.name)}' is not in module.ops")
 	end 'opAt'
-
 end 'PrimitiveInliner'
-
 
 // ⭐ **DOES THIS SITE'S STAMP LEAVE EVERY FAST ARM DEAD?** — then nothing is expanded: the runtime call
 // stands exactly as the lowering wrote it, and the site pays neither the `element_size@24` load nor a compare

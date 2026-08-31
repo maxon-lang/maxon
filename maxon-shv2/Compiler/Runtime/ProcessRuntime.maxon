@@ -22,20 +22,22 @@
 // would have pulled all of that into a program that allocates nothing — and the same now holds for
 // `__proc_bg_priority`, which is likewise a handful of instructions that touch no memory.
 //
-// ⭐ **HOST-ONLY BY THE R4 RULING (2026-07-30), AND FOR A REASON OF ITS OWN ON TOP.** `x64-windows` is real;
-// every other target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` via
-// `SemanticCheck.calleeNeedsWin32Substrate`, which matches on the `__proc_` PREFIX — so an entry point added
-// later is gated by construction rather than by memory.
+// ⭐ **THE `processInfo` HOST FACILITY, AND WHICH TARGETS HAVE IT IS `TargetFacilities`' TO SAY.** A target
+// that does not refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`, matched on the
+// `__proc_` PREFIX — so an entry point added later is gated by construction rather than by memory.
 //
-// ⚠⚠ **THE EXTRA REASON MATTERS, because it is not "nobody wrote the lowering yet": THERE ARE THREE
-// DIFFERENT OS APIS AND THEY DO NOT AGREE ON THEIR OWN SHAPE.** `stdlib/Process.maxon:26-27` names all
-// three — `GetModuleFileNameA` on Windows, `_NSGetExecutablePath` on macOS, `/proc/self/exe` on Linux — and
-// they differ in more than spelling: the first FILLS a caller's buffer and answers a count, the second takes
-// an IN-OUT size and signals "too small" through a `-1` return plus a rewritten size, the third is a
-// SYMLINK that must be `readlink`'d and is not NUL-terminated. Those are three retry protocols behind one
-// surface, and shv2's Std tier is TARGET-NEUTRAL: there is no place in it for a body that is a
-// doubling loop on one target and a readlink on another. Serving them honestly means a per-target primitive
-// plus a target-neutral surface over it — a rung, not a lowering.
+// ⚠⚠ **THE REASON THIS BAND WAS A RUNG AND NOT A LOWERING IS INTACT, AND MAC2 DISCHARGED IT RATHER THAN
+// DELETING IT: THERE ARE THREE DIFFERENT OS APIS AND THEY DO NOT AGREE ON THEIR OWN SHAPE.**
+// `stdlib/Process.maxon:26-27` names all three — `GetModuleFileNameA` on Windows, `_NSGetExecutablePath` on
+// macOS, `/proc/self/exe` on Linux — and they differ in more than spelling: the first FILLS a caller's buffer
+// and answers a count, the second takes an IN-OUT size, signals "too small" through a `-1` return plus a
+// rewritten size, leaves that size UNCHANGED on success (so the length must be MEASURED) and answers a path
+// that "may be a symbolic link and not the real file", the third is a SYMLINK that must be `readlink`'d and
+// is not NUL-terminated. Those are three retry protocols behind one surface, and shv2's Std tier is
+// TARGET-NEUTRAL: there is no place in it for a body that is a doubling loop on one target and a readlink on
+// another. So each backend translates its own convention into `osExecutablePath`'s, and the loop below is
+// written once — which is what the arm64 lane actually did (`Arm64DarwinRuntime.buildArm64DarwinExePathChunk`),
+// with no edit to this file.
 // ⚠ wasm is refused for a STRONGER reason than any of those: WASI has no executable-path primitive AT ALL.
 // A component has no image path to report, and `args_get[0]` is whatever the host chose to pass rather than
 // a resolved path — so a lowering there could only be a plausible WRONG ANSWER, which is worse than a
@@ -48,9 +50,10 @@ let ProcessRuntimePrefix = b"__proc_"
 // ⭐ **THE THREE ENTRY POINTS.**
 export let ProcessExecutablePathName = b"__proc_exe_path"
 export let ProcessCurrentPidName = b"__proc_pid"
-// ⭐ **THE THIRD, AND THE PREFIX PROMISE COLLECTED A SECOND TIME.** It joins the `__proc_` band, so
-// `SemanticCheck.calleeNeedsWin32Substrate` refuses it on every non-x64-windows target with no edit there —
-// exactly as `__proc_pid` did when it arrived. See `isProcessRuntimeCallee`.
+
+// ⭐ **THE THIRD, AND THE PREFIX PROMISE COLLECTED A SECOND TIME.** It joins the `__proc_` band, so the E3104
+// gate covers it on every target whose `processInfo` row is `false`, with no edit there — exactly as
+// `__proc_pid` did when it arrived. See `isProcessRuntimeCallee`.
 export let ProcessBackgroundPriorityName = b"__proc_bg_priority"
 
 // The first buffer the walk asks for is `ManagedDirectoryRuntime.MaxPathBytes` — the same `MAX_PATH` the
@@ -61,10 +64,16 @@ export let ProcessBackgroundPriorityName = b"__proc_bg_priority"
 // bootstrap starts at 512 (`X86CodeEmitter.Runtime.cs:1189`); the smaller start costs at most one extra
 // doubling on a long path and allocates half as much on every ordinary one.
 
-// The growth factor, as the shift that applies it. Named because a bare `1` at a `shl` says nothing about
-// which of the two obvious policies (double, or ask the OS for the size) this loop uses — and for
-// `GetModuleFileNameA` the second is NOT available, which is the whole reason the loop exists.
-let PathGrowthShift = 1 as ParsedInt
+// ⚠ **THE GROWTH FACTOR MOVED TO `ManagedDirectoryRuntime.PathGrowthShift` (MAC5)**, beside the
+// `MaxPathBytes` this loop already reads from there: `__md_current_path` grows the same way now that
+// `getcwd` has replaced a `GetCurrentDirectoryA` that could name its own required size, and the first
+// attempt's size and the growth step are ONE policy rather than two facts in two files.
+//
+// ⚠ **THE OTHER LANE COULD HAVE ANSWERED A SIZE AND DELIBERATELY DOES NOT.** `_NSGetExecutablePath` rewrites
+// its in-out size to the one it needs, so an arm64-only loop could retry exactly once. `osExecutablePath`
+// carries no channel for that number — deliberately, because a channel only one lane can fill would make
+// this target-neutral graph ask which target it is compiling for — so that lane answers `bufLen`, i.e.
+// "too small", and pays at most one extra doubling. See `Arm64DarwinRuntime.buildArm64DarwinExePathChunk`.
 
 // ⭐⭐ **`__proc_exe_path() -> arrRec`** — a FRESH owned `__ManagedMemory` holding the running image's
 // absolute path, and the caller frees it.
@@ -90,10 +99,10 @@ let PathGrowthShift = 1 as ParsedInt
 // out-of-range index is answered rather than refused. It is spelled by NUL-terminating the buffer at
 // offset 0 and then joining the ORDINARY copy-out — one producer of the answer, whatever the reason for it,
 // which is exactly how `__cl_arg` spells its own out-of-range case.
-// ⚠ It is also unreachable in practice on this target: `GetModuleFileNameA(NULL, …)` asks about the module
-// that is currently executing, and the only documented failure is a buffer too small — which the loop
-// answers rather than surfaces. The arm is here because "the OS cannot fail" is not something a runtime
-// gets to assume, not because a test drives it.
+// ⚠ It is also unreachable in practice on either lane: `GetModuleFileNameA(NULL, …)` and
+// `_NSGetExecutablePath` both ask about the image that is currently executing, and the only documented
+// failure of either is a buffer too small — which the loop answers rather than surfaces. The arm is here
+// because "the OS cannot fail" is not something a runtime gets to assume, not because a test drives it.
 //
 // ⚠ The raw buffer is a scratch allocation this function owns end to end: it is freed on the one exit, and
 // what the caller receives is the independent `__ManagedMemory` copy.
@@ -159,12 +168,14 @@ end 'buildProcessExecutablePath'
 // ⭐ **THE Std OP AND ITS x64 LOWERING ALREADY EXISTED; ONLY THE DOOR WAS MISSING.** `StdOp.osGetPid` and
 // `lowerOsGetPid`'s `GetCurrentProcessId` import shipped with the P1.5 IOCP substrate, where the pid is the
 // high half of the overlapped pipe name's uniquifier (`GtRuntime.emitGtPipeNameUniquifier`) — so this rung
-// adds a name and an entry point, not an instruction. That is why there is no backend work here and no new
-// `IatSlot`: a second producer of the same op reaches the same slot.
+// adds a name and an entry point, not an instruction. That is why there was no backend work here and no new
+// `IatSlot`: a second producer of the same op reaches the same slot. (⚠ A LANE is a different question from
+// a producer: arm64-macOS had to write the `getpid` call itself, and the compiler-inserted producer above is
+// exactly why that arm refuses a route it cannot serve rather than trusting the name-keyed gate.)
 //
 // ⚠ **THERE IS NO RETRY, NO FAILURE ARM AND NO BUFFER**, which is what makes it three lines beside
-// `__proc_exe_path`'s loop: `GetCurrentProcessId` reads the PEB, cannot fail, has no out-parameter and
-// answers the same DWORD on every call in a process. `isPure` is nevertheless `false` on the op (it is a
+// `__proc_exe_path`'s loop: `GetCurrentProcessId` and `getpid()` both read a value the kernel already holds,
+// cannot fail, have no out-parameter and answer the same 32-bit id on every call in a process. `isPure` is nevertheless `false` on the op (it is a
 // call, and the backends need the call barrier's clobber accounting), so two calls in one function are two
 // calls — which `specs-shv2/process-id.md:is-stable-across-calls` asserts agree rather than assuming.
 function buildProcessCurrentPid(module StdModule)
@@ -217,10 +228,10 @@ export function installProcessRuntime(module StdModule, usage RuntimeUsage)
 	end 'backgroundPriority'
 end 'installProcessRuntime'
 
-// Every callee this file installs — what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows
-// target. A PREFIX test rather than an `equals` against a roster of names, for `isCommandLineRuntimeCallee`'s
-// reason: a second entry point here is then covered by construction instead of having to be remembered at
-// two sites.
+// Every callee this file installs — what the E3104 gate refuses on a target whose `processInfo` row is
+// `false`. A PREFIX test rather than an `equals` against a roster of names, for
+// `isCommandLineRuntimeCallee`'s reason: a second entry point here is then covered by construction instead
+// of having to be remembered at two sites.
 //
 // ✅ **THAT PROMISE WAS TESTED AND HELD.** `__proc_pid` arrived after this predicate was written and needed
 // no edit here: `specs-shv2/process-id.md:rejected-on-wasm` pins the E3104 it earns by prefix alone.

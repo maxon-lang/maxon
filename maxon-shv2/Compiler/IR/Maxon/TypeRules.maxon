@@ -1429,6 +1429,31 @@ export function rangeIsUnsigned(low ParsedInt) returns bool
 	return low >= 0
 end 'rangeIsUnsigned'
 
+// ⭐⭐ **IS A RANGED INTEGER ALIAS CLOSED UNDER BITWISE `and`?** — the one question that decides
+// whether `a and b` KEEPS the ranged alias its operands were declared with, and `and` is the only
+// operator whose result can. It is what makes `let imm = value and elementMask` still a
+// `MachineWord`, and so what makes the `imm shr rotationStart` after it fill with ZEROS.
+//
+// `and` can only CLEAR bits, so over a non-negative operand `0 <= (a and b) <= a`: every value the
+// operator can produce lies in `[0, high]`. A range whose LOW BOUND IS 0 therefore contains all of
+// them, and the alias survives as a PROOF — spendable by every reader of a denoted alias, not just
+// by the shift's fill.
+//
+// The other two shapes are excluded because the closure genuinely FAILS, not out of caution:
+//
+//   • **low > 0** — `1 and 2` is `0`, below the bound. An `int(1 to 100)` pair produces values the
+//     alias forbids, and `Parser.divisorProof` would then read a `neverZero` that is false: the
+//     UNCATCHABLE hardware fault G14's withhold exists to prevent. The runnable oracle agrees — it
+//     still reports E3057 for `100 / (a and b)` over two `int(1 to 100)`s.
+//   • **low < 0** — a signed range is not closed either: `-3 and -9` is `-11`, below both operands.
+//
+// ⚠ `or`/`xor` carry NOTHING at any low bound, and for a different reason rather than a stricter
+// one: they SET bits, so `0x0F or 0xF0` is `0xFF` — a result above both operands' HIGH bound, which
+// no low bound can repair. The bootstrap excludes them in the same words.
+export function rangeIsClosedUnderBitAnd(low ParsedInt) returns bool
+	return low == 0
+end 'rangeIsClosedUnderBitAnd'
+
 // --- Ranged-typealias narrowing checks (P1.9) ---
 //
 // A ranged alias's bounds are stored INCLUSIVE as i64 bit patterns on `RangedTypeAlias`

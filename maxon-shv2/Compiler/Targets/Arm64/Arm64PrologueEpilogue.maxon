@@ -39,10 +39,19 @@ typealias Arm64RegNumArray = Array with RegNum
 // The callee-saved GPR range x19..x28 (RegNum 19..28) and the callee-saved SIMD count d8..d15 (8
 // registers starting at `firstVector + 8`). x29/x30 are the frame record (saved by the STP directly),
 // x16/x17 scratch and x18 the untouchable platform register are never colored, so none appear here.
-let Arm64CalleeSavedGprLow = 19
-let Arm64CalleeSavedGprEnd = 29
-let Arm64CalleeSavedFpFirst = 8
-let Arm64CalleeSavedFpEnd = 16
+//
+// ⭐ **EXPORTED FOR THE GREEN-THREAD CONTEXT SWITCH (MAC3), WHICH MUST SAVE EXACTLY THIS SET.** A
+// `bl __gt_context_switch` is an ordinary call from a suspending function's view, so the switch has to
+// preserve precisely what the prologue above preserves — and it runs ANOTHER green thread's arbitrary code
+// before control returns, so a register the colorer believes survives a call must be saved there by hand.
+// `Arm64GtRuntime.assertArm64GtFrameConsistent` DERIVES the initial frame size from these four bounds
+// rather than restating a 160, which is what makes adding a callee-saved register a compile-time panic
+// instead of a wild `ret` on the first switch-in. That is `X64PrologueEpilogue.calleeSavedOrder`'s reason,
+// one ISA over, and it is why these are exported rather than re-spelled beside the switch.
+export let Arm64CalleeSavedGprLow = 19
+export let Arm64CalleeSavedGprEnd = 29
+export let Arm64CalleeSavedFpFirst = 8
+export let Arm64CalleeSavedFpEnd = 16
 
 // Insert prologue/epilogue ops for every function in the module.
 export function insertArm64PrologueEpilogue(module TargetModule, target Target)

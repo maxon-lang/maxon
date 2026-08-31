@@ -69,6 +69,25 @@ statement of it.** A subprocess promise is reaped by the driver, so these cases 
 ⚠ The two `error.` cases are front-end refusals (`E3005`, `E3057`), are target-neutral, and carry NO
 marker.
 
+### ⭐ arm64-macOS RUNS `__Builtins.runProcess`, AND ITS WAIT REALLY DOES YIELD THERE
+
+`TargetFacilities` answers `subprocess gives true` for arm64-macOS, so this builtin compiles and runs
+on that lane. The cases above cannot be widened — every one of them spawns `cmd /c …` — so the
+subjects this lane can express carry `posix-…` siblings marked `arm64-macos`, following
+`process-background-priority.md`'s pattern. The command LINE reaches `/bin/sh -c` there, which is
+what "run this command line" means under POSIX and the same interpreter `system()` names, so
+`"exit 3"` is the whole program where the Windows sibling writes `cmd /c exit 3`.
+
+⛔ **TWO SUBJECTS HAVE NO SIBLING, EACH FOR A REASON IN THE PLATFORM RATHER THAN IN THE PORT.**
+`spawn-failure-caught` and `spawn-failure-recover-continue` turn on `CreateProcessA` REFUSING a
+command that names no runnable executable; under the shell shape the spawn of `/bin/sh` always
+succeeds and a missing command is the SHELL's exit **127**, so no command line on this lane can
+reach the spawn-failure throw those cases exist to catch (measured: a bad name answers 127, not the
+`otherwise` handler). `store-overflow-caught` pins the 64-slot bound that is
+`WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`; this lane sweeps the store with `waitpid` and has
+no such ceiling to overflow. Both would need a different program asserting a different fact, which
+is a rung and not a marker.
+
 ## Tests
 
 <!-- test: async-subprocess.exit-code -->
@@ -79,6 +98,35 @@ exits, and returns the exit code, which becomes the program's exit code. The spa
 ```maxon
 function runChild() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 3") otherwise 99
+end 'runChild'
+
+function main() returns ExitCode
+	let p = async runChild()
+	let code = await p
+	return code as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+3
+```
+
+<!-- test: async-subprocess.posix-exit-code -->
+<!-- targets: arm64-macos -->
+`exit-code`'s subject on the POSIX lane, and the case that proves `__Builtins.runProcess` runs a child here
+at all: a spawned green thread runs a child that exits 3, parks on it, resumes once it exits, and returns
+the exit code, which becomes the program's exit code. The spawn succeeds, so the `otherwise` fallback is
+never taken.
+
+⚠ **THE COMMAND LINE GOES THROUGH `/bin/sh -c`, AND THAT IS THE CORRECT READING OF THIS SURFACE RATHER THAN
+A SHORTCUT.** `__Builtins.runProcess` takes a whole command LINE a user wrote, and on a lane whose spawn
+primitive takes a vector, "run this command line" MEANS handing it to the interpreter `system()` names —
+which is why `"exit 3"` is a complete program here where the Windows sibling writes `cmd /c exit 3`. The
+ARGV-taking intrinsics in `subprocess-builtins.md` reach no shell at all, and
+`posix-argv-reaches-the-child-verbatim` there is what holds that half apart from this one.
+```maxon
+function runChild() returns Integer
+	return try __Builtins.runProcess("exit 3") otherwise 99
 end 'runChild'
 
 function main() returns ExitCode
@@ -153,6 +201,47 @@ typealias Integer = int(i64.min to i64.max)
 123
 ```
 
+<!-- test: async-subprocess.posix-multi-concurrent -->
+<!-- targets: arm64-macos -->
+⭐ **THE CONCURRENCY CASE — SEVERAL CHILDREN THROUGH THE NETPOLL AT ONCE.** Three children are spawned
+BEFORE any await, so all three park on their processes SIMULTANEOUSLY and `__gt_proc_check`'s
+parallel-array swap-remove runs with a multi-entry store — the path `posix-exit-code` and
+`posix-interleave-with-sleep` never reach, each parking one child at a time. Each exit code is read back
+into its own digit, so `123` proves all three resumed independently with the right child-to-thread mapping
+and no cross-talk; two children swapped, or one thread resumed with another's status, gives a different
+three-digit number rather than a near miss.
+
+⚠ On this lane the poll is a `waitpid`-per-entry sweep rather than a `WaitForMultipleObjects` of three
+handles, so the 64-slot `MAXIMUM_WAIT_OBJECTS` bound the Windows `store-overflow-caught` case pins is a
+Win32 fact this lane does not share; nothing here asserts it.
+```maxon
+function c1() returns Integer
+	return try __Builtins.runProcess("exit 1") otherwise 99
+end 'c1'
+
+function c2() returns Integer
+	return try __Builtins.runProcess("exit 2") otherwise 99
+end 'c2'
+
+function c3() returns Integer
+	return try __Builtins.runProcess("exit 3") otherwise 99
+end 'c3'
+
+function main() returns ExitCode
+	let p1 = async c1()
+	let p2 = async c2()
+	let p3 = async c3()
+	let r1 = await p1
+	let r2 = await p2
+	let r3 = await p3
+	return (r1 * 100 + r2 * 10 + r3) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+123
+```
+
 <!-- test: async-subprocess.interleave-with-sleep -->
 <!-- targets: x64-windows -->
 A slow child (a ~1 s `ping` delay) and a short (50 ms) sleeper run concurrently. The sleeper's timer fires WHILE
@@ -165,6 +254,47 @@ var order = 0
 
 function slow() returns Integer
 	_ = try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
+	order = order * 10 + 1
+	return 1
+end 'slow'
+
+function fast() returns Integer
+	sleep(50)
+	order = order * 10 + 2
+	return 2
+end 'fast'
+
+function main() returns ExitCode
+	let p1 = async slow()
+	let p2 = async fast()
+	_ = await p1
+	_ = await p2
+	return order as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+21
+```
+
+<!-- test: async-subprocess.posix-interleave-with-sleep -->
+<!-- targets: arm64-macos -->
+⭐ **THE CASE THAT PROVES THE PROCESS WAIT YIELDS ON THIS LANE.** A slow child (a one-second `sleep`) and a
+short 50 ms sleeper run concurrently. The sleeper's timer fires WHILE the child is still running, so the
+sleeper resumes FIRST — the wait is bounded by the earliest timer rather than blocking the single M on the
+child. Each records its completion order into a global (`order = order * 10 + tag`), so `21` proves the
+sleeper (tag 2) completed before the child thread (tag 1); a wait that blocked would produce `12`.
+
+⭐ It is worth having here rather than being taken on trust from Windows, because the very same measurement
+on the STREAMING reader answers `12` on this lane: the process wait parks and a pipe read does not
+(`streaming-subprocess.posix-echo-read` records that split, and `TargetFacilities`'s MAC8 row is where it
+comes from). So on arm64-macOS this case and its streaming counterpart genuinely disagree, and only a
+measurement can say which way each falls.
+```maxon
+var order = 0
+
+function slow() returns Integer
+	_ = try __Builtins.runProcess("sleep 1") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'

@@ -34,7 +34,11 @@
 // ⚠ Deliberately NOT a case per runtime ENTRY POINT. `__gt_now_ns` and `__Builtins.currentTimeMs` are one
 // facility asked twice, and a target that lowers the monotonic clock lowers both or neither — so splitting
 // them would invite a table with two answers to one question.
-enum HostFacility
+// ⚠ EXPORTED, and a `module`/file-private narrowing will be REVERSED by the build: `SemanticCheck`
+// reads this enum for the services gate (`requireTargetSupportsServiceEntry`), which asks this table
+// rather than refusing blind. An unused-export sweep narrowed it once, after which that gate stopped
+// compiling.
+export enum HostFacility
 	// The scheduler's monotonic counter (`osReadClock`) — `__gt_now_ns` and every `Clock.*` above it.
 	monotonicClock
 	// The calendar (`osReadWallClock`) — `__clock_now_unix_s`. Split from the monotonic clock because a
@@ -165,9 +169,9 @@ end 'CalleeFacility'
 //
 // --- the per-family arguments, written where each family joined ---
 //
-// R4.1's file-IO entries join the clock and sleep ones: `osFileOpenRead` lowers only on x64-windows
-// (the ruling of 2026-07-30 scoped file IO host-only), and the three other backends panic rather than
-// fake it — so the program must be refused HERE, at the call's own span, before it reaches one.
+// R4.1's file-IO entries join the clock and sleep ones: `osFileOpenRead` lowers only where a lane has
+// written it, and the backends that have not panic rather than fake it — so the program must be refused
+// HERE, at the call's own span, before it reaches one.
 // R4.3's directory entries join them on the same terms and by the same PREFIX test, so the whole
 // eight-method surface is gated by construction rather than by a list somebody has to remember to extend.
 // The command-line entries join on the same terms and by the same PREFIX test. ⚠ Their reason is one the
@@ -177,10 +181,20 @@ end 'CalleeFacility'
 // W5's two entries join on the same terms and by the same PREFIX test, and each has a reason of its own
 // beyond "unimplemented elsewhere" — the shape argument again, twice over. STANDARD INPUT has no HANDLE
 // to fetch under POSIX or WASI (fd 0 *is* the handle; a component holds an input-stream resource), so
-// `osStdHandle` has no work to do there and the graph above it would differ, not merely its lowering.
-// The EXECUTABLE PATH is read by three different OS APIs with three different retry protocols
-// (`stdlib/Process.maxon:26-27`), and WASI has no analogue at all. Both are rungs rather than lowerings;
+// `osStdHandle` has no work to do there. The EXECUTABLE PATH is read by three different OS APIs with three
+// different retry protocols (`stdlib/Process.maxon:26-27`), and WASI has no analogue at all.
 // `ConsoleRuntime`'s and `ProcessRuntime`'s headers carry each in full.
+//
+// ⭐⭐⭐ **FOUR OF THE PARAGRAPHS ABOVE CONCLUDED "A RUNG RATHER THAN A LOWERING", AND MAC4–MAC7 SETTLED
+// EACH OF THEM DIFFERENTLY — WHICH IS WHY THE REASONS STAY AND ONLY THE TABLE MOVED.** The `commandLine`
+// argument was RIGHT: argv really is a different shape, and arm64-macOS serves it through a different Std
+// GRAPH (`CommandLineRuntime.commandLineShape`) rather than a different lowering. The `consoleStdin`
+// argument was HALF right: there really is no `GetStdHandle` under POSIX, and it does not follow that a
+// rung is needed — an op with no OS work to do lowers to arithmetic, and `osStdHandle` became one
+// subtraction. `managedFile` and `managedDirectory` were plain "unimplemented elsewhere", and MAC4/MAC5
+// implemented them — the directory half at real cost, because Win32 takes a GLOB where POSIX takes a
+// DIRECTORY. ⇒ **A reason on this roster says what a callee NEEDS and never what a target HAS; only
+// `targetProvidesFacility` says the second, which is why a landing edits one row and no paragraph.**
 // The SUBPROCESS band joins on the same terms and by the same PREFIX test, so an entry point added to it
 // later is gated by construction rather than by memory. Its own reason is stronger than "unimplemented
 // elsewhere": `CreateProcessA`, three named pipes and an IOCP completion port are a WINDOWS shape, and
@@ -354,35 +368,85 @@ end 'calleeHasHostFacility'
 // are refusals of a different KIND from "not yet" — that distinction is carried by
 // `SemanticCheck.targetCanHostSubprocess` and its E3074, which reads this table's subject and not its
 // answer. One table, two consumers, no second copy.
-function targetProvidesFacility(target Target, facility HostFacility) returns bool
+export function targetProvidesFacility(target Target, facility HostFacility) returns bool
 	if target.cpu == CpuArch.x64 and target.os == Os.windows 'theFullRow'
 		return true
 	end 'theFullRow'
 
 	if target.cpu == CpuArch.arm64 and target.os == Os.macos 'darwinArm64'
 		return match facility 'f'
-			monotonicClock gives false
+			// MAC3. `mrt_darwin_monotonic_clock` reads `CLOCK_UPTIME_RAW` through `clock_gettime_nsec_np` and
+			// reports the frequency as 1e9, which makes `__gt_now_ns`'s ticks→nanoseconds scaling the identity
+			// on this lane (`Arm64DarwinRuntime.DarwinMonotonicTicksPerSecond` carries why that is the strongest
+			// form the split can take).
+			monotonicClock gives true
 			wallClock gives true
 			threadCpuClock gives true
-			sleep gives false
-			managedFile gives false
-			managedDirectory gives false
-			commandLine gives false
-			consoleStdin gives false
-			processInfo gives false
+			// MAC3. `mrt_darwin_sleep_ms` is a `nanosleep`; the GREEN-THREAD park above it rides `greenThreads`,
+			// which is why the two stay separate rows even though one lane now provides both.
+			sleep gives true
+			// ⭐⭐ **MAC4/5/6/7.** Each of these four rows was `false` with a REASON attached rather than a
+			// deferral, and each reason is now discharged in the file that owned it:
+			//
+			//   • `managedFile` — `open`/`creat`/`read`/`write`/`close`/`fstat`/`unlink`/`rename`, with the
+			//     errno→Win32 translation in `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` so the
+			//     target-neutral classification above it is untouched.
+			//   • `managedDirectory` — `FindFirstFileA`'s GLOB emulated over `opendir`/`readdir`/`fnmatch`
+			//     plus `mkdir` and `getcwd`. It is the row that cost the most, because Win32 takes a pattern
+			//     where POSIX takes a directory.
+			//   • `consoleStdin` — `ConsoleRuntime`'s own header argued this was "a DIFFERENT Std graph" and
+			//     overstated it: `osStdHandle` lowers to one subtraction, and the read is `managedFile`'s.
+			//   • `commandLine` — the one row where the SHAPE argument was right: SysV hands a pre-split
+			//     vector, so this lane runs a DIFFERENT Std graph over two `.data` words the entry stub
+			//     captures (`CommandLineRuntime.commandLineShape`), rather than a different lowering.
+			managedFile gives true
+			managedDirectory gives true
+			commandLine gives true
+			consoleStdin gives true
+			// MAC2. All three `__proc_` entries lower here: `_NSGetExecutablePath` + `realpath` through the
+			// `mrt_darwin_exe_path` chunk, `getpid`, and `setpriority` + `getpriority`. ⚠ The reason this row
+			// took a rung rather than a lowering is intact and now DISCHARGED rather than deferred — the three
+			// platforms really do disagree about the path API's shape, and Darwin's disagreement is written out
+			// in `Arm64DarwinRuntime.buildArm64DarwinExePathChunk` instead of being a refusal.
+			processInfo gives true
 			// `sysconf(_SC_NPROCESSORS_ONLN)` — the read the op was SHAPED for. `StdOp.osCpuCount` takes no
 			// buffer precisely because this lane answers a bare scalar, and the `< 1 ⇒ 1` clamp that covers
 			// both `GetActiveProcessorCount`'s 0 and `sysconf`'s -1 is already builder-built Std
 			// (`CpuParallelRuntime.buildCpuCount`), so this lane supplies only the read.
 			cpuCount gives true
-			// The green-thread floor and everything standing on it. `__gt_context_switch`,
-			// `__gt_trampoline` and `__gt_morestack` are hand-assembled x64 chunks
-			// (`X64GtRuntime.appendX64GtRuntimeChunks`) with no AAPCS64 twin, so a `true` here would
-			// promise a scheduler that does not exist.
-			reschedule gives false
-			greenThreads gives false
-			// Waits on the scheduler above: a spawn's three pipes are read through `__gt_io_park`.
-			subprocess gives false
+			// ⭐⭐ **MAC3 — THE GREEN-THREAD FLOOR AND EVERYTHING STANDING ON IT.** This row used to read
+			// *"`__gt_context_switch`, `__gt_trampoline` and `__gt_morestack` are hand-assembled x64 chunks with
+			// no AAPCS64 twin, so a `true` here would promise a scheduler that does not exist"*. They have one
+			// now: `Arm64GtRuntime.appendArm64GtRuntimeChunks` builds all three, the prologue stack guard and
+			// the import-call stack shim are emitted inline beside them, and the P/M tier's own host objects —
+			// the per-thread slot, the run-queue lock, each P's wake event, a worker M's birth and join — are
+			// libSystem sequences in `Arm64DarwinRuntime`.
+			//
+			// ⚠ It is `true` for arm64-macOS ALONE and not for arm64 generally, which is the whole reason this
+			// table is keyed on a TARGET rather than on a CPU: every one of those host objects is a pthread
+			// primitive, and the Linux lane is a raw static image that links no libc to provide one.
+			reschedule gives true
+			greenThreads gives true
+			// ⭐⭐ **MAC8 — THE LAST FACILITY, AND THE ROW THAT MAKES THIS LANE SELF-COMPILE.** It read *"waits
+			// on the scheduler above: a spawn's three pipes are read through `__gt_io_park`"*, and the
+			// scheduler is the least of what it needed. Four things landed:
+			//
+			//   • `posix_spawnp` with a file-actions builder, under `POSIX_SPAWN_CLOEXEC_DEFAULT` — which is
+			//     `bInheritHandles` + `STARTUPINFOA` exactly, and is why no descriptor is marked by hand.
+			//   • A COMMAND SHAPE fork in the Std graph (`SubprocessRuntime.SubprocessCommandShape`): this
+			//     primitive takes an ARGUMENT VECTOR, and re-splitting a Win32-quoted line through a shell
+			//     would silently expand `$HOME` and glob `a*b`.
+			//   • A HANDLE KIND on every value the two handle ops receive
+			//     (`Arm64DarwinRuntime.DarwinHandleKindShift`), because `close` and `free` are not one call
+			//     here and a descriptor and a pointer are both just integers.
+			//   • An IO-COMPLETION shape (`GtRuntime.IoCompletionShape`): a read completes in its caller on
+			//     this lane, so the port, the wake event and the drain thread are not built at all.
+			//
+			// ⚠ **THE ONE THING IT DOES NOT HAVE IS A NETPOLL A READ CAN PARK ON.** `__gt_subp_read_line`
+			// blocks its M until the child writes or exits; the COLLECT loop never blocks, because
+			// `osPipePeek` asks first. A kqueue would lift that and change no answer — see
+			// `StdToArm64Conversion`'s `osReadOverlapped` arm.
+			subprocess gives true
 			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets.
 			managedSocket gives false
 		end 'f'

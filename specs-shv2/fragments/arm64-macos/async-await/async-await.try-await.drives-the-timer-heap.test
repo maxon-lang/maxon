@@ -1,0 +1,336 @@
+// Test: async-await.try-await.drives-the-timer-heap
+typealias Integer = int(i64.min to i64.max)
+
+enum LeafError implements Error
+		failed
+end 'LeafError'
+
+function timedThrowing() returns Integer throws LeafError
+		_ = File.exists(FilePath from "noyield.txt")
+		sleep(10)
+		return 1
+end 'timedThrowing'
+
+function timedPlain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		sleep(10)
+		return 1
+end 'timedPlain'
+
+function main() returns ExitCode
+		let awaitStart = Clock.nowMs()
+		var plain = 0
+		for _ in 0 upto 6 'plainRound'
+				let p = async timedPlain()
+				plain = plain + (await p)
+		end 'plainRound'
+		let awaitMs = Clock.elapsedMs(awaitStart)
+
+		let tryStart = Clock.nowMs()
+		var thrown = 0
+		for _ in 0 upto 6 'tryRound'
+				let p = async timedThrowing()
+				thrown = thrown + (try await p otherwise 0)
+		end 'tryRound'
+		let tryMs = Clock.elapsedMs(tryStart)
+
+		var score = 0
+		if awaitMs < 10000 'controlSane'
+				score = score + 1
+		end 'controlSane'
+		if tryMs < awaitMs + 200 'noTimerPenalty'
+				score = score + 1
+		end 'noTimerPenalty'
+		print("plain={plain} thrown={thrown} score={score}\n")
+		return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_num_procs@144 = i64 0
+  __sched_shutdown_flag@152 = i64 0
+  __sched_lock@160 = i64 0
+  __slab_arena_list@168 = i64 0
+  __slab_arena_map_l1@176 = i64 0
+  __slab_state@184 = i64 0
+}
+
+func @timedThrowing {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_20  ; "noyield.txt"
+    arm64.bl FilePath.init
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl File.exists
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movImm x0, 10
+    arm64.bl sleep
+    arm64.movImm x0, 1
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @timedPlain {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_20  ; "noyield.txt"
+    arm64.bl FilePath.init
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl File.exists
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movImm x0, 10
+    arm64.bl sleep
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 160
+    arm64.storeSlotReg slot16, x28
+    arm64.storeSlotReg slot15, x27
+    arm64.storeSlotReg slot14, x26
+    arm64.storeSlotReg slot13, x25
+    arm64.storeSlotReg slot12, x24
+    arm64.storeSlotReg slot11, x23
+    arm64.storeSlotReg slot10, x22
+    arm64.storeSlotReg slot9, x21
+    arm64.storeSlotReg slot8, x20
+    arm64.storeSlotReg slot7, x19
+    arm64.bl Clock.nowMs
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x21, 6
+    arm64.cset x0, lt
+    arm64.cbnz x0, plainRound
+    arm64.b forexit#4
+  plainRound:
+    arm64.leaFuncAddr x0, timedPlain
+    arm64.bl __gt_spawn
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_await
+    arm64.add x20, x20, x0
+    arm64.b forstep#3
+  forstep#3:
+    arm64.add x21, x21, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.movRegReg x0, x19
+    arm64.bl Clock.elapsedMs
+    arm64.movRegReg x19, x0
+    arm64.bl Clock.nowMs
+    arm64.movRegReg x21, x0
+    arm64.movImm x22, 0
+    arm64.movImm x23, 0
+    arm64.b forhdr#5
+  forhdr#5:
+    arm64.cmp x23, 6
+    arm64.cset x0, lt
+    arm64.cbnz x0, tryRound
+    arm64.b forexit#8
+  tryRound:
+    arm64.leaFuncAddr x0, timedThrowing
+    arm64.bl __gt_spawn
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.add x22, x22, x0
+    arm64.b forstep#7
+  forstep#7:
+    arm64.add x23, x23, 1
+    arm64.b forhdr#5
+  forexit#8:
+    arm64.movRegReg x0, x21
+    arm64.bl Clock.elapsedMs
+    arm64.movImm x1, 0
+    arm64.movImm x16, 10000
+    arm64.cmp x19, x16
+    arm64.cset x2, lt
+    arm64.cbnz x2, controlSane
+    arm64.b critsplit#16
+  controlSane:
+    arm64.movImm x1, 1
+    arm64.b ifcont#13
+  critsplit#16:
+    arm64.b ifcont#13
+  ifcont#13:
+    arm64.add x2, x19, 200
+    arm64.cmp x0, x2
+    arm64.cset x0, lt
+    arm64.cbnz x0, noTimerPenalty
+    arm64.b critsplit#17
+  noTimerPenalty:
+    arm64.add x19, x1, 1
+    arm64.b ifcont#15
+  critsplit#17:
+    arm64.movRegReg x19, x1
+    arm64.b ifcont#15
+  ifcont#15:
+    arm64.leaRdata x0, __str_rec_21  ; "plain="
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_22  ; " thrown="
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot6, x1
+    arm64.movRegReg x0, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_23  ; " score="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot5, x1
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x28
+    arm64.bl __int_to_string
+    arm64.storeSlotReg slot4, x0
+    arm64.leaRdata x1, __str_rec_24  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.storeSlotReg slot3, x2
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.storeSlotReg slot2, x1
+    arm64.add x2, x23, x20
+    arm64.add x2, x2, x26
+    arm64.add x2, x2, x22
+    arm64.add x2, x2, x27
+    arm64.add x0, x2, x0
+    arm64.add x0, x0, x1
+    arm64.storeSlotReg slot0, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot1, x0
+    arm64.add x19, x0, 56
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x21, x19, x23
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x21, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x20, x20, x26
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x21, slot6
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x1, slot5
+    arm64.movRegReg x2, x27
+    arm64.bl __str_copy
+    arm64.add x20, x20, x27
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x28
+    arm64.loadRegSlot x22, slot4
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x1, slot3
+    arm64.loadRegSlot x22, slot2
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x20, x22
+    arm64.loadRegSlot x20, slot1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.loadRegSlot x0, slot0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl print
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+}

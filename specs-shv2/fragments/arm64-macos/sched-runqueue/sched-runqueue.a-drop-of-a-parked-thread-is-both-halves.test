@@ -1,0 +1,283 @@
+// Test: sched-runqueue.a-drop-of-a-parked-thread-is-both-halves
+function done() returns Integer
+	Runtime.yield()
+	return 1
+end 'done'
+
+function sleeper() returns Integer
+	sleep(200)
+	return 9
+end 'sleeper'
+
+function main() returns ExitCode
+	var total = 0
+	var stillParked = 0
+	var i = 0
+
+	while i < 1 'warm'
+		let s = async sleeper()
+		let f = async done()
+		total = total + await f
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		i = i + 1
+	end 'warm'
+
+	let liveBefore = __Builtins.mmRawAllocLive()
+	var j = 0
+
+	while j < 3 'parkedThenDropped'
+		let s = async sleeper()
+		let f = async done()
+		total = total + await f
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		j = j + 1
+	end 'parkedThenDropped'
+
+	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	print("total={total} stillParked={stillParked} liveGrew={liveGrew}")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __gt_run_queue_head@48 = i64 0
+  __gt_run_queue_tail@56 = i64 0
+  __gt_init_done@64 = i64 0
+  __gt_timer_count@72 = i64 0
+  __gt_timer_heap_base@80 = i64 0
+  __gt_timer_capacity@88 = i64 0
+  __gt_trace_counter@96 = i64 0
+  __gt_proc_count@104 = i64 0
+  __gt_proc_handles_base@112 = i64 0
+  __gt_proc_gts_base@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_num_procs@176 = i64 0
+  __sched_shutdown_flag@184 = i64 0
+  __sched_lock@192 = i64 0
+  __slab_arena_list@200 = i64 0
+  __slab_arena_map_l1@208 = i64 0
+  __slab_state@216 = i64 0
+}
+
+func @done {
+  entry:
+    arm64.prologue 16
+    arm64.bl Runtime.yield
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @sleeper {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 200
+    arm64.bl sleep
+    arm64.movImm x0, 9
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 144
+    arm64.storeSlotReg slot14, x28
+    arm64.storeSlotReg slot13, x27
+    arm64.storeSlotReg slot12, x26
+    arm64.storeSlotReg slot11, x25
+    arm64.storeSlotReg slot10, x24
+    arm64.storeSlotReg slot9, x23
+    arm64.storeSlotReg slot8, x22
+    arm64.storeSlotReg slot7, x21
+    arm64.storeSlotReg slot6, x20
+    arm64.storeSlotReg slot5, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b whilehdr#1
+  whilehdr#1:
+    arm64.cmp x21, 1
+    arm64.cset x0, lt
+    arm64.cbnz x0, warm
+    arm64.b whileexit#3
+  warm:
+    arm64.leaFuncAddr x0, sleeper
+    arm64.bl __gt_spawn
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_ready
+    arm64.leaFuncAddr x0, done
+    arm64.bl __gt_spawn
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x23
+    arm64.bl __gt_await
+    arm64.add x19, x19, x0
+    arm64.movImm x23, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_is_complete
+    arm64.sub x0, x23, x0
+    arm64.add x20, x20, x0
+    arm64.add x21, x21, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_promise_drop
+    arm64.b whilehdr#1
+  whileexit#3:
+    arm64.bl __mm_counter_raw_alloc_live
+    arm64.movRegReg x21, x0
+    arm64.movImm x22, 0
+    arm64.b whilehdr#4
+  whilehdr#4:
+    arm64.cmp x22, 3
+    arm64.cset x0, lt
+    arm64.cbnz x0, parkedThenDropped
+    arm64.b whileexit#6
+  parkedThenDropped:
+    arm64.leaFuncAddr x0, sleeper
+    arm64.bl __gt_spawn
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __gt_ready
+    arm64.leaFuncAddr x0, done
+    arm64.bl __gt_spawn
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_await
+    arm64.add x19, x19, x0
+    arm64.movImm x24, 1
+    arm64.movRegReg x0, x23
+    arm64.bl __gt_is_complete
+    arm64.sub x0, x24, x0
+    arm64.add x20, x20, x0
+    arm64.add x22, x22, 1
+    arm64.movRegReg x0, x23
+    arm64.bl __gt_promise_drop
+    arm64.b whilehdr#4
+  whileexit#6:
+    arm64.bl __mm_counter_raw_alloc_live
+    arm64.sub x21, x0, x21
+    arm64.leaRdata x0, __str_rec_3  ; "total="
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_4  ; " stillParked="
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot4, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_5  ; " liveGrew="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot3, x1
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x28
+    arm64.bl __int_to_string
+    arm64.storeSlotReg slot2, x0
+    arm64.add x1, x23, x19
+    arm64.add x1, x1, x26
+    arm64.add x1, x1, x20
+    arm64.add x1, x1, x27
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot0, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot1, x0
+    arm64.add x21, x0, 56
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x22, x21, x23
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x22, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x19, x19, x26
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x22, slot4
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x1, slot3
+    arm64.movRegReg x2, x27
+    arm64.bl __str_copy
+    arm64.add x19, x19, x27
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x28
+    arm64.loadRegSlot x20, slot2
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x19, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x21
+    arm64.loadRegSlot x0, slot0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
+    arm64.ret
+}

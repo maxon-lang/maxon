@@ -1,0 +1,104 @@
+// Test: a-float-division-by-a-constant-zero-is-not-folded
+typealias Real = float(f64.min to f64.max)
+
+function pickF(a Real) returns Real
+	return a
+end 'pickF'
+
+function main() returns ExitCode
+	let one = pickF(1.0)
+	if (try (one / pickF(0.0)) otherwise -77.0) != -77.0 'positiveZeroStillThrows'
+		return 1
+	end 'positiveZeroStillThrows'
+	if (try (one / pickF(-0.0)) otherwise -78.0) != -78.0 'negativeZeroStillThrows'
+		return 2
+	end 'negativeZeroStillThrows'
+	if (try (one / pickF(4.0)) otherwise -79.0) != 0.25 'anOrdinaryDivisionStillFolds'
+		return 3
+	end 'anOrdinaryDivisionStillFolds'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.b __il_body#18
+  __il_body#18:
+    arm64.b __il_cont#17
+  __il_cont#17:
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.b __il_body#19
+  __il_body#19:
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.fpLoadRdata d2, [rdata + __fconst_0]
+    arm64.fcmp d1, d2
+    arm64.cset x0, eq
+    arm64.fdiv d1, d0, d1
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-77]
+    arm64.b trycont#3
+  tryok#1:
+    arm64.b trycont#3
+  trycont#3:
+    arm64.fpLoadRdata d2, [rdata + __fconst_-77]
+    arm64.fcmp d1, d2
+    arm64.cset x0, ne
+    arm64.cbnz x0, positiveZeroStillThrows
+    arm64.b ifcont#5
+  positiveZeroStillThrows:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#5:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-0]
+    arm64.b __il_body#21
+  __il_body#21:
+    arm64.b __il_cont#20
+  __il_cont#20:
+    arm64.fdiv d0, d0, d1
+    arm64.b tryerr#7
+  tryerr#7:
+    arm64.fpLoadRdata d0, [rdata + __fconst_-78]
+    arm64.b trycont#8
+  trycont#8:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-78]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, negativeZeroStillThrows
+    arm64.b ifcont#10
+  negativeZeroStillThrows:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#10:
+    arm64.b __il_body#23
+  __il_body#23:
+    arm64.b __il_cont#22
+  __il_cont#22:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0.25]
+    arm64.b tryok#11
+  tryok#11:
+    arm64.b trycont#13
+  trycont#13:
+    arm64.fpLoadRdata d1, [rdata + __fconst_0.25]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, anOrdinaryDivisionStillFolds
+    arm64.b ifcont#15
+  anOrdinaryDivisionStillFolds:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#15:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

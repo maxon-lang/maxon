@@ -88,11 +88,18 @@ line:
 panic at X64Backend.maxon:1794: resolveCallFixups: call to unknown function '__Builtins.currentTimeMs'
 ```
 
-### The substrate is x64-windows only at this rung
+### The substrate exists on the lanes that have written it, and nowhere else
 
-All four read the host through Win32 imports, and the green-thread runtime that hosts the monotonic
-one has no arm64/wasm lowering. A program that reaches any of them on another target is refused
-with `E3104` at the call site rather than panicking three tiers down in the wasm/arm64 backend.
+All four read the host, and a lane serves them only once a backend has written that read out. A program
+that reaches one on a lane whose `targetProvidesFacility` row denies the facility is refused with `E3104`
+at the call site rather than panicking three tiers down in the backend.
+
+⭐ **arm64-macOS SERVES ALL FOUR, WHICH IS WHY THE READING CASES BELOW NAME IT.** The calendar and the
+thread-CPU read landed with the Darwin host surface; the MONOTONIC one landed with the green-thread
+scheduler, because `__gt_now_ns` is a scheduler function and rides `usesGt`. All three are one libSystem
+import asked with three different `clockid_t`s (`clock_gettime_nsec_np`), which is why one lane's
+arithmetic is exact where Windows's is not: `Arm64DarwinRuntime` reports the monotonic frequency as 1e9
+against a reading already in nanoseconds, making the ticks-to-nanos scaling the identity.
 
 For `threadCpuTicks` the refusal is stronger than *"not yet"*, and it is the SHAPE argument the
 machine query makes one family over: `QueryThreadCycleTime` answers TSC ticks through a `ULONG64*`
@@ -116,7 +123,7 @@ wasm32-wasi. See `async-scheduler.md`'s *Targets* section for the one statement 
 ## Tests
 
 <!-- test: builtins-clock.nanos-monotonic -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A monotonic clock never moves backwards: each successive reading is `>=` the previous one. The
 epoch is platform-defined, so only ordering is asserted, never a magnitude.
 ```maxon
@@ -139,7 +146,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.nanos-advances -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The clock is LIVE, not a constant folded in at compile time: busy-work between two readings shows
 up as a positive delta, and the delta is in the units the intrinsic claims (a millisecond of
 spinning is at least 1,000 nanoseconds by a wide margin, which raw QPC ticks — ~10,000 for a
@@ -164,7 +171,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.ms-tracks-nanos -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `currentTimeMs()` IS `currentTimeNanos()` scaled: two readings taken back to back must agree once
 the nanosecond one is divided by 1,000,000. The window is generous (a scheduler preemption between
 the two reads is legal) but tiny compared with any unit error — a millisecond reading that was
@@ -189,7 +196,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.ms-resolves-sub-tick -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 **The test that pins the ruling above.** It walks a tight loop, records the SMALLEST non-zero delta
 between two successive `currentTimeMs()` readings — which is precisely the source counter's period,
 expressed in milliseconds — and asserts it is 1.
@@ -272,7 +279,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.wall-clock-is-not-the-monotonic-clock -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The two clocks are DIFFERENT instruments, and this is what says so: seconds-since-1970 is four
 orders of magnitude larger than seconds-since-boot on any machine that has not been running since
 1970, so a wall clock wired to the monotonic source collapses the gap.

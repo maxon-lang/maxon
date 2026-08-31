@@ -106,20 +106,22 @@ end 'main'
 
 ## Targets
 
-⭐ Every case below carries `<!-- targets: x64-windows -->`, for the ONE reason stated in
+⭐ Every case below carries `<!-- targets: x64-windows, arm64-macos -->`, for the ONE reason stated in
 **`file-io.md`'s "Targets — the one statement of the FILESYSTEM gate"**: `Directory.list` / `exists` /
 `isDirectory` / `create` / `currentPath` lower to the runtime entries `__md_open_search`, `__md_exists`,
 `__md_create` and `__md_current_path`, and `list-filters-dot-entries` reaches `__mf_*` on top of those.
-None has an x64-linux or wasm32-wasi implementation at this rung — `E3104`, raised by
+None has an x64-linux or wasm32-wasi implementation at this rung — arm64-macOS gained one at MAC4, which is why the markers name it — `E3104`, raised by
 `SemanticCheck.requireTargetSupportsCallee`, not by the marker. MEASURED at the rung that whitelisted
 `stdlib/Directory.maxon`: **9 of 9 cases refused on wasm32-wasi**, each naming its own entry. The reason
-is written down in `file-io.md` and not repeated here; what un-gates these is the same POSIX/WASI
-substrate that un-gates that file, plus its directory-enumeration twin.
+is written down in `file-io.md` and not repeated here; what un-gates the REMAINING lanes is the same POSIX/WASI
+substrate that un-gates that file, plus its directory-enumeration twin — which on arm64-macOS meant
+emulating `FindFirstFileA`'s GLOB over `opendir`/`readdir`/`fnmatch`, because Win32 takes a pattern where
+POSIX takes a directory.
 
 ## Tests
 
 <!-- test: list-directory -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
@@ -144,7 +146,7 @@ end 'main'
 ```
 
 <!-- test: list-directory-count -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
@@ -175,7 +177,7 @@ it: they assert membership and `count() >= 1`, which stay true while two bogus e
 along. **Only an exact count catches this.**
 
 <!-- test: list-filters-dot-entries -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let oneFile = FilePath from "test_dots_one"
@@ -213,7 +215,7 @@ end 'main'
 ```
 
 <!-- test: list-nonexistent-directory -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let files = try Directory.list(FilePath from "nonexistent_dir_12345") otherwise 'err'
@@ -232,7 +234,7 @@ Directory not found
 ```
 
 <!-- test: directory-exists -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	if Directory.exists(FilePath from "../bin") 'check'
@@ -246,7 +248,7 @@ end 'main'
 ```
 
 <!-- test: directory-is-directory -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	if Directory.isDirectory(FilePath from "../bin") 'check'
@@ -260,7 +262,7 @@ end 'main'
 ```
 
 <!-- test: file-is-not-directory -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	// Test that a nonexistent path is not a directory
@@ -275,7 +277,7 @@ end 'main'
 ```
 
 <!-- test: current-directory-not-empty -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let cwd = Directory.currentPath()
@@ -290,7 +292,7 @@ end 'main'
 ```
 
 <!-- test: current-directory-is-directory -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ```maxon
 function main() returns ExitCode
 	let cwd = Directory.currentPath()

@@ -1,0 +1,97 @@
+// Test: async-await.void
+var flag = 0
+
+function setFlag()
+		_ = File.exists(FilePath from "noyield.txt")
+		flag = 1
+end 'setFlag'
+
+function main() returns ExitCode
+		let p = async setFlag()
+		await p
+		return flag
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __data_flag@0 = i64 0
+  __data_CharacterSet.cachedWhitespacesAndNewlines@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_run_queue_head@24 = i64 0
+  __gt_run_queue_tail@32 = i64 0
+  __gt_init_done@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_live_count@104 = i64 0
+  __sched_active_workers@112 = i64 1
+  __sched_max_active_workers@120 = i64 1
+  __sched_tls_index@128 = i64 0
+  __sched_tls_teb_offset@136 = i64 0
+  __sched_procs@144 = i64 0
+  __sched_num_procs@152 = i64 0
+  __sched_shutdown_flag@160 = i64 0
+  __sched_lock@168 = i64 0
+  __slab_arena_list@176 = i64 0
+  __slab_arena_map_l1@184 = i64 0
+  __slab_state@192 = i64 0
+}
+
+func @setFlag {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_17  ; "noyield.txt"
+    arm64.bl FilePath.init
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl File.exists
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movImm x0, 1
+    arm64.leaGlobal x1, __data_flag
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x0, setFlag
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await
+    arm64.leaGlobal x0, __data_flag
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_86  ; "panic at async-await.void.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

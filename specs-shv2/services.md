@@ -133,7 +133,7 @@ substrate reached by `sleep` has always answered E3104.
 ## Tests
 
 <!-- test: companions-resolve-as-types -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A `spawn` makes the type a service, and both synthesized companions are then nameable TYPES — in a
 signature written by a function that spawns nothing.
 
@@ -192,7 +192,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: companions-come-from-a-spawn-in-another-file -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ Whether a type is a service is a WHOLE-PROGRAM property. The file that declares `Calc` and names
 `Calc.handle` writes no `spawn` at all; the file that spawns declares nothing. The companions exist
 because the two are compiled together — the `Unknown type` a per-file decision would report is what this
@@ -234,7 +234,7 @@ end 'main'
 ```
 
 <!-- test: a-spawn-inside-a-method-body-is-found -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ The walk that decides which types are services reads EVERY token of every file, and this is the case
 that says why it cannot ride the declaration sweep: that sweep consumes a `type` declaration whole and
 resumes past its `end`, so a `spawn` in a METHOD BODY would be invisible to an arm written inside it. The
@@ -552,7 +552,7 @@ error E2015: <fragment>:15:10: Unsupported: `spawn Box.create(…)` — `type Bo
 ```
 
 <!-- test: a-private-method-is-not-a-message -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Only `export`/`public` INSTANCE methods are messages. `record` is file-private and `version` is a static,
 so neither is subject to the transferability rule — a `Promise` parameter on either is perfectly legal on
 a type that is spawned, which is what this case pins. Compare
@@ -592,7 +592,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-factory-may-be-spelled-with-a-keyword -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ A keyword may be a DECLARED NAME (D8), and `stdlib/FilePath.maxon:34` proves the shape is live corpus:
 `public static function from (path String) returns FilePath`. So `spawn Reader.from(3)` must be recognized
 as a spawn — both halves of `<Type>.<factory>` go through the same name reader every other declaration
@@ -690,7 +690,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: spawn-send-and-the-service-runs -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ The first case in this file that starts a real green thread. `spawn` hands back a `Counter.handle`; a call
 on that handle is a MESSAGE, enqueued and returned from at once; the service's own green thread runs the
 handler. Dropping the handle at the end of `main` closes the mailbox, the loop's `recv` answers 0 and the
@@ -734,7 +734,7 @@ n=2
 ```
 
 <!-- test: messages-are-serialized-in-fifo-order -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Handlers run one at a time, in send order — so three digits pushed in order read back as one number.
 ```maxon
 type Log
@@ -771,7 +771,7 @@ acc=123
 ```
 
 <!-- test: two-instances-are-independent -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Two spawns of one type are two services with two states.
 
 ⚠ **THE ORDER OF THE TWO PRINTS IS FORCED BY CAUSALITY AND NOT BY LUCK.** `b` prints its own count and then
@@ -822,7 +822,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: the-same-type-is-used-directly-and-spawned -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ The location-transparency property, and the test a dedicated `service` declaration would have made
 impossible: one type, one method, reached both ways in one program. The direct calls run before the `spawn`
 exists, so the two lines are ordered by the program rather than by the scheduler.
@@ -890,7 +890,7 @@ error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a m
 ```
 
 <!-- test: shutdown-drains-what-is-queued -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `shutdown()` is a graceful drain, not a kill: the poison pill goes in BEHIND everything already queued, so
 every message sent before it still runs.
 
@@ -933,7 +933,7 @@ acc=3
 ```
 
 <!-- test: a-send-after-shutdown-is-dropped-cleanly -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐⭐ **THE CASE THAT REACHES THE ABANDON PATH, AND IT REACHES IT BY EITHER OF TWO ROADS.** The second `keep`
 is sent after the poison pill, so the loop never runs its handler — and which road drops its `String` is a
 race this case deliberately does not resolve: if the send wins, the envelope is queued behind the pill and
@@ -973,7 +973,7 @@ kept a1
 ```
 
 <!-- test: dropping-the-last-handle-shuts-the-service-down -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 An ordinary program needs no shutdown boilerplate: the handle is an owned box, and its scope-exit drop is
 what closes the mailbox. `inner` is dropped at the end of the labelled block and `outer` at `main`'s return,
 and BOTH services' queued work runs — which is the property under test.
@@ -1026,7 +1026,7 @@ beep 1
 ```
 
 <!-- test: a-cloned-handle-keeps-the-service-alive -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A handle is an ordinary box, so `.clone()` reaches it — and on a handle the clone is a second HANDLE to the
 SAME service, not a second service. Dropping one leaves the mailbox open; the last one to go closes it.
 ```maxon
@@ -1064,7 +1064,7 @@ n=2
 ```
 
 <!-- test: a-handle-moved-into-another-service -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A handle is a transferable message payload: `Worker` is handed the `Logger`'s handle, sends to it, and then
 DROPS it — the un-consumed payload drop the loop owes for every message it runs. That drop is the `Logger`'s
 last handle, so the logger shuts down without `main` ever naming it again.
@@ -1109,7 +1109,7 @@ log: from the worker
 ```
 
 <!-- test: handles-in-an-array -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Handles are ordinary boxes and live in containers — which means the array's element drop is the handle drop,
 and two services shut down when the array does.
 ```maxon
@@ -1140,7 +1140,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-handle-payload-beside-a-consumed-string-payload -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐⭐ **TWO SERVICES, TWO PAYLOAD KINDS, AND THE CROSSING BETWEEN TWO NAME TABLES.** `Logger.say` takes a
 `String` and CALLS A METHOD on it; `Worker.run` takes a `Logger.handle`. Neither is remarkable alone — the
 cases above pin each — and together they are the first program in this file whose signature-index and project
@@ -1204,7 +1204,7 @@ bytes=15
 ```
 
 <!-- test: a-string-argument-moves-into-the-service -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A managed argument is MOVED: the sending frame hands over the reference it holds and the service becomes the
 box's one owner. Nothing is increfed at the send and nothing is dropped by the sender, which is what keeps
 the plain refcount correct across a green thread.
@@ -1243,7 +1243,7 @@ kept a literal (3)
 ```
 
 <!-- test: a-throwing-message-is-sent-fire-and-forget -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐⭐ **A `throws` CLAUSE IS WHAT MAKES A MESSAGE REPLY-BEARING, AND SV1 SENDS IT ANYWAY.** The reply slot is
 filled with 0, the handler runs, and its error has nowhere to go — which is the fire-and-forget half of the
 design, not a gap in it. What must NOT happen is the thing that did: the second `keep` throws before it
@@ -1291,7 +1291,7 @@ kept a1
 ```
 
 <!-- test: unioncases-tags-the-request-variants -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The synthesized request union is an ordinary union, so its `.unionCases` companion exists — and `__shutdown`
 holds variant 0, so the first message an author declares is variant 1.
 ```maxon
@@ -1318,7 +1318,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: an-idle-service-that-is-never-sent-to-still-exits-zero -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Process exit must not hang on a service parked in `recv`, which is its steady state. Here the mailbox is
 closed by the handle's own drop — at the end of the `spawn` STATEMENT, since nothing binds it — well before
 `main` returns, so the loop's `recv` answers 0 the first time it is asked and the exit drain has one
@@ -1351,7 +1351,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: fire-and-forget-cycle-is-legal -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ The case that pins "only blocking edges count" — without it a later tightening would silently ban correct
 programs. `A` names `B`'s handle in a message and `B` names `A`'s, which is a cycle in the type graph and no
 cycle at all in the blocking one, because neither send waits.
@@ -1397,7 +1397,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-fire-and-forget-send-is-not-a-blocking-edge -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐⭐ **THE CASE THAT CAN ACTUALLY SEE "only blocking edges count", AND `fire-and-forget-cycle-is-legal` ABOVE
 CANNOT.** That one has no `await` anywhere, so `checkServiceCallCycles` short-circuits on an empty seed set
 before it ever consults the rule — it pins the SV1 property (a type-graph ring compiles and runs) and is
@@ -1460,7 +1460,7 @@ acked 7
 ```
 
 <!-- test: an-export-reached-only-by-message-is-not-unused -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 An export method reachable only as a MESSAGE must count as used, or the unused-export check would refuse
 every service whose handle is the only caller. It is credited by the send op naming `Calc.bump` — the same
 `maxonOpCalleeKind` road an ordinary call is credited by, which is why this needs no arm of its own.
@@ -1630,11 +1630,28 @@ error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a
 ```
 
 <!-- test: error.a-service-is-rejected-on-arm64 -->
-<!-- targets: arm64-macos -->
-The same gate on the other local lane, which is the one that makes this a TARGET rule rather than a wasm
-one. ⚠ `x64-linux` was measured to answer identically (`lowerTlsAlloc: TlsAlloc is x64-windows only` before
-the gate, E3104 after) and is not pinned here only because two lanes already part the target from the
-construct.
+<!-- targets: arm64-linux -->
+The same gate on a second NON-wasm lane, which is what makes this a TARGET rule rather than a wasm one.
+
+⚠⚠ **THIS CASE NAMED `arm64-macos` UNTIL THE arm64-macOS GREEN-THREAD FLOOR LANDED, AND ITS OWN PROSE IS
+WHY IT MOVED HERE RATHER THAN BEING DELETED.** It recorded the measured reason for the refusal as
+*"`lowerTlsAlloc: TlsAlloc is x64-windows only` before the gate, E3104 after"* — a SCHEDULER primitive, not
+a service one. That primitive is exactly what MAC3 supplied, so a service now compiles and runs on
+arm64-macOS and this case went red saying *"expected a compile error but compilation succeeded"*. The
+subject — a service refused at its own span on a native lane with no green-thread floor — is unchanged and
+still true here; the same prose already recorded that `x64-linux` was MEASURED to answer identically, which
+is what makes this the honest re-point rather than a lane picked to keep a case green.
+
+⚠ **THE LANE IS `arm64-linux` AND NOT `x64-linux`, WHICH IS THE DIFFERENCE BETWEEN A CASE THAT CAN GO RED
+AND ONE THAT CANNOT.** Both refuse identically — MEASURED at this review, the same two `E3104`s with only
+the target name differing — so the refusal is not what picks between them. What picks between them is that
+`x64-linux` needs WSL and so is unreachable from a macOS host, while `arm64-linux` runs here through
+OrbStack; and that this case's two siblings, `async-sleep.rejected-on-arm64` and
+`subprocess-builtins.streaming-rejected-on-arm64`, moved to `arm64-linux` in this same change. One lane for
+the three of them, and it is the one someone can actually run. ⇒ It also keeps this case's NAME honest: an
+`x64-linux` marker under a name ending `-on-arm64` is the project's own signature bug — one fact written
+down twice, the copies disagreeing — sitting in a test name, where a later reader greps for the arm64
+refusal and finds a case that never tested it.
 ```maxon
 type Plot
 	var n as Integer
@@ -1656,12 +1673,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 'spawn' lowers to the runtime entry '__svc_spawn', which has no arm64-macos implementation
-error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a message send lowers to the runtime entry '__mbox_send', which has no arm64-macos implementation
+error E3104: <fragment>:15:10: this construct is x64-windows only at this rung: 'spawn' lowers to the runtime entry '__svc_spawn', which has no arm64-linux implementation
+error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a message send lowers to the runtime entry '__mbox_send', which has no arm64-linux implementation
 ```
 
 <!-- test: a-scalar-only-record-crosses-whole -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ The POSITIVE CONTROL for the three cases below, and the shape the transfer rule admits: a record whose
 every slot is a machine word holds no reference to anything, so moving it moves the whole of it. Built at the
 send, so this frame gives up the only reference there was.
@@ -1966,7 +1983,7 @@ error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — 
 ```
 
 <!-- test: send-and-await-a-reply -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A value-returning message is awaitable RPC.
 ```maxon
 type Calc
@@ -1998,7 +2015,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-message-throws-and-the-error-merges-with-serviceerror -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The merge is always two-way — transport plus one handler.
 ```maxon
 enum MathError implements Error
@@ -2037,7 +2054,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-call-after-shutdown-answers-stopped -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A stopped service resolves its pending replies rather than hanging their awaiters.
 ```maxon
 type Calc
@@ -2138,7 +2155,7 @@ note: <fragment>:15:10: the `spawn` that makes `Store` a service
 ```
 
 <!-- test: error.two-services-that-await-each-other-are-refused -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
 ```maxon
 type A
@@ -2188,7 +2205,7 @@ error E3139: <fragment>:10:14: service call cycle — these messages can deadloc
 ```
 
 <!-- test: a-reply-error-type-with-one-member-is-nameable -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **A MESSAGE THAT THROWS NOTHING HAS A ONE-MEMBER REPLY ERROR TYPE, AND ONE MEMBER IS A NAME.** The reply of
 `total()` can fail only in transport, so its error type is `ServiceError` itself — an ordinary declared enum a
 `throws` clause can spell, which is what lets a bare `try` PROPAGATE it out of an intermediate function. Only a
@@ -2260,7 +2277,7 @@ error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing 
 ```
 
 <!-- test: shutdown-resolves-pending-replies -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **THE LIVENESS OBLIGATION, ON BOTH OF ITS ROADS.** A message that dies unprocessed must not hang its awaiter.
 The FIRST send is queued behind the poison pill and is abandoned by the loop's own drain; the SECOND arrives
 after the mailbox is already closed and is abandoned by the send. Both answer `ServiceError.stopped`, and the
@@ -2301,7 +2318,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-string-moves-in-and-a-fresh-string-comes-back -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The reply carries a MANAGED value across green threads. It is sound for the reason the send's move is: the
 handler's result is freshly minted in the handler's own frame, so the service gives up its only reference and
 the awaiter takes it — one owner throughout, which is what a plain refcount requires.
@@ -2333,7 +2350,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: reply-discarded-is-dropped-clean -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ A reply-bearing message sent in STATEMENT position mints a cell nobody binds, so the promise is dropped at
 statement end while the cell is still PENDING. The dropper may not free it — the replier is about to write into
 it — so it adds the consumer ticket only, and the reply's own completion supplies the runner's half. The managed
@@ -2364,7 +2381,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: pending-reply-dropped-then-answered -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The dropped cell of the first send is still pending when the SECOND send's await drives the service, so the
 replier writes into a cell its awaiter has already renounced. That is the ordering the teardown rendezvous
 exists for, and freeing the cell at the drop is a clobbered green thread rather than a leak.
@@ -2398,7 +2415,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: completed-reply-dropped-is-reclaimed -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The other order: `p`'s first cell COMPLETES while the middle await drives the service (its message is ahead in
 FIFO order), and only THEN is it dropped — by the RE-ARM on the next line. The drop finds the runner ticket
 already there and reclaims; an arm that took a completed cell as merely queued would strand the struct
@@ -2431,7 +2448,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: rpc-from-inside-a-service -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐⭐ **THE FIRST CROSS-GREEN-THREAD WAKE IN THE LANGUAGE.** `Outer`'s message awaits a reply from `Inner`, so a
 green thread — not the main one — is the awaiter, and the drive that completes its cell runs `Inner` from
 `Outer`'s own stack. The graph `Outer → Inner` is acyclic, which is what makes this legal.
@@ -2477,7 +2494,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.double-await-of-a-reply -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Per-await linearity composes for free, because it keys on the promise's own identity rather than on what
 produced it — a reply cell is a `Promise` like any other.
 ```maxon
@@ -2572,7 +2589,7 @@ error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that th
 ```
 
 <!-- test: cycle-through-a-free-function-is-refused -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 An edge is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so the
 edge `A → B` exists even though `A`'s own body names no `B` message.
 
@@ -2626,7 +2643,7 @@ error E3139: <fragment>:3:13: service call cycle — these messages can deadlock
 ```
 
 <!-- test: cycle-same-type-self-edge-is-refused -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⚠ **A SELF-EDGE IS A CYCLE, AND THIS IS THE ONE USERS WILL HIT.** Two instances of the same service could not
 actually deadlock, but edges are by TYPE — which is what makes them statically knowable at all — so the
 analysis cannot tell the instances apart and must be conservative. The message says the workaround.
@@ -2661,7 +2678,7 @@ error E3139: <fragment>:10:14: service call cycle — these messages can deadloc
 ```
 
 <!-- test: cycle-behind-a-second-await-is-still-refused -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⛔⛔ **ONE MESSAGE OWES AN EDGE PER SERVICE IT AWAITS, NOT ONE EDGE.** `A.ping` awaits `B` and then `C`; the
 `A → B` half is what closes the ring `A.ping → B.pong → A.ack`, and the `A → C` half is innocent. This case
 is `error.two-services-that-await-each-other-are-refused` with **one extra, unrelated `await` appended**, and
@@ -2733,7 +2750,7 @@ error E3139: <fragment>:10:15: service call cycle — these messages can deadloc
 ```
 
 <!-- test: deep-acyclic-chain-runs -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Three services in a chain, each awaiting the next. An acyclic graph has a topological order, so the service
 lowest in it awaits nobody and always makes progress — which is the induction the whole rule rests on, run.
 
@@ -2793,7 +2810,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: awaitany-returns-the-completed-index -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐ **ONE WAITING PRIMITIVE COVERS SERVICE REPLIES, FILE IO AND SUBPROCESS DRAINS, AND THIS IS THE HALF THAT
 MAKES IT TRUE (SV3).** A reply is an ordinary `Promise`, so it goes into an `Array with Promise with …` and
 `__Builtins.awaitAny` selects over it exactly as it does over `async` spawns — no separate "channel select"
@@ -2879,7 +2896,7 @@ error E3098: <fragment>:28:5: a reply from 'Calc.divide' throws 'Calc.divide.err
 ```
 
 <!-- test: a-stored-reply-decodes-serviceerror-through-the-storage-road -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ⭐⭐ **THE CASE THAT SAYS THE TWO ROADS DECODE THE SAME WORD.** A reply awaited DIRECTLY is described by its
 message (`TryTarget.serviceReply`); one awaited out of an array is described by its STORAGE TYPE
 (`TryTarget.promise`) — two different roads through `caughtErrorFormFor`, reading one error word that the

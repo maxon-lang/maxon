@@ -1,0 +1,242 @@
+// Test: managed-file.rename-round-trip
+function main() returns ExitCode
+	let oldPath = "test_managed_rename_src.txt"
+	let newPath = "test_managed_rename_dst.txt"
+	var f = try __ManagedFile.openWrite(oldPath.toByteArray().managed) otherwise 'openFail'
+		return 1
+	end 'openFail'
+	try f.write("rename me".toByteArray().managed) otherwise 'writeFail'
+		f.close()
+		return 2
+	end 'writeFail'
+	f.close()
+
+	try __ManagedFile.rename(oldPath.toByteArray().managed, newPath.toByteArray().managed) otherwise 'renameFail'
+		return 3
+	end 'renameFail'
+	if __ManagedFile.exists(oldPath.toByteArray().managed) != 0 'oldStillThere'
+		return 4
+	end 'oldStillThere'
+	if __ManagedFile.exists(newPath.toByteArray().managed) != 1 'newMissing'
+		return 5
+	end 'newMissing'
+	try __ManagedFile.delete(newPath.toByteArray().managed) otherwise 'deleteFail'
+		return 6
+	end 'deleteFail'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_3  ; "test_managed_rename_src.txt"
+    arm64.leaRdata x20, __str_rec_4  ; "test_managed_rename_dst.txt"
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mf_open_write
+    arm64.movRegReg x22, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.leaRdata x0, __str_rec_5  ; "rename me"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x21
+    arm64.bl __mf_write
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_close
+    arm64.movImm x19, 2
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_close
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl String.toByteArray
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.bl __mf_rename
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.movImm x19, 3
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#5:
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_exists
+    arm64.cmp x0, 0
+    arm64.cset x21, ne
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cbnz x21, oldStillThere
+    arm64.b ifcont#8
+  oldStillThere:
+    arm64.movImm x19, 4
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#8:
+    arm64.movRegReg x0, x20
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_exists
+    arm64.cmp x0, 1
+    arm64.cset x21, ne
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cbnz x21, newMissing
+    arm64.b ifcont#10
+  newMissing:
+    arm64.movImm x19, 5
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#10:
+    arm64.movRegReg x0, x20
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_delete
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#12
+    arm64.b tryok#11
+  tryerr#12:
+    arm64.movImm x20, 6
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_destruct
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#11:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x22
+    arm64.bl __mf_destruct
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

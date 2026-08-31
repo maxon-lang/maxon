@@ -94,13 +94,6 @@
 // neither reference compiler's guard for a frameless leaf that has stack parameters
 // (v1's `FrameScanState.needsFrame`, the bootstrap's `hasStackParams`) — there is no such leaf.
 
-// x64 frames keep rsp 16-byte aligned at each call site. Exported because the panic
-// runtime lays its own frames by hand (X64Runtime) and must land on the SAME residue: a
-// second `= 16` over there would be this fact written down twice, and the two could only
-// ever disagree silently — a misaligned rsp is not a compile error, it is a crash inside
-// kernel32's SSE, arbitrarily far from whichever copy was wrong.
-export let StackFrameAlignment = 16
-
 // `push rbp` is a push like any other, and the frame arithmetic is the one place that has
 // to know it: it moves rsp by 8 exactly as a callee-saved push does, so it counts toward
 // the parity that decides how much `sub rsp` must reserve to land 16-aligned AT the call.

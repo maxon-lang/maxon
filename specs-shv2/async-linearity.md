@@ -51,7 +51,7 @@ moment one does.** Removing the marker before then re-creates the masking, silen
 ## Tests
 
 <!-- test: async-linearity.error.double-await -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `await` is linear: awaiting one promise twice in straight-line code is refused at the second await.
 ⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
 green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
@@ -78,7 +78,7 @@ error E3102: <fragment>:10:16: use of moved value 'p': its ownership moved to an
 ```
 
 <!-- test: async-linearity.error.double-await-in-loop -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The check is flow-sensitive, and this is why it must be. There is exactly ONE `await` here lexically, so
 a "have I seen this promise awaited before?" check finds nothing — but it sits in a loop over a promise
 spawned OUTSIDE the loop, so it awaits the same green thread every iteration. Reachability catches it:
@@ -107,7 +107,7 @@ error E3100: <fragment>:12:11: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-through-alias -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Linearity is a property of the GREEN THREAD, not of the identifier text. `let q = p` gives one green
 thread a second name; awaiting through both names awaits it twice. In shv2 `q` and `p` are the SAME SSA
 value, so the second await is refused with no thread-id sidetable — the value IS the thread's identity.
@@ -131,7 +131,7 @@ error E3100: <fragment>:11:10: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-through-alias-in-branch -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The same alias, made in a DIFFERENT block from the `async` that spawned the thread. A cross-block read
 of the promise resolves to the same SSA value it was spawned as (there is no re-tag), so `p` and `q`
 inside the branch name one thread — and awaiting both is the second await it is.
@@ -162,7 +162,7 @@ error E3100: <fragment>:16:11: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-alias-outlives-rebind -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Re-arming `p` does NOT end the first thread's life while `q` still names it. The reachability walk stops
 a path only when the promise's DEFINITION is re-passed (a re-arm); reassigning `p` mints a NEW value, so
 `q` still names the first thread when it is awaited — and that await is the second one, refused.
@@ -188,7 +188,7 @@ error E3100: <fragment>:12:10: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-after-ternary-arm -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 An `await` in one ternary arm does NOT make the promise spent on the path where that arm was not taken —
 but the await AFTER the ternary is reachable from the arm that WAS taken, so on that path the thread is
 awaited twice. Exclusivity buys the arms nothing here: reachability decides, and the arm reaches the tail.
@@ -221,7 +221,7 @@ error E3102: <fragment>:14:16: use of moved value 'p': its ownership moved to an
 ```
 
 <!-- test: async-linearity.await-in-exclusive-branches -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Two awaits of one promise in MUTUALLY EXCLUSIVE branches are each the only await on their own path, and
 are allowed. A lexical "already awaited" check would reject this valid program; reachability does not,
 because neither await can reach the other.
@@ -251,7 +251,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-linearity.rearm-after-await -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Reassigning a promise binding RE-ARMS it: `p` now names a new green thread, so awaiting it again is the
 first await of that thread, not a second await of the old one. The linear check refuses a second await
 of one thread, not a second `await p` in the text.
@@ -275,7 +275,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-linearity.await-aliased-loop-element -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A loop that re-arms the promise each iteration, WITH an alias inside the loop. Every iteration spawns a
 fresh thread and awaits it exactly once through `q`, so the single `await q` is one await per promise,
 not N awaits of one. This is the case an over-eager check breaks: the alias unifies `p` and `q`, and the
@@ -305,7 +305,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-linearity.await-in-ternary-arms -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The two arms of a ternary are MUTUALLY EXCLUSIVE — only the selected arm is evaluated — so an `await` in
 each is the only await on its own path, exactly as in an `if`/`else`. The reachability check reads the
 arms as the separate branches they lower to, not as one straight-line block.
@@ -331,7 +331,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-linearity.await-aliased-in-ternary-arms -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The same, through an ALIAS: `p` and `q` are one green thread under two names, and the two arms await it
 through different names. Linearity keys on the THREAD, so it sees one thread awaited in each of two
 exclusive arms — one await per path, and legal. This is the intersection of the two facts that must both

@@ -1,0 +1,197 @@
+// Test: sleep.async-interleave
+typealias Integer = int(i64.min to i64.max)
+
+function slowTask() returns Integer
+		sleep(200)
+		print("slow\n")
+		return 1
+end 'slowTask'
+
+function fastTask() returns Integer
+		sleep(10)
+		print("fast\n")
+		return 2
+end 'fastTask'
+
+function main() returns ExitCode
+		let p1 = async slowTask()
+		let p2 = async fastTask()
+		let r1 = await p1
+		let r2 = await p2
+		print("r1={r1} r2={r2}\n")
+		return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @slowTask {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 200
+    arm64.bl sleep
+    arm64.leaRdata x0, __str_rec_5  ; "slow\x0a"
+    arm64.bl print
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @fastTask {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+    arm64.bl sleep
+    arm64.leaRdata x0, __str_rec_6  ; "fast\x0a"
+    arm64.bl print
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 128
+    arm64.storeSlotReg slot12, x28
+    arm64.storeSlotReg slot11, x27
+    arm64.storeSlotReg slot10, x26
+    arm64.storeSlotReg slot9, x25
+    arm64.storeSlotReg slot8, x24
+    arm64.storeSlotReg slot7, x23
+    arm64.storeSlotReg slot6, x22
+    arm64.storeSlotReg slot5, x21
+    arm64.storeSlotReg slot4, x20
+    arm64.storeSlotReg slot3, x19
+    arm64.leaFuncAddr x0, slowTask
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.leaFuncAddr x0, fastTask
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_7  ; "r1="
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_8  ; " r2="
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x26
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_9  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot2, x0
+    arm64.add x1, x22, x19
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x20
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot0, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot1, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x21, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x19, x19, x25
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.loadRegSlot x20, slot2
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x19, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x28
+    arm64.loadRegSlot x0, slot0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+}

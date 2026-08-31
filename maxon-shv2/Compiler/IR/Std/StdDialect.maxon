@@ -1388,16 +1388,17 @@ export union StdOp
 	// CAN BE STATED.** This op is the ONLY way an emitted program acquires an OS thread, at exactly two
 	// sites: `GtRuntime.buildIoInit`'s completion thread and `SchedRuntime.emitSchedWakeOrSpawn`'s worker M.
 	// So a thread born here runs at whatever priority `__proc_bg_priority` last set for the process — and on
-	// x64-windows, the only lane that lowers either, that holds with NOTHING EMITTED HERE, because
-	// `SetPriorityClass` sets a PROCESS class covering threads created before and after it.
+	// BOTH lanes that lower that op, that holds with NOTHING EMITTED HERE: `SetPriorityClass` sets a PROCESS
+	// class covering threads created before and after it, and Darwin scopes a `nice` value to the process in
+	// exactly the same way.
 	//
-	// ⚠ **THAT IS A WINDOWS PROPERTY, NOT A UNIVERSAL ONE, AND THE LINUX LANES ARE THE ONES IT BREAKS ON.**
-	// POSIX splits: Darwin scopes `nice` to the PROCESS (so arm64-macos would inherit the same way), but
-	// LINUX scopes it to the THREAD — a thread already running keeps its old value, and a new one inherits
-	// only its CREATOR's. ⇒ **A Linux lane that lowers `osEnterBackgroundPriority` owes work HERE as well**,
-	// making the M adopt the priority at its own birth rather than assuming the process call reached it.
-	// It cannot forget: that lane must delete the refusal in `StdToArm64Conversion` / `StdToWasm`, whose
-	// panic text names this obligation.
+	// ⚠ **THAT IS NOT A UNIVERSAL PROPERTY, AND THE LINUX LANES ARE THE ONES IT BREAKS ON.** POSIX splits:
+	// MAC2 MEASURED Darwin's half and landed it, but LINUX scopes `nice` to the THREAD — a thread already
+	// running keeps its old value, and a new one inherits only its CREATOR's. ⇒ **A Linux lane that lowers
+	// `osEnterBackgroundPriority` owes work HERE as well**, making the M adopt the priority at its own birth
+	// rather than assuming the process call reached it. It cannot forget: that lane must delete the refusal
+	// in `StdToArm64Conversion.lowerOsEnterBackgroundPriority`'s `syscall` arm / `StdToWasm`, whose panic text
+	// names this obligation.
 	//
 	// ⚠ shv2 reaches neither site today — `emitSchedWakeOrSpawn` has had no producer since EC10, and
 	// `buildIoInit` is lazy — so this is a contract written down BEFORE it can be tested, deliberately, at
@@ -1442,9 +1443,22 @@ export union StdOp
 	// completion thread drains, which is how the drop arm knows the completion thread is DONE with the GT before it
 	// frees it. x64-windows only, like every IOCP op.
 	osCancelIo(handleId ValueId, ovlId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
-	// `osGetPid()` = `GetCurrentProcessId()` — the current process id, DEFINING the result (captured from RAX). Used
-	// to make the overlapped pipe name CROSS-PROCESS unique (the high 32 bits of the name's hex uniquifier; the low
-	// 32 are a per-process counter), so two concurrent test processes never collide on a FIRST_PIPE_INSTANCE name.
+	// `osGetPid()` = `GetCurrentProcessId()` on Windows, `getpid()` on arm64-macOS — the current process id,
+	// DEFINING the result (captured from the return register). It has TWO producers, which is why it sits in
+	// the IOCP band and answers a question that has nothing to do with one: the pipe-name uniquifier mints it
+	// to make an overlapped name CROSS-PROCESS unique (the high 32 bits of the name's hex uniquifier; the low
+	// 32 are a per-process counter), and `ProcessRuntime.buildProcessCurrentPid` mints it as the whole body of
+	// `__proc_pid`.
+	//
+	// ⚠ **THE FIRST PRODUCER IS COMPILER-INSERTED AND NO CALLEE-NAME GATE CAN SEE IT**
+	// (`GtRuntime.emitGtPipeNameUniquifier`), so a backend arm for this op must refuse a lane it cannot serve
+	// ITSELF rather than trusting `TargetFacilities` to have refused upstream. `lowerOsGetPid` on arm64
+	// carries that argument in full; `StdOp.osCpuCount` records the measurement that made it a rule.
+	//
+	// ⚠ **THE ANSWER IS 32 BITS WIDE ON BOTH LANES** (`DWORD`, `pid_t`) and only one of them widens it for
+	// free — writing `EAX` zeroes `RAX`'s upper half architecturally, while AAPCS64 leaves an `int` return's
+	// upper half UNSPECIFIED. `specs-shv2/process-id.md:fits-in-a-dword` is what makes that difference
+	// visible rather than a stale high word passing as a plausible id.
 	osGetPid(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 	// --- P1.5 dogfood slice 1b: the STREAMING subprocess stdin pipe + synchronous write ---
 	//
@@ -1578,10 +1592,9 @@ export union StdOp
 	// `ERROR_SHARING_VIOLATION` — an intermittent failure that depends on what else is running. The
 	// bootstrap's own sync worker makes the same choice and says so.
 	//
-	// ⭐ **`openWriteExecutable` EMITS THIS SAME OP.** The only thing it adds in the references is a Unix
-	// 0755 permission bit, and shv2's file IO is host-only Windows by the R4.1 ruling, so there is nothing
-	// for a second op to carry — one extra dispatch arm in the parser, zero extra ops here. A POSIX lane
-	// adds the second op on the day it adds the second backend.
+	// ⚠ **`openWriteExecutable` HAD NO OP OF ITS OWN AND NOW DOES — see `osFileOpenWriteExecutable` at the
+	// tail of this union.** This comment used to end *"a POSIX lane adds the second op on the day it adds
+	// the second backend"*, and MAC4 is that day.
 	osFileOpenWrite(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// `osFileSize(result, handle, sizeOutPtr)` = `GetFileSizeEx(handle, sizeOutPtr)` — the 64-bit size is
 	// written to `[sizeOutPtr]` and the BOOL verdict is `result`. The OUT-PARAM shape (like `osReadClock`)
@@ -1719,22 +1732,32 @@ export union StdOp
 	// takes the PARENT's `STD_OUTPUT_HANDLE` into its STARTUPINFO, and one op that reads a selector is the honest
 	// shape where three ops differing only in an immediate would be three copies of one marshalling.
 	osStdHandle(resultId ValueId, whichId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
-	// `osExecutablePath(result, bufLen, bufPtr)` = `GetModuleFileNameA(NULL, bufPtr, bufLen)` — the running
-	// image's absolute path, written into the caller's buffer. The result is the character count written,
-	// which is how the caller tells "fits" from "truncated"; `isStore: true` because it writes that buffer.
+	// `osExecutablePath(result, bufLen, bufPtr)` — the running image's absolute path, written into the caller's
+	// buffer. `GetModuleFileNameA(NULL, bufPtr, bufLen)` on Windows; on arm64-macOS a runtime chunk over
+	// `_NSGetExecutablePath` + `realpath` (`Arm64DarwinRuntime.buildArm64DarwinExePathChunk`, which carries
+	// the measurement for why the second call exists). The result is the byte count written EXCLUDING the
+	// NUL, which is how the caller tells "fits" from "truncated"; `isStore: true` because it writes that
+	// buffer.
 	//
-	// ⚠ **THE FIELD ORDER IS `osDirCurrentPath`'s, AND THE WIN32 ARGUMENT ORDER IS NOT.**
+	// ⭐ **THE COUNT'S CONVENTION IS `GetModuleFileNameA`'s AND EVERY LANE OWES IT.** A `+1` for the NUL would
+	// both trigger a spurious doubling when a path exactly fills the buffer and carry a trailing NUL into the
+	// copied-out `String`. Darwin's primitive answers no count at all — it leaves `*bufsize` UNCHANGED on
+	// success, contrary to a common misreading — so that lane MEASURES the length rather than reading one.
+	//
+	// ⚠ **THE FIELD ORDER IS `osDirCurrentPath`'s, AND NEITHER LANE'S ARGUMENT ORDER IS.**
 	// `GetCurrentDirectoryA(nBufferLength, lpBuffer)` genuinely takes its length first; `GetModuleFileNameA`
-	// takes the buffer first and the size last. The two ops read alike here on purpose — one shape for "an OS
-	// call that fills a caller's buffer and answers a length" — and the TRANSPOSITION lives in the one place
-	// that knows the ABI, `lowerOsExecutablePath`. Ordering these fields to match kernel32 instead would put
-	// a per-import argument order into the target-neutral tier, where nothing can check it.
+	// and `_NSGetExecutablePath` both take the buffer first and the size second. The two ops read alike here
+	// on purpose — one shape for "an OS call that fills a caller's buffer and answers a length" — and the
+	// TRANSPOSITION lives in the one place per lane that knows the ABI (`lowerOsExecutablePath`, in each
+	// backend). Ordering these fields to match one of the imports instead would put a per-import argument
+	// order into the target-neutral tier, where nothing can check it.
 	//
-	// ⭐ **THE RETRY LOOP IS BUILDER-BUILT Std ABOVE IT**, the division `osDirCurrentPath` draws. The two
-	// imports do not even signal truncation the same way — `GetCurrentDirectoryA` answers the REQUIRED size,
-	// `GetModuleFileNameA` answers `nSize` itself and sets `ERROR_INSUFFICIENT_BUFFER` — so a backend that
-	// owned the loop would own two different loops, and the classification would be invisible to every pass
-	// between here and the encoder.
+	// ⭐ **THE RETRY LOOP IS BUILDER-BUILT Std ABOVE IT**, the division `osDirCurrentPath` draws. The imports
+	// do not even signal truncation the same way — `GetCurrentDirectoryA` answers the REQUIRED size,
+	// `GetModuleFileNameA` answers `nSize` itself and sets `ERROR_INSUFFICIENT_BUFFER`, `_NSGetExecutablePath`
+	// answers `-1` and rewrites its in-out size — so a backend that owned the loop would own three different
+	// loops, and the classification would be invisible to every pass between here and the encoder. Each
+	// backend translates its own convention into this op's, and the doubling walk above stays one graph.
 	osExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// --- W35: the OTHER standard stream ---
 	//
@@ -2197,6 +2220,22 @@ export union StdOp
 	// three orderings genuinely do not cover (a store-load pair with no CAS between them is the shape to
 	// watch for), and it should arrive WITH that use, not ahead of it.
 	//
+	// ⚠ **MAC3 PUT THE SCHEDULER ON A WEAKLY-ORDERED ISA, WHICH IS THE FIRST TIME THAT SHAPE HAS BEEN
+	// REACHABLE AT ALL — AND IT IS STILL NOT REACHED.** A green thread's `completed` publication IS a
+	// store-load pair with no CAS between it and `__gt_any_completed`'s read: on x64 TSO the prior stores to
+	// `result`/`threw` cannot sink past it, and on arm64 nothing stops them, so a second observer could see
+	// `completed` before the value it announces — a WRONG AWAITED VALUE, not a crash, which no gate on that
+	// lane could see. What makes it latent rather than live is that there is no second observer: a coroutine
+	// is never published where a worker M could take it (EC10, and `builtins-cpu-parallel`'s
+	// `sched-max-active-workers-is-one-under-async` pins it). ⭐ MEASURED on arm64-macOS, 32 coroutines
+	// through `async`/`await` with `MAXON_MAX_PROCS` at 1, 2, 4 and 8: the high-water mark of concurrently
+	// ACTIVE worker Ms is **1 in all four runs**. The env var makes Ms; it does not hand them coroutines.
+	// ⇒ **The trigger is `spawn` publishing a green thread to a worker M, and NOT `MAXON_MAX_PROCS > 1`** —
+	// which is this note's own mistake a third time if it is written down as the latter. The fence arrives
+	// with that change, and it must cover all THREE publishers at once (the trampoline's store and
+	// `__gt_cell_complete`'s two): fencing the trampoline alone would leave the Std-tier pair unordered
+	// while reading, to a later maintainer, as protection.
+	//
 	// ⛔ **THE REFCOUNT STEP IS DELIBERATELY NOT ONE OF THESE, AND THIS NOTE NAMED THE WRONG TRIGGER TWICE —
 	// SO IT NOW RECORDS THE HISTORY RATHER THAN PREDICTING THE NEXT FLIP.** For years it read *"the day green
 	// threads land"*; green threads landed and shv2 stayed correct, because a single-M cooperative scheduler
@@ -2353,14 +2392,43 @@ export union StdOp
 	// ⚠ **THE UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT**, exactly as `osThreadCpuTicks`'s is: a
 	// Windows priority CLASS (`BELOW_NORMAL_PRIORITY_CLASS` = 0x4000) against a POSIX NICE value (10). The
 	// two scales even run in opposite directions — larger is LOWER priority under POSIX — so a caller
-	// compares against its own platform's constant and never across.
+	// compares against its own platform's constant and never across. That is why
+	// `specs-shv2/process-background-priority.md` carries PAIRS of cases rather than widened markers: there
+	// is no number both lanes could assert.
 	//
-	// ⭐ x64-WINDOWS ONLY at this rung, and it needs no `SemanticCheck` edit to say so: its entry point is
-	// `ProcessRuntime.ProcessBackgroundPriorityName`, which wears the `__proc_` prefix that
-	// `calleeNeedsWin32Substrate` already refuses on every other target with E3104. That is the promise
-	// `isProcessRuntimeCallee`'s header makes — a third entry point is covered by construction — being
-	// collected for the second time. Full call-barrier metadata: it IS two indirect calls once lowered.
+	// ⛔⛔ **THE POSIX HALF MUST BE `setpriority` AND NEVER `nice`, AND THE SPEC ALREADY CATCHES THE
+	// DIFFERENCE.** `nice(10)` is RELATIVE — two calls give 10 then 20 — while `setpriority(PRIO_PROCESS, 0,
+	// 10)` states an ABSOLUTE value, which is what makes the "set" idempotent and what
+	// `is-stable-across-calls` (both spellings) is written to test.
+	//
+	// ⭐ Which targets lower it is `TargetFacilities.targetProvidesFacility`'s `processInfo` row and is NOT
+	// counted here; the refusal elsewhere needs no `SemanticCheck` edit, because its entry point is
+	// `ProcessRuntime.ProcessBackgroundPriorityName`, which wears the `__proc_` prefix the roster already
+	// keys on. That is the promise `isProcessRuntimeCallee`'s header makes — a third entry point is covered
+	// by construction — being collected for the second time. Full call-barrier metadata: it IS two indirect
+	// calls once lowered, on both lanes.
 	osEnterBackgroundPriority(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osEnterBackgroundPriority`, per the band-append
+	// invariant: a mid-band insertion would silently re-point every `to`-range arm that spans this region.
+	//
+	// ⭐⭐ **`osFileOpenWriteExecutable(result, pathPtr)` — `osFileOpenWrite` WITH THE EXECUTE BITS (MAC4).**
+	// It is `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)` on Windows, byte for byte the same call
+	// `osFileOpenWrite` makes, and `creat(path, 0755)` rather than `creat(path, 0644)` under POSIX.
+	//
+	// ⭐ **THE OP EXISTS BECAUSE THE DIFFERENCE IS REAL WHEREVER PERMISSIONS ARE**, which
+	// `osFileOpenWrite`'s own comment predicted and deferred: *"shv2's file IO is host-only Windows by the
+	// R4.1 ruling, so there is nothing for a second op to carry"*. The moment a lane has a mode argument
+	// there IS something to carry, and it cannot be carried by the lowering — one Std op cannot be two
+	// permission masks. `stdlib/File.maxon`'s `executable` arm is what asks for it, and a program that
+	// wrote an executable file it could not then execute would be a SILENT wrong answer: the file exists,
+	// the bytes are right, and only the mode is missing.
+	//
+	// ⚠ **THE TWO OPS DELIBERATELY DO NOT COLLAPSE INTO ONE WITH A MODE OPERAND.** A mode is a POSIX fact
+	// with no Win32 counterpart, so a `mode` operand would be a value every Windows call site had to
+	// materialise and every Windows lowering had to discard — the target-neutral tier carrying a
+	// target-specific number. Two ops, each naming an INTENT, leaves each backend to spell that intent in
+	// its own vocabulary.
+	osFileOpenWriteExecutable(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2665,6 +2733,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		//   • everything else — terminators, calls, memory and the OS band define call returns, kernel
 		//     answers and addresses, none of which is an arithmetic shape at all.
 		div to osEnterBackgroundPriority then operands.recordNeither()
+		osFileOpenWriteExecutable then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -2751,6 +2820,7 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 		const to globalAddr then load.recordNotALoad()
 		loadIndirect(resultId, addrId, offset, valueType) then load.recordLoad(resultId, address: addrId, displacement: offset, readType: valueType)
 		storeIndirect to osEnterBackgroundPriority then load.recordNotALoad()
+		osFileOpenWriteExecutable then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3004,6 +3074,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// every `resultId` is a def and is skipped here.
 		osReadFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
 		osFileOpenWrite(_, pathPtr) then referenced.insert(pathPtr)
+		osFileOpenWriteExecutable(_, pathPtr) then referenced.insert(pathPtr)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
@@ -3226,6 +3297,7 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		// land in the caller's out-param word, not in a result.
 		osReadFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileOpenWrite(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osFileOpenWriteExecutable(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osFileSize(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileDelete(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
@@ -3461,6 +3533,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// rewritten here, and every `resultId` is a def carried through unremapped.
 		osReadFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osReadFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
 		osFileOpenWrite(resultId, pathPtr) gives StdOp.osFileOpenWrite(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osFileOpenWriteExecutable(resultId, pathPtr) gives StdOp.osFileOpenWriteExecutable(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -3697,6 +3770,7 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		atomicCas(resultId, addrId, expectedId, replacementId) then return StdOp.atomicCas(clonedValue(resultId, subst: valueSubst), addrId: addrId, expectedId: expectedId, replacementId: replacementId)
 		atomicRmw(resultId, addrId, operandId, opcode) then return StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: addrId, operandId: operandId, opcode: opcode)
 		currentThreadToken to osEnterBackgroundPriority then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
+		osFileOpenWriteExecutable then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -3939,6 +4013,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		ret to osFreePages then break 'term'
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
 		witnessCall to osEnterBackgroundPriority then break 'term'
+		osFileOpenWriteExecutable then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 

@@ -629,6 +629,7 @@ type RangeCheckEmitter
 				const to ret then self.refuseNonParamAheadOfAGuard(pos)
 				param then break 'op'
 				call to osEnterBackgroundPriority then self.refuseNonParamAheadOfAGuard(pos)
+				osFileOpenWriteExecutable then self.refuseNonParamAheadOfAGuard(pos)
 			end 'op'
 		end 'eachPrefixOp'
 	end 'requireGuardHeadHoldsOnlyParams'
@@ -1351,6 +1352,7 @@ type RangeCheckEmitter
 				// F2 + G1: every value-defining member of this range answers something the machine produces at run
 				// time, never a negated int constant.
 				atomicCas to osEnterBackgroundPriority then break 'c'
+				osFileOpenWriteExecutable then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1586,6 +1588,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		osCommitPages to osReservePages gives false
 		// F2 + G1: every member of this range is a body op, never the `ret` this asks about.
 		atomicCas to osEnterBackgroundPriority gives false
+		osFileOpenWriteExecutable gives false
 	end 'term'
 end 'retMatchesValue'
 

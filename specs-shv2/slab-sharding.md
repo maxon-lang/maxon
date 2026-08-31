@@ -46,17 +46,19 @@ Treiber push and its drain, the ownership gate actually REJECTING a span, two th
 raw row, and — since EC8 — whether the traffic counters are stepped ATOMICALLY. All four need a second OS
 thread. They were verified by measurement instead — see the rung's report and `track0/`.
 
-⚠ **EVERY CASE HERE IS `targets: x64-windows`, AND THAT IS A PROPERTY OF THE SUBJECT RATHER THAN A
-CONVENIENCE.** All four are green-thread programs, because sharding is only compiled into a program that
-has a scheduler (`usesGt`) — and a P exists on exactly one lane. The three ops the sharding is built from
-say the same thing at the tier below: `StdToWasm` REFUSES `tlsSlotLoad` and the lock trio at emission, and
-`StdToArm64Conversion` has no case for either. `sched-processor.md` carries the identical restriction for
-the identical reason.
+⚠ **EVERY CASE HERE CARRIES A `targets:` MARKER, AND THAT IS A PROPERTY OF THE SUBJECT RATHER THAN A
+CONVENIENCE.** All are green-thread programs, because sharding is only compiled into a program that has a
+scheduler (`usesGt`) — and a P exists only where one has been built. ⛔ This paragraph said *"on exactly one
+lane"* and named the tier below as agreeing: *"`StdToWasm` REFUSES `tlsSlotLoad` and the lock trio at
+emission, and `StdToArm64Conversion` has no case for either"*. The second half stopped being true when the
+arm64-macOS scheduler landed: that isel now lowers `tlsSlotLoad` as a thread-pointer read with no call at
+all, and the lock trio as `pthread_mutex_*`. wasm still refuses all four, and both Linux lanes have no libc
+to build any of it on. `sched-processor.md` carries the identical restriction for the identical reason.
 
 ## Tests
 
 <!-- test: slab-sharding.a-green-thread-program-allocates-through-its-processor-row -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 **THE P-OWNED ROW, HAMMERED.** A green thread's allocations run with `main` adopted as P[0], so every
 span they touch is cut, stamped, cached, drained, evicted and returned against a real owner. This builds
 and drops thousands of short-lived Strings inside green threads and then verifies a population built the
@@ -128,7 +130,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-slot-allocated-before-the-scheduler-is-freed-after-it -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 **THE RAW ROW, AND THE ONE ARM OF THE LOCK A SINGLE-THREADED PROGRAM REACHES.** Everything allocated
 before the first `async` is allocated with NO processor: the P read answers "none", the spans
 land on the dedicated raw row and are stamped as owned by nobody. Once the scheduler exists those same
@@ -214,7 +216,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-parked-span-is-taken-back-and-re-owned -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 **THE PARKED SENTINEL, ROUND-TRIPPED.** A span whose last slot comes back is unlinked from its owner's
 mcache row, parked on mcentral and stamped with an owner that is neither a processor nor "no
 processor". The next refill takes it back and re-stamps it. This case empties a class's spans wholesale
@@ -301,7 +303,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-parked-span-still-reaches-the-scavenger -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 **THE OWNER STAMP AND THE SCAVENGER, TOGETHER.** The scavenger destroys spans off the mcentral lists,
 and since S5 every one of those carries the parked sentinel in the field the mcache eviction is derived
 from. This is the two-pass grace case run through a GREEN THREAD, so the spans it empties were owned by
@@ -360,7 +362,7 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.the-traffic-counters-are-exact-across-green-threads -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 **THE COUNTERS, READ THROUGH THE SHARDED ALLOCATOR.** Every traffic column an emitted program keeps is
 stepped inside `__mm_alloc`/`__mm_free`, which since EC8 reach their slot through a `__slab_alloc` that
 carries the class lookup, the processor read, the shard row, the state region and the pop in ONE body

@@ -719,6 +719,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// G1: the multi-M substrate names no wasm function and needs no import table entry — it is REFUSED at
 		// emission (below), so it contributes nothing to collect here.
 		tlsAlloc to osEnterBackgroundPriority then break 'k'
+		osFileOpenWriteExecutable then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1339,6 +1340,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// The priority door would answer an i64 like every other machine word. It is refused at emission on
 		// this lane, so — exactly as for the TLS pair above — this arm exists only to keep the local map TOTAL.
 		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osFileOpenWriteExecutable then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1565,6 +1567,7 @@ type WasmFuncEmitter
 			memFill then panic("emitStraightLineTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas to currentThreadToken then panic("emitStraightLineTerminator: an atomic or a thread-token read is a body op, never a terminator")
 			tlsAlloc to osEnterBackgroundPriority then panic("emitStraightLineTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
+			osFileOpenWriteExecutable then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1655,6 +1658,7 @@ type WasmFuncEmitter
 			memFill then panic("emitDispatcherTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas to currentThreadToken then panic("emitDispatcherTerminator: an atomic or a thread-token read is a body op, never a terminator")
 			tlsAlloc to osEnterBackgroundPriority then panic("emitDispatcherTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
+			osFileOpenWriteExecutable then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1820,6 +1824,7 @@ type WasmFuncEmitter
 			// could not be incomplete, only a pretence: it would report success for something that never
 			// happened. Refused at the call's own span with E3104 by the `__proc_` prefix, so this is a backstop.
 			osEnterBackgroundPriority then panic("emitBodyOp: `osEnterBackgroundPriority` is x64-windows only — a WASI component has no process and no scheduler priority, so there is nothing here to lower it to")
+			osFileOpenWriteExecutable then panic("emitBodyOp: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3187,6 +3192,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		memFill then panic("decideDispatcher: a `memFill` is a body op, never a terminator")
 		atomicCas to currentThreadToken then panic("decideDispatcher: an atomic or a thread-token read is a body op, never a terminator")
 		tlsAlloc to osEnterBackgroundPriority then panic("decideDispatcher: a TLS op, an event signal or the priority door is a body op, never a terminator")
+		osFileOpenWriteExecutable then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

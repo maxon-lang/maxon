@@ -180,6 +180,7 @@ function leafOpRole(op StdOp) returns LeafOpRole
 		// `isUnsupportedInInlineBody` answers below — a fill and the two atomics are body ops a leaf may
 		// hold, the import calls refuse.
 		osCommandLine to osEnterBackgroundPriority then break 'kind'
+		osFileOpenWriteExecutable then break 'kind'
 	end 'kind'
 
 	return LeafOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else LeafOpRole.body
@@ -799,6 +800,7 @@ type LeafInliner
 				const to param then break 'kind'
 				call(_, callee, _) then self.considerSite(pos, callee: callee)
 				retVoid to osEnterBackgroundPriority then break 'kind'
+				osFileOpenWriteExecutable then break 'kind'
 			end 'kind'
 		end 'eachOp'
 		return self.sitePositions.count()
@@ -849,6 +851,7 @@ type LeafInliner
 			const to param then self.refuseNotTheSplitCall()
 			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId)
 			retVoid to osEnterBackgroundPriority then self.refuseNotTheSplitCall()
+			osFileOpenWriteExecutable then self.refuseNotTheSplitCall()
 		end 'site'
 		var pred = self.blockAt(predRef)
 		pred.opRefs.truncate(tail)
@@ -1203,6 +1206,7 @@ type LeafInliner
 			globalAddr to osFreePages then refuseNotATerminator(calleeFunc)
 			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
 			witnessCall to osEnterBackgroundPriority then refuseNotATerminator(calleeFunc)
+			osFileOpenWriteExecutable then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -1302,7 +1306,6 @@ type LeafInliner
 		let sourceInfo = try self.module.blockSourceInfo.get(sourceRef) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo has no entry for blockRef {sourceRef}")
 		try self.module.blockSourceInfo.set(to, value: sourceInfo) otherwise panic("LeafInliner.carryBlockSourceInfo: blockSourceInfo.set OOB at {to}")
 	end 'carryBlockSourceInfo'
-
 end 'LeafInliner'
 
 // ⭐ **THE STD-ABI CONVENTION, CHECKED WHERE IT IS SPENT.** `buildValueColumn` maps ids
@@ -1316,6 +1319,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 		const to ret then refuseNotAParamOp()
 		param(resultId, index, _) then requireParamValueIsItsIndex(resultId, index: index, calleeFunc: calleeFunc)
 		call to osEnterBackgroundPriority then refuseNotAParamOp()
+		osFileOpenWriteExecutable then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

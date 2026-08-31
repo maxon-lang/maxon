@@ -83,6 +83,7 @@ end 'arm64OsCallKind'
 export let Arm64LinuxSyscallWrite = 64
 export let Arm64LinuxSyscallMmap = 222
 export let Arm64LinuxSyscallExitGroup = 94
+
 // F1a — the page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
 // backing while keeping the mapping. AArch64's numbers, NOT x86-64's (11 and 28 there — see the twin block in
 // `Targets/X64/X64LinuxRuntime.maxon`), which is the whole reason this table carries an arch prefix. There is
@@ -90,6 +91,7 @@ export let Arm64LinuxSyscallExitGroup = 94
 // Windows-only call and arm64 emits nothing for it.
 export let Arm64LinuxSyscallMunmap = 215
 export let Arm64LinuxSyscallMadvise = 233
+
 // F2 — the per-thread identity word. `gettid` answers the calling thread's kernel thread id: per-thread
 // stable and never 0, which is exactly `StdOp.currentThreadToken`'s contract. It is asked instead of reading
 // `TPIDR_EL0` because shv2's Linux lane is a raw static binary with no libc, so nothing has written that
@@ -129,22 +131,35 @@ export let Arm64LinuxSyscallGettid = 178
 // and a `cbz` catches a null frame pointer (Linux, where execve zeroes the GPRs). Give this stub a
 // frame record, or drop either guard, and the walk's termination changes.
 //
-// ⚠ argv IS NOT AVAILABLE THE WAY macOS MAKES IT AVAILABLE — a landmine for whoever wires it later.
-// dyld hands macOS `mrt_start` argc/argv in **x0/x1**. The Linux kernel does NOT: it enters with
-// **argc at `[sp]`, argv at `sp+8`, envp after its NUL terminator**, and x0/x1 architecturally
-// UNSPECIFIED. v1 stashes from x0/x1 unconditionally on both (`Arm64Dialect.maxon:266-272`,
-// `Arm64PrologueEpilogue.maxon:42-64`), which is a latent bug on Linux. The scalar core needs no
-// argv at all, so this stub dodges it entirely — but a future argv slice must read the stack on
-// Linux, not the registers, and must do so BEFORE anything perturbs sp.
+// ⭐⭐ **argv IS CAPTURED HERE, AND WHERE IT IS CAPTURED FROM IS PER-OS WITHIN arm64 (MAC7).** This
+// paragraph was a landmine note and is now the implementation of what it warned about. dyld hands
+// macOS `mrt_start` argc/argv in **x0/x1**. The Linux kernel does NOT: it enters with **argc at
+// `[sp]`, argv at `sp+8`, envp after its NUL terminator**, and x0/x1 architecturally UNSPECIFIED.
+// v1 stashes from x0/x1 unconditionally on both (`Arm64Dialect.maxon:266-272`,
+// `Arm64PrologueEpilogue.maxon:42-64`), which is a latent bug on Linux and is the reason this arm
+// is a `match os` rather than one sequence.
+//
+// ⚠ **THE CAPTURE IS THE FIRST THING THE STUB DOES, BEFORE ANY `bl`.** On macOS a call would clobber
+// x0/x1; on Linux — where the capture must read the stack — anything that perturbs sp would move the
+// two words out from under it. Both hazards are avoided by the same placement, which is why it is
+// stated once rather than per arm.
 //
 // `leakCheck` gates the future MM leak bridge exactly as the x64 stub does; it is `false` for the
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, os Os) returns FunctionCodeChunk
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, os Os) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+
+	// The argument vector into the two `.data` words `__cl_count`/`__cl_arg` read (MAC7). It rides
+	// `usesCommandLine`, so a program that never asks for its arguments carries neither the capture nor
+	// the words — the one-bit-two-tiers arrangement every other runtime family here uses.
+	if captureArgv 'argv'
+		emitArm64ArgvCapture(code, rdataRelocs: rdataRelocs, os: os)
+	end 'argv'
 
 	// Fill every EAGER managed global's `.data` slot BEFORE user code (P1.7 slice 2a) — a `static` member's
 	// is filled on first access instead (see `ModuleInit`). `__module_init` takes
@@ -166,6 +181,20 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, os Os
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GlobalCleanupName)
 	end 'globalCleanup'
 
+	// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE (MAC3).**
+	// The ORDER is the whole point and it is `BackendDispatch.appendGreenThreadDrainGate`'s argument, which
+	// this stub had no arm for until the scheduler reached this lane: AFTER the global cleanup, because a
+	// released managed global may be the last owner of a handle whose drop lets a green thread finish; and
+	// BEFORE `__mm_leak_check`, because a worker M's `__gt_reclaim` steps the very counters that gate reads,
+	// so an un-joined scheduler makes a clean program report 101 intermittently.
+	//
+	// `__gt_drain_at_exit` is shaped like `__mm_leak_check` deliberately — ExitCode in x0, ExitCode out — so
+	// on AAPCS64 the value flows through it with no move at all, exactly as it does through the two gates
+	// around it. A program with no scheduler carries neither the call nor the function.
+	if drainGreenThreads 'greenThreadDrain'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GtDrainAtExitName)
+	end 'greenThreadDrain'
+
 	// The leak gate (future MM milestone). `__mm_leak_check` is an ordinary AAPCS64 function — it
 	// takes the ExitCode in x0 and returns the adjusted code (or 101) in x0 — so the value flows
 	// straight through with no move. Never emitted for the scalar core (`leakCheck` is false).
@@ -185,5 +214,33 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, os Os
 	// the end of this chunk into the next function rather than trusting it never to return.
 	arm64EmitBrk(code)
 
-	return FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 end 'buildArm64EntryStubChunk'
+
+// ⭐ **STASH `argc` AND `argv` WHERE THE Std TIER CAN READ THEM.** Two `.data` words and two stores; the
+// only per-OS part is which two places the pair is read FROM.
+//
+// ⚠ **THE ADDRESS GOES THROUGH x16 (IP0), WHICH IS FREE AT PROCESS ENTRY AND IS THE ONE SCRATCH NO ABI
+// CONTRACT HERE CLAIMS.** x0/x1 hold the values being stored on macOS, and the mandated ADRP+ADD pair needs
+// a destination that is neither.
+function emitArm64ArgvCapture(code ByteArray, rdataRelocs RdataRelocationArray, os Os)
+	match os 'argvLocation'
+		macos then emitArm64ArgvFromEntryRegisters(code, rdataRelocs: rdataRelocs)
+		wasi then panic("buildArm64EntryStubChunk: `wasm32-wasi` is not an arm64 lane — a WASI component has no `mrt_start` and no arm64 `.text` at all, so an `Os.wasi` reaching this stub is a target-construction bug")
+		linux then panic("buildArm64EntryStubChunk: arm64-Linux enters `_start` with argc at [sp] and argv at sp+8, and with x0/x1 architecturally UNSPECIFIED — so this capture cannot be the macOS one and `targetProvidesFacility` gives `commandLine` to arm64-macOS alone, which refuses such a program at its own source span (E3104). Reaching here means a program carrying `usesCommandLine` got past that gate on a Linux target, which is a compiler bug rather than the user-facing rejection")
+		windows then panic("buildArm64EntryStubChunk: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes, so an `Os.windows` reaching the arm64 entry stub is a target-construction bug")
+	end 'argvLocation'
+end 'emitArm64ArgvCapture'
+
+// dyld enters `mrt_start` with `argc` in x0 and `argv` in x1 — the two registers an AAPCS64 `main(argc,
+// argv)` would have received, which is exactly how the platform's own start-up files read them.
+function emitArm64ArgvFromEntryRegisters(code ByteArray, rdataRelocs RdataRelocationArray)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
+end 'emitArm64ArgvFromEntryRegisters'
+
+// One captured register into one `.data` word.
+function emitArm64ArgvStore(code ByteArray, rdataRelocs RdataRelocationArray, label ByteArray, src Arm64Register)
+	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64RuntimeReg(Arm64Register.x16), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(Arm64Register.x16), byteOffset: 0, scale: SpillSlotBytes)
+end 'emitArm64ArgvStore'

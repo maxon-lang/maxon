@@ -1,0 +1,496 @@
+// Test: managed-file.read-bound-is-the-owned-capacity
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openRead'
+end 'TestFile'
+
+function main() returns ExitCode
+	let path = "test_mf_read_owned_bound.txt"
+	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
+	try wf.file.write("0123456789".toByteArray().managed) otherwise panic("write: 10 bytes to a freshly opened file")
+	wf.file.close()
+
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create: a 4-byte owned buffer")
+	let atCapacity = try rf.file.read(mm, 4) otherwise 999
+	let overCapacity = try rf.file.read(mm, 5) otherwise 999
+	rf.file.close()
+
+	try mm.setLength(4) otherwise panic("setLength: 4 bytes of a capacity-4 buffer")
+	let first = try mm.byteAt(0) otherwise panic("byteAt: offset 0 of a 4-byte live range")
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise panic("delete: the file this case created")
+
+	print("at={atCapacity} first={first} over={overCapacity}")
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @TestFile.openWrite {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mf_open_write
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_destruct
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @TestFile.openRead {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mf_open_read
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_destruct
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 160
+    arm64.storeSlotReg slot17, x28
+    arm64.storeSlotReg slot16, x27
+    arm64.storeSlotReg slot15, x26
+    arm64.storeSlotReg slot14, x25
+    arm64.storeSlotReg slot13, x24
+    arm64.storeSlotReg slot12, x23
+    arm64.storeSlotReg slot11, x22
+    arm64.storeSlotReg slot10, x21
+    arm64.storeSlotReg slot9, x20
+    arm64.storeSlotReg slot8, x19
+    arm64.leaRdata x19, __str_rec_5  ; "test_mf_read_owned_bound.txt"
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl TestFile.openWrite
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot0, x21
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:22: openWrite: the runner's working directory is writable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.word64 x20, [x21 + 0]
+    arm64.leaRdata x0, __str_rec_6  ; "0123456789"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl __mf_write
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:23: write: 10 bytes to a freshly opened file\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __mf_close
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl TestFile.openRead
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot1, x21
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:26: openRead: the file just written\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  tryok#5:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movImm x0, 4
+    arm64.movImm x1, 1
+    arm64.bl __managed_mem_create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot2, x20
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:27: create: a 4-byte owned buffer\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  tryok#7:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.movImm x2, 4
+    arm64.movRegReg x1, x20
+    arm64.bl __mf_read
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#10
+    arm64.b tryok#9
+  tryerr#10:
+    arm64.movImm x22, 999
+    arm64.b trycont#11
+  tryok#9:
+    arm64.movRegReg x22, x0
+    arm64.b trycont#11
+  trycont#11:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.movImm x2, 5
+    arm64.movRegReg x1, x20
+    arm64.bl __mf_read
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#13
+    arm64.b tryok#12
+  tryerr#13:
+    arm64.movImm x23, 999
+    arm64.b trycont#14
+  tryok#12:
+    arm64.movRegReg x23, x0
+    arm64.b trycont#14
+  trycont#14:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __mf_close
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_length
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#16
+    arm64.b tryok#15
+  tryerr#16:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:32: setLength: 4 bytes of a capacity-4 buffer\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  tryok#15:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_byte_at
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#18
+    arm64.b tryok#17
+  tryerr#18:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:33: byteAt: offset 0 of a 4-byte live range\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  tryok#17:
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_delete
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#20
+    arm64.b tryok#19
+  tryerr#20:
+    arm64.leaRdata x0, __str_blob_16  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:34: delete: the file this case created\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  tryok#19:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.leaRdata x0, __str_rec_13  ; "at="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_14  ; " first="
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot7, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_15  ; " over="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot6, x1
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x28
+    arm64.bl __int_to_string
+    arm64.storeSlotReg slot5, x0
+    arm64.add x1, x21, x22
+    arm64.add x1, x1, x26
+    arm64.add x1, x1, x20
+    arm64.add x1, x1, x27
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot3, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot4, x0
+    arm64.add x23, x0, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x23, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x19, x19, x22
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x19, x19, x26
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x21, slot7
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x1, slot6
+    arm64.movRegReg x2, x27
+    arm64.bl __str_copy
+    arm64.add x19, x19, x27
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x28
+    arm64.loadRegSlot x20, slot5
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x19, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.storeBaseDispReg.word64 [x19 + 0], x23
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x19, 42
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __destruct_TestFile
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_TestFile
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+}

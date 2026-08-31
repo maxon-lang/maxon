@@ -185,6 +185,78 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		clockGettimeNsecNp gives "_clock_gettime_nsec_np"
 		nanosleep gives "_nanosleep"
 		sysconf gives "_sysconf"
+		// ⚠ **A DOUBLE UNDERSCORE, AND IT IS NOT A TYPO.** The C name is already `_NSGetExecutablePath`;
+		// the Mach-O ABI's leading underscore makes the symbol `__NSGetExecutablePath`. Spelling it with
+		// one would be an unresolved bind that dyld reports at LAUNCH, not at build.
+		nsGetExecutablePath gives "__NSGetExecutablePath"
+		realpath gives "_realpath"
+		free gives "_free"
+		getpid gives "_getpid"
+		setpriority gives "_setpriority"
+		getpriority gives "_getpriority"
+		// MAC3's green-thread substrate. Every one is an ordinary C name plus the Mach-O ABI's leading
+		// underscore; `_np` is part of `pthread_cond_timedwait_relative_np`'s own name (Darwin's
+		// non-portable relative-timeout wait), not a suffix this map adds.
+		malloc gives "_malloc"
+		pthreadKeyCreate gives "_pthread_key_create"
+		pthreadSetspecific gives "_pthread_setspecific"
+		pthreadMutexInit gives "_pthread_mutex_init"
+		pthreadMutexLock gives "_pthread_mutex_lock"
+		pthreadMutexUnlock gives "_pthread_mutex_unlock"
+		pthreadMutexDestroy gives "_pthread_mutex_destroy"
+		pthreadCondInit gives "_pthread_cond_init"
+		pthreadCondSignal gives "_pthread_cond_signal"
+		pthreadCondWait gives "_pthread_cond_wait"
+		pthreadCondTimedwaitRelativeNp gives "_pthread_cond_timedwait_relative_np"
+		pthreadCondDestroy gives "_pthread_cond_destroy"
+		pthreadCreate gives "_pthread_create"
+		pthreadJoin gives "_pthread_join"
+		getenv gives "_getenv"
+		pthreadMutexattrInit gives "_pthread_mutexattr_init"
+		pthreadMutexattrSettype gives "_pthread_mutexattr_settype"
+		pthreadMutexattrDestroy gives "_pthread_mutexattr_destroy"
+		// MAC4/5/6/7's filesystem and argv substrate. ⚠ **`__error` BECOMES `___error` — THREE underscores in
+		// total, and it is not a typo**, for `_NSGetExecutablePath`'s reason one screen up: the C name already
+		// begins with two, and the Mach-O ABI adds its own.
+		//
+		// ⚠ **NONE OF THESE CARRIES AN `$INODE64` SUFFIX, AND THAT IS AN arm64 FACT RATHER THAN A GUESS.** The
+		// suffixed variants (`_stat$INODE64`, `_readdir$INODE64`) exist only on x86_64, where the 32-bit inode
+		// forms had to stay ABI-compatible; arm64-macOS has never had a 32-bit inode, so the plain symbol IS
+		// the 64-bit one. MEASURED with `nm -u` on a clang-linked probe on this host: `_stat`, `_fstat`,
+		// `_fstatat`, `_opendir`, `_readdir`, `_closedir`, `_dirfd`, `_fnmatch`, `___error`, plain.
+		errnoLocation gives "___error"
+		open gives "_open"
+		creat gives "_creat"
+		read gives "_read"
+		close gives "_close"
+		fsync gives "_fsync"
+		stat gives "_stat"
+		fstat gives "_fstat"
+		fstatat gives "_fstatat"
+		unlink gives "_unlink"
+		rename gives "_rename"
+		mkdir gives "_mkdir"
+		getcwd gives "_getcwd"
+		opendir gives "_opendir"
+		readdir gives "_readdir"
+		closedir gives "_closedir"
+		dirfd gives "_dirfd"
+		fnmatch gives "_fnmatch"
+		// MAC8's child-process substrate. ⚠ **`__NSGetEnviron` TAKES A DOUBLE UNDERSCORE** for
+		// `_NSGetExecutablePath`'s reason two screens up: the C name already begins with one.
+		pipe gives "_pipe"
+		poll gives "_poll"
+		waitpid gives "_waitpid"
+		kill gives "_kill"
+		posixSpawnp gives "_posix_spawnp"
+		posixSpawnFileActionsInit gives "_posix_spawn_file_actions_init"
+		posixSpawnFileActionsAdddup2 gives "_posix_spawn_file_actions_adddup2"
+		posixSpawnFileActionsAddchdirNp gives "_posix_spawn_file_actions_addchdir_np"
+		posixSpawnFileActionsDestroy gives "_posix_spawn_file_actions_destroy"
+		posixSpawnattrInit gives "_posix_spawnattr_init"
+		posixSpawnattrSetflags gives "_posix_spawnattr_setflags"
+		posixSpawnattrDestroy gives "_posix_spawnattr_destroy"
+		nsGetEnviron gives "__NSGetEnviron"
 	end 'sym'
 end 'machoImportSymbol'
 

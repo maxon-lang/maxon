@@ -765,11 +765,18 @@ error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismat
 ```
 
 <!-- test: async-await.error.double-await -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 `await` is LINEAR: a promise is awaited exactly once. The thunk owns its result and hands it over
 at the await, so a second await takes a second reference to a payload the thunk only owned once —
 the two releases underflow the refcount and free it twice ("mm_decref: refcount underflow").
 The double-free is made unrepresentable rather than fixed.
+
+⚠ This case and the five `double-await-*` cases after it once kept a NARROW `x64-windows` marker while the
+rest of this file ran on arm64-macOS too, and the reason was never the subject: each reaches `File.exists`
+to give its thunk a yield point, and the FILE surface had no arm64-macOS implementation — so on that lane
+the program was refused with `E3104` naming `__mf_exists` before the linearity check ever ran, and the case
+would have pinned the wrong diagnostic. The note ended *"They widen when `managedFile` does"*; MAC4 is when
+it did, and all six now carry the same marker as the rest of the file.
 
 Note the thunk does not throw. This is an OWNERSHIP bug, not an error-handling one: a plain
 `async` returning a managed `String` double-frees identically.
@@ -799,7 +806,7 @@ error E3102: specs/fragments/async-await/async-await.error.double-await.test:10:
 ```
 
 <!-- test: async-await.error.double-await-in-loop -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The linear-await check is FLOW-SENSITIVE, and this is why it has to be. There is exactly ONE
 `await` here lexically, so a "have I seen this promise awaited before?" check finds nothing — but
 it sits in a loop over a promise spawned OUTSIDE the loop, so it awaits the same green thread on
@@ -852,7 +859,7 @@ end 'main'
 ```
 
 <!-- test: async-await.error.double-await-through-alias -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Linearity is a property of the GREEN THREAD, not of the identifier text. `let q = p` gives one
 green thread a second name; awaiting through both names awaits it twice, and the payload the
 thunk handed over once is released twice. This compiled clean and double-freed at runtime
@@ -879,7 +886,7 @@ error E3100: specs/fragments/async-await/async-await.error.double-await-through-
 ```
 
 <!-- test: async-await.error.double-await-through-alias-in-branch -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The same alias, made in a DIFFERENT BLOCK from the `async` that spawned the thread. This is why
 the key cannot be the promise value's SSA id either: a cross-block read of a promise variable
 re-tags a fresh value around the same green thread, so `p` and `q` here hold two different SSA
@@ -909,7 +916,7 @@ error E3100: specs/fragments/async-await/async-await.error.double-await-through-
 ```
 
 <!-- test: async-await.error.double-await-alias-outlives-rebind -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 Re-arming `p` does NOT end the first thread's life while `q` still names it. The walk that proves
 linearity therefore cannot stop at "the binding I started from was reassigned" — it stops only
 when EVERY binding that awaits the thread has been reassigned. Here `q` still names the first
@@ -1053,7 +1060,7 @@ end 'main'
 ```
 
 <!-- test: async-await.error.double-await-after-ternary-arm -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 The other side of the ternary boundary. An `await` in one arm does NOT make the promise spent on
 the path where that arm was not taken — but the await AFTER the ternary is reachable from the arm
 that was, so on that path the thread is awaited twice. Exclusivity buys the two arms nothing here:

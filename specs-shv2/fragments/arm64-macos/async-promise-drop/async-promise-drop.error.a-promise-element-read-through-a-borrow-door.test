@@ -1,0 +1,19 @@
+// Test: async-promise-drop.error.a-promise-element-read-through-a-borrow-door
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		let l = try s.last() otherwise panic("has one")
+		return (await l) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3141: <fragment>:14:17: a promise cannot be borrowed through 'last': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`

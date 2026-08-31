@@ -20,6 +20,14 @@ export function arm64RuntimeReg(reg Arm64Register) returns MachineWord
 	return arm64GprField(arm64PhysReg(reg))
 end 'arm64RuntimeReg'
 
+// The 5-bit encoding field of a NAMED physical SIMD register — the `d`-side twin, through the same
+// class-checking door (`arm64FpField` panics on a GPR exactly as `arm64GprField` panics on a SIMD
+// register). The green-thread context switch and the relocating grower are its readers: both move
+// d-registers by name rather than by colouring.
+export function arm64RuntimeFpReg(reg Arm64Register) returns MachineWord
+	return arm64FpField(arm64PhysReg(reg))
+end 'arm64RuntimeFpReg'
+
 // ==========================================================================
 // The chunk assembler
 // ==========================================================================
@@ -65,6 +73,39 @@ export type Arm64RuntimeAsm
 			slotCount: slots
 		}
 	end 'beginFunction'
+
+	// ⭐⭐ **OPEN A FUNCTION WITH NO FRAME AT ALL (MAC3) — the shape the GREEN-THREAD chunks need, and the
+	// one `beginFunction` above structurally cannot give them.**
+	//
+	// `__gt_context_switch` MOVES SP between two green threads' stacks and `__gt_trampoline` is entered by a
+	// `ret` into a frame no prologue built; a frame record opened here would be laid on one stack and torn
+	// down on another. `__gt_morestack` is frameless for a third reason: its frame lives on the P's SYSTEM
+	// stack, which it switches to itself, so the record must go there rather than on the near-overflow green
+	// thread stack it exists to rescue.
+	//
+	// ⚠ **A RAW CHUNK HAS NO LOCALS**: `slotOffset` panics for every index, because `slotCount` is 0 and the
+	// only base it could address off is an x29 this function never established. A chunk that wants a local
+	// wants `beginFunction`.
+	//
+	// ⚠ **AND IT IS NOT A LINK IN THE BACKTRACE CHAIN.** `Arm64PrologueEpilogue`'s header states the rule
+	// these three break — every function is framed, so the saved-x29 chain has no hole — and each breaks it
+	// deliberately: the switch and the trampoline sit at a green thread's stack BOUNDARY, where the chain
+	// legitimately ends (`__gt_spawn` seeds a fresh GT's x29 slot to 0, which is what stops the walk), and
+	// morestack runs off the chain entirely. `mrt_start` is frameless for the same class of reason.
+	export static function beginRawFunction() returns Arm64RuntimeAsm
+		return Self{
+			code: ByteArray.create(),
+			callFixups: CallFixupArray.create(),
+			iatRelocs: RelocationArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			labelOffsets: BlockOffsetTable.create(),
+			branchFixups: Arm64BlockBranchFixupArray.create(),
+			nextLabel: 0,
+			frameBytes: 0,
+			slotCount: 0
+		}
+	end 'beginRawFunction'
 
 	// Close a RETURNING function: the epilogue (the exact mirror of the prologue, so sp comes home by
 	// balanced arithmetic and x30 is restored) and the `ret`.
@@ -113,6 +154,11 @@ export type Arm64RuntimeAsm
 	end 'slotOffset'
 end 'Arm64RuntimeAsm'
 
+// The scale a BYTE access divides its immediate offset by. One, because a `strb`/`ldrb` immediate
+// counts bytes — named rather than written as a bare `1` beside the 8s and 4s of the wider forms,
+// where a lone digit says nothing about which of them it is.
+let ByteAccessStride = 1
+
 // A runtime chunk's frame record sits at SP: none of them passes an argument on the stack, so there
 // is no outgoing-argument region to displace it (see `Arm64PrologueEpilogue`'s `recordOffset`).
 let NoOutgoingArgRegion = 0 as StackSize
@@ -137,6 +183,27 @@ export function arm64EmitLoadWord64At(asm Arm64RuntimeAsm, dest Arm64Register, b
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
 end 'arm64EmitLoadWord64At'
 
+// `str Xt, [Xn, #byteOffset]` — the 64-bit STORE twin. Every hand-assembled arm64 runtime writes through a
+// pointer it was handed: the Darwin host surface's out-params, the green-thread chunks' GT struct fields and
+// the relocating grower's chain links. It lives beside its load rather than three times over.
+export function arm64EmitStoreWord64At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
+end 'arm64EmitStoreWord64At'
+
+// ⭐ **THE ADDRESS OF A NUL-TERMINATED `.rdata` CONSTANT IN x0** — the shared half of "hand libSystem, or the
+// panic runtime, a fixed string". The constant rides the SAME immortal, byte-deduped blob channel a String
+// literal's payload takes (`registerStringBlob`), addressed with the mandated ADRP+ADD pair, so no runtime
+// needs a data channel of its own. It registers during the ENCODE phase, after every user literal, so it
+// APPENDS to `.rdata` and moves no label id and no pinned prefix (see `specs-shv2/rdata-section.md`).
+//
+// ⚠ It stops at the ARGUMENT. What follows differs by runtime and by intent — the panic runtime WRITES the
+// string and returns, the green-thread floor ABORTS through `mrt_panic` and does not — so the branch is each
+// caller's and only the materialisation is shared.
+export function arm64EmitCStringArg(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
+	let label = registerStringBlob(globalData, bytes: bytes)
+	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(Arm64Register.x0), label: label.toByteArray(), adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
+end 'arm64EmitCStringArg'
+
 // `ldr Wt, [Xn, #byteOffset]` — a `__symtable` column. 32 bits, ZERO-extended into the full X
 // register, which is what makes the count and both entry fields read as the u32s the writer emitted.
 export function arm64EmitLoadColumn(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset Imm32)
@@ -146,8 +213,15 @@ end 'arm64EmitLoadColumn'
 // `ldrb Wt, [Xn, #0]` — one byte of a C string, zero-extended, so the `cbz` that follows tests the
 // whole register against the NUL.
 export function arm64EmitLoadByte(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register)
-	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrB, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: 0, scale: 1)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrB, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: 0, scale: ByteAccessStride)
 end 'arm64EmitLoadByte'
+
+// `strb Wt, [Xn, #0]` — the store twin, and the second half of a byte-at-a-time C-string copy. The
+// register's upper 56 bits are ignored by the encoding, so a byte read with `arm64EmitLoadByte` can be
+// written straight back with no masking step.
+export function arm64EmitStoreByte(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrB, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: 0, scale: ByteAccessStride)
+end 'arm64EmitStoreByte'
 
 export function arm64EmitMovRuntimeReg(asm Arm64RuntimeAsm, dest Arm64Register, src Arm64Register)
 	arm64EmitMovGpr(asm.code, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(src))
@@ -191,6 +265,12 @@ end 'arm64EmitCondBranchTo'
 export function arm64EmitCbzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
 	arm64EmitCbz(asm.code, fixups: asm.branchFixups, reg: arm64RuntimeReg(reg), targetBlock: label)
 end 'arm64EmitCbzTo'
+
+// The complement. A chunk that has both spellings can branch on the case it wants to LEAVE rather than
+// emitting a `cbz` over an unconditional `b`, which is two instructions and an extra label to say one thing.
+export function arm64EmitCbnzTo(asm Arm64RuntimeAsm, reg Arm64Register, label BlockId)
+	arm64EmitCbnz(asm.code, fixups: asm.branchFixups, reg: arm64RuntimeReg(reg), targetBlock: label)
+end 'arm64EmitCbnzTo'
 
 // The OS door every terminal step in this file goes through — the same one `StdToArm64Conversion`'s
 // `lowerOsExit` uses, so the panic runtime cannot grow a second opinion about which OSes this backend

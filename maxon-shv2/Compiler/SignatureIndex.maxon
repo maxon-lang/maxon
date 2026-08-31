@@ -4286,6 +4286,7 @@ end 'SweptBodyFactEntry'
 
 export typealias SweptBodyFactEntryArray = Array with SweptBodyFactEntry
 typealias DeclaredBodyFactNameSet = Set with ByteArray
+
 // The `<T>.handle` names one program mints (SV1) — see `ProgramSignatures.serviceHandleNames`. Keyed by NAME
 // for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
 typealias ServiceHandleOwnerMap = Map with (ByteArray, ByteArray)
@@ -5984,7 +5985,8 @@ export let ManagedFileOpenWriteMethod = b"openWrite"
 
 // ⭐ It is a distinct METHOD and NOT a distinct op: its only difference in either reference is a Unix 0755
 // permission bit, and shv2's file IO is host-only Windows by the R4.1 ruling — so it lowers to exactly
-// `openWrite`'s `osFileOpenWrite`. A POSIX lane splits them on the day it exists.
+// `openWrite`'s `osFileOpenWrite`. ⚠ **THE TWO ARE SPLIT AS OF MAC4** — `__mf_open_write_exec` and
+// `StdOp.osFileOpenWriteExecutable` — because a POSIX lane makes the permission mask observable.
 export let ManagedFileOpenWriteExecutableMethod = b"openWriteExecutable"
 export let ManagedFileExistsMethod = b"exists"
 export let ManagedFileDeleteMethod = b"delete"
@@ -6203,7 +6205,9 @@ export let ByteAtMethod = b"byteAt"
 // unprefixed constant to serve yet. A second one that spelled it would take this constant rather than mint a
 // fifth, exactly as `ClearMethod` was un-prefixed the day the chain spelled it.
 export let ListPrependMethod = b"prepend"
+
 module let ListLastMethod = b"last"
+
 export let ListRemoveFirstMethod = b"removeFirst"
 export let ListRemoveLastMethod = b"removeLast"
 
@@ -6351,12 +6355,19 @@ export let StringErrorTypeName = b"StringError"
 // of name constants serves both enums: writing them twice would let the two orders drift apart while each file
 // still read "correct", and the ordinal IS the error flag a throwing runtime returns in both families.
 module let ManagedMemoryIndexOutOfBoundsCaseName = b"indexOutOfBounds"
+
 module let ManagedMemoryEmptySlotCaseName = b"emptySlot"
+
 module let ManagedMemorySliceOutOfBoundsCaseName = b"sliceOutOfBounds"
+
 module let ManagedMemoryInvalidLengthCaseName = b"invalidLength"
+
 module let ManagedMemoryInvalidCapacityCaseName = b"invalidCapacity"
+
 module let ManagedMemoryShiftOutOfBoundsCaseName = b"shiftOutOfBounds"
+
 module let ManagedMemoryInvalidByteRangeCaseName = b"invalidByteRange"
+
 module let ManagedMemoryInvalidAllocationCaseName = b"invalidAllocation"
 
 // `String.init(managed ByteMemory)` — `stdlib/String.maxon:114`, the corpus's way back from a
@@ -6387,19 +6398,28 @@ module let ManagedFileErrorTypeName = b"__ManagedFileError"
 // The three case names, in the order `specs/managed-file.md` states them — which IS their ordinal order,
 // and therefore the error flag the runtime returns. Not reorderable; see the layout's comment.
 module let ManagedFileNotFoundCaseName = b"notFound"
+
 module let ManagedFileAccessDeniedCaseName = b"accessDenied"
+
 module let ManagedFileOpenFailedCaseName = b"openFailed"
 
 // The eight R4.2 cases, APPENDED in v1's exact order (`LowerMaxonToStd.maxon:1781-1795`). Appending is not
 // a style choice: the ordinal IS the wire format the runtime returns as an error flag, so inserting or
 // reordering one silently reroutes every handler in the corpus.
 module let ManagedFileReadFailedCaseName = b"readFailed"
+
 module let ManagedFileWriteFailedCaseName = b"writeFailed"
+
 module let ManagedFileSizeFailedCaseName = b"sizeFailed"
+
 module let ManagedFileDeleteFailedCaseName = b"deleteFailed"
+
 module let ManagedFileStatFailedCaseName = b"statFailed"
+
 module let ManagedFileInvalidStatBufferCaseName = b"invalidStatBuffer"
+
 module let ManagedFileInvalidStatIndexCaseName = b"invalidStatIndex"
+
 module let ManagedFileClosedCaseName = b"closed"
 
 // The FIELD that yields it from a byte array — `stdlib/String.maxon:68`'s `var managed as ByteMemory`,
@@ -6477,12 +6497,19 @@ module let ManagedDirectoryErrorTypeName = b"__ManagedDirectoryError"
 // `iteratorInvalid`, which would shift every later ordinal by one. It is the third reference comment found
 // stale about its own enum.
 module let ManagedDirectoryNotFoundCaseName = b"notFound"
+
 module let ManagedDirectoryAccessDeniedCaseName = b"accessDenied"
+
 module let ManagedDirectoryOpenSearchFailedCaseName = b"openSearchFailed"
+
 module let ManagedDirectoryNextFailedCaseName = b"nextFailed"
+
 module let ManagedDirectoryIteratorInvalidCaseName = b"iteratorInvalid"
+
 module let ManagedDirectoryCreateFailedCaseName = b"createFailed"
+
 module let ManagedDirectoryCurrentPathFailedCaseName = b"currentPathFailed"
+
 module let ManagedDirectoryClosedCaseName = b"closed"
 
 // ⭐ **THE COMPILER-OWNED `__ManagedSocket` TYPE** — an 8-byte box holding one raw OS socket handle, with
@@ -6523,11 +6550,17 @@ module let ManagedSocketErrorTypeName = b"__ManagedSocketError"
 // so a transcription that "tidied" the order would silently re-point every other flag by one. The
 // declaration is the authority; this list is checked against it by the ordinal guard.
 module let ManagedSocketBufferOutOfBoundsCaseName = b"bufferOutOfBounds"
+
 module let ManagedSocketResolveFailedCaseName = b"resolveFailed"
+
 module let ManagedSocketConnectFailedCaseName = b"connectFailed"
+
 module let ManagedSocketSendFailedCaseName = b"sendFailed"
+
 module let ManagedSocketRecvFailedCaseName = b"recvFailed"
+
 module let ManagedSocketConnectionClosedCaseName = b"connectionClosed"
+
 module let ManagedSocketClosedCaseName = b"closed"
 
 // ⭐ **THE PARAMETER NAMES A `__ManagedSocket` ARGUMENT MISMATCH QUOTES BACK.** They are the reference's own
@@ -7091,7 +7124,8 @@ export typealias RangeIdentityNameMap = Map with (ByteArray, ByteArray)
 
 // How many ranged aliases a program declares over one range, while `rangeIdentityPairs` is deciding which
 // ranges have more than one claimant. The bound is the count of ranged typealiases in the program.
-module typealias RangeClaimantCount = int(0 to u32.max)
+typealias RangeClaimantCount = int(0 to u32.max)
+
 export typealias RangeClaimantCountMap = Map with (ByteArray, RangeClaimantCount)
 
 // One merged instance ⇒ the instance it merged INTO. Only `rekeyForRangeIdentity` writes it, and only for a

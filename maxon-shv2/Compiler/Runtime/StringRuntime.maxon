@@ -252,6 +252,7 @@ export let StrEqName = b"__str_eq"
 // `__str_eq` it touches no allocator, so it never widens the heap-runtime decision. That decision is
 // driven by the interpolation's OWN `__mm_alloc` calls, which `scanRuntimeUsage` already sees.
 export let IntToStringName = b"__int_to_string"
+
 // The UNSIGNED decimal renderer (X11) — `__int_to_string` with no sign handling at all and an unsigned
 // digit walk. It is a second ENTRY POINT and not a second implementation: one builder emits both (see
 // `buildIntegerToString`), because the two graphs share their count loop and their write loop and
@@ -1092,7 +1093,6 @@ function buildBoolToString(module StdModule)
 	module.functions.push(func)
 end 'buildBoolToString'
 
-
 // `__str_decref(record)` — a String's DROP. It is `__mm_decref` (dec the refcount; free at the last
 // owner) plus the one thing the generic decref structurally cannot do: release the EXTERNAL buffer of a
 // detached String BEFORE the record. The parser routes every owned-String drop here by TAG (`emitDecref`),
@@ -1519,7 +1519,6 @@ function buildStrBytesView(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrBytesView'
-
 
 // ⚠⚠ **`buildStrByteRead` WAS HERE AND WENT WITH BOTH ITS CALLEES (W49 wave 7).** It was ONE bounds-checked
 // byte read serving `__str_byte_at` and `__str_byte_at_or_panic` — the same graph wearing two failure exits,

@@ -39,6 +39,22 @@ completion arriving before the park would otherwise cause.
 statement of it.** Reading a line from a spawned child parks the calling green thread on the driver,
 and the interleaving cases additionally reach `__gt_sleep` — both x64-windows only at this rung.
 
+### ⭐ arm64-macOS RUNS THE PROBE, BUT NOT THE PART OF IT THAT PARKS
+
+`TargetFacilities` answers `subprocess gives true` for arm64-macOS, so `spawnReadLine` compiles and
+runs there; the command line reaches the child through `/bin/sh -c`. The two cases this lane can
+express carry `posix-…` siblings marked `arm64-macos`, following `process-background-priority.md`'s
+pattern — the programs could not be widened, because they spawn `cmd`.
+
+⛔ **`interleave-with-sleep` AND `drop-in-flight` HAVE NO SIBLING, AND BOTH ARE ABOUT A READ THAT IS
+IN FLIGHT.** This lane builds no completion port, no wake event and no drain thread at all
+(`GtRuntime.IoCompletionShape`), and the read completes in its caller — so there is no overlapped
+operation to run a sleeper against and none to cancel. MEASURED with `interleave-with-sleep`'s own
+shape, recording completion ORDER rather than a sum: this lane answers **12** (the reader finishes
+first) where Windows answers **21**. What the siblings below pin is that the probe reads a child's
+bytes and answers the count, from GT0 and from a spawned green thread; the yielding half waits on a
+kqueue this lane does not have.
+
 ## Tests
 
 <!-- test: spawn-read-line.top-level -->
@@ -54,6 +70,26 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: spawn-read-line.posix-top-level -->
+<!-- targets: arm64-macos -->
+`top-level`'s subject on the POSIX lane. GT0 reads a child's stdout through the one-shot probe and returns
+the byte count; `echo hello` writes `hello\n` = SIX bytes, an LF where `cmd /c echo` writes CRLF.
+
+⚠ **THE READ COMPLETES IN ITS CALLER HERE RATHER THAN ON A COMPLETION THREAD.** There is no IOCP and no
+port to drain on this lane — `GtRuntime.IoCompletionShape` is why the port, the wake event and the drain
+thread are not built at all — so what this case pins is that the probe reads the child's bytes and answers
+the count, not the publish-after-park handshake its Windows sibling additionally exercises. The command
+line reaches the child through `/bin/sh -c`, exactly as `__Builtins.runProcess`'s does.
+```maxon
+function main() returns ExitCode
+	let n = spawnReadLine("echo hello")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+6
 ```
 
 <!-- test: spawn-read-line.spawned-reader -->
@@ -75,6 +111,33 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
+```
+
+<!-- test: spawn-read-line.posix-spawned-reader -->
+<!-- targets: arm64-macos -->
+The read runs inside a SPAWNED green thread (`stackBase != 0`) rather than on GT0, so the reader's stack is
+a scheduler-allocated one and its result travels back through the promise rather than through a plain
+return. `main` awaits it and returns the byte count.
+
+⚠ On this lane the resume is NOT cross-thread — the read completes in the reading GT itself — so what this
+case adds over `posix-top-level` is the spawned-stack path, not the run-queue lock its Windows sibling
+exercises. It is worth its own case for the reason `async-subprocess.posix-multi-concurrent` is: a probe
+that only ever ran on GT0 would not notice a reader that answered correctly there and clobbered a spawned
+GT's frame.
+```maxon
+function reader() returns Integer
+	return spawnReadLine("echo hello")
+end 'reader'
+
+function main() returns ExitCode
+	let r = async reader()
+	let n = await r
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+6
 ```
 
 <!-- test: spawn-read-line.interleave-with-sleep -->

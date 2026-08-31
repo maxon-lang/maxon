@@ -1,0 +1,191 @@
+// Test: await-any.leaves-the-others-awaitable
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function value(v Integer) returns Integer
+	Runtime.yield()
+	return v
+end 'value'
+
+function main() returns ExitCode
+	var arr = IntPromiseArray.create()
+	arr.push(async value(10))
+	arr.push(async value(20))
+	arr.push(async value(30))
+	let first = __Builtins.awaitAny(arr)
+	let second = __Builtins.awaitAny(arr)
+	var score = 0
+	if first == second 'aselectiswithoutsideeffect'
+		score = score + 1
+	end 'aselectiswithoutsideeffect'
+	var sum = 0
+	for p in arr 'awaiteveryone'
+		sum = sum + await p
+	end 'awaiteveryone'
+	if sum == 60 'allthreewerestillthere'
+		score = score + 6
+	end 'allthreewerestillthere'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @value {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.bl Runtime.yield
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 10
+    arm64.leaFuncAddr x0, value
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_push
+    arm64.movImm x20, 20
+    arm64.leaFuncAddr x0, value
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_push
+    arm64.movImm x20, 30
+    arm64.leaFuncAddr x0, value
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await_any
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await_any
+    arm64.movImm x21, 0
+    arm64.cmp x20, x0
+    arm64.cset x0, eq
+    arm64.cbnz x0, aselectiswithoutsideeffect
+    arm64.b critsplit#13
+  aselectiswithoutsideeffect:
+    arm64.movImm x20, 1
+    arm64.b ifcont#2
+  critsplit#13:
+    arm64.movRegReg x20, x21
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.movImm x21, 0
+    arm64.movImm x22, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x22, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, awaiteveryone
+    arm64.b forexit
+  awaiteveryone:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x22, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.bl __gt_await
+    arm64.add x21, x21, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x21, 60
+    arm64.cset x0, eq
+    arm64.cbnz x0, allthreewerestillthere
+    arm64.b critsplit#14
+  allthreewerestillthere:
+    arm64.add x20, x20, 6
+    arm64.b ifcont#8
+  critsplit#14:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at await-any.leaves-the-others-awaitable.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

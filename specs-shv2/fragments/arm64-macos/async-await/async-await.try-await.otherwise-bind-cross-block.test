@@ -1,0 +1,246 @@
+// Test: async-await.try-await.otherwise-bind-cross-block
+typealias Integer = int(i64.min to i64.max)
+
+union WorkError implements Error
+		failed(reason String)
+end 'WorkError'
+
+function work(n Integer) returns Integer throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("cross-block")
+		end 'neg'
+		return n
+end 'work'
+
+function main() returns ExitCode
+		let p = async work(-1)
+		var guard = 1
+		if guard == 1 'sep'
+				guard = 2
+		end 'sep'
+		let r = try await p otherwise (e) 'failed'
+				match e 'which'
+						failed(reason) then print("caught: {reason}\n")
+				end 'which'
+				return 0
+		end 'failed'
+		return r
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_num_procs@144 = i64 0
+  __sched_shutdown_flag@152 = i64 0
+  __sched_lock@160 = i64 0
+  __slab_arena_list@168 = i64 0
+  __slab_arena_map_l1@176 = i64 0
+  __slab_state@184 = i64 0
+}
+
+func @work {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_19  ; "noyield.txt"
+    arm64.bl FilePath.init
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl File.exists
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_FilePath
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, neg
+    arm64.b ifcont
+  neg:
+    arm64.leaRdata x19, __str_rec_20  ; "cross-block"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot10, x28
+    arm64.storeSlotReg slot9, x27
+    arm64.storeSlotReg slot8, x26
+    arm64.storeSlotReg slot7, x25
+    arm64.storeSlotReg slot6, x24
+    arm64.storeSlotReg slot5, x23
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 18446744073709551615
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
+    arm64.leaFuncAddr x0, __gt_release_work
+    arm64.storeBaseDispReg.word64 [x20 + 176], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.b sep
+  sep:
+    arm64.b ifcont
+  ifcont:
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_try_await
+    arm64.storeSlotReg slot0, x9
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x19, [x9 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x0, __str_rec_21  ; "caught: "
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_22  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x21, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x20, x20, x23
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x20, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_WorkError
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  matchdead:
+  tryok:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_90  ; "panic at async-await.try-await.otherwise-bind-cross-block.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+}

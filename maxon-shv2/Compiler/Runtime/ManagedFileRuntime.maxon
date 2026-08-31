@@ -10,12 +10,18 @@
 // corpus does not already ask cannot be asked of the bootstrap at all.** Prefer reading v1's lowering over
 // inventing an answer, and say so at the site when neither can settle something.
 //
-// ⭐ **HOST-ONLY BY RULING (2026-07-30).** `x64-windows` is real; every other target refuses at the call
-// site with the EXISTING `E3104 targetUnsupportedConstruct` via `targetHasWin32Substrate`
-// (`SemanticCheck.maxon`), which is the same route that makes the wall clock host-only. No new mechanism,
-// and deliberately NOT a per-backend port: v1's ~3,900 lines of per-backend emission buy lanes the oracle
-// cannot even validate (the bootstrap has no Linux or wasm emitter), and its arm64 directory walk is
-// unfinished in a way that returns an empty result with no error.
+// ⭐⭐ **TWO LANES AS OF MAC4, AND THIS PARAGRAPH USED TO SAY "HOST-ONLY BY RULING (2026-07-30)".** It read:
+// *"`x64-windows` is real; every other target refuses at the call site … deliberately NOT a per-backend
+// port: v1's ~3,900 lines of per-backend emission buy lanes the oracle cannot even validate."* arm64-macOS
+// is now the second, and the caution that paragraph carried is intact rather than overturned — what landed
+// is one lane whose every entry point is exercised by the ported corpus on the host it runs on, not four
+// speculative ones. `TargetFacilities.targetProvidesFacility`'s `managedFile` row is the one place that
+// says which; every other target still refuses at the call site with `E3104`.
+//
+// ⚠ **WHAT THE SECOND LANE DID *NOT* CHANGE IS THIS FILE.** The classification, the box, the sentinels and
+// the retry shapes are the same graph for both — `Arm64DarwinRuntime` translates Darwin's `errno` into the
+// Win32 numbers this file tests, exactly as it translates nanoseconds into a FILETIME — with ONE forced
+// exception, the handle-slot bias below, which was a latent defect rather than a porting cost.
 //
 // ⚠ **DO NOT PORT v1's HANDLE BLOCK BY INSPECTION.** Both references REGISTER an 8-byte handle struct
 // while v1's real `__ManagedDirectory` runtime block is 40 bytes, with nothing tying the two together —
@@ -36,15 +42,52 @@
 export let ManagedFileHandleOffset = 0 as ByteOffset
 export let ManagedFileBoxBytes = 8 as ParsedInt
 
-// The handle value a CLOSED box carries. `close()` is documented idempotent and is ALSO called by the
-// destructor, so the two must be able to run in either order and in both orders — `managed-file.exists`
-// closes explicitly and then lets the struct drop, which is exactly that sequence. Storing this sentinel
-// on close is what makes the second close a no-op rather than a double `CloseHandle` on a reused handle.
+// The value a handle SLOT carries when it holds no handle. `close()` is documented idempotent and is ALSO
+// called by the destructor, so the two must be able to run in either order and in both orders —
+// `managed-file.exists` closes explicitly and then lets the struct drop, which is exactly that sequence.
+// Storing this sentinel on close is what makes the second close a no-op rather than a double close on a
+// reused handle.
 //
 // ⚠ It is `0`, not Win32's `INVALID_HANDLE_VALUE` (-1), and the distinction is deliberate: a box is
 // allocated zeroed, so an unopened box and a closed box carry the same value and one guard covers both.
-// A handle the OS actually returns is never 0 for a file.
 let ManagedFileClosedHandle = 0 as ParsedInt
+
+// ⭐⭐ **A HANDLE SLOT HOLDS `handle + 1`, AND THAT BIAS IS WHAT LETS A ZEROED BOX MEAN "CLOSED" ON A
+// PLATFORM WHOSE HANDLES START AT ZERO.**
+//
+// ⛔ **THIS PARAGRAPH USED TO READ "a handle the OS actually returns is never 0 for a file", AND THAT IS
+// TRUE OF A Win32 `HANDLE` AND FALSE OF A POSIX DESCRIPTOR.** `open(2)` is DEFINED to answer the lowest
+// free descriptor, so a process whose standard input has been closed gets fd 0 for its first file — and
+// the box would then read as CLOSED from the moment it was opened: every `size`/`read`/`write` throwing
+// `closed`, and `__mf_close`/`__mf_destruct` skipping the close, which is a descriptor LEAK with no
+// diagnostic anywhere. Found by inspection during MAC4; the failure is silent on every path.
+//
+// ⇒ The slot stores `handle + HandleSlotBias`, so the encoding is total: **every** handle value the OS can
+// answer — 0 included — maps to a non-zero slot, and the zero a fresh allocation leaves keeps its one
+// meaning. The alternative (a `-1` sentinel with an explicit zero-init) collides with
+// `InvalidHandleValue`, needs a store the allocator's zeroing already pays for, and would have to be
+// remembered at every site that mints a box.
+//
+// ⚠ **THE BIAS IS THE SLOT'S, NOT THE FAMILY'S** — `__ManagedDirectory`'s search handle rides the same
+// encoding through the same guard (`emitLiveHandleOrClosedThrow`), because the defect is the same one:
+// `opendir` answers NULL on failure and never -1, so a directory family testing 0 for "closed" is reading
+// the same word two ways. One encoding, one guard, two families.
+let HandleSlotBias = 1 as ParsedInt
+
+// Store an OS handle into a handle slot — `emitLiveHandleOrClosedThrow`'s inverse, and the only writer of
+// the biased encoding above.
+export function emitStoreHandleSlot(module StdModule, block IrBlock, record ValueId, handleOffset ByteOffset, handle ValueId, ids ValueMinter)
+	let bias = emitConst(module, block: block, value: HandleSlotBias, ids: ids)
+	let slot = emitBin(module, block: block, a: handle, b: bias, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: record, offset: handleOffset, value: slot)
+end 'emitStoreHandleSlot'
+
+// The OS handle a handle slot carries. The caller must already have established that the slot is not the
+// closed sentinel — on that path the answer is `-1`, which is a handle no call may be made with.
+export function emitHandleFromSlot(module StdModule, block IrBlock, slot ValueId, ids ValueMinter) returns ValueId
+	let bias = emitConst(module, block: block, value: HandleSlotBias, ids: ids)
+	return emitBin(module, block: block, a: slot, b: bias, opcode: StdBinOpcode.sub, ids: ids)
+end 'emitHandleFromSlot'
 
 // `CreateFileA` reports failure as `INVALID_HANDLE_VALUE`, which is -1 and NOT the zero a closed box
 // carries. Two distinct sentinels for two distinct facts: "the OS refused" vs "this box holds no handle".
@@ -54,9 +97,13 @@ export let InvalidHandleValue = -1 as ParsedInt
 // Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are BOTH 2 — which is why the errno→variant mapping is
 // builder-built Std here rather than backend code, and why a future POSIX lane reuses this arithmetic
 // unchanged and supplies only the OPEN.
-let ErrorFileNotFound = 2 as ParsedInt
-let ErrorPathNotFound = 3 as ParsedInt
-let ErrorAccessDenied = 5 as ParsedInt
+// ⚠ **EXPORTED FOR THE POSIX LANES (MAC4), WHICH MUST *PRODUCE* THESE NUMBERS.** The classification below
+// is target-neutral arithmetic over a Win32 code, so a lane whose OS answers `errno` has to translate —
+// and `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` reads these three rather than transcribing them,
+// because a producer and a consumer of one number are exactly the pair this project keeps finding drifted.
+export let ErrorFileNotFound = 2 as ParsedInt
+export let ErrorPathNotFound = 3 as ParsedInt
+export let ErrorAccessDenied = 5 as ParsedInt
 
 // ⭐ **THE `__ManagedFileError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`).** DERIVED from
 // the bias rather than spelled 1…11, exactly as `ManagedMemoryRuntime.ArrayErrorIndexOutOfBoundsFlag` is — and the ordinals
@@ -74,6 +121,7 @@ let ManagedFileWriteFailedOrdinal = 4 as ParsedInt
 let ManagedFileSizeFailedOrdinal = 5 as ParsedInt
 let ManagedFileDeleteFailedOrdinal = 6 as ParsedInt
 let ManagedFileStatFailedOrdinal = 7 as ParsedInt
+
 // ⚠ **8 AND 9 CARRY NO FLAG BECAUSE NOTHING THROWS THEM, AND THE ORDINALS ARE HERE ANYWAY (W135).**
 // `invalidStatBuffer` and `invalidStatIndex` name the two ways a `statField`/`statFree` call can be handed
 // something impossible, and shv2 answers both with a runtime ABORT rather than a throw
@@ -108,12 +156,17 @@ let ManagedFileClosedFlag = ManagedFileClosedOrdinal + ErrorFlagOrdinalBias
 // ⚠ **THE SIZE AND THE OFFSETS ARE ONE FACT WITH TWO FAMILIES READING IT, WHICH IS WHY THEY ARE EXPORTED
 // FROM HERE RATHER THAN RE-TRANSCRIBED (R4.3).** A second copy of `cFileName is at 44` is a number nothing
 // checks: get it wrong and `filename()` returns a slice of a timestamp, silently.
+// ⚠ **EXPORTED FOR THE LANE THAT MUST *FILL* THE RECORD (MAC4/5).** Win32 fills it through
+// `FindFirstFileA`; a POSIX lane synthesizes it from a `struct stat` and a `dirent`
+// (`Arm64DarwinRuntime.buildArm64DarwinFillFindDataChunk`), which needs the same offsets this file reads
+// them back with. `FindDataSizeLowOffset` stays private: the fill writes the two size DWORDs as ONE
+// unaligned 64-bit store at `FindDataSizeHighOffset`, so the low half has no separate writer.
 export let FindDataBytes = 320 as ParsedInt
-let FindDataAttributesOffset = 0 as ByteOffset
-let FindDataCreationTimeOffset = 4 as ByteOffset
-let FindDataLastAccessTimeOffset = 12 as ByteOffset
-let FindDataLastWriteTimeOffset = 20 as ByteOffset
-let FindDataSizeHighOffset = 28 as ByteOffset
+export let FindDataAttributesOffset = 0 as ByteOffset
+export let FindDataCreationTimeOffset = 4 as ByteOffset
+export let FindDataLastAccessTimeOffset = 12 as ByteOffset
+export let FindDataLastWriteTimeOffset = 20 as ByteOffset
+export let FindDataSizeHighOffset = 28 as ByteOffset
 let FindDataSizeLowOffset = 32 as ByteOffset
 
 // `cFileName` — a NUL-terminated `char[MAX_PATH]` at the record's tail. Read only by `__ManagedDirectory`
@@ -123,7 +176,13 @@ export let FindDataFileNameOffset = 44 as ByteOffset
 // The two `dwFileAttributes` bits the corpus can observe: `exists` answers 0 for a DIRECTORY (the spec
 // says "Returns 1 if the file exists (and is not a directory)"), and `stat` publishes both as 0/1.
 export let FileAttributeDirectory = 0x10 as ParsedInt
-let FileAttributeReadOnly = 0x1 as ParsedInt
+export let FileAttributeReadOnly = 0x1 as ParsedInt
+
+// `FILE_ATTRIBUTE_NORMAL` — the mask a plain, writable file carries, and the one bit here that only a
+// PRODUCER needs: Win32 sets it and no reader in this file tests it. A POSIX lane synthesizing a find
+// record has to write something for an ordinary file, and writing 0 would be a mask meaning "no attributes
+// at all", which is not what any Win32 `FindFirstFileA` ever answers.
+export let FileAttributeNormal = 0x80 as ParsedInt
 
 // ⭐ **THE 48-BYTE STAT BUFFER — six i64 fields, packed exactly as the bootstrap packs them**
 // (`X86CodeEmitter.Runtime.cs:3815-3872`). `stat` returns this buffer's ADDRESS as a bare `int`, the caller
@@ -166,6 +225,10 @@ let ManagedFileRuntimePrefix = b"__mf_"
 // answers with one, and the test is always "is it zero?".
 export let Win32False = 0 as ParsedInt
 
+// Its complement — Win32 promises only "non-zero", and this is the one a lane that must PRODUCE a BOOL
+// writes. Named rather than left as a bare 1 beside `Win32False` for the reason the pair exists at all.
+export let Win32True = 1 as ParsedInt
+
 // ⭐ **THE SCRATCH WORD A Win32 OUT-PARAMETER IS WRITTEN THROUGH** — `GetFileSizeEx`'s `PLARGE_INTEGER` and
 // `ReadFile`/`WriteFile`'s `lpNumberOfBytes*`. Named for THAT purpose rather than reusing `StatFieldBytes`
 // (which is a stat record's field STRIDE): the two are both 8 and mean different things, and one constant
@@ -185,16 +248,19 @@ let Win32OutWordBytes = 8 as ParsedInt
 // this allocation's layout, transcribed three times, in three files, none of which declares it.
 export let Win32OutWordAnswerOffset = 0 as ByteOffset
 
-// ⭐ **THE THIRTEEN ENTRY POINTS.** Twelve name a `__ManagedFile` method; `__mf_destruct` is the
+// ⭐ **THE FOURTEEN ENTRY POINTS.** Thirteen name a `__ManagedFile` method; `__mf_destruct` is the
 // compiler-INSERTED one — the drop a `__ManagedFile` box takes when its last owner goes away
 // (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half of this type.
 //
-// ⚠ **THERE IS NO `__mf_open_write_exec`, AND THAT IS THE `openWriteExecutable` DECISION, NOT AN
-// OMISSION.** The only thing that method adds in either reference is a Unix 0755 permission bit, and shv2's
-// file IO is host-only Windows by the R4.1 ruling — so the parser's `openWriteExecutable` arm emits
-// `__mf_open_write` and the two are the same call. A POSIX lane splits them on the day it exists.
+// ⭐⭐ **`__mf_open_write_exec` EXISTS AS OF MAC4, AND THIS BLOCK RECORDED ITS ABSENCE AS A DEFERRAL.** It
+// used to read: *"there is no `__mf_open_write_exec` … the parser's `openWriteExecutable` arm emits
+// `__mf_open_write` and the two are the same call. A POSIX lane splits them on the day it exists."* This is
+// that day. The two entry points differ in ONE constant — the permission mask their `StdOp` carries — and
+// on Windows they lower to the identical `CreateFileA`, which is a fact about NTFS having no execute bit
+// rather than about the two methods meaning the same thing.
 export let ManagedFileOpenReadName = b"__mf_open_read"
 export let ManagedFileOpenWriteName = b"__mf_open_write"
+export let ManagedFileOpenWriteExecutableName = b"__mf_open_write_exec"
 
 // The close. NON-throwing, which is what makes the drift guard below a real check rather than a
 // tautology: thirteen callees, eight throwing and five not, and the predicate must separate them.
@@ -226,7 +292,7 @@ export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns boo
 	//   • `__mf_stat_field` / `__mf_stat_free` — stdlib-only INVARIANT sites. A null buffer or an index past
 	//     the six fields is a caller bug, not a runtime condition, so they ABORT (see `RuntimeAbort`) rather
 	//     than hand back an error a caller would have to pretend to handle. Both references do the same.
-	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
+	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileOpenWriteExecutableName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
 end 'isThrowingManagedFileRuntimeCallee'
 
 // ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, and read
@@ -249,23 +315,27 @@ end 'isThrowingManagedFileRuntimeCallee'
 // run on an E3059 path — the parse refuses the program first — so the guard covers a missing arm and the
 // spec cases cover a WRONG one.
 //
-// ⚠⚠ **`__mf_open_write` IS A LOSSY KEY, SO IT ANSWERS WITH BOTH SPELLINGS RATHER THAN GUESSING ONE.**
-// `openWrite` and `openWriteExecutable` are ONE call at this rung — the executable form adds only a Unix
-// 0755 bit, shv2's file IO is host-only Windows by the R4.1 ruling, and the parser's `openWriteExecutable`
-// arm therefore emits `__mf_open_write` (see the entry-point block above). The callee carries no evidence of
-// which word was typed, so `found(ManagedFileOpenWriteMethod)` would tell an author who wrote
-// `openWriteExecutable` to look for an `openWrite` their program does not contain: D12's own defect, one
-// level in. `sharedByTwoSpellings` is true whichever was written. ⚠ **This is the ONE arm that is not
-// injective, and it is why this map answers the UNION where its three siblings answer a NAME** — a POSIX
-// lane that splits the two entry points collapses this arm back to a `found` at no extra cost, and nothing
-// else here changes.
+// ⭐⭐ **`__mf_open_write` WAS A LOSSY KEY AND IS NOT ONE ANY MORE (MAC4), WHICH IS THE OUTCOME THE PREVIOUS
+// PARAGRAPH PREDICTED VERBATIM.** It read: *"a POSIX lane that splits the two entry points collapses this
+// arm back to a `found` at no extra cost, and nothing else here changes."* MAC4 split them — POSIX has a
+// permission mask and Windows has not — so each spelling now has an entry point of its own and every arm of
+// this map is injective again.
+//
+// ⚠ **THE `sharedByTwoSpellings` CASE IS DELIBERATELY LEFT STANDING WITH NO PRODUCER.** It encodes a real
+// property of this map FAMILY — a runtime callee that two source spellings share carries no evidence of
+// which was typed — and the three `RuntimeCalleeSourceMethod` maps are all one union away from needing it
+// again. Deleting it would touch five files and change a second diagnostic's wording to remove a case that
+// costs nothing to keep.
 export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMethod
 	if callee.equals(ManagedFileOpenReadName) 'openRead'
 		return RuntimeCalleeSourceMethod.found(ManagedFileOpenReadMethod)
 	end 'openRead'
 	if callee.equals(ManagedFileOpenWriteName) 'openWrite'
-		return RuntimeCalleeSourceMethod.sharedByTwoSpellings(ManagedFileOpenWriteMethod, alsoSpelled: ManagedFileOpenWriteExecutableMethod)
+		return RuntimeCalleeSourceMethod.found(ManagedFileOpenWriteMethod)
 	end 'openWrite'
+	if callee.equals(ManagedFileOpenWriteExecutableName) 'openWriteExecutable'
+		return RuntimeCalleeSourceMethod.found(ManagedFileOpenWriteExecutableMethod)
+	end 'openWriteExecutable'
 	if callee.equals(ManagedFileSizeName) 'size'
 		return RuntimeCalleeSourceMethod.found(ManagedFileSizeMethod)
 	end 'size'
@@ -468,13 +538,16 @@ end 'emitFileErrnoClassifiedThrow'
 // strings only (identity is `block.id`), and `emitErrnoClassifiedThrow` — shared by both families since
 // R4.3 — already emits `mf`-prefixed labels inside directory functions.
 export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, record ValueId, handleOffset ByteOffset, closedSentinel ParsedInt, closedFlag ParsedInt, ids ValueMinter) returns ValueId
-	let handle = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
+	let slot = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: closedSentinel, ids: ids)
-	let isClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let isClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
 	var closedBlock = module.addBlock(func, label: b"closedthrow")
 	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
 	emitErrorReturn(module, block: closedBlock, flag: closedFlag, ids: ids)
-	return handle
+	// The DECODE is emitted into `entry` rather than into `join`, which is sound for the reason the header
+	// gives about the handle itself: `entry` dominates `join`, and on the closed edge the subtraction is a
+	// dead arithmetic op the allocator colours away.
+	return emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
 end 'emitLiveHandleOrClosedThrow'
 
 // The guard with THIS family's three fixed facts supplied — the handle lives in the box itself, at
@@ -512,11 +585,16 @@ export function emitArrayByteExtent(module StdModule, block IrBlock, arrRec Valu
 	return emitElementByteLen(module, block: block, count: count, es: es, ids: ids)
 end 'emitArrayByteExtent'
 
-// ⭐ **WHICH OPEN A BUILDER EMITS.** A bare bool at `buildManagedFileOpen` would be a magic value at both
-// call sites; this names the two the corpus has.
+// ⭐ **WHICH OPEN A BUILDER EMITS.** A bare bool at `buildManagedFileOpen` would be a magic value at the
+// call sites; this names the three the corpus has.
+//
+// ⚠ `writeExecutable` differs from `write` in exactly one thing — the permission mask its `StdOp` carries —
+// and that mask lives in the BACKENDS rather than here, because it is a POSIX fact with no Win32
+// counterpart (see `StdOp.osFileOpenWriteExecutable`).
 enum ManagedFileOpenMode
 	read
 	write
+	writeExecutable
 end 'ManagedFileOpenMode'
 
 // `__mf_open_read(pathRec) -> (box, flag)` / `__mf_open_write(pathRec) -> (box, flag)` — open a file, or
@@ -546,6 +624,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	match mode 'op'
 		read then module.appendOp(afterCopy, op: StdOp.osFileOpenRead(handle, pathPtrId: scratch))
 		write then module.appendOp(afterCopy, op: StdOp.osFileOpenWrite(handle, pathPtrId: scratch))
+		writeExecutable then module.appendOp(afterCopy, op: StdOp.osFileOpenWriteExecutable(handle, pathPtrId: scratch))
 	end 'op'
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
@@ -561,7 +640,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	// the memory (`SignatureIndex.managedNameDropCallee`). That is the whole RAII half of this type.
 	let boxSize = emitConst(module, block: opened, value: ManagedFileBoxBytes, ids: ids)
 	let box = emitRawAlloc(module, block: opened, byteCount: boxSize, ids: ids)
-	module.appendOp(opened, op: StdOp.storeIndirect(box, offset: ManagedFileHandleOffset, valueId: handle, valueType: StdType.i64))
+	emitStoreHandleSlot(module, block: opened, record: box, handleOffset: ManagedFileHandleOffset, handle: handle, ids: ids)
 	emitOkReturn(module, block: opened, value: box, ids: ids)
 
 	module.functions.push(func)
@@ -587,9 +666,12 @@ function buildManagedFileClose(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	let handle = emitLoadField(module, block: entry, record: box, offset: ManagedFileHandleOffset, ids: ids)
+	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedFileHandleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: ManagedFileClosedHandle, ids: ids)
-	let alreadyClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	// `entry` dominates `doClose`, so the decoded handle is simply in scope there — the dominance argument
+	// `emitLiveHandleOrClosedThrow` makes for its own.
+	let handle = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
 
 	emitIoPark(module, block: doClose, operation: GtIoOperation.fileExists, ids: ids)
@@ -1168,6 +1250,7 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 
 	buildManagedFileOpen(module, name: ManagedFileOpenReadName, mode: ManagedFileOpenMode.read)
 	buildManagedFileOpen(module, name: ManagedFileOpenWriteName, mode: ManagedFileOpenMode.write)
+	buildManagedFileOpen(module, name: ManagedFileOpenWriteExecutableName, mode: ManagedFileOpenMode.writeExecutable)
 	buildManagedFileClose(module)
 	buildManagedFileDestruct(module)
 	buildManagedFileSize(module)

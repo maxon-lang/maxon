@@ -1,0 +1,28 @@
+// Test: cycle-same-type-self-edge-is-refused
+type Worker
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ask(peer Worker.handle) returns Integer
+		return try await peer.answer() otherwise 0
+	end 'ask'
+
+	export function answer() returns Integer
+		return 1
+	end 'answer'
+end 'Worker'
+
+function main() returns ExitCode
+	let w = spawn Worker.create()
+	w.ask(w.clone())
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
+    `Worker.ask` (<fragment>:10:14) awaits a reply from `Worker`
+    Two distinct instances of `Worker` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer call fire-and-forget (send it as a statement and have the peer reply with a separate message), or split the role into two types

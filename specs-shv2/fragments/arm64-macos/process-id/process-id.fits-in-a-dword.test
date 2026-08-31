@@ -1,0 +1,62 @@
+// Test: process-id.fits-in-a-dword
+function main() returns ExitCode
+	let pid = __Builtins.currentProcessId()
+	let dwordLimit = 4294967296
+	var score = 0
+	if pid > 0 'aboveZero'
+		score = score + 1
+	end 'aboveZero'
+	if pid < dwordLimit 'belowTheDwordCeiling'
+		score = score + 2
+	end 'belowTheDwordCeiling'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl __proc_pid
+    arm64.movImm x1, 4294967296
+    arm64.movImm x2, 0
+    arm64.cmp x0, 0
+    arm64.cset x3, gt
+    arm64.cbnz x3, aboveZero
+    arm64.b critsplit#8
+  aboveZero:
+    arm64.movImm x2, 1
+    arm64.b ifcont#2
+  critsplit#8:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.cmp x0, x1
+    arm64.cset x0, lt
+    arm64.cbnz x0, belowTheDwordCeiling
+    arm64.b critsplit#9
+  belowTheDwordCeiling:
+    arm64.add x0, x2, 2
+    arm64.b ifcont#4
+  critsplit#9:
+    arm64.movRegReg x0, x2
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at process-id.fits-in-a-dword.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

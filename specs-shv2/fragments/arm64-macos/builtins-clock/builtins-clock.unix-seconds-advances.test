@@ -1,0 +1,64 @@
+// Test: builtins-clock.unix-seconds-advances
+function main() returns ExitCode
+	let before = __Builtins.currentUnixTimeSeconds()
+	sleep(1100)
+	let after = __Builtins.currentUnixTimeSeconds()
+	if after >= before + 1 'advanced'
+		return 4
+	end 'advanced'
+	return 1
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __clock_now_unix_s
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1100
+    arm64.bl sleep
+    arm64.bl __clock_now_unix_s
+    arm64.add x1, x19, 1
+    arm64.cmp x0, x1
+    arm64.cset x0, ge
+    arm64.cbnz x0, advanced
+    arm64.b ifcont
+  advanced:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -2190,7 +2190,7 @@ end 'emitTargetOp'
 // bit `installGtRuntime` was gated on, read once by the caller and never re-derived per function, so this
 // stays O(1) per function. It gates the Win32 syscall shim on every `iatCall` (see `emitGtGatedIatCall`)
 // and the per-function morestack guard below.
-export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool) returns FunctionCodeChunk
+export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool, target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -2242,7 +2242,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 		chunkLabelOffsets.place(block.id, value: code.count())
 
 		if isFirstBlock and emitGuard 'guard'
-			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes)
+			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target))
 		end 'guard'
 		isFirstBlock = false
 

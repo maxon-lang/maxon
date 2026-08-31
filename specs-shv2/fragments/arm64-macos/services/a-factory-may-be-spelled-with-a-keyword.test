@@ -1,0 +1,180 @@
+// Test: a-factory-may-be-spelled-with-a-keyword
+type Reader
+	var n as Integer
+
+	static function from(path Integer) returns Self
+		return Self{n: path}
+	end 'from'
+
+	export function read() returns Integer
+		return self.n
+	end 'read'
+end 'Reader'
+
+function serve(_ Reader.handle) returns Integer
+	return 1
+end 'serve'
+
+function main() returns ExitCode
+	spawn Reader.from(3)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @Reader.from {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+    arm64.bl Reader.from
+    arm64.movRegReg x1, x0
+    arm64.leaFuncAddr x0, Reader.__loop
+    arm64.leaFuncAddr x2, Reader.__abandon
+    arm64.bl __svc_spawn
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.bl __mbox_handle_drop_box
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Reader.__loop {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.b serve
+  serve:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, stopping
+    arm64.b dispatch
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=read] @__jumptable_0
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.storeBaseDispReg.word64 [x20 + 56], x1
+    arm64.bl __mm_decref
+    arm64.b stopping
+  stopping:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_close
+    arm64.b drain
+  drain:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, finished
+    arm64.b abandon
+  finished:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_service_exit
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  abandon:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_abandon
+    arm64.b drain
+  read:
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.bl __mm_decref
+    arm64.movImm x2, 0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __gt_cell_complete
+    arm64.b serve
+}
+
+func @Reader.__abandon {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=read] @__jumptable_1
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  read:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  abandondrop:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

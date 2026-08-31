@@ -379,7 +379,7 @@ function recognizeRecordConstructor(module StdModule, func IrFunction) returns R
 
 	match returnedValueOf(module, block: block) 'exit'
 		notAValueReturn then return RecordConstructor.notAConstructor
-		returns(box) then return scanConstructorBody(module, func: func, block: block, box: box)
+		returns (box) then return scanConstructorBody(module, func: func, block: block, box: box)
 	end 'exit'
 end 'recognizeRecordConstructor'
 
@@ -407,6 +407,7 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 		const to branch gives BlockExit.notAValueReturn
 		ret(retValId) gives BlockExit.returns(retValId)
 		param to osEnterBackgroundPriority gives BlockExit.notAValueReturn
+		osFileOpenWriteExecutable gives BlockExit.notAValueReturn
 	end 'term'
 end 'returnedValueOf'
 
@@ -446,6 +447,7 @@ type ConstructorScan
 			retVoid to loadIndirect gives false
 			storeIndirect(addrId, offset, valueId, valueType) gives self.admitStore(addrId, offset: offset, valueId: valueId, valueType: valueType, box: box)
 			osAllocPages to osEnterBackgroundPriority gives false
+			osFileOpenWriteExecutable gives false
 		end 'op'
 	end 'admit'
 
@@ -700,6 +702,7 @@ function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction
 			const to ret then break 'op'
 			param(resultId, index, _) then markParameterValue(tracked, resultId: resultId, index: index)
 			call to osEnterBackgroundPriority then break 'op'
+			osFileOpenWriteExecutable then break 'op'
 		end 'op'
 	end 'eachOp'
 	return tracked
@@ -794,6 +797,7 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 		// container / global / error-payload escape route, and is not.
 		storeIndirect(_, _, valueId, _) then markIfTracked(tracked, v: valueId, scan: scan)
 		osAllocPages to osEnterBackgroundPriority then collectStdOpUses(op, referenced: readByOtherOps)
+		osFileOpenWriteExecutable then collectStdOpUses(op, referenced: readByOtherOps)
 	end 'shape'
 end 'scanOneOp'
 
@@ -913,6 +917,7 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 		const to param gives ConstructorCallSite.notAConstructorCall
 		call(resultId, callee, args) gives constructorCallOf(module, resultId: resultId, callee: callee, args: args, byName: byName, constructors: constructors)
 		retVoid to osEnterBackgroundPriority gives ConstructorCallSite.notAConstructorCall
+		osFileOpenWriteExecutable gives ConstructorCallSite.notAConstructorCall
 	end 'op'
 end 'constructorCallAt'
 
@@ -1120,6 +1125,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 		const to param gives false
 		call(_, callee, args) gives callDropsAPromotedRecord(callee, args: args, promoted: promoted)
 		retVoid to osEnterBackgroundPriority gives false
+		osFileOpenWriteExecutable gives false
 	end 'op'
 end 'opDropsAPromotedRecord'
 

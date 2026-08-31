@@ -46,13 +46,14 @@ statement door recognizes `__Builtins.<member>(…)` and nothing else of that sh
 Widening the door widens no NAME. A member the table does not recognize falls through to the same
 reserved-callee rejection expression position already gives it — `E3004`, at the call's own span.
 
-### The substrate is x64-windows only at this rung
+### The substrate exists on the lanes that have written it, and nowhere else
 
-The green-thread timer computes its deadline from `osReadClock`'s QueryPerformanceCounter reading and
-waits with `osSleepMs`, neither of which `StdToArm64`/`StdToWasm` will fake. A program that reaches
-`sleep` on another target is refused with `E3104` at the call site, naming the runtime entry
-(`__gt_sleep`) that has no lowering there — never a panic from inside the backend, which is what it
-used to be:
+The green-thread timer computes its deadline from `osReadClock` and waits with `osSleepMs`, and neither
+backend will fake either. Two lanes provide both — x64-windows through
+QueryPerformanceCounter/`Sleep`, and arm64-macOS through `clock_gettime_nsec_np(CLOCK_UPTIME_RAW)` and
+`nanosleep`. A program that reaches `sleep` on any other is refused with `E3104` at the call site, naming
+the runtime entry (`__gt_sleep`) that has no lowering there — never a panic from inside the backend, which
+is what it used to be:
 
 ```text
 panic at StdToWasm.maxon:1108: emitBodyOp: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung
@@ -79,7 +80,7 @@ four wore one until the 2026-07-28 targets audit measured them green on x64-linu
 ## Tests
 
 <!-- test: builtins-sleep.statement-position -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 A void wrapper shaped exactly like `stdlib/Sleep.maxon` — one `__Builtins.sleep(…)` statement and
 nothing else — compiles, and the sleep is OBSERVABLE: the elapsed time measured across it with the
 whitelisted `Clock` is at least most of the requested duration. Two whitelisted-era mechanisms in one

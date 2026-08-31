@@ -124,6 +124,29 @@ call's own span. ⚠ Before this rung that band was NOT in the gate and such a p
 BACKEND PANIC three tiers down — `SemanticCheck`'s own header recorded the gap verbatim. The two
 `rejected-on-*` cases below are what hold it shut.
 
+### ⭐ arm64-macOS HAS THE FACILITY, SO THE CASES COME IN PAIRS — AND WIDENING WAS NOT AN OPTION
+
+`TargetFacilities.targetProvidesFacility` answers `subprocess gives true` for arm64-macOS
+(`posix_spawnp` under `POSIX_SPAWN_CLOEXEC_DEFAULT`, anonymous pipes, `poll`, `waitpid`), so the
+E3104 above does not fire there and every intrinsic in this file RUNS on that lane. What could not
+be shared is the PROGRAMS: every case above spawns `cmd /c …`, which exists on no POSIX box, so
+widening their markers would test a missing executable rather than this surface (measured: 31 of 39
+cases across the four subprocess specs fail on a bare widening).
+
+⇒ **Each subject that this lane can express carries a SECOND case, named `posix-…`, marked
+`arm64-macos`, running an ordinary POSIX command.** That is `process-background-priority.md`'s
+pattern, for `process-background-priority.md`'s reason: the SUBJECT is shared and the PROGRAM cannot
+be. The pairs deliberately do not agree on their numbers — `/bin/echo` ends a line with a bare LF
+where `cmd /c echo` writes CRLF, so a six is the same answer as the sibling's seven.
+
+⚠ **AND THE TWO LANES DIVIDE ON ONE PROPERTY OF THIS SURFACE, NOT MERELY ON SPELLING.** The
+fourteen-argument spawn takes an argv BLOB, and this lane's primitive takes an argv VECTOR — so the
+Win32 quoting rule at the top of this section has NOTHING to do on arm64-macOS, where nothing is
+ever re-split and therefore nothing needs escaping. `argv-quoting` asserts that a token holding a
+space becomes ONE quoted argument; `posix-argv-reaches-the-child-verbatim` asserts the same subject
+from the other side — that `$HOME`, `a b` and `a*b` reach the child unexpanded, unsplit and
+unglobbed. Neither program could carry the other's claim.
+
 ## Tests
 
 <!-- test: subprocess-builtins.collect-echo -->
@@ -175,6 +198,110 @@ end 'main'
 ```
 ```stdout
 kind=0 code=0 outLen=7 errLen=0 matches=true
+
+```
+
+<!-- test: subprocess-builtins.posix-collect-echo -->
+<!-- targets: arm64-macos -->
+`collect-echo`'s subject on the POSIX lane, and the case that proves the whole attached path runs here at
+all: build an argv blob, spawn `/bin/echo hello` with both streams collected, wait, and read the result
+struct back. ⚠ **The byte count is SIX, not the Windows sibling's seven, and that is the line terminator
+rather than a different capture** — `/bin/echo` ends its line with a bare LF where `cmd /c echo` writes
+CRLF. Nothing about that is convertible, which is why this is a sibling and not a widened marker.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/echo")
+	appendToken(argv, token: "hello")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let err = String.init(__Builtins.subprocessResultStderr(r))
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	let code = __Builtins.subprocessResultStatusCode(r)
+	let n = out.byteLength()
+	let expected = "hello"
+	let matches = out.startsWith(expected)
+	print("kind={kind} code={code} outLen={n} errLen={err.byteLength()} matches={matches}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+kind=0 code=0 outLen=6 errLen=0 matches=true
+
+```
+
+<!-- test: subprocess-builtins.posix-argv-reaches-the-child-verbatim -->
+<!-- targets: arm64-macos -->
+⭐ **THE CASE THAT PROVES THERE IS NO SHELL ON THE ARGV PATH — `argv-quoting`'s subject, inverted.** The
+Windows sibling asserts that a token holding a space is QUOTED into one command line; this lane must
+assert the opposite property, because `posix_spawnp` takes a vector and quotes nothing. Three tokens are
+chosen so that each failure mode is a DIFFERENT wrong answer: `$HOME` would be EXPANDED, `a b` would be
+SPLIT, and `a*b` would be GLOBBED, by any implementation that joined the blob into a line and handed it to
+`/bin/sh -c`. The child prints one bracketed field per argument, so a split shows up as an extra field
+rather than as text that happens to read the same — `[$HOME][a b][a*b]` and `[$HOME][a][b][a*b]` differ,
+where `echo`'s space-joined output for the two would not.
+
+⚠ It is `/bin/sh` that runs, but the tokens under test are POSITIONAL PARAMETERS rather than script text:
+the shell never sees them as source, so an expansion here could only have come from the spawn.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "printf '[%s]' \"$@\"")
+	appendToken(argv, token: "sh")
+	appendToken(argv, token: "$HOME")
+	appendToken(argv, token: "a b")
+	appendToken(argv, token: "a*b")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 7, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let expected = "[$HOME][a b][a*b]"
+	print("verbatim={out == expected} len={out.byteLength()} kind={__Builtins.subprocessResultStatusKind(r)}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+verbatim=true len=17 kind=0
 
 ```
 
@@ -354,6 +481,142 @@ outHasPayload=true errHasOops=true kind=0
 
 ```
 
+<!-- test: subprocess-builtins.posix-stdin-bytes -->
+<!-- targets: arm64-macos -->
+`stdin-bytes-and-stderr`'s stdin half on this lane. `StdinKind.bytes` queues a payload the collect loop
+pushes into the child between drains and closes the pipe once it is spent — so `/bin/cat` echoes it back
+and EXITS rather than blocking on a pipe nobody ever closes. A runtime that queued the payload and never
+wrote it, or wrote it and never closed, hangs here instead of failing, which is what the pinned exit code
+turns into a finite red.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/cat")
+	let empty = ""
+	let payload = "fed-in\n"
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 2, payload.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let echoed = out == payload
+	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} echoed={echoed} outLen={out.byteLength()}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kind=0 code=0 echoed=true outLen=7
+
+```
+
+<!-- test: subprocess-builtins.posix-stdout-and-stderr-are-separate -->
+<!-- targets: arm64-macos -->
+`stdin-bytes-and-stderr`'s other half: the two pipes are drained INDEPENDENTLY, not one after the other.
+The child writes four bytes to stdout and three to stderr with no trailing newline on either, so each
+buffer's exact contents are pinned and a runtime that concatenated the two — or that dropped one — cannot
+pass on a length alone. `printf` rather than `echo` for the same reason the Windows sibling reaches for
+`set /p`: it appends no terminator of its own.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "printf sout; printf err 1>&2")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let err = String.init(__Builtins.subprocessResultStderr(r))
+	let expectedOut = "sout"
+	let expectedErr = "err"
+	print("out={out == expectedOut} err={err == expectedErr} outLen={out.byteLength()} errLen={err.byteLength()}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+out=true err=true outLen=4 errLen=3
+
+```
+
+<!-- test: subprocess-builtins.posix-exit-code-is-propagated -->
+<!-- targets: arm64-macos -->
+The child's own exit status reaches `subprocessResultStatusCode` unchanged. ⚠ **On this lane that is a
+`waitpid` status word rather than `GetExitCodeProcess`'s plain integer**, so the runtime has to decode it —
+a body that handed the raw status back would answer `1792` (`7 << 8`) for this child, and one that lost the
+decode entirely would answer 0 while still reporting `exited`. The status KIND is pinned beside the code so
+that a `0` cannot pass as "exited cleanly" when the child in fact exited 7.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "exit 7")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	let code = __Builtins.subprocessResultStatusCode(r)
+	print("kind={kind} code={code}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return code as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+kind=0 code=7
+
+```
+
 <!-- test: subprocess-builtins.timeout-kills-the-child -->
 <!-- targets: x64-windows -->
 A non-zero `timeoutMs` is a KILL-AFTER deadline, which is what `stdlib/Subprocess.maxon`'s
@@ -397,6 +660,52 @@ kind=2
 
 ```
 
+<!-- test: subprocess-builtins.posix-timeout-kills-the-child -->
+<!-- targets: arm64-macos -->
+`timeout-kills-the-child` on this lane. `/bin/sleep 5` would run for five seconds; the 300 ms deadline
+fires, the child is killed, and the result's status kind is `timedOut` (`2`). The DURATION is asserted
+beside the kind because the kind alone cannot tell a deadline that fired from one that was ignored and then
+mislabelled: a wait that ran the child to completion would report five seconds. ⚠ It is a POSIX `kill`
+rather than `TerminateProcess`, and a runtime that signalled but never reaped would report `timedOut` while
+leaving a zombie — which the leak gate does not see, but a subsequent `waitpid` in the same process would.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sleep")
+	appendToken(argv, token: "5")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 300)
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	let durationMs = __Builtins.subprocessResultDurationMs(r)
+	let childRuntimeMs = 5000
+	print("kind={kind} killedEarly={durationMs < childRuntimeMs}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return kind as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+kind=2 killedEarly=true
+
+```
+
 <!-- test: subprocess-builtins.detach-answers-a-pid -->
 <!-- targets: x64-windows -->
 The detach bit (bit 2 of `flags`) makes the runtime answer the child's OS process id rather than a
@@ -423,6 +732,45 @@ function main() returns ExitCode
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+	print("positive={pid > 0}")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+positive=true
+
+```
+
+<!-- test: subprocess-builtins.posix-detach-answers-a-pid -->
+<!-- targets: arm64-macos -->
+`detach-answers-a-pid` on this lane: the detach bit (bit 2 of `flags`) makes the runtime answer the child's
+OS process id rather than a table handle, and release the slot — so the parent holds no handle to a child it
+will never wait for. The pid is machine-specific, so the property asserted is that it is a real one. ⚠ On
+this lane a detached child is a `posix_spawnp` pid the parent will never `waitpid`, which is why the slot
+must be released HERE rather than left live: a handle nobody can wait on is a leak the table would carry to
+program exit.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/usr/bin/true")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 	print("positive={pid > 0}")
 	return 0 as ExitCode
 end 'main'
@@ -478,6 +826,64 @@ function main() returns ExitCode
 	print("[")
 	let inherited = runEcho("<nul set /p=visible", outKind: 1)
 	let discarded = runEcho("<nul set /p=invisible", outKind: 0)
+	print("] inheritCollected={inherited} discardCollected={discarded}")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+[visible] inheritCollected=0 discardCollected=0
+
+```
+
+<!-- test: subprocess-builtins.posix-inherited-and-discarded-output -->
+<!-- targets: arm64-macos -->
+`inherited-and-discarded-output` on this lane. `OutputKind.inherit` hands the child the PARENT's own
+descriptor, so its text lands in this program's stdout with nothing collected; `OutputKind.discard` opens
+`/dev/null`, so the second child's text goes nowhere at all. ⚠ An inherited descriptor belongs to the
+PARENT, and a spawn that closed it after `posix_spawnp` — as it must close a pipe end or a file it opened —
+would close this program's own stdout and the tail of the line below would never appear. That is a sharper
+trap here than on Windows: `POSIX_SPAWN_CLOEXEC_DEFAULT` means every descriptor is closed in the child
+unless a file action names it, so the inherit path is a deliberate `dup2` rather than the absence of one.
+
+⚠ `/bin/echo -n` rather than `echo`, for the same reason the Windows sibling reaches for `set /p`: a
+trailing newline between the parent's two prints cannot be written into an expected-stdout block as part of
+one line.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function runEcho(word String, outKind Integer) returns Integer
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/echo")
+	appendToken(argv, token: "-n")
+	appendToken(argv, token: word)
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), outKind, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let collected = String.init(__Builtins.subprocessResultStdout(r)).byteLength()
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return collected
+end 'runEcho'
+
+function main() returns ExitCode
+	print("[")
+	let inherited = runEcho("visible", outKind: 1)
+	let discarded = runEcho("invisible", outKind: 0)
 	print("] inheritCollected={inherited} discardCollected={discarded}")
 	return 0 as ExitCode
 end 'main'
@@ -578,6 +984,58 @@ end 'main'
 ```
 ```stdout
 kind=0 code=0 outLen=8400
+
+```
+
+<!-- test: subprocess-builtins.posix-large-collect-grows-both-buffers -->
+<!-- targets: arm64-macos -->
+An UNCAPPED collect of far more than one buffer's worth, on BOTH pipes at once: 1200 lines of 49
+characters plus a LF on each stream is exactly 60000 bytes each, 117 KiB together. Each collect buffer
+starts at 4096 and doubles past what a pass needs, freeing the buffer it outgrew — so this is the case that
+exercises the growth and the free rather than the single-chunk happy path, and the pinned exit code is what
+would catch a double free or a leaked old buffer (either exits **101**).
+
+⭐ **DRIVING BOTH PIPES AT ONCE IS THE POINT, AND IT IS SHARPER HERE THAN ON WINDOWS.** A 64 KiB pipe fills
+long before 60000 bytes have been read out of it, so a runtime that committed to draining stdout before
+looking at stderr would leave the child blocked on a full stderr pipe for ever and this case would HANG
+rather than fail. It passes only because `osPipePeek` asks each stream whether it has bytes before any read
+is committed — the property `subprocessWaitCollect`'s structure exists for, and the one this lane cannot
+fall back on a netpoll to supply.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "i=0; while [ $i -lt 1200 ]; do echo 0123456789012345678901234567890123456789012345678; echo 0123456789012345678901234567890123456789012345678 1>&2; i=$((i+1)); done")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let err = String.init(__Builtins.subprocessResultStderr(r))
+	print("kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} outLen={out.byteLength()} errLen={err.byteLength()}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kind=0 code=0 outLen=60000 errLen=60000
 
 ```
 
@@ -796,11 +1254,20 @@ error E3104: <fragment>:9:21: this construct is x64-windows only at this rung: i
 ```
 
 <!-- test: subprocess-builtins.streaming-rejected-on-arm64 -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-linux -->
 The bare-name streaming builtin is gated by the same band and names its own entry. ⚠ It was outside
 the gate until this rung, and `SemanticCheck.calleeNeedsWin32Substrate`'s header recorded the
 consequence: *"on another target they still die as a BACKEND PANIC rather than a diagnostic —
 MEASURED"*.
+
+⚠ **THIS CASE NAMED arm64-macOS UNTIL THAT LANE GREW A CHILD-PROCESS SUBSTRATE, AND IT MOVED RATHER
+THAN BEING DELETED** — `async-sleep.rejected-on-arm64` did the same thing one facility earlier, for
+the same reason. The whole `__gt_subp_` band now COMPILES AND RUNS there (`posix_spawnp` plus a
+file-actions builder, anonymous pipes, and `waitpid` behind a handle object), so the refusal this
+case pins had to be re-pointed at a lane where it is still true. arm64-Linux is that lane and is the
+right one on the merits: the child-process substrate on this backend is libSystem end to end, and a
+raw static Linux image links no libc to provide any of it — the same *"there is no such primitive
+here"* the case was written to describe.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c echo hi")
@@ -808,5 +1275,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_spawn', which has no arm64-macos implementation
+error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_spawn', which has no arm64-linux implementation
 ```

@@ -93,6 +93,17 @@ shiftIt(u64.max)      // 15 — NOT -1. An unsigned left operand fills with zero
 bit. Any case that means to pin this rule has to use it — which is why `8 shr 2` cannot, and why
 this went unnoticed in both compilers.
 
+**`and` hands its operands' ranged alias down to its result; `or` and `xor` do not.** `and` can only
+CLEAR bits, so `0 <= (a and b) <= a` over a non-negative operand: the AND of two `int(0 to u64.max)`
+values is still an `int(0 to u64.max)`, and the `shr` after it still zero-fills. `or` and `xor` SET
+bits — `0x0F or 0xF0` is `0xFF`, above both operands' high bound — so their result carries no
+operand's range and reverts to the signed bare `int`.
+
+The inheritance holds only where the range is CLOSED under `and`, which means a **low bound of 0**.
+`int(1 to 100)` is not closed (`1 and 2` is `0`), and neither is a signed range (`-3 and -9` is
+`-11`); those hand nothing down, so an `and` result is never mistaken for a proof of a bound the
+operator can break.
+
 **A shift is 64 bits wide.** A ranged left operand decides a shift's *fill*; it never decides its
 *width*. `x shl 29` on an `int(-2147483648 to 2147483647)` needs 61 bits to hold its answer, and it
 gets them — the operand is not truncated to its declared type's storage size, and the count is not
@@ -1125,6 +1136,133 @@ function main() returns ExitCode
 	if castToSigned(u64.max) != -1 'toSigned'
 		return 2
 	end 'toSigned'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: and-hands-its-operands-ranged-alias-down -->
+⭐ **`and` CAN ONLY CLEAR BITS, SO THE AND OF TWO `Wide`s IS A `Wide` — and a compiler that forgets
+that has not lost one instruction, it has lost the value's TYPE.** `let m = a and b` over two
+`int(0 to u64.max)` parameters produces a value the program never named a type for, so every later
+question about it falls back to the bare `int` default, which is SIGNED: `m shr 60` sign-fills,
+`m / 3` divides signed, and `"{m}"` prints `-1`. All three are the same wrong answer, read three
+ways, and they are not hypothetical — the AArch64 logical-immediate encoder *is* this expression
+(`imm = value and mask`, then `imm shr rotationStart`), and a sign-filled shift made its `imms` come
+out `63`, the RESERVED encoding, instead of `47`.
+
+**`or` and `xor` hand nothing down, and for a different reason than a stricter one.** They SET bits,
+so `0x0F or 0xF0` is `0xFF` — a result above both operands' high bound. Only `and` is bounded by its
+operands.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function andThenShift(a Wide, b Wide) returns Wide
+	let m = a and b
+	return m shr 60
+end 'andThenShift'
+
+function andThenDivide(a Wide, b Wide) returns Wide
+	let m = a and b
+	return m / 3
+end 'andThenDivide'
+
+function orThenShift(a Wide, b Wide) returns Num
+	let m = a or b
+	return m shr 60
+end 'orThenShift'
+
+function xorThenShift(a Wide, b Wide) returns Num
+	let m = a xor b
+	return m shr 60
+end 'xorThenShift'
+
+function main() returns ExitCode
+	if andThenShift(u64.max, b: u64.max) != 15 'andKeepsUnsigned'
+		return 1
+	end 'andKeepsUnsigned'
+	if andThenDivide(u64.max, b: u64.max) != 6148914691236517205 'andDividesUnsigned'
+		return 2
+	end 'andDividesUnsigned'
+	if orThenShift(u64.max, b: 0) != -1 'orCarriesNothing'
+		return 3
+	end 'orCarriesNothing'
+	if xorThenShift(u64.max, b: 0) != -1 'xorCarriesNothing'
+		return 4
+	end 'xorCarriesNothing'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: an-and-result-is-no-proof-of-a-low-bound-above-zero -->
+⚠ **THE INHERITANCE IS A PROOF ONLY WHERE THE RANGE IS CLOSED UNDER `and`, AND `int(1 to 100)` IS
+NOT.** `1 and 2` is `0` — below the low bound — so an `and` over two `Small`s may produce a value
+`Small` forbids. A compiler that stamped the alias on anyway would let the divide-by-zero proof read
+a `neverZero` that is false, compile a BARE divide, and turn a catchable `DivisionByZero` into an
+uncatchable hardware fault. The `try` below is what must still be needed, and `7` is what must still
+come back.
+```maxon
+typealias Small = int(1 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function guarded(a Small, b Small) returns Num
+	return try (100 / (a and b)) otherwise 7
+end 'guarded'
+
+function main() returns ExitCode
+	if guarded(1, b: 2) != 7 'zeroIsCaught'
+		return 1
+	end 'zeroIsCaught'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: an-and-does-not-launder-an-unproven-merge-into-a-proof -->
+⛔⛔ **AN `and` THAT CHANGES NOTHING MUST NOT CHANGE WHAT IS PROVEN.** The inheritance above hands an
+operand's ranged alias to the `and`'s result, and that answer is RECORDED — into the same map a cast
+writes, which every proof reader takes AHEAD of the merge withhold. So reading the operand through the
+DECLARED-type door would launder `a-merged-count-is-not-proven-around-a-loop`'s phi straight past G14:
+`n` declares `int(0 to 63)` and holds **71**, and `m = n and 127` holds the SAME 71.
+
+⚠ **MEASURED, one value with two answers:** `1 shl n` gave the saturated **0** while `1 shl m` gave
+**128** — the hardware's masked `1 shl 7` — differing only by an `and` with an all-ones mask. The
+operand is read through the PROOF door instead, so a merge nothing proved hands down nothing and the
+`and` result falls back to a bare `int`, exactly where it was before the rule existed.
+```maxon
+typealias Num = int(i64.min to i64.max)
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var n = 1 as Bits
+	var i = 0 as Num
+	while i < 7 'step'
+		n = n + 10
+		i = i + 1
+	end 'step'
+
+	// The premise, asserted before it is spent: the merge really does hold a value its alias cannot.
+	if n != 71 'reached'
+		return 1
+	end 'reached'
+
+	let m = n and 127
+	if m != 71 'laundered'
+		return 2
+	end 'laundered'
+
+	if 1 shl m != 0 'shl'
+		return 3
+	end 'shl'
+
 	return 42
 end 'main'
 ```

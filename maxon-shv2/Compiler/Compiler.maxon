@@ -788,6 +788,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	for entry in schedRuntimeGlobals(usage) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
+	// argv's two captured words plus the empty-argument word (MAC7). ⚠ **NO OUTER BIT TEST**, for
+	// `schedRuntimeGlobals`'s reason: the answer depends on the TARGET as well as on the bit — a Windows
+	// program fetches its command line by a call and lays out nothing — and that pair of conditions is asked
+	// where it is stated (`commandLineRuntimeGlobals`) rather than being copied here.
+	for entry in commandLineRuntimeGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
 	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
 	// `.data` layout is unchanged — only a pipe-reading program lays them out.
 	if usage.usesIocp 'ioGlobals'
@@ -976,7 +983,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage))
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage), target: project.target)
 	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is
@@ -1038,7 +1045,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// helpers (the raw alloc/free, the cstring walk and the cstring-to-`__ManagedMemory` copy), and it needs
 	// no ordering against the Array install below even though `__cl_arg` CALLS `__managed_create`, for the reason
 	// stated there: one module, name-resolved calls, and the `usesManagedMemory` bit was settled before any install ran.
-	installCommandLineRuntime(pipeline.stdModule, usage: usage)
+	installCommandLineRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
 	// The console and process-introspection runtimes (`__con_read_stdin`, `__proc_exe_path`, `__proc_pid`) —
 	// the same already-lowered way, each on its OWN bit, so a program that reads stdin carries no path walk,

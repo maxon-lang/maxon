@@ -1,0 +1,193 @@
+// Test: companions-come-from-a-spawn-in-another-file
+// --- file: calc.maxon
+export type Calc
+	var count as Integer
+
+	export static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by Integer)
+		self.count = self.count + by
+	end 'bump'
+end 'Calc'
+
+export function serve(_ Calc.handle) returns Integer
+	return 1
+end 'serve'
+
+typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return serve(h) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @Calc.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Calc.create
+    arm64.movRegReg x1, x0
+    arm64.leaFuncAddr x0, Calc.__loop
+    arm64.leaFuncAddr x2, Calc.__abandon
+    arm64.bl __svc_spawn
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x19, 1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x19, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at main.maxon:3: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.bl __mbox_handle_drop_box
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Calc.__loop {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.b serve
+  serve:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, stopping
+    arm64.b dispatch
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=bump] @__jumptable_1
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.storeBaseDispReg.word64 [x20 + 56], x1
+    arm64.bl __mm_decref
+    arm64.b stopping
+  stopping:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_close
+    arm64.b drain
+  drain:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, finished
+    arm64.b abandon
+  finished:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_service_exit
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  abandon:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_abandon
+    arm64.b drain
+  bump:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.add x1, x2, x1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.bl __mm_decref
+    arm64.b serve
+}
+
+func @Calc.__abandon {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=bump] @__jumptable_2
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  bump:
+    arm64.b abandondrop
+  abandondrop:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
