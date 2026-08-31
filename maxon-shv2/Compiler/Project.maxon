@@ -4355,7 +4355,10 @@ end 'conformanceListDeclares'
 // all — which is exactly the coincidence this paragraph warns about: a seed agrees with its declaration
 // until the declaration changes. That enum is now READ rather than seeded, so its clause list is the
 // corpus.s and cannot drift; the three below still owe this.
-function builtinErrorConformance() returns ByteArrayArray
+// ⚠ **`module` SINCE SV4**: `ServiceCompanions.buildServiceReplyErrorEnum` synthesizes an error enum too,
+// and it owes `implements Error` for the reason this header gives — a `throws Calc.divide.errors` clause is
+// checked by `ConformanceCheck.requireImplErrorConformsAndIsScalar` like any other.
+module function builtinErrorConformance() returns ByteArrayArray
 	var conformsTo = ByteArrayArray.create()
 	conformsTo.push(ErrorInterfaceName)
 	return conformsTo
@@ -4601,7 +4604,7 @@ module let ServiceReplySlotName = b"__reply"
 // `public enum ServiceError`, and the compiler has to look that declaration up to place its cases on a
 // reply's fused dispatch line — so the spelling is here, once, rather than as a byte literal at each of the
 // three sites that ask (`ServiceCompanions.serviceReplyTransportPlacement`,
-// `Parser.serviceReplyErrorMembers` and `Parser.serviceReplyErrorTypeName`).
+// `Parser.serviceReplyErrorMembers` and `ProgramSignatures.serviceReplyErrorName`).
 module let ServiceErrorTypeName = b"ServiceError"
 
 // ⭐ **THE ONE CASE OF `ServiceError`, AS A NAME.** `<T>.__abandon` transcribes its ORDINAL into a reply's
@@ -4610,11 +4613,30 @@ module let ServiceErrorTypeName = b"ServiceError"
 // families' are, and this constant is what names the case at both ends of that check.
 module let ServiceErrorStoppedCaseName = b"stopped"
 
-// ⭐ **THE DERIVED SPELLING A TWO-MEMBER REPLY ERROR TYPE IS QUOTED BY (SV2)** — `Calc.divide.errors`,
-// `SERVICES_DESIGN.md`'s own. It is a DIAGNOSTIC STRING and nothing else: no registry holds it, nothing
-// resolves it, and that is exactly what makes a bare `try` over such a reply E3059 — there is no `throws`
-// clause an author could write that names it. `Parser.serviceReplyErrorTypeName` is its one builder.
+// ⭐ **THE MEMBER HALF OF A TWO-MEMBER REPLY ERROR TYPE'S NAME (SV2)** — `Calc.divide.errors`,
+// `SERVICES_DESIGN.md`'s own spelling.
+//
+// ⛔ **IT USED TO BE A DIAGNOSTIC STRING AND NOTHING ELSE, AND IT IS A REGISTERED TYPE NOW (SV4).** This
+// header read *"no registry holds it, nothing resolves it, and that is exactly what makes a bare `try` over
+// such a reply E3059 — there is no `throws` clause an author could write that names it."* All three clauses
+// are false: `ServiceCompanions.synthesizeServiceCompanions`' third pass mints a nominal enum under this
+// name for every THROWING message and registers it through the same `recordEnum` door every author-written
+// enum takes, so `function fetch(…) throws Calc.divide.errors` resolves and
+// `Promise with (Integer, Calc.divide.errors)` interns. E3059 is still what a bare `try` earns when the
+// enclosing clause names the HANDLER half alone — a name mismatch, which is a different sentence for a
+// different mistake.
 module let ServiceReplyErrorSuffix = b"errors"
+
+// ⭐ **THE FUSED REPLY ERROR TYPE'S REGISTERED NAME — `<Service>.<method>.errors`.** DOTTED for
+// `serviceRequestCompanionName`'s reason and by the same construction: `Parser.parseTypeReference`'s
+// qualified arm and `Parser.parseOptionalThrowsClause` both assemble a dotted chain into one name, so the
+// enum is found under exactly the key a `throws Calc.divide.errors` clause produces.
+//
+// ⚠ **ITS ARGUMENT IS THE MESSAGE KEY (`<Service>.<method>`), not a service name** — the fused pair is a
+// property of ONE message, because what it fuses is `ServiceError` with what THAT message declares.
+export function serviceReplyErrorsCompanionName(messageKey ByteArray) returns ByteArray
+	return "{String.from(messageKey)}.{String.from(ServiceReplyErrorSuffix)}".toByteArray()
+end 'serviceReplyErrorsCompanionName'
 
 // The one field of `<T>.handle`: the mailbox pointer. A real 8-byte box on `managedFileLayout`'s shape
 // rather than a parse-time mark, so moves, E3102, struct fields, arrays and the drop cascade all reach it

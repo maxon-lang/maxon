@@ -646,13 +646,24 @@ end 'serviceMessageHasAReply'
 module function serviceReplySlotIndex(payloads PayloadFieldArray) returns ServiceReplySlotIndex
 	for slot in 0 upto payloads.count() 'eachSlot'
 		let field = try payloads.get(slot) otherwise panic("serviceReplySlotIndex: payloads.get OOB at {slot} on a list walked to its own count")
-		if field.name.equals(ServiceReplySlotName) 'theReplySlot'
+		if fieldIsTheServiceReplySlot(field) 'theReplySlot'
 			return ServiceReplySlotIndex.at(slot)
 		end 'theReplySlot'
 	end 'eachSlot'
 
 	return ServiceReplySlotIndex.absent
 end 'serviceReplySlotIndex'
+
+// ⭐⭐ **IS THIS PAYLOAD SLOT THE ONE THE COMPILER FILLED ITSELF? — the one home of that test, because THREE
+// mechanisms turn on it and each of them is silently wrong if it drifts.** `serviceReplySlotIndex` above
+// finds the slot to mint a cell into; `Parser.moveMessagePayloads` SKIPS it, because a cell is not a
+// refcounted box and `moveIntoGreenThread` would refuse it as the author's own argument (E3135); and
+// `Parser.emitEnumBox` skips its ARGUMENT TYPE CHECK, because the slot is declared `MaxonType.integer`
+// deliberately (a raw pointer the P1.3 destructor cascade must not follow) while the cell it holds is typed
+// `Promise with (T, E)` since SV4 — an E3005 on every reply-bearing send if it were asked.
+module function fieldIsTheServiceReplySlot(field PayloadField) returns bool
+	return field.name.equals(ServiceReplySlotName)
+end 'fieldIsTheServiceReplySlot'
 
 // The answer above, as a union rather than a sentinel index: a fire-and-forget message has NO reply slot,
 // and `-1` would be a number every reader had to remember not to index with.
@@ -703,8 +714,10 @@ end 'serviceReplyTransportPlacement'
 
 // The HANDLER member's position — the slice one past the transport member's top. `tooWide` is a real answer
 // and not a compiler bug: a FLOAT-backed error enum's tags are IEEE-754 bit patterns and one spanning a
-// negative and a positive double is wider than the whole i64 line, so such a message is refused at the send
-// (`Parser.requireServiceReplyIsCarriable`) rather than silently mis-dispatched.
+// negative and a positive double is wider than the whole i64 line, so such a message is refused at the
+// SPAWN (`classifyServiceRoster` -> `uncarriableReplyErrorNoun`, E3140 — NOT a
+// `Parser.requireServiceReplyIsCarriable`, which this comment named for two rungs and which has never
+// existed) rather than silently mis-dispatched.
 module function serviceReplyHandlerPlacement(signatures ProgramSignatures, errorName ByteArray) returns FusedPlacement
 	return fusedPlacementAt(serviceReplyTransportPlacement(signatures).top + 1, span: enumTagSpan(serviceReplyErrorLayout(signatures, errorName: errorName)))
 end 'serviceReplyHandlerPlacement'
@@ -937,4 +950,111 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 
 		signatures.recordServiceRequest(buildServiceRequestUnion(signatures, typeName: typeName, into: signatures.indexTypeNames()))
 	end 'eachRequest'
+
+	// ⭐⭐ **PASS 3 — ONE NOMINAL ENUM PER *THROWING* MESSAGE, SO THE FUSED REPLY ERROR TYPE HAS A NAME
+	// (SV4).** `<Service>.<method>.errors` is what a `throws` clause spells, what a
+	// `Promise with (T, E)` puts in its second argument, and what `Parser.mintServiceReplyCell` interns the
+	// reply's own type against. Before it, the two-member type existed only as a diagnostic string.
+	//
+	// ⚠ **NON-THROWING MESSAGES ARE SKIPPED BECAUSE THEY ALREADY HAVE A REAL NAME** — a reply whose only
+	// error member is `ServiceError` IS a `ServiceError`, an ordinary declared enum, and minting a synonym
+	// for it would be a second name for one type with nothing to keep the two answers equal.
+	for typeName in services 'eachReplyErrorType'
+		let layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+		for i in 0 upto layout.messageMethodCount() 'eachMessage'
+			mintServiceReplyErrorType(signatures, messageKey: qualifiedMethodName(typeName, methodName: layout.messageMethodAt(i)))
+		end 'eachMessage'
+	end 'eachReplyErrorType'
 end 'synthesizeServiceCompanions'
+
+// ⭐⭐ **THE THIRD PASS'S BODY FOR ONE MESSAGE — split out so the roster walk above stays two lines and the
+// four gates below read as one sequence.**
+//
+// ⛔⛔ **IT SKIPS RATHER THAN PANICS ON A MESSAGE THIS PROGRAM WILL BE REFUSED FOR.** `serviceTypeRoster`
+// runs `classifyServiceTarget` and NOT `classifyServiceRoster`, so this sweep also runs for rosters
+// `Parser.parseSpawn` is about to refuse with E3140, and for programs `SemanticCheck` will refuse with
+// E3113. `serviceReplyHandlerFusedShift` PANICS on an unplaceable member, so the same gates are asked here
+// and answered by declining to mint — the boxed and unfusable pair THROUGH `uncarriableReplyErrorNoun`
+// itself rather than restated, so the two sweeps cannot drift. Those diagnostics own such programs; a
+// compiler panic would take the program's real refusal with it.
+function mintServiceReplyErrorType(signatures ProgramSignatures, messageKey ByteArray)
+	let errorName = try throwsClauseName(signatures.throwsOf(messageKey)) otherwise return
+	let handlerError = errorName.toByteArray()
+
+	// ⚠ **THE UNDECLARED GATE CANNOT BE FOLDED INTO THE NOUN BELOW, AND THAT ASYMMETRY IS DELIBERATE ON
+	// BOTH SIDES.** `uncarriableReplyErrorNoun` answers `""` for an undeclared type ON PURPOSE, so as not to
+	// pre-empt E3113 — which means its silence reads *"carriable, OR not an error type at all"*, and only
+	// this test tells the two apart.
+	if not signatures.containsEnum(handlerError) 'semanticCheckRefusesThisProgram'
+		return
+	end 'semanticCheckRefusesThisProgram'
+
+	// ⭐ **THE BOXED AND UNFUSABLE GATES ARE ASKED *THROUGH* `uncarriableReplyErrorNoun`, NOT RESTATED.**
+	// That function is the one `classifyServiceRoster` refuses such a program by (E3140), so asking it here
+	// is what keeps the two sweeps agreeing: a fourth uncarriable shape added there stops this pass minting
+	// for it in the same commit, where two hand-copied gates would have drifted silently — and a drift here
+	// is not a crash, it is a registered enum for a program that has no valid reply at all.
+	if not uncarriableReplyErrorNoun(signatures, messageKey: messageKey).isEmpty() 'refusedAtTheSpawn'
+		return
+	end 'refusedAtTheSpawn'
+
+	let handlerLayout = serviceReplyErrorLayout(signatures, errorName: handlerError)
+	let handlerPlacement = serviceReplyHandlerPlacement(signatures, errorName: handlerError)
+
+	// Asked of the REGISTRY rather than of the roster, for pass 1's reason: a warm rebuild arrives with a
+	// fresh roster and a filled registry.
+	let name = serviceReplyErrorsCompanionName(messageKey)
+	if signatures.containsEnum(name) 'alreadyMinted'
+		return
+	end 'alreadyMinted'
+
+	signatures.recordServiceReplyErrors(buildServiceReplyErrorEnum(signatures, name: name, handlerLayout: handlerLayout, handlerPlacement: handlerPlacement), messageKey: messageKey)
+end 'mintServiceReplyErrorType'
+
+// ⭐⭐⭐ **THE FUSED PAIR AS A DECLARATION — `ServiceError`'s cases then the handler's, AT THE FUSED TAGS
+// THE WIRE ALREADY CARRIES.** A registered case's tag is `Parser.fusedCaseTag(...)` — the ONE home of that
+// sum, shared with `fusedErrorUnionInfo`'s dispatch table — **MINUS `ErrorFlagOrdinalBias`**, and the
+// subtraction is not a fudge: a declared enum's case is thrown as `tag + bias` by the ordinary Std-tier
+// encode, so storing the fused ordinal minus the bias is what makes that encode reproduce the fused word.
+// The universal scalar invariant `flag = tag + bias` therefore holds for this enum on every road at once:
+// the reply's own fused word, and a bare `try` that re-publishes it verbatim.
+//
+// ⚠ **THERE IS NO `throw Calc.divide.errors.<case>` ROAD, AND THIS HEADER USED TO NAME ONE.** A dotted
+// static access three segments deep does not parse (`E2010` at the `.divide`), so the enum is reachable as
+// a TYPE — in a `throws` clause, in a `Promise`'s error argument — and not as a case literal. If that road
+// is ever opened it needs a rule first: `EnumLayout.indexOfCase` returns the FIRST match, and this layout
+// deliberately holds both members' cases, so a colliding name would silently mean the transport member.
+//
+// ⛔⛔ **BOTH POSITIONS COME FROM `serviceReplyTransportPlacement` / `serviceReplyHandlerPlacement` AND
+// NOWHERE ELSE.** Those functions' own header states why (*"the two sides are in different processes of the
+// compiler and must agree to the digit"*); a second derivation here would be an arm running for a case that
+// was not raised.
+//
+// ⭐ **DUPLICATE BARE CASE NAMES ACROSS THE TWO MEMBERS ARE KEPT, NOT MERGED.** `Halt.stopped` beside
+// `ServiceError.stopped` is two cases at two tags, and the ambiguity is the author's to resolve at the
+// `match` (E3085) — collapsing them here would put the two members' cases on one tag and dispatch the wrong
+// one.
+// ⚠⚠ **THE MEMBERSHIP BELOW IS STATED TWICE AND HAS NO SHARED HOME — `Parser.serviceReplyErrorMembers`
+// IS THE OTHER COPY.** Both say *"member 1 is `ServiceError` at `serviceReplyTransportPlacement`, member 2
+// is the handler's at `serviceReplyHandlerPlacement`"*. They cannot be merged cheaply: the roster's natural
+// carrier is `TryBlockErrorMember`, which is file-private to `Parser.maxon`, and the two callers run in
+// different PHASES — this one during `queryProgramSignatures`, before any `Parser` exists. Widening a
+// try-block type onto the module surface to share two lines would be the worse coupling.
+// ⇒ **A THIRD MEMBER, OR A REORDERING, MUST BE MADE IN BOTH.** What is NOT duplicated, and matters far
+// more, is the arithmetic (`Parser.fusedCaseTag`) and the positions (the two placement functions): those
+// have one home each, so the two copies cannot disagree about a NUMBER — only about a membership, which
+// would show up as a case set the dispatch table does not hold rather than as a wrong arm.
+function buildServiceReplyErrorEnum(signatures ProgramSignatures, name ByteArray, handlerLayout EnumLayout, handlerPlacement FusedPlacement) returns EnumLayout
+	var errors = EnumLayout.create(name, isUnion: false, conformsTo: builtinErrorConformance(), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
+	addServiceReplyErrorCases(errors, member: serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName), placement: serviceReplyTransportPlacement(signatures))
+	addServiceReplyErrorCases(errors, member: handlerLayout, placement: handlerPlacement)
+	return errors
+end 'buildServiceReplyErrorEnum'
+
+// One member's cases, shifted onto the fused line. `declaresRawValue: false` is the literal truth: neither
+// member's raw values survive the shift, and nothing interpolates a case of this enum.
+function addServiceReplyErrorCases(errors EnumLayout, member EnumLayout, placement FusedPlacement)
+	for i in 0 upto member.caseCount() 'eachCase'
+		errors.addCase(member.caseNameAt(i), tag: fusedCaseTag(member.tagOfIndex(i), offset: placement.offset) - ErrorFlagOrdinalBias, rawValue: "", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+	end 'eachCase'
+end 'addServiceReplyErrorCases'

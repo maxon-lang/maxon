@@ -4291,6 +4291,12 @@ typealias DeclaredBodyFactNameSet = Set with ByteArray
 // for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
 typealias ServiceHandleOwnerMap = Map with (ByteArray, ByteArray)
 
+// `<Service>.<method>.errors` → the MESSAGE KEY it fuses the error type of. A registry COLUMN and not a
+// suffix test: `Parser.caughtErrorFormFor` has to tell a reply's fused enum from an author's own type, and a
+// user may perfectly well declare `enum Foo.errors`-shaped names through a namespace. A column cannot
+// false-positive; a spelling test can.
+typealias ServiceReplyErrorOwnerMap = Map with (ByteArray, ByteArray)
+
 // The answer to "does this callee consume any parameter?" — a union so "no recorded entry" is an ANSWER
 // (a borrow-only callee), never confused with an empty-but-present one.
 export union CalleeConsume
@@ -9946,6 +9952,13 @@ export type ProgramSignatures
 	// `<T>.handle` per candidate to compare would allocate a String on a path that answers `false` for every
 	// program with no service in it. Empty, it costs one `contains` on an empty table.
 	var serviceHandleOwners as ServiceHandleOwnerMap
+	// ⭐⭐ **THE `<Service>.<method>.errors` ENUMS THIS SWEEP MINTED (SV4)**, filled by the one act that
+	// creates them (`recordServiceReplyErrors`), on `serviceHandleOwners`' shape and for its reason: the
+	// reader (`Parser.caughtErrorFormFor`) must decide whether a `throws` name is a reply's fused pair, and a
+	// membership test cannot claim a type the compiler did not mint. It also carries the answer the reader
+	// needs NEXT — which message — so the fused members are re-derived from the same placements the service
+	// loop shifted its flag by.
+	var serviceReplyErrorOwners as ServiceReplyErrorOwnerMap
 	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
 	// of the scan — false for every program that declares no container of its own, which is the whole
 	// existing corpus and every one of its goldens.
@@ -10078,7 +10091,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -10337,6 +10350,70 @@ export type ProgramSignatures
 			self.recordEnum(buildUnionCasesCompanion(request), declaredByTheCorpus: true)
 		end 'hasAssociatedValues'
 	end 'recordServiceRequest'
+
+	// ⭐⭐ **REGISTER ONE `<Service>.<method>.errors`, AND FILE IT AGAINST ITS MESSAGE IN THE SAME
+	// STATEMENT** — `recordServiceHandle`'s shape and its reason. The two facts are one act because the
+	// registered LAYOUT alone cannot tell `Parser.caughtErrorFormFor` that a `throws` clause naming this enum
+	// must dispatch through the reply's fused table: decoded as an ordinary declared enum (`flag - bias`
+	// against the source tags) the handler member's arms would select on tags nothing raises, silently.
+	export function recordServiceReplyErrors(errors EnumLayout, messageKey ByteArray)
+		self.recordEnum(errors, declaredByTheCorpus: true)
+		try self.serviceReplyErrorOwners.insert(errors.name, value: messageKey) otherwise panic("recordServiceReplyErrors: `{String.from(errors.name)}` is already filed under a message — `synthesizeServiceCompanions` asks the enum registry for that very name before minting, so a second mint of one reply error type cannot reach this line")
+	end 'recordServiceReplyErrors'
+
+	// ⭐ **IS THIS NAME A REPLY'S FUSED ERROR TYPE, AND OF WHICH MESSAGE?** — `isServiceHandle`/`serviceOfHandle`'s
+	// pair, split the same way and for the same reason: the membership test runs on a path that answers
+	// `false` for every program with no `spawn` in it, and the lookup PANICS because its one caller has just
+	// been through the test.
+	export function isServiceReplyErrorType(name ByteArray) returns bool
+		return self.serviceReplyErrorOwners.contains(name)
+	end 'isServiceReplyErrorType'
+
+	// ⚡ **THE GATE IN FRONT OF THAT TEST, ON THE COLUMN THE TEST ACTUALLY READS.** `caughtErrorFormFor`
+	// asks it once per `try` site to avoid building a `ByteArray` from the clause's name; gating on a
+	// SERVICE-HANDLE count instead would be correct-by-implication but would answer `true` for a program
+	// with services and no throwing message, which is the common one.
+	export function declaresAServiceReplyErrorType() returns bool
+		return self.serviceReplyErrorOwners.count() > 0
+	end 'declaresAServiceReplyErrorType'
+
+	export function messageOfServiceReplyErrorType(name ByteArray) returns ByteArray
+		return try self.serviceReplyErrorOwners.get(name) otherwise panic("messageOfServiceReplyErrorType: `{String.from(name)}` is filed under no message — `recordServiceReplyErrors` is the one act that mints a reply error type, and it files the owner in the same statement")
+	end 'messageOfServiceReplyErrorType'
+
+	// ⭐⭐ **WHAT A REPLY THROWS, AS A NAME (SV2) — THE ONE HOME OF THE ANSWER.** A reply ALWAYS carries
+	// `ServiceError`: a service can be gone, whatever the message declares. That is what makes a plain
+	// `await h.m()` E3057 by construction and needs no rule of its own.
+	//
+	// ⭐ **ONE MEMBER IS `ServiceError` ITSELF AND TWO ARE A SYNTHESIZED ENUM, AND BOTH ARE REAL NAMES.** A
+	// message that throws nothing has `ServiceError` alone — an ordinary declared enum, so
+	// `function fetch(h Calc.handle) returns int throws ServiceError  return try await h.total()` propagates.
+	// A message that throws has the fused pair, registered under `<message>.errors` by
+	// `ServiceCompanions.synthesizeServiceCompanions`' third pass, so a `throws` clause can spell that too and
+	// a bare `try` propagates just as far. E3059 is what an enclosing clause naming the HANDLER half alone
+	// earns, which is an ordinary name mismatch.
+	//
+	// ⚠ It answers from the THROWS CLAUSE rather than from the owners map, because it is asked at doors that
+	// run BEFORE pass 3 has minted anything (`internPromiseInstanceForReply` at the send, the storage door)
+	// as well as after.
+	//
+	// ⛔ **SO IT CAN NAME AN ENUM PASS 3 DECLINED TO MINT, AND THIS COMMENT USED TO CALL THAT IMPOSSIBLE
+	// "BY CONSTRUCTION". IT IS AN ORDERING ARGUMENT.** Pass 3 skips a message whose handler error is
+	// undeclared, boxed or unfusable, and for those this still returns `<message>.errors` — a name no
+	// registry holds, which `internPromiseInstanceForReply` will happily intern into a `Promise` type
+	// argument. What makes that harmless is that `classifyServiceRoster` walks the SAME
+	// `(serviceTypeRoster x messageMethodAt)` set and refuses the whole program at the `spawn` (E3140) or at
+	// the declaration (E3113), so the unregistered name never escapes the parser — MEASURED both ways at
+	// review, exit 1, no panic and no second answer. ⇒ **that shared walk is the load-bearing fact**: if
+	// either sweep's roster ever stops matching the other's, this returns a name for a program nobody
+	// refuses, and the reply's error type resolves to nothing.
+	export function serviceReplyErrorName(messageKey ByteArray) returns ByteArray
+		if not throwsClauseIsThrowing(self.throwsOf(messageKey)) 'transportOnly'
+			return ServiceErrorTypeName
+		end 'transportOnly'
+
+		return serviceReplyErrorsCompanionName(messageKey)
+	end 'serviceReplyErrorName'
 
 	// ⭐⭐ **IS THIS TYPE A SERVICE HANDLE? — the door two mechanisms ask.** `compilerOwnedAggregateOf` asks it
 	// to route the handle's drop and clone; `Parser.dispatchMethodOnBase` asks it to route a method call on a
@@ -21892,14 +21969,9 @@ export type ProgramSignatures
 	// ⚠ **THE RESULT POSITION IS ALWAYS FILLED** — see `PromiseVoidResultName` for why a void thunk gets a
 	// stand-in argument rather than a shorter instance.
 	export function internPromiseInstanceForCallee(callee ByteArray) returns GenericInstanceId
-		var args = MaxonTypeArray.create()
-
-		match self.returnTypeOf(callee, into: self.typeNames) 'result'
-			declared(returnType) then args.push(self.promiseResultArgFor(returnType))
-			// An undeclared callee is typed `Integer` everywhere else this index answers for one
-			// (`Parser.calleeReturnType` says so in as many words), so the promise over it agrees.
-			undeclared then args.push(MaxonType.integer)
-		end 'result'
+		// An undeclared callee is typed `Integer` everywhere else this index answers for one
+		// (`Parser.calleeReturnType` says so in as many words), so the promise over it agrees.
+		var args = self.promiseInstanceArgsFor(callee, undeclaredResult: MaxonType.integer)
 
 		let clause = self.throwsOf(callee)
 		if throwsClauseIsThrowing(clause) 'throwing'
@@ -21909,6 +21981,38 @@ export type ProgramSignatures
 
 		return self.genericInstances.intern(self.typeNames.intern(PromiseTypeName), args: args)
 	end 'internPromiseInstanceForCallee'
+
+	// ⭐⭐ **THE TYPE A SERVICE REPLY'S CELL IS BORN WITH — `Promise with (T, E)` READ OFF THE MESSAGE
+	// (SV4).** `Parser.mintServiceReplyCell` mints its cell at this instance, which is what makes every
+	// integer position refuse a reply through the type check it already has: `return h.total()` is E3005,
+	// `p + 1` is E2004, `takesInt(h.total())` is E3005 and `p.clone()` is E2015, none of them enumerated
+	// anywhere. W230 proved the argument on the spawn road; this is the road it did not reach.
+	//
+	// ⚠ **THE ERROR ARGUMENT IS ALWAYS PUSHED, WHERE THE SPAWN'S IS CONDITIONAL** — every reply throws,
+	// because the service can be gone whatever the message declares, and `promiseStorageThrows` keys
+	// throwing-ness on the ARGUMENT COUNT (`PromiseType.maxon`). A one-argument reply instance would hand
+	// `try await` a promise the type says cannot fail.
+	export function internPromiseInstanceForReply(messageKey ByteArray) returns GenericInstanceId
+		// An undeclared MESSAGE is the compiler's own `<T>.__shutdown` pill — a legal send whose reply really
+		// does carry nothing — which is the one arm where the reply road and the spawn road part.
+		// `Parser.serviceReplyResultType` states the same split in the parser's own interner.
+		var args = self.promiseInstanceArgsFor(messageKey, undeclaredResult: self.promiseResultArgFor(MaxonReturnType.void))
+		args.push(MaxonType.named(self.typeNames.intern(self.serviceReplyErrorName(messageKey))))
+		return self.genericInstances.intern(self.typeNames.intern(PromiseTypeName), args: args)
+	end 'internPromiseInstanceForReply'
+
+	// The RESULT half of either instance — the half the two roads share, so a reply and a spawn cannot come
+	// to disagree about how a declared or a void thunk is typed. That equality is what
+	// `internPromiseInstanceForCallee`'s header rests the whole storage rule on. Only the UNDECLARED arm
+	// differs, which is why it arrives as an argument rather than being decided here.
+	function promiseInstanceArgsFor(callee ByteArray, undeclaredResult MaxonType) returns MaxonTypeArray
+		var args = MaxonTypeArray.create()
+		match self.returnTypeOf(callee, into: self.typeNames) 'result'
+			declared(returnType) then args.push(self.promiseResultArgFor(returnType))
+			undeclared then args.push(undeclaredResult)
+		end 'result'
+		return args
+	end 'promiseInstanceArgsFor'
 
 	// The result TYPE ARGUMENT for a promise over a thunk returning `returnType`. Split out so the void
 	// stand-in has exactly one home; see `PromiseVoidResultName`.

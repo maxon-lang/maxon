@@ -1,0 +1,24 @@
+// Test: error.clone-a-reply
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let copy = p.clone()
+	print("copied {copy.inner > 0}")
+	return (try await p otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E2015: <fragment>:17:15: Unsupported: `clone` on `Promise`, which is a GENERIC type — a clone must be minted per INSTANCE (a `Promise with String` and a `Promise with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `Promise` that rebuilds it.

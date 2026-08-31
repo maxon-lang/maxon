@@ -579,9 +579,34 @@ let v = try await c.divide(10, by: 0) otherwise (e) 'oops'
 end 'oops'
 ```
 
-That is character-for-character the existing try-block synthesized-error-union syntax. For bare
-`try` propagation (which needs exact type match), name the union: `typealias E = Calc.divide.errors`.
-The diagnostic for getting this wrong should hand the user that exact line.
+That is character-for-character the existing try-block synthesized-error-union syntax.
+
+**SHIPPED (SV4), and the spelling is the clause rather than the alias.** For bare `try` propagation
+(which needs exact type match), name the union directly in the `throws` clause:
+
+```maxon
+function fetch(h Calc.handle) returns Integer throws Calc.divide.errors
+	return try await h.divide(10, by: 0)
+end 'fetch'
+```
+
+`Calc.divide.errors` is a REGISTERED enum: `synthesizeServiceCompanions`' third pass mints one per
+throwing message, whose cases are `ServiceError`'s and the handler's at the fused tags the transport
+already writes. So it resolves in a `throws` clause, interns in
+`Promise with (Integer, Calc.divide.errors)`, and a reply can be STORED under it — which is what
+retired the old E3098 *"two members with no declaration between them"*. A `match` over it keeps the
+synthesized-union dispatch above, so the arms are spelled exactly as they are here; a bare arm whose
+name BOTH members declare is E3085, not a silent pick.
+
+⚠ It is reachable as a TYPE and not as a case literal: `throw Calc.divide.errors.stopped` does not
+parse (a static access three dotted segments deep is `E2010`). That road needs a rule before it is
+opened — the layout deliberately holds both members' cases, and `indexOfCase` returns the first match,
+so a colliding name would silently mean the transport member.
+
+⚠ **`typealias E = Calc.divide.errors` — the spelling this section used to promise — does NOT parse**,
+and the reason is not about services: a bare-name typealias (`typealias A = B`) is unsupported for
+every type in the language, and arrives with the milestone that gives it meaning. The `throws` clause
+above is the working cure; the alias is sugar on top of it.
 
 **E3073 (`AsyncNonYielding`, both compilers):** the mailbox receive and the select wait are PARK
 POINTS and must be registered as such, or `spawn` fails its own yield analysis for every service.

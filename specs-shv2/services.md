@@ -2209,7 +2209,8 @@ error E3139: <fragment>:10:14: service call cycle — these messages can deadloc
 ⭐ **A MESSAGE THAT THROWS NOTHING HAS A ONE-MEMBER REPLY ERROR TYPE, AND ONE MEMBER IS A NAME.** The reply of
 `total()` can fail only in transport, so its error type is `ServiceError` itself — an ordinary declared enum a
 `throws` clause can spell, which is what lets a bare `try` PROPAGATE it out of an intermediate function. Only a
-message that throws needs the two-member union, and that one has no spelling (see the case below).
+message that throws needs the two-member union, and that one is spelled `<Service>.<method>.errors` — a name the
+compiler synthesizes rather than one an author declares (see `a-declared-throws-clause-names-a-replys-errors`).
 ```maxon
 type Calc
 	var count as Integer
@@ -2239,9 +2240,12 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.bare-try-propagation-of-a-two-member-reply-is-refused -->
-A message that THROWS has a two-member reply error type, and no `throws` clause can name it — so a bare `try`
-that would re-publish the flag to this function's caller is refused with the same E3059 an ordinary type
-mismatch earns. The cure is to CATCH the reply here, which is what `otherwise (e)` is for.
+A message that THROWS has a two-member reply error type, and a `throws` clause CAN name it — the pair is
+synthesized as `Calc.divide.errors`, which is what `a-declared-throws-clause-names-a-replys-errors` propagates
+through. What THIS case pins is the MISMATCH: `fetch` declares `throws MathError`, the handler half alone,
+which is not the reply's error type — so the bare `try` that would re-publish the fused flag under that
+narrower name earns the same E3059 an ordinary type mismatch does. Either name the reply's own error type or
+CATCH it here, which is what `otherwise (e)` is for.
 ```maxon
 enum MathError implements Error
 	divideByZero
@@ -2274,6 +2278,95 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing function throws 'MathError' — add 'otherwise' to convert
+```
+
+<!-- test: a-declared-throws-clause-names-a-replys-errors -->
+<!-- targets: x64-windows, arm64-macos -->
+⭐ **THE SPELLING THE PREVIOUS CASE'S MISMATCH IMPLIES** (`SERVICES_DESIGN.md:583`). The fused pair is a
+nominal enum registered under `<Service>.<method>.errors`, so a `throws` clause can name it — and once it
+can, a bare `try` inside `fetch` re-publishes the flag VERBATIM to `fetch`'s own caller instead of being
+refused. The two members survive the hop: `main` catches at the call and still selects between transport and
+handler.
+```maxon
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Integer, by Integer) returns Integer throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+function fetch(h Calc.handle) returns Integer throws Calc.divide.errors
+	return try await h.divide(10, by: 0)
+end 'fetch'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let v = try fetch(h) otherwise (e) 'oops'
+		match e 'why'
+			stopped then return 70 as ExitCode
+			divideByZero then return 71 as ExitCode
+		end 'why'
+	end 'oops'
+	return v as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+71
+```
+
+<!-- test: error.an-ambiguous-bare-arm-over-a-fused-reply-error-is-refused -->
+Fusing two members into one dispatch table can collide on a bare case name: `Halt` declares a `stopped` of its
+own, so `stopped` in the `match` names both `ServiceError.stopped` and `Halt.stopped` and there is no rule
+that picks one. The qualified spelling disambiguates; the bare one is REFUSED rather than silently selecting a
+member, which is the same E3085 an ordinary two-member `try` union earns.
+```maxon
+enum Halt implements Error
+	stopped
+	halted
+end 'Halt'
+
+type Guard
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function risky() returns Integer throws Halt
+		if self.count == 0 'halt'
+			throw Halt.halted
+		end 'halt'
+		return self.count
+	end 'risky'
+end 'Guard'
+
+function main() returns ExitCode
+	let h = spawn Guard.create()
+	try await h.risky() otherwise (e) 'oops'
+		match e 'why'
+			stopped then return 70 as ExitCode
+			halted then return 71 as ExitCode
+		end 'why'
+	end 'oops'
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3085: <fragment>:26:4: case 'stopped' is shared by multiple union members; qualify with 'EnumName.stopped'
 ```
 
 <!-- test: shutdown-resolves-pending-replies -->
@@ -2819,10 +2912,11 @@ MAKES IT TRUE (SV3).** A reply is an ordinary `Promise`, so it goes into an `Arr
 `__Builtins.awaitAny` selects over it exactly as it does over `async` spawns — no separate "channel select"
 and no second waiting mechanism.
 
-⚠ **THE STORAGE MUST NAME `ServiceError` AND THE MESSAGE MUST THROW NOTHING.** A reply ALWAYS carries
-`ServiceError` (the service can be gone, whatever the message declares), so `Promise with Integer` alone
-would erase it; and a message that DOES throw has a two-member reply error type no `throws` clause can
-spell, which is `error.a-throwing-message-reply-cannot-be-stored` below.
+⚠ **THE STORAGE MUST NAME THE REPLY'S OWN ERROR TYPE.** A reply ALWAYS carries `ServiceError` (the service can
+be gone, whatever the message declares), so `Promise with Integer` alone would erase it; and a message that
+DOES throw has a two-member reply error type the storage must spell by its fused name, which is
+`a-throwing-reply-stores-in-a-promise-naming-its-errors` below. `Slow.value` throws nothing, so `ServiceError`
+is the whole of its reply error type.
 
 ⚠ The reply is awaited afterwards. `awaitAny` retires nothing, so the array would otherwise die holding a
 live reply cell — `W217`, exit 75; see `specs-shv2/await-any.md`.
@@ -2857,12 +2951,61 @@ end 'main'
 5
 ```
 
-<!-- test: error.a-throwing-message-reply-cannot-be-stored -->
-⭐ **THE ONE REPLY THAT MAY NOT BE STORED, AND THE REASON IS THE SAME ONE `error.bare-try-propagation-of-a-two-member-reply-is-refused` GIVES.** A message that throws has a reply error type of
-`{ServiceError, <what the message throws>}` — two members with no declaration between them and no spelling
-a `Promise with (T, E)` could put in its second argument. Storing it would erase one of the two, and the
-awaiter would then decode a fused two-member flag as a single enum: a silent wrong `match` arm rather than
-a diagnostic. So the refusal is at the STORE, where both halves are still known.
+<!-- test: a-throwing-reply-stores-in-a-promise-naming-its-errors -->
+<!-- targets: x64-windows, arm64-macos -->
+⭐ **THE FUSED ERROR TYPE HAS A NAME, SO THE ONE REPLY THAT COULD NOT BE STORED NOW CAN BE.** A message that
+throws has a reply error type of `{ServiceError, <what the message throws>}`, and that pair is synthesized as
+a nominal enum under `<Service>.<method>.errors` — an ordinary declared type a `Promise with (T, E)` can put
+in its second argument. The storage road and the direct road then describe the SAME two members, so `e` binds
+the same fused flag either way and the bare arms select through one dispatch table.
+```maxon
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+typealias Integer = int(i64.min to i64.max)
+typealias DivideReply = Promise with (Integer, Calc.divide.errors)
+typealias DivideReplyArray = Array with DivideReply
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Integer, by Integer) returns Integer throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	var ps = DivideReplyArray.create()
+	ps.push(h.divide(10, by: 0))
+	let p = try ps.get(0) otherwise panic("the reply was pushed into slot 0")
+	try await p otherwise (e) 'oops'
+		match e 'why'
+			stopped then return 70 as ExitCode
+			divideByZero then return 71 as ExitCode
+		end 'why'
+	end 'oops'
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+71
+```
+
+<!-- test: error.a-stored-reply-that-names-the-wrong-errors-is-refused -->
+The two-member type now HAS a name, so the refusal is no longer *"nothing can name it"* — it is an ordinary
+name mismatch. `ReplyPromise` names `ServiceError`, which is only the TRANSPORT half; storing a reply from a
+throwing message under it would erase the handler member, and the awaiter would then decode a fused
+two-member flag as a single enum: a silent wrong `match` arm rather than a diagnostic. So the refusal stays at
+the STORE, where both the declared name and the message's own are still known.
 ```maxon
 enum MathError implements Error
 	divideByZero
@@ -2895,7 +3038,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: <fragment>:28:5: a reply from 'Calc.divide' throws 'Calc.divide.errors' — two members with no declaration between them — so no 'Promise with (T, E)' can name it; catch it at a 'try await' instead of storing it
+error E3098: <fragment>:28:5: 'ReplyPromise' names the error type 'ServiceError', but a reply from 'Calc.divide' throws 'Calc.divide.errors'
 ```
 
 <!-- test: a-stored-reply-decodes-serviceerror-through-the-storage-road -->
@@ -3081,4 +3224,173 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3142: <fragment>:18:10: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+```
+
+<!-- test: error.return-a-reply-as-its-result-type -->
+A reply is not its result. `grab` is declared `returns Integer` and returns `h.total()`, which is the reply —
+the value that will eventually produce an `Integer`, not an `Integer`. Before replies were typed the cell was
+minted `ValueTypeTag.integer`, so this COMPILED and printed the green thread's raw cell address (a different
+number on every run), which is the wrong answer this pins.
+```maxon
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function grab(h Calc.handle) returns Integer
+	return h.total()
+end 'grab'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	print("grabbed {grab(h)}")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3005: <fragment>:15:2: Cannot return 'struct' from function declared to return 'int'
+```
+
+<!-- test: error.arithmetic-on-a-reply -->
+A reply is not a number, so it has no arithmetic. `p + 1` used to be pointer arithmetic on a green-thread cell
+address that happened to compile.
+```maxon
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let bumped = p + 1
+	print("bumped {bumped}")
+	return (try await p otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E2004: <fragment>:17:17: Cannot operate on struct and int
+```
+
+<!-- test: error.a-reply-in-an-integer-parameter -->
+<!-- targets: x64-windows, arm64-macos -->
+An `Integer` parameter does not take a reply. The cure is to `await` it and pass the RESULT — which is also
+the only spelling that keeps the cell's one owner intact. A reply always carries an error member, so it
+renders as a two-argument `Promise` instance.
+
+⚠ **THIS IS THE ONE REPLY-TYPING REFUSAL THAT CARRIES THE MARKER, AND THE REASON IS *WHO REACHES THE
+VERDICT FIRST* — the discriminator this file's Targets section states.** Its four siblings (return,
+arithmetic, `clone`, storage) are PARSE throws: the compile stops, so the fragment's only diagnostic is the
+one they pin, and they are unmarked and green on every lane. An ARGUMENT type mismatch is not — it is a
+whole-program `SemanticCheck` verdict (`argTypeMismatchSentence`), and by the time it is reached
+`checkCalls` has already recorded an **E3104** for this program's `spawn`, its `__gt_cell_alloc` and its
+`__mbox_send`. MEASURED on `--target=wasm32-wasi`: the E3005 is produced, correctly and last, behind three
+E3104 lines. The rule is target-neutral and the x64 lane pins it; what is not target-neutral is the
+SCAFFOLDING needed to reach it.
+```maxon
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function takesInt(n Integer) returns Integer
+	return n
+end 'takesInt'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	return takesInt(h.total()) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3005: <fragment>:20:9: argument type mismatch for 'n': expected 'Integer', got 'Promise with (int(-9223372036854775808 to 9223372036854775807), ServiceError)'
+```
+
+<!-- test: error.clone-a-reply -->
+⭐ The one that was a latent double-reclaim rather than merely a wrong type. A reply cell is the two-party
+teardown rendezvous between the awaiter and the service loop, and exactly one owner may arrive at it;
+`p.clone()` used to hand back a second copy of the cell word, with nothing to say which of the two owned it.
+`Promise` declares no `clone`, and synthesizing one is refused at the receiver.
+```maxon
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let copy = p.clone()
+	print("copied {copy.inner > 0}")
+	return (try await p otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E2015: <fragment>:17:15: Unsupported: `clone` on `Promise`, which is a GENERIC type — a clone must be minted per INSTANCE (a `Promise with String` and a `Promise with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `Promise` that rebuilds it.
+```
+
+<!-- test: a-reply-inner-is-the-one-unwrap -->
+<!-- targets: x64-windows, arm64-macos -->
+The sanctioned reply → `int` conversion, and the twin of `promise-typing.inner-is-the-one-unwrap`. `.inner`
+peeks at the cell word without consuming the reply, so the `await` that follows still reclaims it and the
+program still balances to zero.
+```maxon
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let named = p.inner > 0
+	print("names a thread {named}")
+	return (try await p otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+7
+```
+```stdout
+names a thread true
 ```

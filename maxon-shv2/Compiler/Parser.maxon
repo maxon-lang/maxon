@@ -9036,10 +9036,14 @@ union TryTarget
 	// exist. A storage type has no such case: its clause is read off the type, which is always there.
 	promise(storageName ByteArray, throwsClause ThrowsClause)
 	// ⭐⭐ **A SERVICE REPLY (SV2): the MESSAGE's name, and nothing else.** Unlike `witness` and `promise` it
-	// carries no clause, because a reply's error type is not a fact anybody RECORDED — it is DERIVED, from
-	// `ServiceError` merged with whatever the message itself throws, and deriving it once at
+	// carries no clause, because a reply's error type is not a fact the DECLARATION records — it is derived
+	// from `ServiceError` merged with whatever the message itself throws, and deriving it once at
 	// `tryTargetThrows` is what stops the plain-`await` reject (E3057), the `otherwise (e)` binding and the
 	// propagate check (E3059) from coming to three different answers about the same reply.
+	//
+	// ⚠ **THAT DERIVED TYPE HAS A REGISTERED NAME SINCE SV4** (`<message>.errors`), so the OTHER three arms
+	// can carry it in an ordinary clause — see `caughtErrorFormFor`, which routes them to this arm's dispatch
+	// table by asking the registry rather than by re-deriving anything.
 	serviceReply(messageName ByteArray)
 end 'TryTarget'
 
@@ -9718,6 +9722,22 @@ module type FusedPlacement
 		return Self{fusable: false, offset: 0, top: 0}
 	end 'tooWide'
 end 'FusedPlacement'
+
+// ⭐⭐ **WHERE ONE MEMBER'S CASE LANDS ON THE FUSED LINE — the arithmetic itself, written ONCE because
+// THREE parties have to land on the same number and two of them are in different passes.** The dispatch
+// table (`fusedErrorUnionInfo`), the reply's NOMINAL enum
+// (`ServiceCompanions.addServiceReplyErrorCases`) and the flag the service actually writes
+// (`ServiceLoop.emitFusedHandlerFlag`, via `serviceReplyHandlerFusedShift`) all express this same sum.
+//
+// ⚠ **THE NOMINAL ENUM SPELLS IT `fusedCaseTag(...) - ErrorFlagOrdinalBias`, AND THE SUBTRACTION IS THE
+// POINT.** A declared enum's case is thrown as `tag + bias` by the ordinary Std-tier encode, so storing
+// the fused ordinal MINUS the bias is exactly what makes that encode reproduce the fused word — the
+// universal `flag = tag + bias` then holds for the reply's own cell, for a bare `try` that republishes it
+// verbatim, and for the dispatch table alike. Written as two independent formulas this relationship is
+// invisible, and a disagreement is not a crash: it is a `match e` arm running for a case nothing raised.
+module function fusedCaseTag(memberTag ParsedInt, offset ParsedInt) returns ParsedInt
+	return memberTag + offset
+end 'fusedCaseTag'
 
 // ⚠⚠ **THE FUSED LINE'S CEILING AND FLOOR, HELD SHORT OF `i64`'s OWN BY A MARGIN — so every placement
 // question is a COMPARISON and never a trial addition.** `ParsedInt` is `int(i64.min to i64.max)`, so an
@@ -26936,18 +26956,46 @@ export type Parser
 		return MaxonReturnType.value(try self.parseTypeReference(BarePrimitiveVoice.asAType))
 	end 'parseOptionalReturnType'
 
-	// The `throws E` clause that follows a function's return type (P1.4b). `E` is a bare enum name — a
-	// payload-free enum conforming to `Error` (validated later, in SemanticCheck; the sweep and the real
-	// parse are tolerant). Read by BOTH the declaration sweep (`recordScannedSignature`, whole-program) and
-	// the real parse (`parseFunction`, which stamps `func.throwsTypeName`), so the throws fact is captured
-	// once and shared, exactly as `parseOptionalReturnType` is.
+	// The `throws E` clause that follows a function's return type (P1.4b). `E` is the name of a payload-free
+	// enum conforming to `Error` (validated later, in SemanticCheck; the sweep and the real parse are
+	// tolerant). Read by BOTH the declaration sweep (`recordScannedSignature`, whole-program) and the real
+	// parse (`parseFunction`, which stamps `func.throwsTypeName`), so the throws fact is captured once and
+	// shared, exactly as `parseOptionalReturnType` is.
+	//
+	// ⭐⭐ **THE NAME MAY BE A DOTTED CHAIN, AND IT HAD TO BECOME ONE (SV4).** `BNF_SYNTAX.md:241` has always
+	// said `throws_clause = 'throws' type_ref`, and a type reference has been a chain since N1b; this reader
+	// consumed exactly ONE identifier, so `throws Calc.divide.errors` — a reply's fused error type, which is
+	// a registered enum since SV4 — died on `E2001: unexpected token: '.'`.
+	//
+	// ⭐ **IT IS THE *SAME* WALK `parseTypeReference`'s qualified arm uses**, `dottedChainLengthAt` /
+	// `assembleDottedChainAt`, rather than a hand-rolled loop — which is what admits a KEYWORD standing as a
+	// segment (the D8 rule) here exactly as it is admitted there. The walk is purely syntactic and asks no
+	// registry, so the tolerant sweep and the real parse still answer identically, and all three callers get
+	// the change from one reader.
 	function parseOptionalThrowsClause() returns ThrowsClause throws ParseError
 		if not self.at(TokenKind.throws) 'noThrows'
 			return ThrowsClause.none
 		end 'noThrows'
 		try self.consume(TokenKind.throws)
+
+		let headIndex = self.pos
+		// Read BEFORE the consume below, which moves the cursor off the head the walk counts from.
+		let qualifierDots = self.dottedChainLengthAt(headIndex)
 		let nameTok = try self.consume(TokenKind.identifier)
-		return ThrowsClause.throwing(String.from(nameTok.value))
+		if qualifierDots == 0 'aBareName'
+			return ThrowsClause.throwing(String.from(nameTok.value))
+		end 'aBareName'
+
+		// Stops PAST the final segment, as the type-reference walk does: nothing downstream of a `throws`
+		// clause consumes that token either. `advance` and not `consume(identifier)`, because a segment may be
+		// a keyword standing as a name.
+		let qualified = self.assembleDottedChainAt(headIndex, dots: qualifierDots)
+		for _ in 0 upto qualifierDots 'eachSegment'
+			try self.consume(TokenKind.dot)
+			self.advance()
+		end 'eachSegment'
+
+		return ThrowsClause.throwing(String.from(qualified))
 	end 'parseOptionalThrowsClause'
 
 	// ⛔ **A FUNCTION SIGNATURE ENDS AT THE END OF ITS LINE.** Both clauses that may follow the
@@ -33939,7 +33987,7 @@ export type Parser
 			for i in 0 upto member.layout.caseCount() 'eachCase'
 				// `declaresRawValue: false` is the literal truth and not a default: this layout exists only to
 				// dispatch the fused `match` and no value is ever TYPED by it, so nothing can interpolate one.
-				layout.addCase(member.layout.caseNameAt(i), tag: member.layout.tagOfIndex(i) + member.fusedTagOffset, rawValue: "", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+				layout.addCase(member.layout.caseNameAt(i), tag: fusedCaseTag(member.layout.tagOfIndex(i), offset: member.fusedTagOffset), rawValue: "", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 				caseMembers.push(member)
 			end 'eachCase'
 		end 'eachMember'
@@ -33959,13 +34007,35 @@ export type Parser
 	// SERVICE already wrote the fused ordinal into the cell's error word (`ServiceLoop.buildServiceArm`
 	// shifts the handler's flag by exactly the offset this table is built from). So `e` and the dispatch
 	// subject are one value and no op is emitted here at all.
+	//
+	// ⭐⭐ **AND THE OTHER THREE TARGETS REACH THE SAME TABLE BY NAME (SV4).** A reply's fused pair is a
+	// REGISTERED enum since SV4, so a function may declare `throws Calc.divide.errors`, a storage type may
+	// name it in its `ErrorType` argument, and an interface method may declare it — and on each of those
+	// roads the word `(e)` binds is still the FUSED ordinal the service wrote, propagated verbatim by a bare
+	// `try`. Decoding it as an ordinary declared enum (`flag - bias` against the source tags) would be
+	// numerically wrong for every case of the handler member, silently. So the classification is a REGISTRY
+	// question — `isServiceReplyErrorType` — asked at this one choke point, which all three `try` doors and
+	// the `if let` door come through.
 	function caughtErrorFormFor(target TryTarget, flag ValueId) returns CaughtErrorForm
 		match target 'kind'
 			named to promise then break 'kind'
 			serviceReply(messageName) then return self.serviceReplyCaughtForm(messageName, flag: flag)
 		end 'kind'
 
-		return CaughtErrorForm.singleCall
+		// ⚡ Gated on the one-`count()` question, because the probe below builds a `ByteArray` from the
+		// clause's name. It asks the column the probe itself reads — a program may declare services and no
+		// THROWING message, and then there is still nothing here to find.
+		if not self.signatures.declaresAServiceReplyErrorType() 'noFusedReplyErrorsInThisProgram'
+			return CaughtErrorForm.singleCall
+		end 'noFusedReplyErrorsInThisProgram'
+
+		let thrown = try throwsClauseName(self.tryTargetThrows(target)) otherwise return CaughtErrorForm.singleCall
+		let errorName = thrown.toByteArray()
+		if not self.signatures.isServiceReplyErrorType(errorName) 'anOrdinaryErrorType'
+			return CaughtErrorForm.singleCall
+		end 'anOrdinaryErrorType'
+
+		return self.serviceReplyCaughtForm(self.signatures.messageOfServiceReplyErrorType(errorName), flag: flag)
 	end 'caughtErrorFormFor'
 
 	// A reply's caught-error form: the fused union when the message throws, and the ORDINARY single-enum
@@ -33986,9 +34056,15 @@ export type Parser
 	//
 	// ⚠ **NEITHER MEMBER IS BOXED, AND THAT IS ENFORCED RATHER THAN ASSUMED.** `ServiceError` is a
 	// payload-free enum in `stdlib/Builtins.maxon`, and a message whose `throws` names a payload-carrying
-	// union is refused at the send (`requireServiceReplyIsCarriable`) precisely so this stays true — a boxed
+	// union is refused at the SPAWN (`ServiceCompanions.classifyServiceRoster`, E3140 — there is no
+	// `requireServiceReplyIsCarriable`, which two comments including this one used to name) precisely so this stays true — a boxed
 	// member's fused ordinal is a LOAD out of the box, and there is no landing pad on a reply's one edge to
 	// put it in.
+	// ⚠⚠ **THIS MEMBERSHIP IS STATED TWICE — `ServiceCompanions.buildServiceReplyErrorEnum` IS THE OTHER
+	// COPY**, and its header says why there is no shared home (this roster's carrier is file-private here,
+	// and that caller runs before any `Parser` exists). A third member, or a reordering, must be made in
+	// both. The NUMBERS are not duplicated: `fusedCaseTag` and the two placement functions have one home
+	// each, so the copies can differ only about membership.
 	function serviceReplyErrorMembers(messageName ByteArray) returns TryBlockErrorMemberArray
 		var members = TryBlockErrorMemberArray.create()
 		members.push(TryBlockErrorMember.create(ServiceErrorTypeName, clause: ThrowsClause.throwing(String.from(ServiceErrorTypeName)), isBoxed: false, layout: serviceReplyErrorLayout(self.signatures, errorName: ServiceErrorTypeName), placement: serviceReplyTransportPlacement(self.signatures)))
@@ -34760,30 +34836,9 @@ export type Parser
 			named(callee) gives self.signatures.throwsOf(callee)
 			witness(_, throwsClause) gives throwsClause
 			promise(_, throwsClause) gives throwsClause
-			serviceReply(messageName) gives ThrowsClause.throwing(self.serviceReplyErrorTypeName(messageName))
+			serviceReply(messageName) gives ThrowsClause.throwing(String.from(self.signatures.serviceReplyErrorName(messageName)))
 		end 'kind'
 	end 'tryTargetThrows'
-
-	// ⭐⭐ **WHAT A REPLY THROWS, AS A NAME (SV2).** A reply ALWAYS carries `ServiceError` — a service can be
-	// gone, whatever the message declares — so the answer is never `none`, which is what makes a plain
-	// `await h.m()` E3057 by construction and needs no rule of its own.
-	//
-	// ⭐ **ONE MEMBER IS A REAL NAME AND TWO ARE NOT, AND THAT ASYMMETRY IS THE FEATURE.** A message that
-	// throws nothing has `ServiceError` alone, an ordinary declared enum a `throws` clause can spell — so
-	// `function fetch(h Calc.handle) returns int throws ServiceError  return try await h.total()` PROPAGATES.
-	// A message that throws has a two-member union no declaration can name, and a bare `try` over it is
-	// therefore E3059 against whatever the enclosing function declares. The derived spelling
-	// `<message>.errors` is what that diagnostic quotes: it is `SERVICES_DESIGN.md`'s own `Calc.divide.errors`
-	// and it is a DIAGNOSTIC STRING, not a type reference — nothing resolves it, and it is deliberately not a
-	// name any registry holds, because a two-member union has no declaration for one to hold.
-	function serviceReplyErrorTypeName(messageName ByteArray) returns String
-		match self.signatures.throwsOf(messageName) 'handlerThrows'
-			none then return String.from(ServiceErrorTypeName)
-			throwing then break 'handlerThrows'
-		end 'handlerThrows'
-
-		return "{String.from(messageName)}.{String.from(ServiceReplyErrorSuffix)}"
-	end 'serviceReplyErrorTypeName'
 
 	function tryErrorEnumType(throwsClause ThrowsClause) returns MaxonType
 		return match throwsClause 'k'
@@ -35184,9 +35239,10 @@ export type Parser
 		// `async` spawn dropped at scope exit / a re-arm routes to `__gt_promise_drop`, which reclaims AND
 		// cancels the thread — NOT `__mm_decref` (a promise owns no `__mm_alloc` box; the handle is the GT
 		// struct pointer). Checked FIRST, off the promise MARK column, because no TAG identifies a promise: a
-		// spawn's handle is typed at the interned `Promise with (T[, E])` since W230 and a service reply's
-		// cell is still `integer`, so tag-based routing would miss one road or send a bare int down the
-		// other. The mark is written by every road that mints a promise, which is what makes it the answer.
+		// spawn's handle is typed at the interned `Promise with (T[, E])` since W230 and a reply's cell since
+		// SV4, but a bare `int` binding reassigned from a promise wears the same tags a promise does — so
+		// tag-based routing would send one down the other's road. The mark is written by every road that
+		// mints a promise and by nothing else, which is what makes it the answer.
 		if self.valueOwnsGreenThread(value) 'promise'
 			return GtPromiseDropName
 		end 'promise'
@@ -53871,10 +53927,22 @@ export type Parser
 			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloadsAt returned fewer fields than its own count at {i}")
 			let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
 			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: caseTok)
+			classes.push(class)
+
+			// ⛔⛔ **THE `__reply` SLOT'S ARGUMENT IS NOT TYPE-CHECKED, AND SINCE SV4 THAT IS LOAD-BEARING.**
+			// Its field is declared `MaxonType.integer` deliberately (a raw cell pointer the P1.3 destructor
+			// cascade must not follow) while `mintServiceReplyCell` mints the value at
+			// `Promise with (T, E)` — so this check would earn an **E3005 on every reply-bearing send in the
+			// suite**, blaming the author for an argument they did not write and the compiler minted. Both
+			// sides of this slot are the compiler's, which is what makes skipping it honest rather than a
+			// hole. `moveMessagePayloads` skips the same slot for its own reason, through the same predicate.
+			if fieldIsTheServiceReplySlot(field) 'theCompilersOwnCell'
+				continue
+			end 'theCompilersOwnCell'
+
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
 			let anchorIndex = try argAnchors.get(i) otherwise panic("emitEnumBox: argAnchors.get OOB at {i} — captured in lockstep with the args")
 			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex), voice: payloadFillVoice(fill))
-			classes.push(class)
 		end 'validate'
 
 		// ⭐⭐ **A MESSAGE'S PAYLOADS ARE TRANSFERRED BEFORE THE BOX EXISTS, AND THE ORDER IS THE WHOLE
@@ -53946,7 +54014,7 @@ export type Parser
 		for i in 0 upto payloads.count() 'eachPayload'
 			let arg = try args.get(i) otherwise panic("moveMessagePayloads: args.get OOB at {i} — the caller sized the columns to the variant's payload count")
 			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
-			if field.name.equals(ServiceReplySlotName) 'theCompilersOwnCell'
+			if fieldIsTheServiceReplySlot(field) 'theCompilersOwnCell'
 				continue
 			end 'theCompilersOwnCell'
 
@@ -56504,10 +56572,11 @@ export type Parser
 	// `__reply` payload gets a fresh cell; one without has no slot at all
 	// (`ServiceCompanions.serviceReplySlotIndex` is the authority) and this fills nothing.
 	//
-	// ⭐ **THE CELL IS SLOTTED AS AN ORDINARY INTEGER ARGUMENT, WHICH IS WHY THE OP GOES HERE AND NOT AT THE
-	// SEND.** `emitEnumBox` types each slot against the payload field and that field is `MaxonType.integer`
-	// deliberately — a raw cell pointer the P1.3 destructor cascade skips — so the cell has to EXIST before
-	// the box is built, and minting it here is what lets it ride the same fill every other argument does.
+	// ⭐ **THE CELL IS SLOTTED AS AN ORDINARY ARGUMENT, WHICH IS WHY THE OP GOES HERE AND NOT AT THE SEND.**
+	// The cell has to EXIST before the box is built, and minting it here is what lets it ride the same fill
+	// every other argument does. Its payload FIELD stays `MaxonType.integer` — a raw cell pointer the P1.3
+	// destructor cascade must not follow — while the VALUE is a `Promise`, which is why `emitEnumBox` skips
+	// exactly this slot's argument-type check (`fieldIsTheServiceReplySlot`).
 	//
 	// ⚠ **AND IT IS ENROLLED AS AN OWNED PROMISE IN THE SAME BREATH**, exactly as `emitAsyncCall` enrols a
 	// spawn's: `markValuePromise` makes `await`/`try await`/E3100 see it, and `pendingTempDrops` makes an
@@ -56521,8 +56590,19 @@ export type Parser
 	end 'fillMessageReplySlot'
 
 	// The mint itself, split out because a `match` arm is ONE statement and this is five.
+	//
+	// ⭐⭐ **THE CELL IS BORN AT `Promise with (T, E)` (SV4) — W230's argument, on the road it did not
+	// reach.** It was minted `ValueTypeTag.integer` until SV4, so on the reply road a scheduler pointer was a
+	// plain number and `return h.total()`, `p + 1`, `takesInt(h.total())` and `p.clone()` all COMPILED. The
+	// instance comes from `SignatureIndex.internPromiseInstanceForReply`, interned in the index's own name
+	// space so it is the SAME gid a `typealias R = Promise with (Integer, Calc.divide.errors)` resolves to —
+	// which is what lets a reply be stored in the type that names it.
+	//
+	// ⚠ **`markValuePromise` STAYS, AND IT IS NOT REDUNDANT WITH THE TYPE.** The mark answers *"does THIS
+	// frame owe a `__gt_promise_drop`?"* (`decrefCalleeFor`, `storedPromiseValue`), which a type cannot: a
+	// promise read back out of a container carries the very same type and owes nothing.
 	function mintServiceReplyCell(slot CaseIndex, callee ByteArray, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
-		let cell = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		let cell = self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForReply(callee))
 		self.markValuePromise(cell)
 		self.pendingTempDrops.push(cell)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.serviceReplyCell(cell, messageName: callee), range: range)
@@ -65792,15 +65872,12 @@ export type Parser
 	// `async` spawn's handle nor a service reply is refused here rather than by the tag doors below, whose
 	// sentence would compare a `Promise with …` against an `int` and tell the author nothing about why.
 	//
-	// ⭐⭐ **A SERVICE REPLY IS ADMITTED SINCE SV3, AND THIS COMMENT USED TO SAY IT COULD NOT BE.** It read
-	// *"its error type is the reply's synthesized union, which the storage type's `ErrorType` argument cannot
-	// spell"* — true of a message that THROWS and only of that one. A message that throws NOTHING has a reply
-	// whose only error member is `ServiceError`, a declared enum a storage type names like any other, and
-	// `ServiceCompanions.serviceReplyTransportPlacement`'s own header says what follows: *"its fused ordinal IS
-	// the ordinary `ordinal + bias` flag, and the awaiter binds a plain `ServiceError` with no union machinery
-	// anywhere."* So the STORAGE road and the DIRECT road decode identically — `caughtErrorFormFor` answers
-	// `singleCall` for both — and the two-member case is refused on its own terms in
-	// `requirePromiseStorageDescribesReply`, where the reason can be stated.
+	// ⭐⭐ **EVERY SERVICE REPLY IS ADMITTED SINCE SV4, AND THIS COMMENT USED TO SAY HALF OF THEM COULD NOT
+	// BE.** It read *"its error type is the reply's synthesized union, which the storage type's `ErrorType`
+	// argument cannot spell"* — true only while that union had no name. A message that throws NOTHING has a
+	// reply whose only error member is `ServiceError`; one that DOES throw has the fused pair, registered
+	// under `<message>.errors`. Either way the storage type names a declared enum, and the STORAGE road and
+	// the DIRECT road decode identically because `caughtErrorFormFor` classifies both off the same registry.
 	function promiseSourceStoredHere(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns AsyncCalleeLookup throws ParseError
 		if self.valueOwnsGreenThread(value) 'aSpawnOrAReply'
 			let source = self.asyncCallCalleeOf(func, promise: value)
@@ -65826,29 +65903,24 @@ export type Parser
 		end 'road'
 	end 'requirePromiseStorageDescribesSource'
 
-	// ⛔⛔ **THE ONE REPLY THAT MAY NOT BE STORED: ONE FROM A MESSAGE THAT THROWS (SV3).** Such a reply's
-	// error type is `{ServiceError, <what the message throws>}` — two members with no declaration between
-	// them, which is why the diagnostic elsewhere quotes the DERIVED spelling `<message>.errors` and why
-	// `serviceReplyCaughtForm` builds a synthesized union for it. A `Promise with (T, E)` has one name to
-	// give, so storing it would erase one member and leave the awaiter decoding a fused two-member flag as a
-	// single enum — a silent wrong `match` arm rather than a diagnostic. It is refused at the STORE, where
-	// both halves are still known, and its own sentence says which cure to take.
+	// ⭐⭐ **EVERY REPLY MAY BE STORED SINCE SV4, AND THIS DOOR USED TO REFUSE HALF OF THEM.** It carried an
+	// arm reading *"a reply from 'X' throws 'X.errors' — two members with no declaration between them — so no
+	// 'Promise with (T, E)' can name it"*. There IS a declaration between them now:
+	// `ServiceCompanions.synthesizeServiceCompanions`' third pass registers `<message>.errors` as a nominal
+	// enum, so the storage type spells it like any other error type and the awaiter decodes it through
+	// `caughtErrorFormFor`'s registry classification rather than as a single enum.
 	//
-	// ⭐ The rest is the ordinary comparison: the result is what the MESSAGE declares
+	// ⭐ What is left is the ordinary comparison: the result is what the MESSAGE declares
 	// (`serviceReplyResultType`, the same door the await reads it through) and the error is
-	// `serviceReplyErrorTypeName`'s — never `throwsOf(<message>)`, which is the HANDLER's clause and says
-	// nothing about the transport a reply always carries.
+	// `ProgramSignatures.serviceReplyErrorName`'s — never `throwsOf(<message>)`, which is the HANDLER's
+	// clause and says nothing about the transport a reply always carries. A storage type that names only the
+	// handler half is therefore an ordinary name mismatch at `requirePromiseStorageErrorMatches`.
 	function requirePromiseStorageDescribesReply(messageName ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
-		// The subject and the reply's error type are each spelled ONCE and read by all three sentences below:
-		// three copies of *"a reply from 'X'"* is three places for one phrase to drift, and
-		// `serviceReplyErrorTypeName` is the one home of *what a reply throws* either way.
+		// The subject and the reply's error type are each spelled ONCE and read by both sentences below: two
+		// copies of *"a reply from 'X'"* is two places for one phrase to drift, and `serviceReplyErrorName` is
+		// the one home of *what a reply throws* either way.
 		let subject = "a reply from '{String.from(messageName)}'"
-		let replyThrows = self.serviceReplyErrorTypeName(messageName)
-
-		match self.signatures.throwsOf(messageName) 'handlerThrows'
-			none then break 'handlerThrows'
-			throwing then throw ParseError.promiseStorageMismatch("{subject} throws '{replyThrows}' — two members with no declaration between them — so no 'Promise with (T, E)' can name it; catch it at a 'try await' instead of storing it", line: anchor.line, column: anchor.column)
-		end 'handlerThrows'
+		let replyThrows = String.from(self.signatures.serviceReplyErrorName(messageName))
 
 		// ⚠ **AND THE STORAGE MUST NAME AN ERROR TYPE AT ALL, REFUSED HERE RATHER THAN BY THE SHARED
 		// COMPARISON.** A reply ALWAYS carries `ServiceError` — the service can be gone, whatever the message
@@ -67784,9 +67856,11 @@ export type Parser
 		// of a bit on this binding, because a promise ALIASES: `let q = p` enrols no second owner, and there is
 		// no `q` to poison — the ONE record against the thread's `ValueId` answers for `p` and `q` alike.
 		//
-		// ⚠ **AND IT IS ASKED ABOVE THE SCALAR ESCAPE, WHICH IS HOW A SERVICE REPLY REACHED IT AT ALL.** A
-		// reply cell is minted `ValueTypeTag.integer` (`mintServiceReplyCell`), so the escape below swallowed
-		// its poison whole and `services.error.use-after-await-of-a-reply` COMPILED and exited 8.
+		// ⚠ **AND IT IS ASKED ABOVE THE SCALAR ESCAPE, WHICH IS HOW A SERVICE REPLY ONCE REACHED IT AT ALL.**
+		// A reply cell was minted `ValueTypeTag.integer` until SV4, so the escape below swallowed its poison
+		// whole and `services.error.use-after-await-of-a-reply` COMPILED and exited 8. The cell is typed
+		// `Promise with (T, E)` now and no longer takes that escape by tag — the ORDER still stands on its own
+		// merit, stated in the paragraph below.
 		//
 		// ⚠ **AND MORE SPECIFIC THAN THE `movedFrom` REFUSAL BELOW, WHICH IS WHY IT IS ABOVE IT TOO.** E3102
 		// says the value's ownership "moved to another binding" — true of a move, and false of a consume, where
@@ -67803,9 +67877,14 @@ export type Parser
 		// ⛔ **IT USED TO ADMIT A PROMISE, AND THAT REASON IS DEAD TWICE OVER.** The header read *"A promise
 		// handle is integer-tagged, so this one predicate admits both"* — false since W230 typed a spawn's
 		// handle at the interned `Promise with (T[, E])`, and false in the other direction for a service
-		// reply, whose cell IS still integer-tagged and whose poison this therefore swallowed in silence. So
+		// reply, which was still integer-tagged then and whose poison this therefore swallowed in silence. So
 		// the escape now excludes a promise explicitly, off the `markValuePromise` column that EVERY road
 		// minting one writes — derived from the roads rather than from the two an old comment listed.
+		//
+		// ⚠ **SV4 TYPED THE REPLY CELL TOO, AND THE CLAUSE STAYS.** No road mints a scalar-tagged promise
+		// today, so the clause guards nothing that exists — which is exactly what it is for: it is one
+		// dense-column read (measured below), and the alternative is a silent hole the next road to mint one
+		// falls into.
 		//
 		// What remains is the case the arm was really always about: a promise binding REASSIGNED to a bare
 		// scalar (`p = 5`), whose `movedFrom` means "owns nothing droppable" rather than "was moved from".
@@ -67822,8 +67901,8 @@ export type Parser
 		// disjuncts are MUTUALLY EXCLUSIVE at this line: `typeIsPromiseStorage` is false for anything whose tag
 		// is not `genericInstance`, `valueMaxonType(v)` carries `tagOf(v)` as its tag, and this line only runs
 		// once `tagOwnsNoHeapValue` has said that tag IS `integer`/`boolean`/`float`. So a promise reaching the
-		// escape wears a SCALAR tag, and the only one that does is a service reply cell — which is exactly what
-		// the mark records. A promise read back out of a container carries the `Promise with (T[, E])` type,
+		// escape would wear a SCALAR tag, and the mark is the one column that records such a mint whatever
+		// road makes it. A promise read back out of a container carries the `Promise with (T[, E])` type,
 		// is therefore a `genericInstance`, and never reaches this line at all: it falls through to the move
 		// checks below, which is where a value this frame does not own belongs.
 		//
@@ -76004,8 +76083,26 @@ export type Parser
 	// resolve a ranged alias, the filler became reachable — a latent wrong answer sprung by a change in a
 	// different function. The name has to come from the callee's return type, the only place it exists.
 	function awaitedPromiseFacts(func IrFunction, promise ValueId) returns AwaitedPromise
-		// ⭐ **THE STORAGE ROAD IS ASKED FIRST, AND IT HAS TO BE.** A spawn stored into a container keeps its
-		// promise MARK (nothing clears it — the mark is what said this frame once owned the thread), so a
+		let source = self.asyncCallCalleeOf(func, promise: promise)
+
+		// ⭐⭐ **THE THIRD ROAD (SV2): a SERVICE REPLY — asked FIRST, and since SV4 it has to be.** Its result
+		// is the message's declared return type, exactly as a spawn's is its callee's; the difference is
+		// entirely in the error type, which is `tryTargetThrows`' to derive.
+		//
+		// ⚠ **A REPLY CELL IS ITSELF TYPED `Promise with (T, E)` NOW**, so it answers `typeIsPromiseStorage`
+		// below and would otherwise be described by its own rendered instance name instead of by the MESSAGE
+		// — E3057, E3059 and every reply diagnostic would stop naming `Calc.divide` and start naming
+		// `Promise with (int, ServiceError)`. Taking the reply road first costs nothing in truth: the storage
+		// door proved the storage type describes the reply exactly, so the two carry the same
+		// `(result, throws)` pair either way, and only the SUBJECT of the sentence differs.
+		match source 'reply'
+			found then break 'reply'
+			serviceReply(messageName) then return AwaitedPromise.create(self.serviceReplyResultType(messageName), tryTarget: TryTarget.serviceReply(messageName))
+			none then break 'reply'
+		end 'reply'
+
+		// ⭐ **THE STORAGE ROAD BEATS THE SPAWN ROAD, AND IT HAS TO.** A spawn stored into a container keeps
+		// its promise MARK (nothing clears it — the mark is what said this frame once owned the thread), so a
 		// value can answer to both roads; the one that is TRUE of it is the type it now carries, because the
 		// storage door checked that claim against the callee and the callee is no longer what describes it.
 		let promiseType = self.valueMaxonType(promise)
@@ -76014,12 +76111,9 @@ export type Parser
 			return AwaitedPromise.create(MaxonReturnType.value(self.resolvedSlotType(self.signatures.substitutedInstanceArg(storage, position: PromiseResultArgPosition))), tryTarget: TryTarget.promise(self.signatures.instanceDisplayName(storage), throwsClause: promiseStorageThrows(self.signatures, gid: storage)))
 		end 'fromStorage'
 
-		match self.asyncCallCalleeOf(func, promise: promise) 'callee'
+		match source 'callee'
 			found(callee) then return AwaitedPromise.create(self.calleeReturnType(callee), tryTarget: TryTarget.named(callee))
-			// ⭐ **THE THIRD ROAD (SV2): a SERVICE REPLY.** Its result is the message's declared return type,
-			// exactly as a spawn's is its callee's — the difference is entirely in the error type, which is
-			// `tryTargetThrows`' to derive.
-			serviceReply(messageName) then return AwaitedPromise.create(self.serviceReplyResultType(messageName), tryTarget: TryTarget.serviceReply(messageName))
+			serviceReply then panic("awaitedPromiseFacts: promise v{promise} took the reply arm above, which returns")
 			none then panic("awaitedPromiseFacts: promise v{promise} is neither a stored promise nor defined by an `asyncCall` or a `serviceReplyCell` — `valueIsPromise` admits exactly those three, and every caller gates on it")
 		end 'callee'
 	end 'awaitedPromiseFacts'

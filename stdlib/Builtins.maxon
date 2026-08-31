@@ -141,8 +141,10 @@ end 'ParseError'
 // service has no handler to run and its pending reply resolves with `stopped` rather than hanging its
 // awaiter. That is a LIVENESS obligation of the runtime and it is why the case exists at declaration time,
 // before anything throws it: an awaitable message's error type is the two-member union
-// `{ServiceError, <what the message itself throws>}`, so this enum is half of a TYPE the compiler will
-// synthesize rather than a value some runtime path happens to produce.
+// `{ServiceError, <what the message itself throws>}`, so this enum is half of a TYPE the compiler
+// synthesizes rather than a value some runtime path happens to produce. Literally half, since SV4 — the
+// compiler mints `<Service>.<method>.errors` for every throwing message, whose first cases are this enum's
+// at this enum's own tags, and a message that throws NOTHING has a reply error type that IS this enum.
 //
 // It carries NO `__` prefix, deliberately and for `ArrayError`'s exact reason: a user must be able to write
 // `match e ... ServiceError.stopped then ...`, and a reserved name is one `requireUnreservedName` (E2051)
