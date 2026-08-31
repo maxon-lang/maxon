@@ -1,30 +1,106 @@
 ---
 name: land
-description: Implement one self-contained change end to end and push it — decide the MINIMAL spec set and watch it go RED first, write the code, green the set on a filter, optimize, independent review, rebase on origin/main, then ONE gate battery (full shv2 suite + wasm lane + self-compile), commit and push. The lightweight sibling of /rung — main checkout, no worktree, no wave, no slice board, no contract, no PLAN.md bookkeeping. Use for a bug fix, a missing diagnostic, a small feature, a defect found by hand, or any change that does not need a rung. Invoke as `/land <what to do>`.
+description: Implement one self-contained change end to end and push it — decide the MINIMAL spec set and watch it go RED first, write the code, green the set on a filter, optimize, independent review, rebase on origin/main, then ONE gate battery (full shv2 suite + wasm lane + self-compile), commit and push. The lightweight sibling of /rung — main checkout, no worktree, no wave, no slice board, no contract, no PLAN.md bookkeeping. Use for a bug fix, a missing diagnostic, a small feature, a defect found by hand, or any compiler change that is not a claimed PLAN.md rung — HOWEVER LARGE it turns out to be: the task is done AS ONE CHUNK, in ONE commit, with no slicing and no escalation out of this process. Invoke as `/land <what to do>`.
 ---
 
 # Land one change
 
-**One invocation = ONE change: specified, implemented, reviewed and pushed.** You work directly in the
-main checkout, alone on `main`, and you run the expensive gates **exactly once, at the end**.
+**One invocation = ONE change, done WHOLE: specified, implemented, reviewed and pushed as a single
+commit.** You work directly in the main checkout, alone on `main`, and you run the expensive gates
+**exactly once, at the end**.
 
 `/rung` is for a rung of `maxon-shv2/PLAN.md` — a named feature with a contract, a wave of agents and a
 worktree. `/spec-port` is for one spec off v1's whitelist. **This is for everything else:** the bug you
 just found, the diagnostic nobody wrote, the pass that answers wrong, the small feature that never
 earned a row on the board.
 
-## The shape — and the economy that makes it cheap
+> ## ⛔⛔ THERE IS NO ESCALATION. YOU FINISH THE CHANGE IN THIS PROCESS.
+>
+> **The process was CHOSEN, deliberately, by the person who invoked it. It is not a guess for you to
+> second-guess once you see how big the work is.** You may not switch to `/rung`, you may not open a
+> worktree, you may not stop and recommend that someone run a rung instead, and you may not land half
+> the change and file the rest as needing one. **You finish it here.**
+>
+> ⛔ **NONE of these is a reason to leave, and each has been offered as one:** it turned out large; it
+> touches several passes; it needs new IR ops; it wants a design decision you are able to make; it
+> "deserves" a contract, a plan or a board row; it will take hours. `.claude/CLAUDE.md` settles all of
+> them at once — ***"There are no time constraints. Complexity doesn't matter. If you are fixing an
+> issue then fix it properly."***
+>
+> **What a rung buys is COORDINATION ACROSS TREES — a contract so agents in separate worktrees can code
+> against an interface that is still moving, and a board so nobody takes the same row twice.** You
+> delegate too, heavily (see *Coordinating*, below) — but every agent you send works in the **SAME tree,
+> under you, integrated as it arrives**. There is no second tree and no second owner, so the contract has
+> nobody to inform and the board has nobody to tell. The ceremony buys you nothing and costs you the red
+> set, the diagnosis and the context you have already paid for. Switching does not produce better code;
+> it produces the same code, hours later, from a colder start.
+>
+> **When the change turns out to be big, the loop is what scales — not the process:** widen the spec set
+> (§1), write new IR ops as ordinary code (§2 — a "contract" is a signature you land *with* its first
+> consumer, and with one author that is just writing it), delegate to `maxon-spec-implementer` when the
+> diagnosis runs long — one mechanism at a time **into your own tree, integrated as it arrives**, which
+> is delegated labour and never a slice of the deliverable — and land the whole thing in one commit.
+> **A big change is a longer §2 and §3, not more commits.** If the change
+> happens to close a `PLAN.md` row, **write the row in the same commit** — that is bookkeeping, not a
+> change of process.
+>
+> **The ONLY thing that stops you is the HALT list at the end of this file, and none of its entries is a
+> reroute** — each is a question for the user, answered in place, after which you carry on here.
+>
+> *(2026-08-31: an agent mid-`/land` decided the work "was really a rung" and switched. The escape
+> hatch that let it is deleted; this box replaces it.)*
 
-| | | red here means |
-|---|---|---|
-| **1** | Decide the **MINIMAL** spec set. **Watch every case FAIL.** | a case that is green *now* tests nothing about your change |
-| **2** | Write **all** the code | |
-| **3** | Green the set — **on the FILTER, never the full suite** | keep going |
-| **4** | Optimization pass | a ladder you cannot explain |
-| **5** | Independent review — an agent that did **not** write the code | fix before the commit |
-| **6** | **Rebase** on `origin/main` | resolve by hand |
-| **7** | THE BATTERY, once: full shv2 suite · wasm lane · **self-compile** | **stop** |
-| **8** | Commit and push | a rejected push re-runs §7 |
+> ## ⛔⛔ ONE CHANGE, ONE CHUNK, ONE COMMIT. **DO NOT SLICE THE TASK.**
+>
+> **The task you were given is the unit.** It goes through §1–§8 **once**, whole, and reaches `main` as
+> **one commit**. ⛔ **No phases, no "part 1 of 3", no landing the reachable half and filing the rest,
+> no slice board, no per-piece commit-and-push, no separate red/green cycle per piece.** A task cut into
+> four is not four small `/land`s; it is one `/land` done four times, badly.
+>
+> **Slicing is `/rung`'s tool and it does not port**, because `/rung` has the two things that make a
+> slice safe and this process deliberately has neither: **separate worktrees per slice** and **a board
+> that says who owns which one.** Here there is ONE tree and ONE commit, and **you are the integrator** —
+> so nothing waits at the far end to put slices back together. A slice is not a smaller unit of work; it
+> is an unintegrated one that lands half-finished on `main`.
+>
+> **Three things go wrong, and the first is the one that made this process worth writing:**
+> - **The battery multiplies.** §7 is the expensive part and it runs ONCE precisely because the change
+>   is one chunk. Four slices is four rebases, four full suites, four wasm lanes, four ~3-minute
+>   self-compiles and four reviews — **heavier than the rung you were avoiding**, for the same code.
+> - **`main` carries half a mechanism between slices**, and the next agent builds on it. An `export`
+>   without its consumer is an E3092 that breaks the self-compile; a diagnostic no case reaches is dead
+>   code; a lowering with no emitter is a wrong answer waiting for a caller.
+> - **The acceptance set dissolves.** §1's red set is the acceptance for the WHOLE change. Slice it and
+>   each piece invents its own smaller one — which is how "done" gets declared against cases nobody
+>   chose.
+>
+> ✅ **What IS allowed — and it is most of the work — is delegating LABOUR.** Every step of this process
+> is handed to an agent (that is the next section), and several `maxon-spec-implementer`s may run at once
+> on **disjoint files**, or sequentially when the files overlap. **That is not slicing**: they share your
+> one tree, you integrate as their work arrives, and the whole thing goes through §3–§8 as a unit and
+> lands as one commit. **Cutting up the WORK is the method; cutting up the DELIVERABLE is the failure.**
+> Also fine: fixing a pre-existing red **you did not cause** in its own commit first (§7) — somebody
+> else's defect, not a slice of your task.
+>
+> *(2026-08-31, the same day as the box above: an agent divided a `/land` task into slices. Both
+> failures are one failure — the process was chosen, and the task is the task.)*
+
+## The shape — who does what
+
+**You are the COORDINATOR. You do not write the change; you own the spec set, the integration, the
+gates and the commit.** Agents do the reading and the typing.
+
+| | | who | red here means |
+|---|---|---|---|
+| **0** | Orient · clean tree · **build** | **you** | |
+| **1** | Decide the **MINIMAL** spec set, write it, **watch every case FAIL** | **scout** agent surveys · **you** decide · **spec-author** agent writes · **you** read the red | a case that is green *now* tests nothing about your change |
+| **2** | Write **all** the code | **`maxon-spec-implementer`** (one or more) | |
+| **3** | Green the set — **on the FILTER, never the full suite** | same agent(s) · **you** integrate and confirm | keep going |
+| **4** | Optimization pass | **`maxon-rung-optimizer`** on a trigger · **the ladder read is YOURS** | a ladder you cannot explain |
+| **5** | Independent review | **`maxon-rung-reviewer`** — never the agent that wrote the code | fix before the commit |
+| **6** | **Rebase** on `origin/main` | **you** | resolve by hand |
+| **7** | THE BATTERY, once: full shv2 suite · wasm lane · **self-compile** | **you** | **stop** |
+| **8** | Commit and push | **you** | a rejected push re-runs §7 |
 
 **Everything before §7 runs on one `--filter`.** That is what makes this lightweight — and it is only
 honest because §1's red was real. The filter is a *proxy* for the suite, and a proxy you never saw fail
@@ -35,9 +111,81 @@ the very duplication the review exists to catch). Review *before* commit (a revi
 bug report; before it, it is a gate). **Rebase before the battery** — a battery run on a tree you then
 rebase has tested something you are not pushing.
 
+## Coordinating: what you delegate, what you keep, and what you never hand over
+
+> ### ⭐ THE LINE: **an agent may produce any amount of TEXT or CODE. You keep every NUMBER THAT GATES,
+> and every decision about what "done" means.**
+
+**Delegate by default — every step above with an agent named in it, every time.** Not because you could
+not do it, but because **your context is the scarce resource**: an implementation is greps, dead ends,
+IR dumps and refuted hypotheses, and none of that is anything the *gates* need. The agent absorbs it and
+returns a report. You stay small enough to integrate, judge and land.
+
+⚠ **A coordinator who starts reading a third file to form a hypothesis has stopped coordinating.** Hand
+it over. **The one exception is narrow:** a single edit you have ALREADY located and can prove with one
+filtered run. The moment it needs a second hypothesis or a second file, hand it over — and **§5's review
+still runs**, because independence is not a size question.
+
+**What is NEVER delegated**, because delegating it would move the gate:
+
+- **The choice of spec set (§1).** An agent left to choose its own coverage tests what it remembered —
+  which is exactly how a "finished" scalar core once scored 48 of 2,746. The scout returns FACTS; the
+  set is yours.
+- **Reading the RED (§1) and confirming the GREEN (§3)** with your own filtered run.
+- **The `scale-test` ladder read and its `optimization-log.md` row (§4)** — attribution is only
+  available now, and only to whoever knows what changed.
+- **The rebase (§6), the battery (§7), the commit and the push (§8).**
+
+### ⛔ EACH GATE RUNS ONCE, AND THIS TABLE SAYS WHERE
+
+Every agent's brief independently tells it to be thorough, so without this table the suite runs three to
+five times per change and exactly one of those runs gates anything.
+
+| Work | Runs | Where | Everywhere else |
+|---|---|---|---|
+| **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
+| **full shv2 suite · wasm lane · self-compile** | **once** | **you, §7** | ⛔ **no agent runs any of these** — the reviewer finishes minutes before the battery, on the identical tree |
+| **`scale-test` ladder** | **once** | **you, §4** — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
+| **`git commit` / `git push` / `git rebase`** | **once** | **you, §6 and §8** | ⛔ **no agent commits, pushes, rebases, stashes or opens a worktree** |
+
+**When an agent suspects something it cannot cheaply confirm, it says so in its report** — a sentence
+feeding a gate that is going to run anyway beats a run nobody can attribute.
+
+### Every brief carries these six things
+
+1. **The change in one line**, and **the cases that must go green** — the acceptance, not a topic.
+2. **"This is a `/land` change"**: main checkout, no worktree, no branch, **one commit at the end, which
+   is the coordinator's**. ⛔ Do not commit, push, rebase or stash.
+3. **Its EXCLUSIVE file list**, when more than one agent is live. One file, one owner — and agents run in
+   parallel only on disjoint files, sequentially otherwise.
+4. **The DIAGNOSIS you already have** — symptoms, exit codes, stderr, the call sites you read, the
+   hypotheses you already refuted. Making an agent re-derive this is the one waste delegation exists to
+   prevent.
+5. **Its STOP RULE**: stop when your filter is green; the full suite is the coordinator's.
+6. **The gate table above**, in one line: which runs are yours, which are not.
+
+⛔ **Brief for DIAGNOSIS, never for COVERAGE.** "Enumerate every construct that could false-reject and
+prove each parses", "confirm no other spec regressed", "check nothing was left disabled" — the §7
+battery and §1's count check already do all three, better, one step later. ⚠ **A specific instruction in
+your brief OUTRANKS the agent's own stop rule**: you cannot brief thoroughness in without briefing the
+stop out.
+
+⛔ **Do not use `maxon-rung-implementer`** — it works in an isolated worktree, which this process does
+not have. `maxon-spec-implementer` is the one that works in the main checkout.
+
+### Verify the claims, do not re-derive the work
+
+**Do not trust a report.** Re-run the crux filter yourself (one call, structured output), read the crux
+lines of the diff, **check exit codes, and never grep for a success string** — a past session reported a
+green build by grepping for `^error` while the real failure printed `[CMP] ERROR:`. Exit **101** is a
+leak. What you must NOT do is re-derive the agent's diagnosis or re-run what it already ran; auditing
+its diff for quality is **§5's** job, not yours.
+
 ---
 
-## 0. Start
+## 0. Start — yours
+
+*(Two tool calls and a sentence. Delegating this would cost more than doing it.)*
 
 **Say in one or two sentences what the change is and what will prove it**, before touching anything, so
 the user can redirect you cheaply. If the ask is ambiguous *in a way that changes the code*, this is the
@@ -60,6 +208,24 @@ again if the fix were reverted.** Not "few": one case per distinct wrong answer,
 the change adds or moves a diagnostic. A case that cannot fail for your reason is padding; a wrong
 answer with no case is the thing this skill exists to prevent.
 
+⚠ **"Minimal" describes the SPEC SET, never the change.** The set is the smallest thing that proves the
+**whole** task — not a smaller task. If a case you would need is inconvenient because the change is
+large, that is the set telling you the size of the work, and the answer is §2, not a narrower set.
+
+### The scout finds the material; YOU pick the set; an author writes it
+
+**Send a read-only survey agent first** (`Explore`, or `general-purpose` when it needs to run a probe).
+Ask it for **FACTS, not a recommendation**: which `specs-shv2` files own this behaviour, every existing
+case that touches it with file + line, every `disabled-test:` in range, whether `/specs` pins it and the
+**verbatim text** of the case that does, and what the neighbouring cases in that file look like.
+
+**Then YOU pick the set** — from its facts, against the criterion above. That decision never moves.
+
+**Then hand the writing out**: give an agent the exact list — file, case name, program, expected
+`exitcode`/`stdout`/`maxoncstderr`, and the marker to flip for anything already present — and let it
+write them into `specs-shv2/`. *(For one or two cases, writing them yourself is cheaper than the brief.
+That is a cost call, not a rule.)*
+
 **Where the cases come from, in this order:**
 
 1. **An existing `specs-shv2/` case.** Grep first — the behaviour may already be pinned, and then your
@@ -67,9 +233,12 @@ answer with no case is the thing this skill exists to prevent.
    **enable**: those markers are DEBT, not precedent.
 2. **A new case in the `specs-shv2/*.md` file that already owns the behaviour.** Format:
    `docs/SPECS.md`. Follow the neighbouring cases' shape.
-3. **If the natural home is a `/specs` file that has NOT been ported**, port the WHOLE file — that is
-   `/spec-port <name>` — rather than hand-copying one case out of it. A curated subset is a spec *you*
-   wrote, and no count check can see what you left behind.
+3. **A case lifted from an unported `/specs` file** — copy it VERBATIM (program, `exitcode`, `stdout`,
+   `maxoncstderr`, name), never paraphrased and never renamed. A real compiler passed those cases
+   unedited, so a copied case is a claim someone already satisfied; a case you reworded is a claim you
+   made up. ⚠ **Do not port the rest of that file here** — its remaining cases are `/spec-port`'s
+   backlog and the whitelist already tracks them. That is a queue position, not a decision, and it
+   needs no note anywhere.
 
 ⛔ **Cases go in `specs-shv2/`.** shv2 is the product; the bootstrap is the means (user ruling,
 2026-08-29). Write a `specs/` case only when the C# bootstrap itself is what you are changing.
@@ -103,10 +272,18 @@ run_spec_test compiler=shv2 filter=<pattern>
 >    disabled while it still runs.
 > 3. ⛔ **You may not write a `disabled-test:`.** A case you cannot make pass is a HALT, not a marker.
 
-## 2. Write the code
+## 2. Write the code — `maxon-spec-implementer`
 
-**All of it, in the main checkout.** Nobody else is here — no worktree, no lock dance. *(If the change
-wants two agents on overlapping files, it is a rung: HALT and say so.)*
+**Hand the implementation to `maxon-spec-implementer`.** It works in the main checkout on exactly this
+shape of gap. The brief is §1's red set, the six things every brief carries, and above all **the
+diagnosis you already did while reading the red** — that is the most valuable thing in it.
+
+**ALL of the code lands in the main checkout before anything is committed.** *(More than one agent is
+fine on **disjoint** files, sequentially when they overlap: never two agents in one checkout on
+overlapping files. That is a scheduling rule about LABOUR — you integrate as their work arrives, and the
+deliverable stays one chunk and one commit.)*
+
+**What the agents must be told, beyond the standard six:**
 
 - **Run `maxon-coder` before writing any Maxon.**
 - **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (CLAUDE.md).
@@ -115,33 +292,37 @@ wants two agents on overlapping files, it is a rung: HALT and say so.)*
 - **A new diagnostic goes through the registry**: an entry in `docs/error-codes.txt`, then
   `maxon error-codes generate`, then the code that emits it. Never hand-edit a generated enum, never
   grep one for a free number, never write a bare `"E3010"` in source.
-- **Delegate when the diagnosis runs long** — `maxon-spec-implementer` works in the main checkout on
-  exactly this shape of gap. Hand it the symptoms and **the diagnosis you have already done**; making it
-  re-derive that is the one waste delegation is supposed to prevent. Brief it for DIAGNOSIS, never for
-  COVERAGE: the gates below already prove coverage, better, one step later. Whoever writes the code,
-  §5's reviewer must not be them.
+- **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
+  target. Size is never a reason to stop; see the two boxes at the top of this file.
 
-## 3. Green the set
+⚠ **Whoever writes the code, §5's reviewer must not be them.**
 
-Iterate **edit → build → filtered run**. Rebuild every time; a stale binary reads green or red for the
-wrong reason.
+## 3. Green the set — the agent's loop, your confirmation
 
-- ⛔ **Do not run the full suite in this loop.** It is §7's, once. A suite run per iteration is the
-  single largest piece of duplicated work these processes have ever paid for.
+**The agent iterates: edit → build → filtered run**, until its cases are green. Rebuild every time; a
+stale binary reads green or red for the wrong reason. **Then YOU re-run the filter once yourself** and
+read the result — one call, structured output, and it is the only thing standing between an agent's
+report and §7.
+
+- ⛔ **NOBODY runs the full suite in this loop — not you, not the agent.** It is §7's, once. A suite
+  run per iteration is the single largest piece of duplicated work these processes have ever paid for,
+  and every agent's brief must say so.
 - ⛔ **Never turn a case green by narrowing what it tests** — not the spec text, not the filter, not a
   marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
-- **A defect you find on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
+- **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
   not the suite is green over it. **And the probe that found it becomes a case in the set.** "I verified
   it by hand" is discovery, never evidence: it is unrepeatable, unreviewable, and invisible to the wasm
   lane a spec case reaches for free.
-- **When the set is green, re-run §1's count check**, then stop editing for correctness.
+- **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
+  agent reporting "all green" and a filtered run you read are not the same evidence.
 
-## 4. The optimization pass
+## 4. The optimization pass — the AGENT on a trigger, the LADDER always yours
 
 **Three parts, and only the first is unconditional.**
 
-- **(a) Read your own diff for unscalable structure — always, minutes.** An O(n) lookup inside an O(n)
-  walk; a `findFirst` over a compiler-sized array in a loop; a fixpoint, liveness or dominator tree
+- **(a) A scan of the diff for unscalable structure — always.** When (c) fires, the optimizer does this
+  and more; when it does not, hand the diff to a **read-only scan agent** (`Explore`) with this list. An
+  O(n) lookup inside an O(n) walk; a `findFirst` over a compiler-sized array in a loop; a fixpoint, liveness or dominator tree
   recomputed per element; a walk over a dense index space where the set bits were the point; an
   allocation in a hot path. The compiler must stay LINEAR in program size.
 - **(b) The ladder — `run_scale_test` (~17 s, shv2 only)** when the change touched a pass, the IR, or a
@@ -150,7 +331,7 @@ wrong reason.
   ×4 is quadratic.** Read it off the **ALLOCATION** columns, which are exact and bit-for-bit
   reproducible; the CPU column carries a few-percent noise band and a platform-defined unit. A Δ0 from a
   ladder whose corpus cannot express your feature is a blind spot, not a result.
-- **(c) The `maxon-rung-optimizer` AGENT — only on a trigger:** the change adds a pass, an IR op, or an
+- **(c) The `maxon-rung-optimizer` AGENT — on a trigger:** the change adds a pass, an IR op, or an
   indexed collection; or (b)'s allocation ladder bends ≳2.4 per doubling and you cannot explain it. **If
   no trigger fired, say so in the report** — a superlinear hunt over a change that added no algorithm has
   nothing to find.
@@ -163,6 +344,12 @@ neither can you. ⚠ **Write no row you did not measure.**
 
 **`maxon-rung-reviewer` on the working diff — uncommitted, main checkout — after §4 and before the
 commit.** It must not be the agent that wrote the code; that independence is the whole point.
+
+⚠ **Both this agent and `maxon-rung-optimizer` are named for `/rung` and their briefs mention
+`scripts/rung-finish.sh`. Say in the brief that this is a `/land` change**: the diff is uncommitted in
+the main checkout, there is no worktree and no branch, and the full battery is YOURS, minutes later.
+Their `rung-finish.sh` reference means *"the caller runs the suite after you, so you do not"* — which is
+exactly true here. **A report of theirs recommending a rung is out of scope; note it and carry on.**
 
 - **Brief it for the "Code Quality" checklist in `.claude/CLAUDE.md`** — **duplication first**, including
   pre-existing duplication in the files touched, and especially logic copied across a boundary where
@@ -179,7 +366,9 @@ commit.** It must not be the agent that wrote the code; that independence is the
   verdict — this project's history is full of agent findings that measurement refuted. Confirm before
   acting, and say so if you disagree.
 
-## 6. Rebase on `origin/main`
+## 6. Rebase on `origin/main` — yours
+
+**No agent rebases, stashes, commits or pushes.** Git state is the coordinator's, start to finish.
 
 ```bash
 git stash push -u -m land && git pull --rebase && git stash pop
@@ -194,7 +383,9 @@ during changes; a battery run before the rebase measured a tree that no longer e
 - **A stash must never outlive this step.** If the pop conflicts, resolve it now — work sitting in
   `git stash list` looks exactly like work that vanished.
 
-## 7. THE BATTERY — once, in this order, on the rebased tree
+## 7. THE BATTERY — once, in this order, on the rebased tree — yours
+
+⛔ **No agent runs any part of this.** Every brief says so; this is where that promise is kept.
 
 | Gate | |
 |---|---|
@@ -222,7 +413,11 @@ folded into the green.
 
 ## 8. Commit and push
 
-One commit, on `main` — this repo develops there; do not branch.
+**ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
+the compiler source, the spec cases, the minted goldens, any `optimization-log.md` row, and a `PLAN.md`
+row if one happened to close. ⛔ **Not a commit per piece, and never a partial landing with the rest
+"to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
+licensed you to push.
 
 **The message carries what the diff cannot:** the wrong answer that motivated the change, the mechanism,
 the cases that went red → green, and the gate figures you measured. ⚠ **Never a figure you did not
@@ -249,14 +444,22 @@ Everything above runs unattended. Stop and report, without landing, when:
 - **A case would have to be disabled**, or **an existing `specs-shv2` expectation rewritten**. The first
   is the failure mode this whole process exists to prevent; the second has a blast radius beyond your
   change and belongs to whoever owns that behaviour.
-- **It is really a rung** — it needs new IR ops with a contract, or two agents on overlapping files, or
-  it closes a `PLAN.md` row. Say so and switch to `/rung`.
 
-⚠ **"This is big" is NOT on that list**, and neither is "I could not find the gap" — that is diagnosis
-you have not finished. The only honest stop is a question the user has to answer.
+**Each of those is a QUESTION, answered in place — never a reroute.** You stop, report, and wait; you do
+not start a rung, open a worktree, or hand the work to another process. When the answer comes you carry
+on from where you stopped, in this file.
+
+⚠ **NOT on that list, ever:** "this is big"; "this deserves a rung"; "I could not find the gap" (that is
+diagnosis you have not finished); "a contract would be cleaner"; **"I will land this part now and the
+rest after"** — there is no partial landing, and no slice. **The only honest stop is a question the user
+has to answer.**
 
 ## The thing this process exists to catch
 
 **A change that is green because nothing tested it.** Everything expensive here runs once, at the end,
 and every cheap thing before it is a proxy — so the whole loop rests on §1's red being real. **Watch
 every case fail before you write the fix, count what actually ran, and never make a case go away.**
+
+**And the reason the coordination exists at all:** that red set, the integration and the gates are
+judgement work, and they are the first thing to go when a coordinator spends its context on greps and
+IR dumps. **Send the agent. Keep the judgement.**
