@@ -57,12 +57,13 @@
 //   • **AN UNSIGNED COMPARISON** — `stdTypeIsUnsigned(operandType)`. See `evaluateCmp`: one bit
 //     pattern, two honest readings, and this compiler's only integer-comparison folder speaks the
 //     signed one.
-//   • **UNARY ops.** `neg`/`bitNot` over a constant are foldable and are not folded here: this pass's
-//     two evaluators are `evaluateBinOp` and `evaluateCmp`, and neither has a one-operand form.
-//     ⚠ The shared roster DOES classify a `unaryOp` since `EC13` (`StdArithShape.unary`), so the arm a
-//     unary fold needs is already there and the missing half is only the evaluator. It is still not
-//     free: `InsertRangeChecks.recordConstNeg` already folds a `neg` for its own purposes, so a unary
-//     fold would owe that site a look first.
+//   • **A UNARY op other than `neg`/`bitNot`** — the conversions, the math intrinsics and the two
+//     reinterpretations. `neg` and `bitNot` DO fold (`evaluateUnaryOp`, since 2026-08-31); the rest are
+//     declined by the parser's folder on its own arms (`TypeRules.foldIntUnaryOp`), and a `siToFp` or
+//     `bitcastI64ToF64` over an integer constant would in any case fold to a FLOAT, which this pass never
+//     materializes. The look that fold once owed `InsertRangeChecks.recordConstNeg` has been taken: that
+//     pass runs FIRST (`PassPipeline`), folding a `neg` for its own constant domain while the op is still
+//     an op, so the two never see each other's work — and both spell the same `-x`.
 //
 // ⚠ **IT IS NOT A CONSTANT PROPAGATOR.** It reads only what a `const` op materializes; a value that is
 // constant on every path into a phi is not constant to this pass, and nothing here looks through memory
@@ -175,7 +176,9 @@ end 'evaluateOps'
 // computed value, or `op` itself where nothing folds.
 //
 // Which ops are subjects at all is `classifyArithOperands`' answer, shared with `foldConstOperands`:
-// the two passes act on the same two variants and no others, and that set is enumerated once.
+// that roster is enumerated once. This pass acts on three of its shapes — the two-operand arithmetic
+// and comparison it shares with `foldConstOperands`, and the ONE-operand `unaryOp`, which that pass
+// never touches because no target has an immediate form of a negate.
 function tryEvaluate(op StdOp, constMap ConstValueMap, operands StdArithOperands) returns StdOp
 	classifyArithOperands(op, operands: operands)
 
@@ -187,12 +190,16 @@ function tryEvaluate(op StdOp, constMap ConstValueMap, operands StdArithOperands
 		return evaluateCmp(op, resultId: operands.resultId, lhs: operands.lhs, rhs: operands.rhs, pred: operands.pred, operandType: operands.operandType, constMap: constMap)
 	end 'comparison'
 
+	if operands.isUnary() 'unary'
+		return evaluateUnaryOp(op, resultId: operands.resultId, operand: operands.lhs, opcode: operands.unaryOpcode, operandType: operands.operandType, constMap: constMap)
+	end 'unary'
+
 	return op
 end 'tryEvaluate'
 
-// ⭐ **THE ONE ADMISSION RULE, ASKED BY BOTH EVALUATORS.** Arithmetic and comparison ask exactly the
-// same two questions of their operands and would have answered them in two places, which is the
-// duplication this file is otherwise at pains to avoid.
+// ⭐ **THE ONE ADMISSION RULE, ASKED BY ALL THREE EVALUATORS.** Arithmetic, comparison and the unary
+// fold ask exactly the same two questions of an operand and would have answered them in three places,
+// which is the duplication this file is otherwise at pains to avoid.
 //
 // ⚠ **A FLOAT NEVER FOLDS, AND THE REASON IS NOT `foldConstOperands`'.** That pass refuses a float
 // because no SSE/NEON/wasm form takes an immediate — a fact about ENCODING. This one refuses because a
@@ -202,12 +209,18 @@ end 'tryEvaluate'
 // written for; the guard is HERE, at the pass, because the decision belongs to the pass. It is
 // sabotage-measured: `specs-shv2/fold-constants.md`'s float control takes the x64 emitter down without
 // it (a folded float lands in a GPR immediate that every consumer expects in an XMM).
-function operandsAreFoldableIntegers(constMap ConstValueMap, lhs ValueId, rhs ValueId, operandType StdType) returns bool
+function operandIsFoldableInteger(constMap ConstValueMap, operand ValueId, operandType StdType) returns bool
 	if stdTypeIsFloat(operandType) 'float'
 		return false
 	end 'float'
 
-	return constMap.contains(lhs) and constMap.contains(rhs)
+	return constMap.contains(operand)
+end 'operandIsFoldableInteger'
+
+// The two-operand form of the rule: `operandType` is the type BOTH operands are read at, so the float
+// guard is asked once and the second operand adds only its own constancy.
+function operandsAreFoldableIntegers(constMap ConstValueMap, lhs ValueId, rhs ValueId, operandType StdType) returns bool
+	return operandIsFoldableInteger(constMap, operand: lhs, operandType: operandType) and constMap.contains(rhs)
 end 'operandsAreFoldableIntegers'
 
 // `resultId = lhs <opcode> rhs` over two constants.
@@ -250,6 +263,29 @@ function evaluateCmp(op StdOp, resultId ValueId, lhs ValueId, rhs ValueId, pred 
 	let verdict = foldIntCompare(maxonCmpOpOfStdPred(pred), lhs: constMap.constantOf(lhs), rhs: constMap.constantOf(rhs))
 	return StdOp.const(resultId, value: verdict, valueType: FoldedComparisonType)
 end 'evaluateCmp'
+
+// `resultId = <opcode> operand` over one constant. The evaluator is the parser's own folder, reached
+// through the unary bridge exactly as `evaluateIntBinOp` reaches `foldIntBinOp` — and it is that folder,
+// not this pass, that declines everything one-operand but `neg` and `bitNot`: the conversions (a `siToFp`
+// over an integer constant would fold to a FLOAT, which this pass never materializes — the admission
+// rule's reason, met one tier down), the math intrinsics and the reinterpretations, each on its own arm.
+// What folds is the two pure bit operations an integer operand admits, and `neg` wraps at `i64.min`
+// exactly as the instruction does — the folder is a `ParsedInt` negate over a full-range alias.
+//
+// ⭐ **WHY THE ARM EXISTS AT ALL:** `-K` over a top-level or inlined constant is a `neg` of a `const`,
+// where the same value spelled `0 - K` is a `sub` of two — and the binary shape folded to one `mov`
+// while the unary kept its instruction. The `0 - x` → `-x` sweep of 2026-08-30 made every such site
+// the unary shape, and `top-level-let/unary-minus-in-constant`'s golden showed the cost in one line.
+function evaluateUnaryOp(op StdOp, resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, constMap ConstValueMap) returns StdOp
+	if not operandIsFoldableInteger(constMap, operand: operand, operandType: operandType) 'notFoldable'
+		return op
+	end 'notFoldable'
+
+	return match foldIntUnaryOp(maxonUnaryOpOfStdOpcode(opcode), operand: constMap.constantOf(operand)) 'e'
+		folded(value) gives StdOp.const(resultId, value: value, valueType: FoldedArithType)
+		notFoldable gives op
+	end 'e'
+end 'evaluateUnaryOp'
 
 // ⭐⭐ **THE FOLDED CONSTANT'S TYPE IS THE MACHINE WORD, NOT THE OP'S `operandType`, AND ON wasm THE
 // DIFFERENCE IS A MISCOMPILE.** A `binOp`'s RESULT is declared at `wasmMachineValTypeOf(operandType)` —

@@ -112,17 +112,20 @@ let Arm64MsubRaShift = 10
 //
 // `LDAXR Xt, [Xn]` — 64-bit, no offset form.
 let Arm64OpLdaxr = 0xC85FFC00
+
 // `STLXR Ws, Xt, [Xn]` — the STATUS register `Ws` sits in the Rs field at bit 16 (0 = stored, 1 = failed).
 // ⚠ `Ws` must differ from BOTH `Xt` and `Xn`; sharing them is CONSTRAINED UNPREDICTABLE. The two encoders
 // below hold that by construction — the status is always x17 and the other two are x16 or an allocatable
 // register, and x17 is in neither pool.
 let Arm64OpStlxr = 0xC800FC00
 let Arm64StlxrRsShift = 16
+
 // `MRS Xt, TPIDRRO_EL0` — the READ-ONLY thread ID register. On Darwin the kernel points it at the current
 // thread's TSD base and stores the CPU number in the low three bits, which is why the read is masked.
 // ⚠ NOT `TPIDR_EL0` (0xD53BD040): that is the writable one, and neither register is set at all on shv2's
 // raw-static Linux lane — see `StdOp.currentThreadToken` for what that lane does instead.
 let Arm64OpMrsTpidrro = 0xD53BD060
+
 // The CPU number Darwin packs into TPIDRRO_EL0's low bits, cleared by a shift-down/shift-up pair. Three
 // bits, so the thread pointer itself is 8-byte aligned — which is what makes the masking lossless.
 let Arm64ThreadPointerCpuBits = 3
@@ -327,6 +330,7 @@ let Arm64OpStpOffX = 0xA9000000
 let Arm64OpLdpOffX = 0xA9400000
 let Arm64PairImm7Shift = 15
 let Arm64PairImm7Mask = 0x7F
+
 // The STP/LDP imm7 counts units of ONE transferred register (8 bytes for the X forms), not bytes — the
 // scale the frame record's offset and the fill ladder's pair displacements both divide by.
 let Arm64PairScaleBytes = 8
@@ -375,6 +379,7 @@ let Arm64OpFmovFpFromGpr = 0x9E670000
 // instruction for; that asymmetry lives in `TargetOp.absF64RegReg` and reaches nothing here.
 let Arm64OpFsqrtD = 0x1E61C000
 let Arm64OpFabsD = 0x1E60C000
+
 // `FNEG Dd, Dn` 0x1E614000 — the same FP-to-FP 2-register form as `fabs` (opcode field 000010 where
 // `fabs` is 000001 and `fsqrt` 000011), and the instruction `StdUnaryOpcode.fneg` IS here. The word
 // matches `maxon-selfhosted`'s `arm64EmitFneg`. ⚠ Like `fabs`, it is an instruction x64 lacks; that
@@ -1504,6 +1509,7 @@ end 'arm64MemFillScratchMask'
 let Arm64MemFillWordBytes = 8  // one STR — the 8..15 band, too narrow for a pair to fit twice
 let Arm64MemFillPairBytes = 16  // one STP of the pattern pair: 16 bytes, a single micro-op
 let Arm64MemFillTwoPairBytes = 32
+
 // Bytes per iteration of the bulk loop (4 STP pairs), and the lower edge of the loop band. With no `rep`
 // analogue on this ISA the bulk loop IS the large path — there is no third arm above it.
 let Arm64MemFillLoopStride = 64
@@ -1650,6 +1656,7 @@ end 'arm64EmitSlotAddress'
 
 // The observed/running value of an LL/SC loop. x16 (IP0).
 let Arm64AtomicValue = Arm64Ip0
+
 // The STLXR status register. x17 (IP1) — distinct from `Arm64AtomicValue` and from every allocatable
 // register, which is what keeps the `Ws != Xt, Xn` constraint true by construction.
 let Arm64AtomicStatus = Arm64Ip1

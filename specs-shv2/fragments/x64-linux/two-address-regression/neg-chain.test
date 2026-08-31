@@ -1,4 +1,6 @@
 // Test: neg-chain
+var seed = 0
+
 function negs(p Integer) returns Integer
 	let x = p + 7
 	let n1 = -x
@@ -8,7 +10,7 @@ function negs(p Integer) returns Integer
 end 'negs'
 
 function main() returns ExitCode
-	let r = negs(0)
+	let r = negs(seed)
 	if r == 707 'ok'
 		return 0
 	end 'ok'
@@ -18,19 +20,26 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
+data {
+  __data_seed@0 = i64 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_seed
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
   __il_body:
-    x64.movRegImm32 rax, 7
-    x64.negReg rax, rax
-    x64.negReg rax, rax
-    x64.negReg rax, rax
-    x64.movRegImm32 rcx, 700
-    x64.subRegReg rcx, rcx, rax
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.negReg rcx, rcx
+    x64.negReg rcx, rcx
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.subRegReg rax, rax, rcx
   __il_cont:
-    x64.cmpRegImm32 rcx, 707
+    x64.cmpRegImm32 rax, 707
     x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0

@@ -80,6 +80,7 @@ Math.log(x float) float         // Natural logarithm
 Math.log2(x float) float        // Base-2 logarithm
 Math.log10(x float) float       // Base-10 logarithm
 Math.pow(base float, exponent float) float // Power
+Math.hasNegativeSignBit(z float) bool // Sign bit of any double: true for -0.0 and -inf, false for +0.0
 floor(x float) int              // Round down
 ceil(x float) int               // Round up
 round(x float) int              // Round to nearest

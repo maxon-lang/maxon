@@ -236,7 +236,15 @@ rather than `-(-(-x))`. The IR is the same: three `negReg` reuse-defs in a row.)
 `p = 0`: `x = 7`; `n1 = -7`, `n2 = 7`, `n3 = -7`. So `x·100 − n3 = 700 − (−7) = 707`. A
 clobbered `x` gives `(−7)·100 + 7 = −693`, which the self-check catches — a raw exit code from
 a wrong run could otherwise land on 0.
+
+⚠ `p` is read from a MODULE-LEVEL `var`, not passed as a literal: `inlineLeaves` splices `negs` into
+`main`, and with a literal argument `foldConstants` (which since 2026-08-31 evaluates a `neg` over a
+constant) folds the whole chain to `mov rax, 707` — no `neg` is emitted and the self-check above
+checks a constant. Neither the parser's constant domain nor the fold pass looks through memory, so a
+load of a global keeps the three `neg`s, and the reuse copy this case exists to pin, on every lane.
 ```maxon
+var seed = 0
+
 function negs(p Integer) returns Integer
 	let x = p + 7
 	let n1 = -x
@@ -246,7 +254,7 @@ function negs(p Integer) returns Integer
 end 'negs'
 
 function main() returns ExitCode
-	let r = negs(0)
+	let r = negs(seed)
 	if r == 707 'ok'
 		return 0
 	end 'ok'

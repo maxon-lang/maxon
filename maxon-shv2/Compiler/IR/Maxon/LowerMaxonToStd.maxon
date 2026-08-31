@@ -380,6 +380,36 @@ export function maxonCmpOpOfStdPred(pred StdCmpPred) returns MaxonCmpOp
 	return op
 end 'maxonCmpOpOfStdPred'
 
+// The unary twin of `maxonBinOpOfStdOpcode`, checked the same way and there for the same reason:
+// `TypeRules.foldIntUnaryOp` is the compiler's ONE unary folder, and it speaks `MaxonUnaryOp`. Every Std
+// unary opcode has a source-level twin (the forward map is a 1:1 rename in every arm), so every arm
+// answers and the round trip checks all of them; it is the FOLDER, not this map, that declines the
+// conversions, the math intrinsics and the reinterpretations, each for the reason stated on its arm.
+export function maxonUnaryOpOfStdOpcode(opcode StdUnaryOpcode) returns MaxonUnaryOp
+	let op = match opcode 'map'
+		neg gives MaxonUnaryOp.neg
+		bitNot gives MaxonUnaryOp.bitNot
+		logicalNot gives MaxonUnaryOp.logicalNot
+		siToFp gives MaxonUnaryOp.promoteToFloat
+		fpToSi gives MaxonUnaryOp.trunc
+		floor gives MaxonUnaryOp.floor
+		ceil gives MaxonUnaryOp.ceil
+		round gives MaxonUnaryOp.round
+		sqrt gives MaxonUnaryOp.sqrt
+		abs gives MaxonUnaryOp.abs
+		fneg gives MaxonUnaryOp.fneg
+		bitcastF64ToI64 gives MaxonUnaryOp.floatToBits
+		bitcastI64ToF64 gives MaxonUnaryOp.bitsToFloat
+	end 'map'
+
+	let roundTrip = maxonUnaryOpToStdOpcode(op)
+	if roundTrip != opcode 'notAnInverse'
+		panic("maxonUnaryOpOfStdOpcode: `{opcode.name}` answers `{op.name}`, which lowers back to `{roundTrip.name}` — the two directions of one correspondence have diverged")
+	end 'notAnInverse'
+
+	return op
+end 'maxonUnaryOpOfStdOpcode'
+
 // Does any declared parameter have `float` type — the ONLY thing that can force an int→float
 // argument widening (see `MaxonToStdLowering.crossFloatDomainArgs`). A bounded scan (parameters
 // are capped at the register-arg ABI count), so it is O(1) per call and allocates nothing; it is what

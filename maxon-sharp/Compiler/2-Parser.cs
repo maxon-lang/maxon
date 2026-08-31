@@ -26778,34 +26778,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (number < 0) _writtenNegativeLiterals.Add(value.Id);
   }
 
+  /// The value of `-<integer literal>` — ONE literal, not an operator over one, which is what admits
+  /// `-9223372036854775808`: its magnitude (2^63) does not fit a positive i64, so reading the magnitude
+  /// first reported an overflow on a literal that is exactly <see cref="long.MinValue"/>. Only the DECIMAL
+  /// spelling needs that exception — a radix literal is a bit pattern, and `0x8000000000000000` already
+  /// reads as <see cref="long.MinValue"/> — so every other case is the negation of what
+  /// <see cref="ParseIntegerLiteral"/> reads, wrapping exactly as shv2's `parseNegatedInt` does
+  /// (`-0xFFFFFFFFFFFFFFFF` is 1). ONE decoder for the digits, so the radix rule cannot drift between the
+  /// signed and unsigned readings; every site that consumes a `-` before an integer literal comes here.
   private static long ParseNegatedIntegerLiteral(Token token) {
     var text = token.Value.Replace("_", "");
-    try {
-      ulong magnitude;
-      if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-        magnitude = Convert.ToUInt64(text[2..], 16);
-      else if (text.StartsWith("0b", StringComparison.OrdinalIgnoreCase))
-        magnitude = Convert.ToUInt64(text[2..], 2);
-      else if (text.StartsWith("0o", StringComparison.OrdinalIgnoreCase))
-        magnitude = Convert.ToUInt64(text[2..], 8);
-      else
-        magnitude = ulong.Parse(text);
-
-      // 9223372036854775808 (2^63) overflows long but -9223372036854775808 is exactly long.MinValue
-      if (magnitude == 1UL << 63) return long.MinValue;
-      return -checked((long)magnitude);
-    } catch (OverflowException) {
-      throw new CompileError(ErrorCode.ParserLiteralOverflow,
-        $"Integer literal '-{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
-        token.Line, token.Column);
-    } catch (FormatException) {
-      throw MalformedNumericLiteral(token);
-    } catch (ArgumentException) {
-      // Convert.ToUInt64 raises this rather than FormatException for an empty or non-radix digit
-      // run ('0x' with nothing after it), so the radix path needs its own arm to reach the same
-      // diagnostic the decimal path does — mirrors ParseIntegerLiteral's same arm.
-      throw MalformedNumericLiteral(token);
-    }
+    if (ulong.TryParse(text, out var magnitude) && magnitude == 1UL << 63) return long.MinValue;
+    return unchecked(-ParseIntegerLiteral(token, negated: true));
   }
 
   /// One integer the parser has FOLDED, plus whether the IR already carries it as a literal op.
@@ -27448,7 +27432,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       anchor.Line, anchor.Column) { FilePath = _sourceFilePath };
   }
 
-  private static long ParseIntegerLiteral(Token token) {
+  /// The value of an integer literal token. A radix literal (`0x`/`0b`/`0o`) is a 64-bit BIT PATTERN —
+  /// `0xFFFFFFFFFFFFFFFF` is -1, exactly as shv2's `parseHexInt` reads it — while a decimal literal must
+  /// fit a signed i64. <paramref name="negated"/> changes only what the overflow diagnostic NAMES: the
+  /// caller that consumed a `-` (<see cref="ParseNegatedIntegerLiteral"/>) reports `'-<digits>'`, so the
+  /// message shows what the source wrote.
+  private static long ParseIntegerLiteral(Token token, bool negated = false) {
     var text = token.Value.Replace("_", "");
     try {
       if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -27459,8 +27448,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         return Convert.ToInt64(text[2..], 8);
       return long.Parse(text);
     } catch (OverflowException) {
+      var written = negated ? $"-{token.Value}" : token.Value;
       throw new CompileError(ErrorCode.ParserLiteralOverflow,
-        $"Integer literal '{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
+        $"Integer literal '{written}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
         token.Line, token.Column);
     } catch (FormatException) {
       throw MalformedNumericLiteral(token);
@@ -27538,6 +27528,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Tries to consume an optional minus sign followed by an integer or float literal.
   /// Returns true if a numeric literal was consumed. Throws if minus was consumed but
   /// no number follows. Returns false without consuming tokens if no minus and no number.
+  /// A negated integer is read by <see cref="ParseNegatedIntegerLiteral"/>, the same decoder the
+  /// expression path uses, so a range bound or match pattern admits `-9223372036854775808` exactly as
+  /// a body does — negating the magnitude here instead reported an overflow on it.
   private bool TryParseSignedNumericLiteral(out NumericLiteral result, string? errorOnDanglingMinus = null) {
     result = default;
     bool negative = false;
@@ -27546,8 +27539,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       negative = true;
     }
     if (Check(TokenType.IntegerLiteral)) {
-      var val = ParseIntegerLiteral(Advance());
-      result = NumericLiteral.Integer(negative ? -val : val);
+      var token = Advance();
+      result = NumericLiteral.Integer(negative ? ParseNegatedIntegerLiteral(token) : ParseIntegerLiteral(token));
       return true;
     }
     if (Check(TokenType.FloatLiteral)) {

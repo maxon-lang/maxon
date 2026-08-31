@@ -903,11 +903,11 @@ type StdToArm64Lowering
 			// division (which cannot fault) rides the pure arith band. Reaching here is a lowering bug.
 			div to max then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — all three are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Integer division is `StdOp.div` (it can fault); `min`/`max` have no integer form and their operands are promoted by the parser")
 			// ⚠ EC18 — `mulHighSigned` CANNOT REACH THIS LANE. `StrengthReduceDivision` asks
-		// `targetLowersMulHigh` and reduces nothing where the opcode has no lowering, and arm64 has none:
-		// AArch64 spells the high half of a signed product as `SMULH Xd, Xn, Xm`, a plain 3-address
-		// instruction that would be a `TargetOp` of its own (and a strictly nicer one than x64's
-		// fixed-register `imul r/m64`). Adding it is what turns this lane on — see the row in
-		// docs/emitted-code-roadmap.md.
+			// `targetLowersMulHigh` and reduces nothing where the opcode has no lowering, and arm64 has none:
+			// AArch64 spells the high half of a signed product as `SMULH Xd, Xn, Xm`, a plain 3-address
+			// instruction that would be a `TargetOp` of its own (and a strictly nicer one than x64's
+			// fixed-register `imul r/m64`). Adding it is what turns this lane on — see the row in
+			// docs/emitted-code-roadmap.md.
 			mulHighSigned then panic("lowerBinOp: `mulHighSigned` has no arm64 lowering — AArch64 spells it `SMULH`, which this dialect does not carry, and `StrengthReduceDivision` declines the whole reduction on a target that cannot lower the opcode. Reaching here means that target gate was bypassed")
 		end 'op'
 	end 'lowerBinOp'

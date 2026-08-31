@@ -163,6 +163,7 @@ let VirtualAllocPageNoAccess = 0x1  // PAGE_NOACCESS — a reservation permits n
 // `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to (P1.2 wave A). The
 // parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX.
 let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HANDLE
+
 // ⚠ **THE THIRD OF THIS FAMILY, `StdErrorHandle`, IS `X64Runtime`'s AND IS READ FROM THERE.** It was the
 // panic writer's alone until `printError` made this isel a second reader; it is now `export`ed rather than
 // respelled here, because one number with two spellings is the duplication a second reader creates. See its
@@ -267,6 +268,7 @@ let CreateEventManualReset = 0x0  // CreateEventA bManualReset = FALSE → AUTO-
 let CreateEventInitialUnsignaled = 0x0  // CreateEventA bInitialState = FALSE (unsignaled until the first SetEvent)
 let ThreadDefaultStackSize = 0x0  // CreateThread dwStackSize = 0 → the executable's default stack
 let ThreadRunImmediately = 0x0  // CreateThread dwCreationFlags = 0 (not CREATE_SUSPENDED)
+
 // GetActiveProcessorCount GroupNumber = ALL_PROCESSOR_GROUPS — the count for the WHOLE machine rather than
 // for the calling thread's processor group. Its own named constant rather than a bare 0xFFFF because a
 // sentinel group number reads as an arbitrary WORD at the call, and choosing it over group 0 is the whole
@@ -322,11 +324,13 @@ let WriteFileOutgoingSlots = (WriteFileStackArgWords + WriteFileScratchSlots) as
 // stack-argument count. The GT syscall shim copies `CreateProcessStackArgWords` words from the GT frame onto
 // the system stack; deriving the reservation from the same constant keeps the shim's copy count from drifting.
 export let CreateProcessStackArgWords = 6 as MachineWord  // args 5-10, all real stack arguments
+
 // `PeekNamedPipe`'s two stack arguments, past the four register ones: `lpBytesLeftThisMessage` is the last
 // and `lpTotalBytesAvail` the one before it. Named for `CreateProcess*Slot`'s reason — a bare 0/1 at a
 // `[rsp+disp]` store says nothing about which of the six arguments is being filled.
 let PeekPipeAvailSlot = 0  // arg5 lpTotalBytesAvail
 let PeekPipeLeftSlot = 1  // arg6 lpBytesLeftThisMessage
+
 // EXPORTED for `X64GtRuntime`'s system-stack shim, which must reserve the same words this lowering writes
 // into — one number, read by the producer and by the shim, exactly as `CreateProcessStackArgWords` is.
 export let PeekPipeStackArgWords = 2 as MachineWord  // args 5-6, both real stack arguments
@@ -349,6 +353,7 @@ export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBuf
 export let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
 export let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
 export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+
 // O3: the DebugStream producer's one import that overflows the register file. Stated in this band with its
 // five siblings rather than beside the lowering, for the band's own reason — the SAME constant sizes the
 // frame reservation and the syscall shim's copy, so the two cannot disagree about the one word the kernel

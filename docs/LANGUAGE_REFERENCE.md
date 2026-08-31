@@ -2928,6 +2928,14 @@ var z = -(x + 1)   // OK: subexpression
 // var w = --x      // Error: consecutive negation operators
 ```
 
+**On a float, `-` is IEEE-754 negation — a sign-bit flip, not `0.0 - x`.** The two differ on exactly
+one input: `0.0 - (+0.0)` is `+0.0`, while `-(+0.0)` is `-0.0`. The flip is what Maxon does at every
+entrance — a literal `-0.0` carries the sign bit, `-x` over a variable or parameter emits a negate
+(`fneg` on arm64, `f64.neg` on wasm, an `xorpd` against a sign mask on x64), and `-K` over a float
+constant folds to the flipped bits — so `let z = 0.0; print("{-z}")` prints `-0.0`, `-(-0.0)` is
+`+0.0`, `-inf` mirrors, and a NaN's sign bit flips with its payload kept. On an integer, `-x` is
+two's-complement negation and yields a plain `int`, whatever ranged alias `x` was declared with.
+
 The `not` operator can be applied repeatedly:
 ```maxon
 var a = not not x  // OK: double bitwise NOT (identity for integers)

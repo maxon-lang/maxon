@@ -8,9 +8,10 @@ category: codegen
 
 ## Documentation
 
-`foldConstants` is the Std→Std pass that EVALUATES a binary operation whose operands are both
-constant and replaces it with the answer, and that folds a `condBranch` on a known condition into an
-unconditional `branch`. `3 * 31 + 4` stops being `mov`/`imul`/`lea` and becomes one `mov rax, 97`.
+`foldConstants` is the Std→Std pass that EVALUATES an integer operation — two-operand or one-operand —
+whose operands are all constant and replaces it with the answer, and that folds a `condBranch` on a
+known condition into an unconditional `branch`. `3 * 31 + 4` stops being `mov`/`imul`/`lea` and becomes
+one `mov rax, 97`; `-K` stops being `mov`/`neg` and becomes one `mov`.
 
 ### The expressions it exists for are the ones the PARSER never saw
 
@@ -124,6 +125,41 @@ function main() returns ExitCode
 	if mul(i64.max, b: 3) != 9223372036854775805 'mulWrapsTwice'
 		return 4
 	end 'mulWrapsTwice'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-negation-of-a-constant-is-evaluated -->
+`-a` and `not a` are the ONE-operand shapes, and they reach this pass the way the two-operand ones
+do: a parameter a leaf negates becomes `neg (const)` once `inlineLeaves` has substituted the caller's
+literal. Until 2026-08-31 the pass evaluated only two-operand shapes, so a `-K` over an inlined (or
+top-level) constant kept a `neg` instruction that the same value spelled `0 - K` never had. The
+evaluator is the parser's own (`foldIntUnaryOp`, reached through `maxonUnaryOpOfStdOpcode`), so
+`i64.min` negated is `i64.min` — the wrap the instruction computes, folded to the same bits.
+```maxon
+typealias Word = int(i64.min to i64.max)
+
+function negate(a Word) returns Word
+	return -a
+end 'negate'
+
+function complement(a Word) returns Word
+	return not a
+end 'complement'
+
+function main() returns ExitCode
+	if negate(42) != -42 'negative'
+		return 1
+	end 'negative'
+	if negate(-9223372036854775808) != -9223372036854775808 'wraps'
+		return 2
+	end 'wraps'
+	if complement(0) != -1 'allOnes'
+		return 3
+	end 'allOnes'
 	return 0
 end 'main'
 ```

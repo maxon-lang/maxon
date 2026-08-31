@@ -217,10 +217,12 @@ let OpcodeSyscallSecondByte = 0x05
 let LockPrefix = 0xF0
 let OpcodeCmpxchgRmReg = 0xB1  // cmpxchg r/m64, r64 (0F B1 /r) — reg field = the SOURCE stored on a match
 let OpcodeXaddRmReg = 0xC1  // xadd r/m64, r64 (0F C1 /r) — reg field = the addend IN and the prior value OUT
+
 // The displacement every atomic's `[base]` operand carries. An atomic names an ADDRESS and nothing else —
 // `StdOp.atomicCas`/`atomicRmw` have no field-offset operand, unlike `loadIndirect`/`storeIndirect` — so
 // this is the only value it can take, and it is named rather than a bare 0 so that stays visible.
 let AtomicWordDisp = 0 as Imm32
+
 // The TEB self-pointer's offset within the Win64 TEB — `NtCurrentTeb()` reads `gs:[0x30]`. The pointer is
 // established by the OS before a thread's first instruction and is never null, which is what makes it a
 // legal answer to `StdOp.currentThreadToken`. Exported because `TargetPrinter` renders it in a golden.
@@ -812,21 +814,23 @@ end 'x64NegF64ScratchMask'
 // like `abs`'s, is recorded in full on `TargetOp.negF64RegReg`. It is the second encoder in this file
 // that emits more than one instruction, for the SSA reason `encodeAbsF64Reg` gives.
 function encodeNegF64Reg(code ByteArray, reg X64Register)
-	assertNegF64OperandReg(reg)
+	assertOperandOffEncoderScratch(reg, scratch: x64NegF64ScratchMask(), opName: "negF64RegReg")
 	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePcmpeqd, dest: NegF64MaskReg, src: NegF64MaskReg, wide: false)
 	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: NegF64MaskReg, count: SignBitPosition)
 	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: reg, src: NegF64MaskReg, wide: false)
 end 'encodeNegF64Reg'
 
-// The colored operand must not be the mask register — the encoder would overwrite it with the mask
-// before XORing. `TargetOp.negF64RegReg`'s `implicitDefs` forbids exactly this via
-// `forbidOperandsFromImplicit`, so a violation is an allocator bug, not a user one — the jump table's
-// `assertJumpTableIndexReg`, one register file over.
-function assertNegF64OperandReg(reg X64Register)
-	if reg == NegF64MaskReg 'aliasesMask'
-		panic("encodeNegF64Reg: the negate's operand was colored to xmm{regNumber(reg)}, the sign-mask scratch register — `negF64RegReg`'s implicitDefs (xmm5) must forbid the operand that register (`forbidOperandsFromImplicit`)")
-	end 'aliasesMask'
-end 'assertNegF64OperandReg'
+// ⭐ **ONE GUARD FOR EVERY ENCODER IN THIS FILE THAT OWNS FIXED REGISTERS** — the jump table's r10/r11 and
+// the f64 negate's xmm5 — because they share one hazard: a colored operand that landed on a register the
+// encoder clobbers would be destroyed before it is read. `TargetOp`'s `implicitDefs` forbids exactly this
+// through `forbidOperandsFromImplicit`, and `assertEncoderScratchMasks` holds that literal equal to
+// `scratch`, so a violation here is an ALLOCATOR bug, never a user program's. `opName` is carried because
+// a union case cannot name itself, and the panic must send the reader to the right declaration.
+function assertOperandOffEncoderScratch(reg X64Register, scratch RegMask, opName String)
+	if regMaskContains(scratch, regNum: reg.rawValue as RegNum) 'aliasesScratch'
+		panic("{opName}: an operand was colored to {registerName(reg)}, a register its encoder clobbers (scratch mask {scratch}) — `TargetOp.{opName}`'s implicitDefs must forbid its operands those registers (`forbidOperandsFromImplicit`)")
+	end 'aliasesScratch'
+end 'assertOperandOffEncoderScratch'
 
 // One group-14 SSE shift-by-immediate (`66 0F 73 /ext ib`) — the opcode-extension form of an SSE
 // instruction, which is why it can ride neither `encodeSseRegReg` (whose reg field is a REGISTER) nor
@@ -1287,7 +1291,7 @@ end 'encodeJmpReg'
 // to the default block; the `lea` to the table files an `.rdata` reloc (patched to point at the blob); the
 // per-slot block-address relocations are recorded in `jumpTables` and resolved after the block loop.
 function encodeX64JumpTable(code ByteArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, indexReg X64Register, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
-	assertJumpTableIndexReg(indexReg)
+	assertOperandOffEncoderScratch(indexReg, scratch: x64JumpTableScratchMask(), opName: "x64JumpTable")
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: indexReg, imm: caseTargets.count() as Imm32)
 	encodeJcc(code, rel32Fixups: rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: defaultTarget)
 	encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: JumpTableBaseReg, label: tableLabel)
@@ -1297,14 +1301,13 @@ function encodeX64JumpTable(code ByteArray, rdataRelocs RdataRelocationArray, re
 	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
 end 'encodeX64JumpTable'
 
-// The colored biased-index register must not be a scratch register — the encoder would clobber it with the
-// table base (r10) or the loaded entry (r11) before reading it. `TargetOp.x64JumpTable`'s `implicitDefs`
-// forbids exactly this via `forbidOperandsFromImplicit`, so a violation is an allocator bug, not a user one.
-function assertJumpTableIndexReg(indexReg X64Register)
-	if indexReg == JumpTableBaseReg or indexReg == JumpTableEntryReg 'aliasesScratch'
-		panic("encodeX64JumpTable: the biased index was colored to r{regNumber(indexReg)}, a jump-table scratch register (r10/r11) — `x64JumpTable`'s implicitDefs (r10|r11) must forbid the index those registers (`forbidOperandsFromImplicit`)")
-	end 'aliasesScratch'
-end 'assertJumpTableIndexReg'
+// The jump table's clobber, as the allocator's currency — the ONE statement of which registers the sequence
+// destroys: `TargetOp.x64JumpTable`'s inline `implicitDefs` literal is checked against it by
+// `assertEncoderScratchMasks`, and `encodeX64JumpTable` keeps its index operand off it — the encoder would
+// clobber the index with the table base (r10) or the loaded entry (r11) before reading it.
+export function x64JumpTableScratchMask() returns RegMask
+	return regMaskOf(JumpTableBaseReg) or regMaskOf(JumpTableEntryReg)
+end 'x64JumpTableScratchMask'
 
 // --- F1b: the byte-fill SIZE LADDER (x64) ---
 
@@ -1339,8 +1342,10 @@ end 'x64MemFillScratchMask'
 let MemFillQwordBytes = 8  // one qword store — the smallest width the overlap trick can anchor on
 let MemFillTwoQwordBytes = 16
 let MemFillFourQwordBytes = 32
+
 // Bytes per iteration of the bulk store loop (8 qwords), and the lower edge of the loop band.
 let MemFillLoopStride = 64
+
 // Where `rep stosq` starts paying. Its ~20-40 cycles of startup dwarf the 1-8 plain stores a small
 // size-class slot needs, and the dominant caller of this op zeroes exactly such a slot — so the ladder exists
 // precisely to keep short fills away from it. (ERMSB/FSRM improve throughput and short `rep stosb`; they do

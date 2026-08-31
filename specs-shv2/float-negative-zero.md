@@ -181,7 +181,7 @@ declared.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 
-function negate(x Real) returns float
+function negate(x Real) returns Real
 	return -x
 end 'negate'
 
