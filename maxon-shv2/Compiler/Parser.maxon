@@ -317,6 +317,13 @@ export union ParseError implements Error
 	// of its frame, and a `match` on a union this frame does not own. One baked-in cure meant a union payload
 	// was told to *"use `get(i)` … or move it out with `pop`"*, advice for a container it is not.
 	promiseCannotBeBorrowed(door String, cure String, line LineNumber, column ColumnNumber)
+	// A NAME still spelling a green thread that `await` or `.cancel()` already handed back to the runtime —
+	// the parser-time, value-keyed half of promise linearity. `door` is how the source spelled the FIRST
+	// consume (`await` / `cancel`), because "already consumed by an earlier ..." is a claim about that one
+	// and naming the wrong keyword would describe a line the author did not write. It carries no NAME: the
+	// caret is on the offending name already, and the sentence is about the THREAD, which an alias spells
+	// just as truly as the binding that spawned it. Renders as E3142.
+	promiseAlreadyConsumed(door String, line LineNumber, column ColumnNumber)
 	// A `var` DECLARED FROM AN IMMUTABLE NAME OF A REFERENCE TYPE — `var b = a` / `var i = o.inner`
 	// where `a` / `o` is a `let` or a parameter. Maxon is single-ownership and everything is a
 	// reference, so the mutable name would reach the immutable one's storage and write through it;
@@ -8760,11 +8767,78 @@ end 'BlockMark'
 type MoveMark
 	export let moved as BoolArray
 	export let values as ValueIdArray
+	// ⭐⭐ **AND THE CONSUMED GREEN THREADS — the SECOND path-sensitive fact, and the one an owned-binding
+	// column structurally cannot carry.** `movedFrom` is positional over `ownedBindings`, and an ALIAS
+	// (`let q = p`) is in no owned set at all — a promise aliases rather than moves, so `q` enrols nothing
+	// — which left every rewind blind to a name that spells a thread the arm consumed. Keyed on the
+	// promise's own `ValueId` instead, which IS the thread's identity, so the ONE record covers the owner
+	// and every alias of it at once and there is no symbol table to walk. See `PromiseConsumeRecord`.
+	export let consumes as PromiseConsumeRecordArray
 
-	export static function create(moved BoolArray, values ValueIdArray) returns MoveMark
-		return Self{moved: moved, values: values}
+	export static function create(moved BoolArray, values ValueIdArray, consumes PromiseConsumeRecordArray) returns MoveMark
+		return Self{moved: moved, values: values, consumes: consumes}
 	end 'create'
 end 'MoveMark'
+
+// ⭐⭐ **ONE CONSUME OF ONE GREEN THREAD — the fact E3142 is decided from, and the fact a branch rewinds.**
+//
+// Keyed on the promise's `ValueId` and never on a NAME. That value IS the thread's identity: an alias binds
+// it verbatim (`declareInitializedBinding`'s promise arm) and a cross-block read resolves to it, so one
+// record answers for the binding that spawned the thread and for every alias of it together. ⇒ a name is
+// not MARKED when the thread is consumed, it is ASKED at its next use (`Parser.requireBindingLive`), which is
+// what keeps a symbol-table walk off the consume path entirely.
+//
+// The KIND rides because the sentence has to name the door the author actually wrote — telling them their
+// `p.cancel()` had "already been awaited" would describe a line their program does not contain.
+type PromiseConsumeRecord
+	export let promise as ValueId
+	export let kind as PromiseConsume
+
+	export static function create(promise ValueId, kind PromiseConsume) returns PromiseConsumeRecord
+		return Self{promise: promise, kind: kind}
+	end 'create'
+end 'PromiseConsumeRecord'
+
+typealias PromiseConsumeRecordArray = Array with PromiseConsumeRecord
+
+// ⭐ **WHAT CONSUMED THE THREAD `promise` NAMES, ACCORDING TO `consumes`** — `notConsumed` when nothing in
+// it did. The ONE reader of a consume list's shape, so the membership test is written once for the use
+// guard, the union below and the parser's own live state.
+//
+// A linear scan, and deliberately: the list holds one entry per `await`/`cancel` REACHED SO FAR on the
+// current path, which is zero for every function in the scale corpus and a handful in an async one. A map
+// would allocate per function to index a list that is usually empty.
+function promiseConsumeIn(consumes PromiseConsumeRecordArray, promise ValueId) returns PromiseConsume
+	for record in consumes 'each'
+		if record.promise == promise 'thisThread'
+			return record.kind
+		end 'thisThread'
+	end 'each'
+	return PromiseConsume.notConsumed
+end 'promiseConsumeIn'
+
+// ⭐ **UNION `from`'s CONSUMES INTO `into` — "the threads spent on EITHER of these paths".** The merge rule
+// for the consume half, and the same rule `Parser.reconcileMovesAtMerge` applies to `movedFrom`
+// (`binding.movedFrom = anyMoved`): a thread reclaimed on ONE reaching edge is spent past the join, because
+// the join cannot know which edge ran. A thread consumed on two edges by different doors keeps the first
+// edge's word for it — either sentence is true of the path it describes, and the caret is on the use.
+function unionPromiseConsumes(into PromiseConsumeRecordArray, from PromiseConsumeRecordArray)
+	for record in from 'each'
+		if promiseConsumeIn(into, promise: record.promise) == PromiseConsume.notConsumed 'notYetRecorded'
+			into.push(record)
+		end 'notYetRecorded'
+	end 'each'
+end 'unionPromiseConsumes'
+
+// An INDEPENDENT copy of a consume list. Both its callers need one for the same reason: the parser's LIVE
+// list is pushed to as the path continues, so a mark that shared it would have the branch's own consumes
+// leak into the snapshot that exists to rewind them, and a live list restored to a mark's own array would
+// push into a mark. Union with an empty list IS the copy, so the two share one loop.
+function copyPromiseConsumes(consumes PromiseConsumeRecordArray) returns PromiseConsumeRecordArray
+	var copy = PromiseConsumeRecordArray.create()
+	unionPromiseConsumes(copy, from: consumes)
+	return copy
+end 'copyPromiseConsumes'
 
 // The union of two move marks' `movedFrom` bits — the move state of a path that ran BOTH the moves `a`
 // records and the moves `b` records. Its one use is the inline-conditional's TRUE path: the true arm's
@@ -8792,7 +8866,15 @@ function orMoveMarks(a MoveMark, b MoveMark) returns MoveMark
 		let am = (try a.moved.get(i) otherwise panic("orMoveMarks: a.moved.get OOB at {i}, below its own count")) if i < a.moved.count() else false
 		moved.push(am or bm)
 	end 'each'
-	return MoveMark.create(moved, values: b.values)
+	// The consume half unions the same way, and PASSES `b`'s list THROUGH when the arm consumed nothing —
+	// which is every ternary in a program that never spawns. A mark is read-only (see `captureMoveMark`), so
+	// two marks may name one list; only the branch that really has something to merge allocates.
+	var consumes = b.consumes
+	if a.consumes.count() > 0 'theArmConsumedAThread'
+		consumes = copyPromiseConsumes(b.consumes)
+		unionPromiseConsumes(consumes, from: a.consumes)
+	end 'theArmConsumedAThread'
+	return MoveMark.create(moved, values: b.values, consumes: consumes)
 end 'orMoveMarks'
 
 // The sub-mark over the FIRST `height` owned bindings — the ones that OUTLIVE a construct whose own
@@ -8815,12 +8897,22 @@ function moveMarkPrefix(mark MoveMark, height BindingMark) returns MoveMark
 		moved.push(try mark.moved.get(i) otherwise panic("moveMarkPrefix: moved.get OOB at {i} after the height check"))
 		values.push(try mark.values.get(i) otherwise panic("moveMarkPrefix: values.get OOB at {i} after the height check"))
 	end 'each'
-	return MoveMark.create(moved, values: values)
+	// The consumes ride WHOLE, and by REFERENCE. `height` trims the owned-binding stack, and a consume is
+	// keyed on a VALUE, which sits in no such stack — the thread an arm reclaimed is reclaimed whether or
+	// not the binding that named it has been popped. Sharing the list with the mark it was trimmed from is
+	// safe for `captureMoveMark`'s reason: a mark is read-only.
+	return MoveMark.create(moved, values: values, consumes: mark.consumes)
 end 'moveMarkPrefix'
 
 // Do two marks record the SAME set of moved-from bindings? Only the `movedFrom` bits are compared — the
 // VALUES legitimately differ between two points in one body (a reassigned `var` holds a different SSA id)
 // and say nothing about who owes a drop.
+//
+// ⚠ **THE CONSUMED-THREAD HALF IS DELIBERATELY NOT COMPARED, AND IT COSTS NOTHING**: every consume that a
+// NAME can outlive also poisons that name's owning binding (`consumePromiseThread` marks it `movedFrom`),
+// so a disagreement about a nameable thread is already a disagreement about an owned binding and is caught
+// by the loop below. The only consume this misses is of a promise NO binding owns — an unbound
+// `await async f()` — which no later use can reach, because there is no name to reach it through.
 //
 // Its one use is a block-form `try`'s N throw edges (`recordRoutedEdge`): the shared handler is entered
 // with ONE ownership state, so every routed call must leave the outer bindings in the same one. Marks of
@@ -9554,7 +9646,7 @@ type TryBlockContext
 	export var conflictingMoveEdge as bool
 
 	export static function create(func IrFunction, tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns TryBlockContext
-		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()), conflictingMoveEdge: false}
+		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create()), conflictingMoveEdge: false}
 	end 'create'
 end 'TryBlockContext'
 
@@ -12737,6 +12829,36 @@ export type Parser
 	// closure body is a separate function: an alias minted in the enclosing one says nothing about whether
 	// the closure's own moves need the walk.
 	var functionMintedValueAliases as bool
+	// ⭐⭐ **THE GREEN THREADS THIS FRAME HAS ALREADY HANDED BACK TO THE RUNTIME, ON THE PATH BEING PARSED
+	// RIGHT NOW — the live half of `MoveMark.consumes`, and the whole state E3142 is decided from.**
+	//
+	// Appended by `consumePromiseThread` (the one door `await`, `try await` and `.cancel()` all reach) and
+	// rewound at every branch by the same capture/restore/reconcile the owned-binding move bits ride, so
+	// "was this thread spent?" is as path-sensitive as "was this binding moved from?" — a consume in one
+	// `if` arm does not spend the thread on the arm that never ran.
+	//
+	// ⚠ **IT IS KEYED ON THE VALUE AND NOT ON THE BINDING, which is exactly what a `VarInfo` column could
+	// not have been.** A promise ALIASES rather than moves, so `let q = p` enrols no second owner and there
+	// is no per-binding place to write `q`'s poison that a rewind could find (`MoveMark` is positional over
+	// `ownedBindings`, and an alias is not in it). One record against the thread's `ValueId` covers every
+	// name that spells it, for as long as that name spells it: re-arming `p` gives `p` a NEW value and
+	// revives it, while an alias still holding the OLD one stays refused — which is the whole of
+	// `async-linearity.error.double-await-alias-outlives-rebind`.
+	//
+	// Re-created per function like `ownedBindings`, for the same reason: a `ValueId` names a value in one
+	// function's SSA space and nothing else.
+	var promiseConsumes as PromiseConsumeRecordArray
+	// ⭐ **THE ONE EMPTY CONSUME LIST EVERY MARK OF A PROMISE-FREE PATH SHARES** — `emptyMoveMark`'s economy
+	// applied to the third column, and it is what keeps this whole mechanism free for the programs that have
+	// no promises in them. A mark is read-only, so one immortal empty list can stand in for all of them
+	// rather than every `if`, `match` and ternary allocating a list to hold nothing.
+	//
+	// ⚠ **IT IS NEVER `promiseConsumes` ITSELF, AND THAT IS A HARD INVARIANT** rather than a coincidence:
+	// `consumePromiseThread` PUSHES into the live list and `reconcileMovesAtMerge` unions into it in place,
+	// so the live list must be private to the parser. Every writer of `promiseConsumes` — the constructor,
+	// the two resets, the closure restore, `restoreMoveMark` — assigns a fresh or previously-private array,
+	// and none of them ever assigns this one or a mark's.
+	let sharedEmptyPromiseConsumes as PromiseConsumeRecordArray
 	// ⭐⭐ **THE NAMES A MENTION HAS RECORDED IN THIS FUNCTION — E3012's OTHER HALF, and the one
 	// `VarInfo.referenced` structurally cannot answer.** "Referenced" is a fact about the NAME within the
 	// enclosing function, not about the individual binding: MEASURED on the oracle, whose `_referencedVars` is
@@ -13186,6 +13308,8 @@ export type Parser
 			ownedBindings: VarInfoArray.create(),
 			unusedCandidates: UnusedBindingCandidateArray.create(),
 			functionMintedValueAliases: false,
+			promiseConsumes: PromiseConsumeRecordArray.create(),
+			sharedEmptyPromiseConsumes: PromiseConsumeRecordArray.create(),
 			referencedNames: ByteArrayArray.create(),
 			mutabilityExercisedNames: ByteArrayArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
@@ -13203,7 +13327,7 @@ export type Parser
 			fileHasClosureLiteral: false,
 			cellArgumentTokenIndex: NoCellArgumentRequest,
 			closureParamHint: ClosureParamTypeHint.none,
-			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()),
+			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create()),
 			isStdlibSource: isStdlibSource,
 			buildsBodies: buildsBodies,
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
@@ -24663,6 +24787,10 @@ export type Parser
 		// Cleared for the reason its header gives: the aliases it stands for belong to the SSA space of the
 		// function that minted them, and this one has none until it binds one.
 		self.functionMintedValueAliases = false
+		// Re-created for the reason `ownedBindings` above is: a consume left over from the previous function
+		// records a `ValueId` in THAT function's SSA space, and this one's values reuse the same numbers —
+		// so a stale entry would refuse a perfectly live promise here, naming a door nobody wrote.
+		self.promiseConsumes = PromiseConsumeRecordArray.create()
 		// Re-created for the same reason, one step further out: a name mentioned in the PREVIOUS function
 		// would excuse a candidate of that name here. The name-scoped half is bounded to ONE function,
 		// exactly as the oracle's per-function `_referencedVars` is.
@@ -26195,6 +26323,7 @@ export type Parser
 		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
 		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
 		self.ownedBindings = VarInfoArray.create()
+		self.promiseConsumes = PromiseConsumeRecordArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
@@ -29774,8 +29903,13 @@ export type Parser
 				// A non-promise value (`p = 5` after a consuming `await`, or after the live thread was dropped
 				// just above): the binding now owns nothing droppable. It STAYS in `ownedBindings` (mid-stack
 				// removal would desync the block/loop drop marks), so it is marked MOVED to make `emitScopeDrops`
-				// skip it — a bare scalar must not be `__mm_decref`'d. Reads still work: `requireBindingLive`
-				// admits any scalar-tagged binding (a scalar is never an unsafely-moved heap value).
+				// skip it — a bare scalar must not be `__mm_decref`'d.
+				//
+				// ⚠ **READS STILL WORK, AND SINCE W232 THAT RESTS ON THE ORDER OF THE TWO LINES ABOVE.**
+				// `requireBindingLive`'s scalar escape now excludes a PROMISE-valued binding, so what admits
+				// this one is that `setValue` has ALREADY re-pointed `boundValue` at the scalar: the binding
+				// being asked about is no longer a promise. (A consume record an earlier `await` made is keyed
+				// on the OLD value and stays there — correctly, since an alias may still name that thread.)
 				binding.movedFrom = true
 				binding.partiallyMoved = false
 			end 'becameScalar'
@@ -34869,6 +35003,11 @@ export type Parser
 	// reconciled at a join (`reconcileMovesAtMerge`). The twin of `snapshotBindings` for the drop-gating
 	// bit. Positional over `ownedBindings`; see `MoveMark` for why only `movedFrom` rides and why the
 	// height is stable at every capture point.
+	//
+	// ⭐ **AND THE CONSUMED GREEN THREADS BESIDE IT, WHICH ARE NOT POSITIONAL AND CANNOT BE.** A promise
+	// ALIASES rather than moves, so a second name for a thread enrols no owned binding — there is no slot in
+	// the positional column for the alias's poison to live in. The consume list is keyed on the thread's own
+	// `ValueId` instead and rides whole — see `markedPromiseConsumes` for what the mark actually gets.
 	function captureMoveMark() returns MoveMark
 		var moved = BoolArray.create()
 		var values = ValueIdArray.create()
@@ -34876,8 +35015,25 @@ export type Parser
 			moved.push(binding.movedFrom)
 			values.push(binding.boundValue)
 		end 'each'
-		return MoveMark.create(moved, values: values)
+		return MoveMark.create(moved, values: values, consumes: self.markedPromiseConsumes())
 	end 'captureMoveMark'
+
+	// ⭐ **THE CONSUME LIST A MARK CARRIES.** The SHARED empty one when nothing has been consumed on this
+	// path — which is every function in a program that never spawns — and an INDEPENDENT COPY otherwise:
+	// the parser's live list is pushed to as the path continues, and a shared reference would let those
+	// pushes leak into the very snapshot that exists to rewind them.
+	//
+	// ⚠ **A MARK'S LIST IS READ-ONLY, AND EVERYTHING HERE RESTS ON IT.** Nothing writes through a mark —
+	// `restoreMoveMark` copies OUT of one, `orMoveMarks` and `reconcileMovesAtMerge` read one — which is
+	// what makes sharing safe both ways: many marks may name the shared empty list, and a trimmed mark
+	// (`moveMarkPrefix`) may name its parent's.
+	function markedPromiseConsumes() returns PromiseConsumeRecordArray
+		if self.promiseConsumes.count() == 0 'nothingConsumedOnThisPath'
+			return self.sharedEmptyPromiseConsumes
+		end 'nothingConsumedOnThisPath'
+
+		return copyPromiseConsumes(self.promiseConsumes)
+	end 'markedPromiseConsumes'
 
 	// ⭐ **PATH-SENSITIVE MOVE STATE — RESTORE.** Rewind every owned binding's `movedFrom` bit to a
 	// captured mark, undoing the moves a sibling branch made so the next path is parsed against the
@@ -34894,6 +35050,19 @@ export type Parser
 			binding.movedFrom = try mark.moved.get(i) otherwise panic("restoreMoveMark: mark.moved.get OOB at {i}")
 			i = i + 1
 		end 'each'
+
+		// ⭐ **THE CONSUME HALF IS ASSIGNED, NOT UNWOUND, AND IT MUST GO IN BOTH DIRECTIONS.** A restore is
+		// not always a rewind: `finalizeIfNoElse`'s direct-false-edge arm restores the THEN branch's mark
+		// onto the entry state, which ADDS the consumes that branch made. Replacing the list with an
+		// independent copy of the mark's states "the consume state at this join is exactly what the mark
+		// says" once, for both directions, instead of two rules that could disagree about which way is which.
+		//
+		// The copy is INDEPENDENT for `markedPromiseConsumes`' reason — the live list is pushed to — and is
+		// skipped entirely when there is nothing to settle either way, which is every branch in a program
+		// that never spawns.
+		if self.promiseConsumes.count() > 0 or mark.consumes.count() > 0 'consumeStateToSettle'
+			self.promiseConsumes = copyPromiseConsumes(mark.consumes)
+		end 'consumeStateToSettle'
 	end 'restoreMoveMark'
 
 	// ⭐⭐ **PATH-SENSITIVE MOVE STATE — RECONCILE AT A JOIN.** Given the edges that REACH a merge (each an
@@ -34956,6 +35125,44 @@ export type Parser
 			binding.movedFrom = anyMoved
 			i = i + 1
 		end 'eachBinding'
+
+		// ⭐ **AND THE CONSUMED THREADS SETTLE THE SAME WAY THE BITS ABOVE DO — spent on ANY reaching edge is
+		// spent past the merge, and spent on NO reaching edge is NOT** (`binding.movedFrom = anyMoved`, one
+		// loop up, said of a value instead of a binding). There is no drop to place for them and so no
+		// per-edge emission: a consume already handed the thread to the runtime on the edge that made it,
+		// and the edges that did not made none.
+		//
+		// ⛔⛔ **ASSIGNED FROM THE EDGES, NEVER UNIONED ONTO THE LIVE STATE — the bits one loop up are, and two
+		// columns settling one join by two different rules is exactly how they come to disagree.** This used
+		// to union in place, on the premise that the live state is always a subset of the union. It is not:
+		// the state this routine finds is whatever was parsed LAST, and that is not always a reaching edge.
+		// A `match` restores the entry mark at the START of each arm (`beginFreshArm`) and never after the
+		// last one, so an arm that RETURNS leaves its own consumes live while contributing no edge — and the
+		// union carried its thread past a merge no reaching path spends it on.
+		//
+		// MEASURED at this review, two programs differing only in the ORDER of one match's two arms: with
+		// `default then return (await p)` LAST the following `await p` was refused E3142, while the same
+		// match written the other way round compiled and exited 44. The `movedFrom` bits were right in both,
+		// because they are ASSIGNED from `anyMoved` over the reaching edges — which is what this now does.
+		//
+		// The scan below is what keeps a promise-free program allocation-free: nothing consumed on any edge
+		// and nothing live means the settled state IS the live state, and there is no list to build.
+		var anyEdgeConsumed = false
+		for edge in edges 'scanEdgeConsumes'
+			if edge.mark.consumes.count() > 0 'edgeSpentAThread'
+				anyEdgeConsumed = true
+			end 'edgeSpentAThread'
+		end 'scanEdgeConsumes'
+
+		if anyEdgeConsumed or self.promiseConsumes.count() > 0 'consumeStateToSettle'
+			// A FRESH private list, for `sharedEmptyPromiseConsumes`' hard invariant: whatever lands in
+			// `promiseConsumes` is pushed into and unioned into later, so it may never be a mark's array.
+			var settled = PromiseConsumeRecordArray.create()
+			for edge in edges 'eachEdgesConsumes'
+				unionPromiseConsumes(settled, from: edge.mark.consumes)
+			end 'eachEdgesConsumes'
+			self.promiseConsumes = settled
+		end 'consumeStateToSettle'
 	end 'reconcileMovesAtMerge'
 
 	// ⭐ **WHICH RUNTIME ENTRY DROPS `value`** — one tag-and-type router, extended per managed kind (Wave
@@ -34976,8 +35183,10 @@ export type Parser
 		// ⭐ **A PROMISE IS A GREEN-THREAD HANDLE, NOT A REFCOUNTED HEAP BOX (P1.5-B2 #88).** An un-awaited
 		// `async` spawn dropped at scope exit / a re-arm routes to `__gt_promise_drop`, which reclaims AND
 		// cancels the thread — NOT `__mm_decref` (a promise owns no `__mm_alloc` box; the handle is the GT
-		// struct pointer). Checked FIRST, off the promise mark column, because a promise's TAG is `integer`
-		// (its awaited scalar type), so the tag-based routing below cannot tell it from a bare int.
+		// struct pointer). Checked FIRST, off the promise MARK column, because no TAG identifies a promise: a
+		// spawn's handle is typed at the interned `Promise with (T[, E])` since W230 and a service reply's
+		// cell is still `integer`, so tag-based routing would miss one road or send a bare int down the
+		// other. The mark is written by every road that mints a promise, which is what makes it the answer.
 		if self.valueOwnsGreenThread(value) 'promise'
 			return GtPromiseDropName
 		end 'promise'
@@ -35949,15 +36158,37 @@ export type Parser
 	// vacate emitted anyway landed in whichever block was current, emptied BOTH slots, and orphaned the
 	// untaken edge's thread — measured, still exit **75**. So the construct is cleanly refused rather than
 	// half-tracked, and the cure is to consume before the join.
-	function requireConsumedPromiseIsOwned(promise ValueId, anchor Token) throws ParseError
+	//
+	// ⚠ **BOTH CONSUME DOORS ASK IT, AND FOR TWO WEEKS ONLY `await` DID.** `emitPromiseCancel` reaches the
+	// same `consumePromiseThread` and reclaims the same struct, so the same program with `cancel` for
+	// `await` was accepted and aborted 75 at run time — `async-promise-drop.error.cancel-a-promise-no-frame-owns`
+	// against its refused `await` twin. The door is a `PromiseConsume` rather than a string so the word in
+	// the message is derived from the consume that asked, and cannot drift from it.
+	function requireConsumedPromiseIsOwned(promise ValueId, anchor Token, door PromiseConsume) throws ParseError
 		if self.valueOwnsGreenThread(promise) or self.promiseValueCarriesAContainerSlot(promise) 'accountedFor'
 			return
 		end 'accountedFor'
 
-		throw ParseError.promiseCannotBeBorrowed(String.from(b"await"), cure: "No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join", line: anchor.line, column: anchor.column)
+		throw ParseError.promiseCannotBeBorrowed(String.from(promiseConsumeDoorName(door)), cure: "No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join", line: anchor.line, column: anchor.column)
 	end 'requireConsumedPromiseIsOwned'
 
-	function consumePromiseThread(promise ValueId, range SourceRange)
+	//
+	// ⭐⭐ **AND IT RECORDS THE CONSUME AGAINST THE THREAD, WHICH IS WHAT REFUSES THE NEXT USE OF ANY NAME
+	// FOR IT (W232, E3142).** The `movedFrom` bit above answers "does this BINDING still owe a drop?", and
+	// that is all it can answer: an alias (`let q = p`) enrols no owned binding, so there is no bit of `q`'s
+	// to set. The record is keyed on the thread's `ValueId` instead — the identity every name for it shares
+	// — so `promiseConsumeIn` answers for the spawner and for each alias with one entry, and the path-
+	// sensitive machinery rewinds ONE list rather than an unbounded set of names.
+	//
+	// `reclaimedBy` is which door handed the thread back to the RUNTIME. `notConsumed` is the honest answer
+	// for the third caller, `transferConsumedArgs`: a promise ARGUMENT moves to another OWNER, which is not
+	// a reclaim and leaves the thread perfectly alive — so a later use of the source is an ordinary
+	// use-after-move (E3102, *"its ownership moved to another binding"*), which is exactly what it is.
+	function consumePromiseThread(promise ValueId, range SourceRange, reclaimedBy PromiseConsume)
+		if reclaimedBy != PromiseConsume.notConsumed and promiseConsumeIn(self.promiseConsumes, promise: promise) == PromiseConsume.notConsumed 'recordTheReclaim'
+			self.promiseConsumes.push(PromiseConsumeRecord.create(promise, kind: reclaimedBy))
+		end 'recordTheReclaim'
+
 		// ⭐⭐ **FIRST, BECAUSE THE SLOT MUST BE EMPTIED BEFORE ANYTHING ELSE CAN DROP IT.** If this promise
 		// was read out of a container, the frame has just finished MOVING it out; the container must stop
 		// naming it or its element walk reclaims a thread this consume already reclaimed.
@@ -46023,9 +46254,14 @@ export type Parser
 		// list whose entries drop at a SCOPE exit rather than a statement's.
 		let markOwnedCount = self.ownedBindings.count()
 		var preMoveMark = self.emptyMoveMark
-		if markOwnedCount > 0 'ownedInScope'
+		// ⚠ **THE SHARED EMPTY MARK STANDS IN ONLY WHEN THERE IS NOTHING TO REWIND, AND "NOTHING" GAINED A
+		// SECOND HALF AT W232.** An owned-binding height of 0 used to be the whole of it; a mark now also
+		// carries the CONSUMED THREADS, and restoring the shared empty one onto a path that had already
+		// awaited something would wipe that record — the arm's rewind un-spending a thread the statement
+		// before it consumed. The scale corpus is all scalar and spawns nothing, so it still allocates none.
+		if markOwnedCount > 0 or self.promiseConsumes.count() > 0 'moveStateToRewind'
 			preMoveMark = self.captureMoveMark()
-		end 'ownedInScope'
+		end 'moveStateToRewind'
 
 		let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
@@ -53771,8 +54007,11 @@ export type Parser
 		// `Slot.held(async plain())` left the spawn a statement-scoped pending temporary of the CONSTRUCTING
 		// frame, so the drain reclaimed it at the end of that statement; the payload kept a dead handle and
 		// the `match`ed-out promise was awaited after cancellation. MEASURED at **exit 92**.
+		//
+		// ⚠ `notConsumed`: the union BOX becomes the thread's owner and the thread runs on, so a later read of
+		// the source name is an ordinary use-after-move (E3102) and not the spent-thread refusal E3142.
 		if payloadClassIsAGreenThread(class) 'aGreenThread'
-			self.consumePromiseThread(arg, range: range)
+			self.consumePromiseThread(arg, range: range, reclaimedBy: PromiseConsume.notConsumed)
 			return arg
 		end 'aGreenThread'
 
@@ -55483,7 +55722,12 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		try self.consumeEmptyArgList()
 		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-		self.consumePromiseThread(recv.value, range: SourceRange.between(recv.anchor, last: methodTok))
+		// ⭐⭐ **THE SAME OWNERSHIP QUESTION `await` ASKS, AND FOR THE SAME REASON — a reclaim this frame
+		// cannot account for is not less wrong for being spelled `cancel`.** Anchored on the METHOD token,
+		// the analogue of the `await` keyword: the caret belongs on the door, not on the receiver that is
+		// perfectly well-formed. See `requireConsumedPromiseIsOwned` for the merge shape it catches.
+		try self.requireConsumedPromiseIsOwned(recv.value, anchor: methodTok, door: PromiseConsume.cancelled)
+		self.consumePromiseThread(recv.value, range: SourceRange.between(recv.anchor, last: methodTok), reclaimedBy: PromiseConsume.cancelled)
 		return self.emitRuntimeCall(GtPromiseDropName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
 	end 'emitPromiseCancel'
 
@@ -65537,7 +65781,9 @@ export type Parser
 
 		let source = try self.promiseSourceStoredHere(func, value: value, storage: storage, anchor: anchor)
 		try self.requirePromiseStorageDescribesSource(source, storage: storage, anchor: anchor)
-		self.consumePromiseThread(value, range: SourceRange.ofToken(anchor))
+		// `notConsumed` for `moveInPayload`'s reason: the CONTAINER takes ownership of a thread that is still
+		// running, so the source's later use is E3102 rather than E3142.
+		self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
 		self.retypeValue(value, valueType: MaxonType.genericInstance(storage))
 		return value
 	end 'storedPromiseValue'
@@ -67487,6 +67733,13 @@ export type Parser
 	// taught it beside a site not taught it IS that bug, and it is the same "one predicate, one enforcing
 	// home" the move gate itself is written to.
 	//
+	// ⭐⭐ **AND SINCE W232 IT ENFORCES A SECOND, MORE SPECIFIC RULE AT THE SAME CHOKEPOINT: a name whose GREEN
+	// THREAD has been consumed is dead too (E3142).** The two are separate facts and both belong here, because
+	// both are answers to "may this name be used?" and the caller set is identical. They differ in what they
+	// are keyed on, and that difference is forced: a move is about a BINDING (which one owes the drop), a
+	// consume is about a VALUE (which thread the runtime took back) — and a promise ALIASES rather than moves,
+	// so an alias has no binding-level bit for the first rule to set.
+	//
 	// A SELF-FIELD ALIAS is EXCLUDED: a bare `count` inside a method reads a fresh `loadIndirect` through
 	// the receiver rather than aliasing an owned value, so it is never moved-from (`poisonMoveSource`
 	// gates on `rhsWasBareLocalReference`, which excludes self-fields). `parseVariableReference` routes
@@ -67525,14 +67778,64 @@ export type Parser
 			return
 		end 'selfFieldAlias'
 
+		// ⭐⭐ **A SPENT GREEN THREAD IS REFUSED BEFORE ANYTHING ELSE ABOUT THE BINDING IS ASKED (W232, E3142).**
+		// `await`/`try await`/`.cancel()` hand the thread's struct back to the scheduler, so ANY later use of a
+		// name that still spells it reads memory the free list owns. The question is asked of the VALUE and not
+		// of a bit on this binding, because a promise ALIASES: `let q = p` enrols no second owner, and there is
+		// no `q` to poison — the ONE record against the thread's `ValueId` answers for `p` and `q` alike.
+		//
+		// ⚠ **AND IT IS ASKED ABOVE THE SCALAR ESCAPE, WHICH IS HOW A SERVICE REPLY REACHED IT AT ALL.** A
+		// reply cell is minted `ValueTypeTag.integer` (`mintServiceReplyCell`), so the escape below swallowed
+		// its poison whole and `services.error.use-after-await-of-a-reply` COMPILED and exited 8.
+		//
+		// ⚠ **AND MORE SPECIFIC THAN THE `movedFrom` REFUSAL BELOW, WHICH IS WHY IT IS ABOVE IT TOO.** E3102
+		// says the value's ownership "moved to another binding" — true of a move, and false of a consume, where
+		// the thread went to the RUNTIME and no binding has it. Both refuse the program; only one describes it.
+		let consumedBy = promiseConsumeIn(self.promiseConsumes, promise: binding.boundValue)
+		if consumedBy != PromiseConsume.notConsumed 'threadAlreadyReclaimed'
+			throw ParseError.promiseAlreadyConsumed(String.from(promiseConsumeDoorName(consumedBy)), line: nameTok.line, column: nameTok.column)
+		end 'threadAlreadyReclaimed'
+
 		// ⭐ **A SCALAR-VALUED BINDING IS ALWAYS SAFE TO READ (P1.5-B2 #88).** `movedFrom`/`partiallyMoved`
 		// forbid a read because a MOVED HEAP value now belongs to another owner; a scalar is never moved that
-		// way, so a move bit on a scalar-valued binding means something else entirely. Two such cases exist,
-		// both from #88: a CONSUMED promise (`movedFrom` = "an `await` reclaimed the green thread" — a second
-		// use is caught by the more specific linear-await E3100 at SemanticCheck, which needs the read to PARSE
-		// first, and a re-arm revives it), and a promise binding reassigned to a bare scalar (`movedFrom` =
-		// "owns nothing droppable"). A promise handle is integer-tagged, so this one predicate admits both.
-		if tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) 'scalarBinding'
+		// way, so a move bit on a scalar-valued binding means something else entirely.
+		//
+		// ⛔ **IT USED TO ADMIT A PROMISE, AND THAT REASON IS DEAD TWICE OVER.** The header read *"A promise
+		// handle is integer-tagged, so this one predicate admits both"* — false since W230 typed a spawn's
+		// handle at the interned `Promise with (T[, E])`, and false in the other direction for a service
+		// reply, whose cell IS still integer-tagged and whose poison this therefore swallowed in silence. So
+		// the escape now excludes a promise explicitly, off the `markValuePromise` column that EVERY road
+		// minting one writes — derived from the roads rather than from the two an old comment listed.
+		//
+		// What remains is the case the arm was really always about: a promise binding REASSIGNED to a bare
+		// scalar (`p = 5`), whose `movedFrom` means "owns nothing droppable" rather than "was moved from".
+		// `reassignBindingValue` re-points `boundValue` at the scalar BEFORE setting that bit, so the binding
+		// asked about here is no longer a promise and the escape still admits it.
+		// ⚠ **THE MARK (`valueOwnsGreenThread`) AND NOT THE WIDER `valueIsPromise`, AND THE DIFFERENCE IS ONE
+		// ALLOCATION PER SCALAR READ.** `valueIsPromise` is `valueOwnsGreenThread(v) or typeIsPromiseStorage(…,
+		// valueMaxonType(v))`, and `valueMaxonType` CONSTRUCTS a `MaxonType` — a union case, which is a heap
+		// object even when it carries no payload. This line is reached on every read of every
+		// `int`/`bool`/`float` binding in every program, so that second disjunct minted one MaxonType per
+		// scalar read.
+		//
+		// ⭐⭐ **AND IT COULD NEVER ANSWER TRUE HERE, so asking the narrow one changes no program.** The two
+		// disjuncts are MUTUALLY EXCLUSIVE at this line: `typeIsPromiseStorage` is false for anything whose tag
+		// is not `genericInstance`, `valueMaxonType(v)` carries `tagOf(v)` as its tag, and this line only runs
+		// once `tagOwnsNoHeapValue` has said that tag IS `integer`/`boolean`/`float`. So a promise reaching the
+		// escape wears a SCALAR tag, and the only one that does is a service reply cell — which is exactly what
+		// the mark records. A promise read back out of a container carries the `Promise with (T[, E])` type,
+		// is therefore a `genericInstance`, and never reaches this line at all: it falls through to the move
+		// checks below, which is where a value this frame does not own belongs.
+		//
+		// ⚠ **A REVIEW ARGUED FOR THE WIDER PREDICATE ON EXACTLY THAT CONTAINER CASE, and the case cannot
+		// occur** — a value cannot be scalar-tagged and instance-typed at once, because the type is DERIVED
+		// from the tag. Recorded because the argument is a reasonable one to have again.
+		//
+		// MEASURED, control vs changed on the scale ladder, same binary path and one session: the
+		// `valueIsPromise` spelling cost **+8,176 allocations at rung 0 rising to +173,953 at rung 5**
+		// (x1.65 x1.79 x1.88 x1.94 x1.97 — linear, a per-read constant, +0.37% of the compile at rung 5);
+		// the mark spelling costs a dense-column read and the ladder returns to the control's numbers.
+		if tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) and not self.valueOwnsGreenThread(binding.boundValue) 'scalarBinding'
 			return
 		end 'scalarBinding'
 
@@ -69776,6 +70079,7 @@ export type Parser
 		let savedPromiseSlotIsAField = self.promiseSlotIsAField
 		let savedPhiAliasUnprovenMarks = self.phiAliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
+		let savedPromiseConsumes = self.promiseConsumes
 		let savedUnusedCandidates = self.unusedCandidates
 		let savedMintedValueAliases = self.functionMintedValueAliases
 		let savedReferencedNames = self.referencedNames
@@ -69945,6 +70249,9 @@ export type Parser
 		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
 		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
 		self.ownedBindings = VarInfoArray.create()
+		// Fresh for the reason above it: a closure body is a function of its own, so a thread the ENCLOSING
+		// frame consumed is recorded against a `ValueId` that means something else in here.
+		self.promiseConsumes = PromiseConsumeRecordArray.create()
 		// A closure declares its own parameters and its body sees none of the enclosing function's bindings,
 		// so it owes its own E3012 accounting — drained under its own name below, before the restore.
 		self.unusedCandidates = UnusedBindingCandidateArray.create()
@@ -70215,6 +70522,7 @@ export type Parser
 		self.promiseSlotIsAField = savedPromiseSlotIsAField
 		self.phiAliasUnprovenMarks = savedPhiAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
+		self.promiseConsumes = savedPromiseConsumes
 		self.unusedCandidates = savedUnusedCandidates
 		self.functionMintedValueAliases = savedMintedValueAliases
 		// ⭐ **A CAPTURE IS A MENTION IN THE ENCLOSING FUNCTION** — the oracle's own restore step
@@ -75876,14 +76184,14 @@ export type Parser
 		// this slice turned six committed `try await` cases into E3055. Emitting it first leaves the await op
 		// last, where the rewrite expects it. The rest of the consume (`consumePromiseThread`) has no emit and
 		// stays below; it finds the columns already cleared and does nothing further.
-		try self.requireConsumedPromiseIsOwned(promise, anchor: awaitTok)
+		try self.requireConsumedPromiseIsOwned(promise, anchor: awaitTok, door: PromiseConsume.awaited)
 		self.vacateConsumedPromiseSlot(promise, range: SourceRange.ofToken(awaitTok))
 		self.recordServiceReplyAwait(func, promise: promise, awaitTok: awaitTok)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
 		// The await consumes the thread — the runtime reclaims its struct here — so its owning binding must not
 		// also drop it at scope exit (P1.5-B2 #88). Covers `try await` too: `parseTryCallTarget` emits its target
 		// through this same `emitAwaitOp`, then rewrites the op to `tryAwait` (the consume is independent).
-		self.consumePromiseThread(promise, range: SourceRange.ofToken(awaitTok))
+		self.consumePromiseThread(promise, range: SourceRange.ofToken(awaitTok), reclaimedBy: PromiseConsume.awaited)
 		return result
 	end 'emitAwaitOp'
 
@@ -75951,8 +76259,13 @@ export type Parser
 			// the end of the very statement that handed it away; the field then holds a dead handle and
 			// `await h.p` aborts. MEASURED at **exit 92** before this arm existed — and, because a cancelled
 			// thread is still a non-zero pointer, a peek at `h.p.inner` reported it as perfectly alive.
+			//
+			// ⚠ **AND IT IS `notConsumed`, WHICH IS THE HONEST WORD FOR IT.** The thread is handed to another
+			// OWNER and stays perfectly alive; nothing reclaimed it. So a later read of the source is an
+			// ordinary use-after-move (E3102 — *"its ownership moved to another binding"*, which is exactly
+			// what happened) rather than the spent-thread refusal `await`/`cancel` earn.
 			if self.valueIsPromise(argValue) 'aPromiseIsAlwaysMoved'
-				self.consumePromiseThread(argValue, range: SourceRange.ofToken(anchor))
+				self.consumePromiseThread(argValue, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
 			end 'aPromiseIsAlwaysMoved'
 			// ⛔⛔ **THE THIRD ARRIVAL: A FEED HANDS THE CALLEE A VALUE IT WILL KEEP (BATCH41 arrival roster).**
 			// A `List with <inner alias>` reaches NO other door — `List` is a DECLARED corpus generic since

@@ -991,8 +991,16 @@ end 'tagIsBareNumericKeyword'
 // ⭐ **DOES A BINDING OF THIS TAG OWN NO HEAP?** — asked by `Parser.requireBindingLive` of a MOVE bit, and
 // the whole of what it means there: `movedFrom`/`partiallyMoved` forbid a read because a moved HEAP value
 // now belongs to another owner, so on a value that owns no heap the bit must mean something else and the
-// read is safe. Two such cases exist, both P1.5-B2 #88 — a consumed promise handle (integer-tagged) and a
-// promise binding reassigned to a bare scalar.
+// read is safe. The case that remains is a promise binding REASSIGNED to a bare scalar (P1.5-B2 #88),
+// whose bit means "owns nothing droppable".
+//
+// ⛔ **IT NO LONGER ADMITS A PROMISE HANDLE, AND THE CALLER IS WHERE THAT IS SAID — NOT HERE (W232).** This
+// header used to name a consumed promise as the other case, on the strength of the handle being
+// integer-tagged; W230 typed a spawn's handle at `Promise with (T[, E])` and a service reply's cell stayed
+// integer, so the tag stopped answering the question either way. `requireBindingLive` now excludes a promise
+// explicitly — read its own header there for WHICH predicate it asks and why; naming the mechanism twice is
+// how the two copies come to disagree. A TAG cannot tell a promise from an `int` and this function should not
+// pretend to — which is exactly why the exclusion lives at the door and not in this predicate.
 //
 // ⚠ **IT WAS `tagIsAsyncScalar`, AND THE RENAME IS THE POINT.** Under that name it was the async CHANNEL
 // predicate, shared by the argument, parameter and result doors — and its header said so. A2 replaced all

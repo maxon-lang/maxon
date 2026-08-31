@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "24758e717f3110c9",
+  "sourceHash": "44ace535e22708fc",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1587,6 +1587,15 @@
       "stage": "semantic",
       "doc": "A promise owns a green thread, and a green thread has exactly ONE owner at every instant -- awaiting\nit consumes it, so under the ownership model it is a mutable value and cannot be borrowed. Reading a\npromise out of a container is therefore a MOVE, not a copy: the slot it came from must be emptied when\nthe read is consumed, or the container's element walk reclaims a thread the consume already reclaimed.\nThis refuses the reads that CANNOT NAME the slot they came from, because a move with nowhere to\nrecord its source cannot be finished. A cursor's `current`/`peek` and a list node's `value()` are the\ncases: each hands back an element without naming an index into the container, so nothing can be\nvacated when the promise is later awaited.\nThe cure is a read that names its slot -- `get(i)`, `first()`, or `for ... in` -- or a move-out\n(`pop`, `remove`), whose result the caller owns outright.\nIt is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good\npromise. It is about there being no way to say which slot stopped owning it.",
       "emittedBy": {"shv2": "semanticPromiseCannotBeBorrowed"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3142,
+      "tag": "E3142",
+      "name": "SemanticPromiseAlreadyConsumed",
+      "stage": "semantic",
+      "doc": "A promise is USED after it was consumed. A promise owns a green thread, and a green thread has\nexactly one owner at every instant, so `await` and `.cancel()` CONSUME it -- the runtime reclaims\nthe thread's struct there. Any later use of a name that still spells that promise reads a struct\nalready back on the scheduler's free list.\nPoisoning follows the VALUE, not the text: an alias (`let q = p`) names the same thread, so\nconsuming through either name consumes it for both -- and a NON-consuming read of the alias\n(`q.inner`) is refused here even though no second consume exists for the linearity pass to find.\nRe-arming the binding from a fresh `async` spawn mints a new thread and revives the name.\nThis is the parser-time, value-keyed half of the rule. E3100 is the flow-sensitive backstop for a\nsecond consume that this half cannot see -- across a loop back edge, where one lexical `await`\nconsumes one thread on every iteration.",
+      "emittedBy": {"shv2": "semanticPromiseAlreadyConsumed"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

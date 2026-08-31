@@ -2496,7 +2496,10 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: error.double-await-of-a-reply -->
 <!-- targets: x64-windows, arm64-macos -->
 Per-await linearity composes for free, because it keys on the promise's own identity rather than on what
-produced it — a reply cell is a `Promise` like any other.
+produced it — a reply cell is a `Promise` like any other. Which is also why the refusal is the parser's
+E3142 and not the linearity pass's E3100: the second `await` READS a name whose thread the first one
+already handed back, and that is a use of a spent promise before it is a second await. See
+`async-linearity.md`'s *Documentation* for the one statement of how the three codes divide this family.
 ```maxon
 type Calc
 	var count as Integer
@@ -2520,7 +2523,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3100: <fragment>:18:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3142: <fragment>:18:20: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: error.plain-await-of-a-reply -->
@@ -3038,4 +3041,44 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3138: <fragment>:14:8: 'buf' arrived as a parameter and cannot be proven unique at the send
+```
+
+<!-- test: error.use-after-await-of-a-reply -->
+<!-- targets: x64-windows, arm64-macos -->
+⭐⭐ **A REPLY IS A PROMISE, SO IT IS MOVE-ONLY TOO — AND IT WAS THE ONE ROAD `W230` DID NOT REACH.** A
+spawn's promise is minted at the interned `Promise with (T[, E])`; a reply cell was minted
+`ValueTypeTag.integer`, so it stayed the bare machine word W230 exists to abolish. Two consequences,
+both measured on this program before the cure: `requireBindingLive`'s scalar early-return swallowed the
+consume poison entirely, and the raw handle flowed straight into an INTEGER parameter position with no
+`.inner` to unwrap it. It COMPILED and exited **8** — `gtIsComplete` answered 1 off a reclaimed cell.
+
+⚠ **ITS SPAWN TWIN WAS ALREADY E3102**, which is what made this a hole rather than a design: the same
+five lines over `async makeValue()` were refused, and over `h.total()` they were not. Linearity (E3100)
+cannot stand in for it — a bare rebind consumes nothing, so there is no second consume for that pass to
+find.
+```maxon
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let a = try await p otherwise 0
+	let b = p
+	let done = __Builtins.gtIsComplete(b)
+	return (a + done) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3142: <fragment>:18:10: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```

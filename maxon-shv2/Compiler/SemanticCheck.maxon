@@ -2058,17 +2058,6 @@ type AwaitSite
 	end 'create'
 end 'AwaitSite'
 
-// ⭐⭐ **THE TWO WAYS A FRAME CONSUMES A GREEN THREAD, AND THE REASON LINEARITY HAS TO COVER BOTH (P1.5-B2c).**
-// `await p` takes the thread's result and `__gt_await` reclaims its struct; `p.cancel()` takes nothing and
-// `__gt_promise_drop` reclaims its struct — so the two differ in what they yield and agree exactly where it
-// matters, which is that the GT is on the scheduler's free list afterwards. MEASURED, all three orderings, on
-// a program `cancel` had only just become able to compile at all: `cancel` then `await` **SEGFAULTED (139)**,
-// `cancel` twice and `await` then `cancel` both **exited 75** with a corrupted scheduler.
-enum PromiseConsume
-	awaited
-	cancelled
-end 'PromiseConsume'
-
 typealias AwaitSiteArray = Array with AwaitSite
 
 function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSiteArray
@@ -2153,9 +2142,10 @@ end 'reportedViolation'
 // The cancelled arm is the one sentence this rung adds, and it exists because telling an author their
 // `p.cancel()` had "already been awaited" would describe a line their program does not contain.
 function alreadyConsumedMessage(first PromiseConsume) returns String
-	return match first 'first'
-		awaited gives "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice"
-		cancelled gives "this promise has already been cancelled: 'cancel' reclaims the green thread's struct, so awaiting or cancelling it again reads a struct the scheduler may already have handed to another spawn"
+	match first 'first'
+		notConsumed then panic("alreadyConsumedMessage: asked for the words of a promise nothing consumed — every site this walk collects is an `await`, a `tryAwait` or a `__gt_promise_drop`, and each of those names its door")
+		awaited then return "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice"
+		cancelled then return "this promise has already been cancelled: 'cancel' reclaims the green thread's struct, so awaiting or cancelling it again reads a struct the scheduler may already have handed to another spawn"
 	end 'first'
 end 'alreadyConsumedMessage'
 

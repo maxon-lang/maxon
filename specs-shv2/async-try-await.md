@@ -339,12 +339,6 @@ error E3059: <fragment>:17:10: try propagates 'AError' but enclosing function th
 green thread twice. The linearity pass counts `tryAwait` sites, not only plain `await`, so the second
 `try await` of the same promise is refused. This locks in the soundness that the exhaustive
 op-match structurally protects.
-⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
-green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
-the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
-ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
-decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
-a loop back edge — so the two codes divide this family between them.
 ```maxon
 enum WorkError implements Error
 	failed
@@ -364,5 +358,5 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:14:20: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+error E3142: <fragment>:14:20: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```

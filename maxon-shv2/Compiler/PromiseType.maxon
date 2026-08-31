@@ -92,6 +92,49 @@ export let PromiseVoidResultName = b"__Void"
 // rest of what the compiler knows about the type rather than in a roster it is not on.
 export let PromiseCancelMethodName = b"cancel"
 
+// ⭐⭐ **THE `await` KEYWORD, AS A DIAGNOSTIC QUOTES IT.** The lexer knows it as `TokenKind.await` and never
+// as text, so a message that names the door had been spelling it inline — once here, beside `cancel`, so the
+// two doors a consume can come by are one list rather than two literals in two files.
+let PromiseAwaitDoorName = b"await"
+
+// ⭐⭐ **THE TWO WAYS A FRAME HANDS A GREEN THREAD BACK TO THE RUNTIME, AND THE THIRD STATE THAT IS NEITHER
+// (P1.5-B2c, widened at W232).** `await p` takes the thread's result and `__gt_await` reclaims its struct;
+// `p.cancel()` takes nothing and `__gt_promise_drop` reclaims its struct — so the two differ in what they
+// yield and agree exactly where it matters, which is that the GT is on the scheduler's free list afterwards.
+// ⚠ **THE RUNTIME NUMBERS BELOW ARE HISTORY, AND THE COMMENT MUST SAY SO — THEY ARE NOT REPRODUCIBLE ON
+// THIS COMPILER.** MEASURED at **P1.5-B2c**, on a tree where `cancel` had only just become able to compile
+// at all and where neither the move poison nor E3142 existed to refuse these programs: all three orderings
+// RAN, and `cancel` then `await` **SEGFAULTED (139)** while `cancel` twice and `await` then `cancel` both
+// **exited 75** with a corrupted scheduler. Every one of the three is now a COMPILE ERROR — E3102 once a
+// promise became move-only, E3142 since W232 — so re-running them today measures the refusal and not the
+// corruption. That is the point of the refusal; the numbers are kept as the evidence that bought it, dated,
+// rather than as a claim about what this binary does.
+//
+// ⭐ **`notConsumed` IS A REAL ARM AND NOT A NULL.** Two doors ask "what, if anything, has already taken this
+// thread?" — the parser's use guard (`Parser.requireBindingLive`) and the argument move, which hands the thread
+// to ANOTHER OWNER rather than to the runtime and so leaves nothing spent. Both need a word for "nothing did",
+// and giving them one is what makes every `match` on this enum exhaustive at the compiler's expense rather
+// than at a reader's.
+//
+// ⚠ It lives HERE and not beside either of its readers because it is read by BOTH the parser (which refuses a
+// use, E3142) and `SemanticCheck` (which words E3100 off the FIRST consume). Declared in one of them, the
+// other would have grown its own copy — this file's header names that as the failure it exists to prevent.
+export enum PromiseConsume
+	notConsumed
+	awaited
+	cancelled
+end 'PromiseConsume'
+
+// ⭐ **HOW THE SOURCE SPELLS THE DOOR A CONSUME CAME BY** — the word every diagnostic about a spent promise
+// quotes, derived from the consume rather than passed beside it so the sentence and the fact cannot disagree.
+export function promiseConsumeDoorName(kind PromiseConsume) returns ByteArray
+	match kind 'door'
+		notConsumed then panic("promiseConsumeDoorName: asked for the door of a promise nothing has consumed — every caller asks only after finding a recorded consume")
+		awaited then return PromiseAwaitDoorName
+		cancelled then return PromiseCancelMethodName
+	end 'door'
+end 'promiseConsumeDoorName'
+
 // ⭐⭐ **THE ONE FIELD A PROMISE CARRIES — `stdlib/Builtins.maxon:124`'s `public let inner`**, and the ONE
 // spelling of its name. That declaration says what it is for in so many words: *"`inner` is exported
 // (read-only via `let`) so non-blocking pollers like the spec test dispatcher can peek at the underlying

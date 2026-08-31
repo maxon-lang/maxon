@@ -1,0 +1,93 @@
+// Test: async-linearity.await-in-an-arm-that-returns
+function makeValue() returns Integer
+	Runtime.yield()
+	return 21
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	var x = 1
+	match x 'pick'
+		1 then x = 2
+		default then return (await p) as ExitCode
+	end 'pick'
+	let a = await p
+	return (a + x) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 23
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __slab_arena_list@160 = i64 0
+  __slab_arena_map_l1@168 = i64 0
+  __slab_state@176 = i64 0
+}
+
+func @makeValue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 r8, 21
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rcx, [rip + makeValue]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_ready
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_await
+    x64.leaRegRegImm32 r8, r8, 2
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at async-linearity.await-in-an-arm-that-returns.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

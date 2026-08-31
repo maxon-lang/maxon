@@ -1,0 +1,16 @@
+// Test: async-linearity.error.cancel-then-await
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	p.cancel()
+	let a = await p
+	return a as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3142: <fragment>:10:16: this promise was already consumed by an earlier 'cancel': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again

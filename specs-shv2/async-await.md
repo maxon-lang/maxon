@@ -780,12 +780,6 @@ it did, and all six now carry the same marker as the rest of the file.
 
 Note the thunk does not throw. This is an OWNERSHIP bug, not an error-handling one: a plain
 `async` returning a managed `String` double-frees identically.
-⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
-green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
-the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
-ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
-decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
-a loop back edge — so the two codes divide this family between them.
 ```maxon
 function makeText() returns String
 		_ = File.exists(FilePath from "noyield.txt")
@@ -802,7 +796,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: specs/fragments/async-await/async-await.error.double-await.test:10:17: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+error E3142: specs/fragments/async-await/async-await.error.double-await.test:10:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.double-await-in-loop -->
@@ -882,7 +876,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: specs/fragments/async-await/async-await.error.double-await-through-alias.test:11:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3142: specs/fragments/async-await/async-await.error.double-await-through-alias.test:11:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.double-await-through-alias-in-branch -->
@@ -912,7 +906,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: specs/fragments/async-await/async-await.error.double-await-through-alias-in-branch.test:13:13: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3142: specs/fragments/async-await/async-await.error.double-await-through-alias-in-branch.test:13:19: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.double-await-alias-outlives-rebind -->
@@ -941,7 +935,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: specs/fragments/async-await/async-await.error.double-await-alias-outlives-rebind.test:12:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3142: specs/fragments/async-await/async-await.error.double-await-alias-outlives-rebind.test:12:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.linear.rearm-after-await -->
@@ -1065,12 +1059,6 @@ The other side of the ternary boundary. An `await` in one arm does NOT make the 
 the path where that arm was not taken — but the await AFTER the ternary is reachable from the arm
 that was, so on that path the thread is awaited twice. Exclusivity buys the two arms nothing here:
 reachability is what decides, and the arm reaches the tail.
-⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
-green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
-the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
-ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
-decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
-a loop back edge — so the two codes divide this family between them.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1088,7 +1076,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: specs/fragments/async-await/async-await.error.double-await-after-ternary-arm.test:13:17: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+error E3142: specs/fragments/async-await/async-await.error.double-await-after-ternary-arm.test:13:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.await-without-try -->

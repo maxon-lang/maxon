@@ -1,0 +1,28 @@
+// Test: async-promise-drop.error.cancel-a-promise-no-frame-owns
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 21
+end 'plain'
+
+function pick() returns bool
+		return true
+end 'pick'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		s.push(async plain())
+		var p = try s.get(0) otherwise panic("has two")
+		if pick() 'branch'
+				p = try s.get(1) otherwise panic("has two")
+		end 'branch'
+		p.cancel()
+		return 5 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3141: <fragment>:23:5: a promise cannot be borrowed through 'cancel': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join

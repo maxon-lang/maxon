@@ -771,3 +771,44 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: async-promise-drop.error.cancel-a-promise-no-frame-owns -->
+⭐⭐ **`cancel` IS A CONSUME, SO IT ASKS THE SAME OWNERSHIP QUESTION `await` ASKS — AND FOR TWO WEEKS IT
+DID NOT.** `requireConsumedPromiseIsOwned` had exactly one caller, `emitAwaitOp`, so this program and
+its `await` twin — the SAME program with one word changed — disagreed: the twin was refused with the
+E3141 below, and this one COMPILED and aborted **75** at run time. A reclaim the compiler cannot
+account for is not less wrong for being spelled `cancel`.
+
+⚠ **THE SHAPE IS A MERGE, and that is why no frame owns the promise.** A phi is minted with the slot
+columns seeded NOT-SET — there is no single slot to empty, because the two edges name different ones —
+so the move out of the container can never be finished. `requireConsumedPromiseIsOwned`'s own header
+describes this program; the only thing new here is that the cancel road reaches it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 21
+end 'plain'
+
+function pick() returns bool
+		return true
+end 'pick'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		s.push(async plain())
+		var p = try s.get(0) otherwise panic("has two")
+		if pick() 'branch'
+				p = try s.get(1) otherwise panic("has two")
+		end 'branch'
+		p.cancel()
+		return 5 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:23:5: a promise cannot be borrowed through 'cancel': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```

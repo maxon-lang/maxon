@@ -21,6 +21,28 @@ In shv2 the promise's SSA `ValueId` already *is* the stable thread identity: an 
 either name awaits the one thread. Re-arming a binding (`p = async g()`) mints a **new** thread, so
 awaiting it again is the first await of *that* thread, not a second await of the old one.
 
+### Which code speaks — E3142, E3102 and E3100 divide this family, and the division is deliberate
+
+**WRITTEN ONCE, HERE.** This paragraph used to be pasted verbatim beside five individual cases across three
+spec files; every one of them was restating a rule that belongs to the rule's own spec.
+
+- **E3142 — "this promise was already consumed"** is the ordinary answer, and the one the parser gives. The
+  two consumes that hand the thread back to the RUNTIME (`await` / `try await`, and `.cancel()`) record the
+  consume against the green thread's own identity, so **any later use of any name that spells that thread**
+  is refused at the name — a second `await`, a `cancel` after an `await`, and equally a NON-consuming read
+  like `q.inner`, which no linearity check could ever see. Because it is keyed on the thread and not on a
+  binding, an **alias** (`let q = p`) is covered by the same record as the binding that spawned it.
+- **E3102 — "use of moved value"** stays for a promise that was handed to another OWNER rather than
+  reclaimed: passed as a call argument, stored into a container or a union payload. The thread is alive and
+  someone else has it, which is exactly what that sentence says.
+- **E3100 — "this promise has already been awaited"** stays as the flow-sensitive backstop for the consume
+  the parser cannot see: a **single lexical `await` inside a loop**, over a promise spawned outside it,
+  which consumes one thread on every iteration. There is no second read for a use guard to reject; only
+  reachability across the back edge finds it.
+
+All three refuse the program, and the caret is on the offending line in each — what differs is which
+sentence describes what the author actually wrote.
+
 The check is **flow-sensitive reachability**, not lexical position, and it has to be in both directions:
 
 - two awaits of one promise in **mutually exclusive** branches are each the only await on their own
@@ -53,12 +75,6 @@ moment one does.** Removing the marker before then re-creates the masking, silen
 <!-- test: async-linearity.error.double-await -->
 <!-- targets: x64-windows, arm64-macos -->
 `await` is linear: awaiting one promise twice in straight-line code is refused at the second await.
-⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
-green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
-the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
-ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
-decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
-a loop back edge — so the two codes divide this family between them.
 ```maxon
 function makeValue() returns Integer
 	Runtime.yield()
@@ -74,7 +90,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:10:16: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+error E3142: <fragment>:10:16: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-linearity.error.double-await-in-loop -->
@@ -127,7 +143,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3100: <fragment>:11:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3142: <fragment>:11:16: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-linearity.error.double-await-through-alias-in-branch -->
@@ -158,7 +174,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3100: <fragment>:16:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3142: <fragment>:16:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-linearity.error.double-await-alias-outlives-rebind -->
@@ -184,7 +200,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3100: <fragment>:12:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3142: <fragment>:12:16: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-linearity.error.double-await-after-ternary-arm -->
@@ -192,12 +208,6 @@ error E3100: <fragment>:12:10: this promise has already been awaited: 'await' is
 An `await` in one ternary arm does NOT make the promise spent on the path where that arm was not taken —
 but the await AFTER the ternary is reachable from the arm that WAS taken, so on that path the thread is
 awaited twice. Exclusivity buys the arms nothing here: reachability decides, and the arm reaches the tail.
-⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
-green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
-the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
-ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
-decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
-a loop back edge — so the two codes divide this family between them.
 ```maxon
 function makeValue() returns Integer
 	Runtime.yield()
@@ -217,7 +227,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:14:16: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+error E3142: <fragment>:14:16: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-linearity.await-in-exclusive-branches -->
@@ -248,6 +258,40 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 22
+```
+
+<!-- test: async-linearity.await-in-an-arm-that-returns -->
+<!-- targets: x64-windows, arm64-macos -->
+⭐⭐ **THE SAME EXCLUSIVITY, THROUGH A `match` — AND IT DEPENDS ON THE ARM ORDER FOR NOTHING.** An arm that
+awaits and then RETURNS contributes no edge to the merge, so the thread it spent is spent on ITS path and
+on no other; the `await` after the `match` is the only one on the path that reaches it.
+
+⚠ **THE `if` TWIN ABOVE PASSED WHILE THIS FAILED, AND THE REASON IS WHY BOTH ARE HERE.** A `match` restores
+its entry state at the START of each arm and never after the last one, so the last arm's own consumes were
+still live when the merge ran — and the merge UNIONED them onto that state instead of ASSIGNING from the
+reaching edges the way the `movedFrom` bits beside them are. MEASURED at W232's review: with the awaiting
+arm written LAST this program was refused **E3142**, and with the two arms swapped — the same program —
+it compiled and ran. A settle rule that reads the arm order is not a settle rule.
+```maxon
+function makeValue() returns Integer
+	Runtime.yield()
+	return 21
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	var x = 1
+	match x 'pick'
+		1 then x = 2
+		default then return (await p) as ExitCode
+	end 'pick'
+	let a = await p
+	return (a + x) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+23
 ```
 
 <!-- test: async-linearity.rearm-after-await -->
@@ -357,4 +401,128 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 22
+```
+
+<!-- test: async-linearity.error.use-after-await-through-alias -->
+<!-- targets: x64-windows, arm64-macos -->
+⭐ **A CONSUME POISONS EVERY NAME THAT SPELLS THE THREAD, NOT ONLY THE ONE THAT OWNS IT.** `let q = p`
+enrols no second owner — `q` simply reads `p`'s value — so a consume that poisoned only the owned-set
+entry left `q` fully live over a green thread the runtime had already reclaimed. MEASURED before the
+cure, on exactly this program: it COMPILED, ran, and `gtIsComplete` answered **1** off a GT struct
+already back on the scheduler's free list — **exit 43**, no diagnostic, no crash. That is the shape a
+peek gives an ownership defect: a plausible number.
+
+⚠ The peek is what makes this observable at all. `q` could not be awaited a second time — E3100 catches
+that — but `q.inner` is a NON-consuming read, and no linearity check exists that can see one.
+```maxon
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	let q = p
+	let a = await p
+	let done = __Builtins.gtIsComplete(q.inner)
+	return (a + done) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3142: <fragment>:11:37: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+```
+
+<!-- test: async-linearity.error.use-after-cancel-through-alias -->
+<!-- targets: x64-windows, arm64-macos -->
+The same hole down the `cancel` road, and it is the same hole because `cancel` reaches the same consume
+door (`consumePromiseThread`) that `await` does. MEASURED before the cure: compiled, **exit 7** —
+`gtIsComplete` answered 0 reading the struct `__gt_promise_drop` had just reclaimed. `cancel` is not a
+weaker consume than `await`; it renounces the result instead of taking it, and the thread is equally
+gone.
+```maxon
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	let q = p
+	p.cancel()
+	let done = __Builtins.gtIsComplete(q.inner)
+	return (7 + done) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3142: <fragment>:11:37: this promise was already consumed by an earlier 'cancel': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+```
+
+<!-- test: async-linearity.error.cancel-twice -->
+<!-- targets: x64-windows, arm64-macos -->
+`cancel` is linear for the reason `await` is: it routes to `__gt_promise_drop`, which reclaims the GT
+struct and returns it to the free list, so a second one hands the allocator a slot it has already taken
+back.
+```maxon
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	p.cancel()
+	p.cancel()
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3142: <fragment>:10:2: this promise was already consumed by an earlier 'cancel': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+```
+
+<!-- test: async-linearity.error.await-then-cancel -->
+<!-- targets: x64-windows, arm64-macos -->
+The two consumes are ONE consume between them, not one each — cancelling what you have already awaited
+is a second reclaim of one thread. This is the case that makes the rule a property of the PROMISE
+rather than of either keyword.
+```maxon
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	let a = await p
+	p.cancel()
+	return a as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3142: <fragment>:10:2: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+```
+
+<!-- test: async-linearity.error.cancel-then-await -->
+<!-- targets: x64-windows, arm64-macos -->
+And the other order. A cancelled promise has no result to hand over — awaiting it would drive a thread
+whose struct is on the free list.
+```maxon
+function makeValue() returns Integer
+	Runtime.yield()
+	return 42
+end 'makeValue'
+
+function main() returns ExitCode
+	let p = async makeValue()
+	p.cancel()
+	let a = await p
+	return a as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3142: <fragment>:10:16: this promise was already consumed by an earlier 'cancel': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
