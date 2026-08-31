@@ -221,6 +221,13 @@ parser resolves a chain through its own walk rather than through the single-hop 
 readings is necessary and NOT sufficient (a door that kept the load would agree with another that kept
 it), so this case carries `completes-under-the-drive`'s own anchor as well: the peek taken THROUGH THE
 CHAIN must go `0 -> 1` across the drive, which only a real status word does.
+
+⚠ **THE SINGLE-HOP HANDLE IS TAKEN BEFORE THE PROMISE IS HANDED TO THE `Holder`, AND THAT ORDER IS THE
+OWNERSHIP RULE SHOWING THROUGH** (`W217`). Passing a promise MOVES it — a green thread has one owner — so
+after `Holder.of(p)` the thread belongs to the struct and `p` names nothing this frame may consume; the
+await is therefore `await h.p`. `.inner` is not a consume, so reading the handle a line EARLIER is legal
+and is what the two doors are compared against. Written the other way (`h.p.inner == p.inner`, `await p`)
+this case pinned a promise with two owners, and it only passed because nothing yet objected.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -244,6 +251,7 @@ function main() returns ExitCode
 	var arr = IntPromiseArray.create()
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
+	let handle = p.inner
 	let h = Holder.of(p)
 	let before = __Builtins.gtIsComplete(h.p.inner)
 	var spins = 0
@@ -254,13 +262,13 @@ function main() returns ExitCode
 		spins = spins + 1
 	end 'drive'
 	var score = 0
-	if h.p.inner == p.inner 'thetwodoorsagree'
+	if h.p.inner == handle 'thetwodoorsagree'
 		score = score + 1
 	end 'thetwodoorsagree'
 	if before == 0 and after == 1 'thechainreadsarealstatus'
 		score = score + 2
 	end 'thechainreadsarealstatus'
-	if await p == 42 'stillawaitable'
+	if await h.p == 42 'stillawaitable'
 		score = score + 4
 	end 'stillawaitable'
 	return score as ExitCode

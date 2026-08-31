@@ -2409,6 +2409,16 @@ export union PayloadClass
 	// `storage` is the `typeParameter` type itself — the same value the `scalar` arm carried, so every reader
 	// asking about the SLOT (its width, a loaded value's type) is unchanged.
 	typeParam(storage MaxonType)
+	// ⭐⭐ **A GREEN-THREAD HANDLE — A ONE-WORD SLOT THAT OWES A RECLAIM AND MAY NOT BE RETAINED** (`W231`).
+	// It is not `scalar`: a scalar payload owns nothing, so a union holding one synthesizes no drop and the
+	// construct copies the word in raw. MEASURED with the promise reading `scalar`: `union Slot { held(p
+	// IntPromise) }` exited **92** — the spawn stayed the caller's statement-scoped pending temporary, the
+	// drain cancelled it at the end of the constructing statement, and the `match`ed-out promise was awaited
+	// dead. And it is not `managed`: there is no refcount to take, so a retain would write into the
+	// scheduler's slab.
+	//
+	// ⚠ APPENDED, never inserted — the arms above are matched by ordinal in the storage band.
+	greenThread(storage MaxonType)
 end 'PayloadClass'
 
 // ⭐⭐ **HOW A CONFORMER'S VALUE HALF IS OWNED AND RELEASED — ONE DECISION, TWO WITNESS WORDS
@@ -2423,6 +2433,14 @@ end 'PayloadClass'
 // `IrInterface.WitnessRetainFuncOffset` for the measured access violation). It is the same split
 // `Parser.promoteBorrowedToOwned` makes for a CONCRETE String, reached here through a witness because the
 // conformer is a run-time fact.
+// Which ownership question a field walk is asking. The two are NOT degrees of one: `isAManagedRecord` is
+// "may this be retained or cloned" and `owesDrop` is "must this be reclaimed", and a promise answers no to
+// the first and yes to the second. See `ProgramSignatures.typeOwesDrop`.
+enum FieldOwnershipQuestion
+	owesDrop
+	isAManagedRecord
+end 'FieldOwnershipQuestion'
+
 union ExistentialOwnershipProtocol
 	// The value half is not a pointer at all — an `int`/`bool` conforming intrinsically
 	// (`isIntrinsicBuiltinConformance`). BOTH words stay 0, and both runtime entries are inert on it.
@@ -2434,6 +2452,18 @@ union ExistentialOwnershipProtocol
 	// `__mm_retain` — an aggregate has no cheap owning copy and its alias is observable, so it must stay the
 	// same box.
 	aggregate
+	// ⭐⭐ **A GREEN-THREAD HANDLE — THE ONE PROTOCOL THAT RELEASES WITHOUT EVER RETAINING** (`W217`/`W231`).
+	// A promise is reclaimed by `__gt_promise_drop` (unlink, free the stack, cancel) and has NO refcount to
+	// take a second reference through, because a green thread has exactly one owner at every instant.
+	//
+	// ⚠⚠ **IT IS THE ARM THAT BREAKS "THE TWO WORDS ARE NON-ZERO TOGETHER", DELIBERATELY.** Every other
+	// protocol fills `destroyFunc` and `retainFunc` as a pair, and `instanceArgOwesDrop`'s header explains
+	// why they must not be decided separately. This one fills the DESTROY word and leaves the RETAIN word 0
+	// — which is sound only because the readers treat a zero retain as inert rather than as a promise to
+	// call it, and is exactly why the arm lives HERE, in the single decision, instead of being a second
+	// predicate bolted beside it. A promise that could be retained would be two owners of one thread, which
+	// is the double reclaim `await`'s linearity exists to make unrepresentable.
+	greenThread
 end 'ExistentialOwnershipProtocol'
 
 // ⭐⭐ **THE ONE SPELLING OF "HOW DO I TAKE A REFERENCE UNDER THIS PROTOCOL" (W41-opaque).** Two runtime words
@@ -2449,6 +2479,9 @@ function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns 
 	match protocol 'protocol'
 		byteRecord then return StrCloneName
 		aggregate then return MmRetainName
+		// A green thread is never co-owned — see the arm's own note. EMPTY here is the complete answer, not a
+		// sentinel, exactly as it is for `none`: both readers stamp nothing and the zero word is inert.
+		greenThread then return EmptySourceText
 		none then return EmptySourceText
 	end 'protocol'
 end 'retainCalleeForProtocol'
@@ -2655,6 +2688,13 @@ function promiseOrManagedInstanceClass(signatures ProgramSignatures, typeNames T
 		return PayloadClass.managed(fieldType, isString: false)
 	end 'aBox'
 
+	// ⛔ **A PROMISE IS ITS OWN CLASS AND USED TO FALL THROUGH TO `scalar`** — see the arm for the exit 92
+	// that cost. Asked of the TYPE through the shared resolver, so an `IntPromise` alias is recognised as
+	// readily as a bare `Promise with Integer` instance.
+	if signatures.typeIsAGreenThreadHandle(fieldType, from: typeNames) 'aGreenThread'
+		return PayloadClass.greenThread(fieldType)
+	end 'aGreenThread'
+
 	return PayloadClass.scalar(fieldType)
 end 'promiseOrManagedInstanceClass'
 
@@ -2696,7 +2736,9 @@ module function caseHasManagedField(signatures ProgramSignatures, typeNames Type
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("caseHasManagedField: payloadsAt count disagrees with get at {fi}")
 		let class = classifyUnionPayload(signatures, typeNames: typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
-		if payloadClassIsManaged(class) 'found'
+		// The DESTRUCTOR's own gate, so it asks the ownership question — a promise payload is not a box and
+		// still owes a reclaim. See `PayloadClass.greenThread`.
+		if payloadClassOwesDrop(class) 'found'
 			return true
 		end 'found'
 	end 'eachField'
@@ -2723,8 +2765,32 @@ export function payloadClassIsManaged(class PayloadClass) returns bool
 		// instantiation is a raw scalar. The STORE-side reference the slot does owe is taken by
 		// `Parser.moveInPayload`, which routes on this case by NAME and not through this predicate.
 		typeParam gives false
+		// NOT managed: "managed" here licenses a RETAIN and a clone, and a green thread has neither. What it
+		// does owe is a drop, which is `payloadClassOwesDrop` below.
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsManaged'
+
+// ⭐ **DOES THIS PAYLOAD OWE A RECLAIM?** The union twin of `typeOwesDrop`, and the question a destructor
+// cascade must ask — `payloadClassIsManaged` is the narrower "is it a box". A promise payload answers
+// `false` there and `true` here, and reading the first as the second is what let `union Slot { held(p
+// IntPromise) }` construct without moving the spawn in and die without dropping it.
+module function payloadClassOwesDrop(class PayloadClass) returns bool
+	return payloadClassIsManaged(class) or payloadClassIsAGreenThread(class)
+end 'payloadClassOwesDrop'
+
+export function payloadClassIsAGreenThread(class PayloadClass) returns bool
+	return match class 'c'
+		greenThread gives true
+		managed gives false
+		scalar gives false
+		nestedUnion gives false
+		existential gives false
+		floatPayload gives false
+		undeclaredName gives false
+		typeParam gives false
+	end 'c'
+end 'payloadClassIsAGreenThread'
 
 // ⭐ **MAY A MATCH-ARM BINDING ON THIS SLOT BE WRITTEN BACK INTO THE BOX (`specs/mutable-enums.md`)?**
 // The write-back (`Parser.writeBackPayload`) must state, statically, who owns the value the slot held
@@ -2764,6 +2830,8 @@ export function payloadBindingAcceptsWrites(class PayloadClass) returns bool
 		existential gives false
 		floatPayload gives false
 		undeclaredName gives false
+		// A one-word slot, so a bound payload takes a write exactly as a scalar one does.
+		greenThread gives true
 	end 'c'
 end 'payloadBindingAcceptsWrites'
 
@@ -2780,6 +2848,7 @@ export function payloadClassIsExistential(class PayloadClass) returns bool
 		floatPayload gives false
 		undeclaredName gives false
 		typeParam gives false
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsExistential'
 
@@ -2797,6 +2866,7 @@ export function payloadClassIsTypeParam(class PayloadClass) returns bool
 		scalar gives false
 		floatPayload gives false
 		undeclaredName gives false
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsTypeParam'
 
@@ -2822,6 +2892,7 @@ export function payloadClassIsString(class PayloadClass) returns bool
 		// cannot know, and the reason its store dispatches through the descriptor's `retainFunc@64`. `false`
 		// means "do not take the STATIC String route" here, precisely as it does for an existential.
 		typeParam gives false
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsString'
 
@@ -2898,6 +2969,7 @@ export function payloadStorageOf(class PayloadClass) returns MaxonType
 		// store's width is unchanged for every instantiation.
 		typeParam(storage) then return storage
 		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
+		greenThread(storage) then return storage
 	end 'c'
 end 'payloadStorageOf'
 
@@ -2931,6 +3003,7 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 		// substitutes and what `decrefCalleeFor` routes to `__drop_type_param` on.
 		typeParam then return declared
 		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
+		greenThread(storage) then return storage
 	end 'c'
 end 'payloadValueTypeOf'
 
@@ -4315,6 +4388,15 @@ end 'calleeTakesArgumentByRef'
 // The field is a precondition MANAGED one — every caller asks `structFieldIsManaged`/`payloadClassIsManaged`
 // first, so a scalar reaching here is a classification drift and panics rather than mis-routing.
 export function managedFieldDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns ByteArray
+	// ⭐⭐ **ASKED FIRST, AND ASKED OF THE TYPE RATHER THAN THE TAG, BECAUSE A PROMISE FIELD IS USUALLY
+	// SPELLED BY AN ALIAS.** `var p as IntPromise` reaches here tagged `named`, not `genericInstance`, so the
+	// instance arm below cannot see it and the cascade would resolve it as an aggregate name and hand back a
+	// `__destruct_<T>` for a record that does not exist. `typeIsAGreenThreadHandle` resolves both spellings —
+	// the same two-spellings trap `typeIsManaged`'s `genericAlias` arm carries in prose.
+	if signatures.typeIsAGreenThreadHandle(fieldType, from: typeNames) 'aGreenThread'
+		return GtPromiseDropName
+	end 'aGreenThread'
+
 	let tag = maxonTypeTag(fieldType)
 	// ⚠ `tagIsByteRecord`: WHICH DROP a field takes is a question about its record, and a Character's record
 	// is a String's. Spelled `tagIsText` a Character field falls through to the named/struct arm and drops
@@ -4468,9 +4550,16 @@ end 'managedNameDropCallee'
 // owns managed heap, the trivial `__mm_decref` when its box is all it owns. Split out so the struct arm and
 // the tuple arm of the cascade above cannot come to answer it differently — a tuple IS a struct box.
 function structBoxDropCallee(signatures ProgramSignatures, structName ByteArray) returns ByteArray
-	if signatures.structHasManagedField(structName) 'managedStruct'
+	// ⛔ **`structHasFieldOwingDrop`, NOT `structHasManagedField` — AND THIS LINE MADE THE WHOLE STRUCT-FIELD
+	// HALF OF `W231` INERT** (found at review). `installOneStructDestructor` was switched to the ownership
+	// question and this was not, so a `type Holder { let p as IntPromise }` routed its box drop to the
+	// trivial `__mm_decref`, `__destruct_Holder` was never entered into `needed`, and the synthesis gate one
+	// line down skipped the type it had just been taught to accept. MEASURED: exit **75**, with neither
+	// `__destruct_Holder` nor `__gt_promise_drop` anywhere in the emitted IR. The spec case passed anyway
+	// because it AWAITS the field — which is why the un-awaited case now sits beside it.
+	if signatures.structHasFieldOwingDrop(structName) 'owesADestructor'
 		return destructorSymbol(structName)
-	end 'managedStruct'
+	end 'owesADestructor'
 
 	return MmDecrefName
 end 'structBoxDropCallee'
@@ -19187,6 +19276,22 @@ export type ProgramSignatures
 		return self.typeIsManaged(self.containerElementType(id), from: self.typeNames)
 	end 'containerElementIsManaged'
 
+	// ⭐ **DOES THIS CONTAINER'S ELEMENT OWE A DROP?** The instance-keyed spelling of `typeOwesDrop`, and the
+	// question the ELEMENT DESTRUCTOR STAMP must ask — `containerElementIsManaged` is the narrower "is the
+	// element an `__mm` box", which is right for deciding a retain or a clone and wrong for deciding whether
+	// the record's `element_destroy@40` walk has anything to do. An `Array with Promise` answers `false`
+	// there and `true` here, which is exactly `W217`: the stamp was 0, the walk was skipped, and the
+	// container died holding live green threads (exit 75).
+	export function containerElementOwesDrop(id GenericInstanceId) returns bool
+		return self.typeOwesDrop(self.containerElementType(id), from: self.typeNames)
+	end 'containerElementOwesDrop'
+
+	// Is this container's element a green-thread handle? Asked where the element's drop is not a refcount —
+	// the vacate doors and the copy refusals — rather than where it merely owes one.
+	export function containerElementIsAGreenThreadHandle(id GenericInstanceId) returns bool
+		return self.typeIsAGreenThreadHandle(self.containerElementType(id), from: self.typeNames)
+	end 'containerElementIsAGreenThreadHandle'
+
 	// Is a SINGLE-ELEMENT container's element an OPAQUE TYPE PARAMETER (P1.7 slice 3a)? The instance-keyed
 	// spelling of `slotTypeIsOpaque` above, which carries the reason — a `Map`'s VALUE column asks the same
 	// question of a slot no `containerElementType` names, so the rule lives on the TYPE and this reads it
@@ -20236,7 +20341,8 @@ export type ProgramSignatures
 	// `__destruct_<T>` (a scalar-only struct/union box → the trivial `__mm_decref`), a nested Array → `__managed_decref`.
 	// Routed through the SHARED `managedFieldDropCallee` over the element type, so the stamped element destructor
 	// equals the drop callee any managed FIELD of the same type gets — the moved-in set and the dropped set agree
-	// by construction. Precondition: `containerElementIsManaged`.
+	// by construction. Precondition: `containerElementOwesDrop` — the OWNERSHIP question, not the narrower
+	// `containerElementIsManaged`, since a promise element owes this stamp without being a box.
 	export function arrayElementDropCallee(id GenericInstanceId) returns ByteArray
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.containerElementType(id))
 	end 'arrayElementDropCallee'
@@ -21737,6 +21843,48 @@ export type ProgramSignatures
 	// producers are `String.addressableBytes()` (BATCH2 slice 1) and `emitOwnedManagedMemoryResult`'s three
 	// OS runtime entries (`__md_filename`, `__md_current_path`, `__cl_arg`). Not memoized like its twin:
 	// it is asked once per such call site, never on a hot parser path.
+	// ⭐⭐ **THE TYPE A SPAWN'S PROMISE IS BORN WITH — `Promise with T` / `Promise with (T, E)` read off
+	// the CALLEE.** `Parser.emitAsyncCall` mints its result at this instance, which is what makes every
+	// integer position refuse a promise through the type check it already has, rather than through a roster
+	// of positions somebody had to remember to write down.
+	//
+	// ⭐ **IT INTERNS IN THE INDEX'S OWN NAME SPACE, AND THAT IS THE WHOLE CORRECTNESS ARGUMENT.**
+	// `genericInstances.intern` is keyed on `(typeNameId, args)`, so the gid a spawn gets must be the SAME
+	// gid a user's `typealias IntPromise = Promise with Integer` resolves to — otherwise a spawn could not be
+	// stored in the storage type that names it, and `promiseStorageThrows` would answer about one instance
+	// while the await asked about another. Interning here, off `returnTypeOf`'s raw swept types and this
+	// index's own `typeNames`, is what makes the two keys equal by construction instead of by coincidence.
+	//
+	// ⚠ **THE RESULT POSITION IS ALWAYS FILLED** — see `PromiseVoidResultName` for why a void thunk gets a
+	// stand-in argument rather than a shorter instance.
+	export function internPromiseInstanceForCallee(callee ByteArray) returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+
+		match self.returnTypeOf(callee, into: self.typeNames) 'result'
+			declared(returnType) then args.push(self.promiseResultArgFor(returnType))
+			// An undeclared callee is typed `Integer` everywhere else this index answers for one
+			// (`Parser.calleeReturnType` says so in as many words), so the promise over it agrees.
+			undeclared then args.push(MaxonType.integer)
+		end 'result'
+
+		let clause = self.throwsOf(callee)
+		if throwsClauseIsThrowing(clause) 'throwing'
+			let errorName = (try throwsClauseName(clause) otherwise panic("internPromiseInstanceForCallee: a clause `throwsClauseIsThrowing` accepted carries a name")).toByteArray()
+			args.push(MaxonType.named(self.typeNames.intern(errorName)))
+		end 'throwing'
+
+		return self.genericInstances.intern(self.typeNames.intern(PromiseTypeName), args: args)
+	end 'internPromiseInstanceForCallee'
+
+	// The result TYPE ARGUMENT for a promise over a thunk returning `returnType`. Split out so the void
+	// stand-in has exactly one home; see `PromiseVoidResultName`.
+	function promiseResultArgFor(returnType MaxonReturnType) returns MaxonType
+		return match returnType 'r'
+			void gives MaxonType.named(self.typeNames.intern(PromiseVoidResultName))
+			value(inner) gives inner
+		end 'r'
+	end 'promiseResultArgFor'
+
 	export function internSynthesizedByteInstance() returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(MaxonType.named(self.typeNames.intern(SynthesizedByteElementName)))
@@ -23211,8 +23359,25 @@ export type ProgramSignatures
 			return self.rangeRenderedInstanceName(id)
 		end 'moreThanOneAliasNamesThisType'
 
-		return try self.instanceDisplayNames.get(id) otherwise self.canonicalInstanceName(id)
+		return try self.instanceDisplayNames.get(id) otherwise self.unaliasedInstanceName(id)
 	end 'instanceDisplayName'
+
+	// What an instance is called when NO alias was recorded for it. Normally the `Base_Arg` mangling, which is
+	// at least searchable: some file declares `Byte`, so `Array_Byte` leads a reader somewhere.
+	//
+	// ⭐ **A PROMISE IS THE ONE INSTANCE THAT IS ROUTINELY MINTED BY THE COMPILER RATHER THAN WRITTEN BY AN
+	// AUTHOR**, so the usual reasoning inverts: `async plain()` interns `Promise with Integer` whether or not
+	// any file wrote a `typealias` for it, and when none did, the mangling `Promise_Integer` is a name that
+	// appears in NO source file and cannot be searched for — the exact failure `rangeRenderedInstanceName`'s
+	// header describes for a merged instance. Rendering it the way the source WOULD write it is both true and
+	// findable. An author who did declare an alias still sees the alias, because that lookup comes first.
+	function unaliasedInstanceName(id GenericInstanceId) returns ByteArray
+		if self.instanceIsPromiseHandle(id) 'aPromise'
+			return self.rangeRenderedInstanceName(id)
+		end 'aPromise'
+
+		return self.canonicalInstanceName(id)
+	end 'unaliasedInstanceName'
 
 	// An instance no single alias can be said to spell, written the way the SOURCE would write it:
 	// `Array with int(0 to 255)`. Every alias R-1 merged into this instance denotes exactly this, so the name
@@ -24240,17 +24405,22 @@ export type ProgramSignatures
 	// trivial aggregate fell between them: retained by the rehash, released by nobody. Reading ONE decision is
 	// the arrangement the witness pair `destroyFunc@8`/`retainFunc@16` already has off
 	// `existentialOwnershipProtocol`, which is why it is spelled the same way here.
-	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamPosition) returns bool
+	// ⚠ **RENAMED FROM `instanceArgOwesDrop` WHEN THE PROMISE ARM ARRIVED (`W217`), BECAUSE THE OLD NAME
+	// WOULD NOW LIE.** A green-thread argument is NOT managed — it is not an `__mm` box and may not be
+	// retained or cloned — and it DOES owe the `destroyFunc@40` stamp this predicate gates. "Owes a drop" is
+	// what the descriptor's drop word has always actually asked; while the two coincided the narrower name
+	// was harmless, and the moment they parted it would have been a false answer wearing an accurate name.
+	export function instanceArgOwesDrop(id GenericInstanceId, position TypeParamPosition) returns bool
 		return match self.typeOwnershipProtocol(self.canonicalInstanceArg(id, position: position)) 'protocol'
 			none gives false
-			byteRecord to aggregate gives true
+			byteRecord to greenThread gives true
 		end 'protocol'
-	end 'instanceArgIsManaged'
+	end 'instanceArgOwesDrop'
 
 	// ⭐ **THE TYPE-CYCLE NODE INSTANCE `id`'s ARGUMENT AT `position` POINTS AT (E4014).** A container OWNS its
 	// elements, so each argument is an ownership edge in `TypeCycleCheck`'s graph.
 	//
-	// ⚠ Here rather than at the caller for `instanceArgIsManaged`'s stated reason: the argument's `named` id is
+	// ⚠ Here rather than at the caller for `instanceArgOwesDrop`'s stated reason: the argument's `named` id is
 	// meaningless outside `self.typeNames`, and adopting it into the merged `project.typeNames` is exactly the
 	// mistake — the id would then mean whatever name happens to sit at that number in the OTHER table.
 	//
@@ -24965,6 +25135,20 @@ export type ProgramSignatures
 	// the door `decrefCalleeFor` (a scope-exit drop) and a nested-instance field drop route through — over
 	// this index's own interner, so a caller never misresolves the instance's substituted-field ids.
 	export function genericInstanceBoxDropCallee(id GenericInstanceId) returns ByteArray
+		// ⭐⭐ **A PROMISE DROPS THROUGH `__gt_promise_drop`, AND IT IS THE ONE ARM HERE THAT IS NOT A BOX.**
+		// Every other instance below names an `__mm` record and a refcount entry to release it with; a promise
+		// names a green thread, and reclaiming it means unlinking it from the run queue or the timer store,
+		// freeing its stack and CANCELLING it — which is what that entry does. Routing it to any of the
+		// refcount entries would call `__mm_decref` on a pointer into the scheduler's slab, decrementing a
+		// word that is not a refcount.
+		//
+		// ⚠ **IT IS FIRST DELIBERATELY.** The arms below are keyed on base-name predicates a promise answers
+		// `false` to, so order is not load-bearing today — but this is the arm whose MISS is silent (a promise
+		// falling through to the struct cascade drops a thread as though it were a record), and the cheapest
+		// place to make that unrepresentable is the top.
+		if self.instanceIsPromiseHandle(id) 'promise'
+			return GtPromiseDropName
+		end 'promise'
 		// An `Array` drops through `__managed_decref` — which frees its external element buffer (the one thing a
 		// generic `__mm_decref` cannot reach) and then the record, mirroring how a String drops through
 		// `__str_decref`. Its elements are trivial at this slice, so there is no element walk.
@@ -25577,6 +25761,9 @@ export type ProgramSignatures
 		match self.existentialOwnershipProtocol(typeName) 'protocol'
 			byteRecord then return StrDecrefName
 			aggregate then return managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName))
+			// A conformer whose value half is a green thread releases it the one way a green thread is
+			// released. Its `retainFunc@16` twin is 0 — see the protocol arm for why that pair is uneven here.
+			greenThread then return GtPromiseDropName
 			none then return EmptySourceText
 		end 'protocol'
 	end 'existentialDestroyCallee'
@@ -25609,7 +25796,7 @@ export type ProgramSignatures
 	// STRUCT is trivial in the CONSUME sense and is still a refcounted box, so its answer is `__mm_retain`.
 	// The claim mattered because `destroyFunc@40` was gated on the consume boundary while this word was gated
 	// on ownership: the sentence made the two look like they agreed while the code had them differing on
-	// exactly that class. They now read one predicate (`instanceArgIsManaged`).
+	// exactly that class. They now read one predicate (`instanceArgOwesDrop`).
 	export function typeParamRetainCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
 		return retainCalleeForProtocol(self.typeParamOwnershipProtocol(id, position: position))
 	end 'typeParamRetainCallee'
@@ -25633,7 +25820,10 @@ export type ProgramSignatures
 	export function instanceDropCallee(id GenericInstanceId) returns ByteArray
 		return match self.typeOwnershipProtocol(MaxonType.genericInstance(id)) 'protocol'
 			none gives EmptySourceText
-			byteRecord to aggregate gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
+			// `greenThread` joins the range rather than earning an arm: `managedFieldDropCallee` routes an
+			// instance through `genericInstanceBoxDropCallee`, whose FIRST arm is the promise, so the callee
+			// this hands back is already `__gt_promise_drop`.
+			byteRecord to greenThread gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id))
 		end 'protocol'
 	end 'instanceDropCallee'
 
@@ -25702,7 +25892,8 @@ export type ProgramSignatures
 	export function typeParamDropCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
 		return match self.typeParamOwnershipProtocol(id, position: position) 'protocol'
 			none gives EmptySourceText
-			byteRecord to aggregate gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
+			// See `instanceDropCallee` — the promise routes itself through `genericInstanceBoxDropCallee`.
+			byteRecord to greenThread gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
 		end 'protocol'
 	end 'typeParamDropCallee'
 
@@ -25749,6 +25940,11 @@ export type ProgramSignatures
 		if self.typeArgSpellingIsSuperseded(t) 'theContestReplacedThisOne'
 			return ExistentialOwnershipProtocol.none
 		end 'theContestReplacedThisOne'
+		// ⭐ ASKED BEFORE `typeIsManaged`, which answers `false` for a promise — it is not a box — and would
+		// therefore hand back `none`, the protocol that owns NOTHING. A promise owns a thread.
+		if self.typeIsAGreenThreadHandle(t, from: self.typeNames) 'aGreenThread'
+			return ExistentialOwnershipProtocol.greenThread
+		end 'aGreenThread'
 		if not self.typeIsManaged(t, from: self.typeNames) 'ownsNothing'
 			return ExistentialOwnershipProtocol.none
 		end 'ownsNothing'
@@ -25789,6 +25985,14 @@ export type ProgramSignatures
 	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
 		return self.typeIsManaged(self.structFieldDeclaredType(structName, index: index), from: self.typeNames)
 	end 'structFieldIsManaged'
+
+	// ⭐ **THE OWNERSHIP PROJECTION OF THE FIELD QUESTION — what a DESTRUCTOR must ask** (`W231`). A promise
+	// field is not managed (not a box, never retained, never cloned) and does owe a reclaim, so the
+	// synthesized `__destruct_<T>` has to walk it. Asking `structFieldIsManaged` there is what left a
+	// `type Holder { let p as IntPromise }` with no destructor at all.
+	export function structFieldOwesDrop(structName ByteArray, index FieldIndex) returns bool
+		return self.typeOwesDrop(self.structFieldDeclaredType(structName, index: index), from: self.typeNames)
+	end 'structFieldOwesDrop'
 
 	// The DECLARED type of struct field `index`, read off THIS index's own registry. The preamble every
 	// by-name field question shares — fetch the layout, fetch the field — written once because it was written
@@ -25972,7 +26176,7 @@ export type ProgramSignatures
 	// PARAMETER (`layoutBlockOffsetFor`) and this walk answers for ONE of them, so a column is stamped with its
 	// OWN argument's destructor or with nothing.
 	//
-	// ⛔⛔ **AND IT GATES ON THE *DROP* BOUNDARY (`instanceArgIsManaged`), NOT ON THE *CONSUME* ONE — IT ASKED
+	// ⛔⛔ **AND IT GATES ON THE *DROP* BOUNDARY (`instanceArgOwesDrop`), NOT ON THE *CONSUME* ONE — IT ASKED
 	// `genericInstanceArgIsOwned` FOR THREE RUNGS AND THAT WAS A SILENT WRONG ANSWER (W41-trivial).** The two
 	// questions differ on EXACTLY one class, the co-owned trivial aggregate (`typeArgIsCoOwnedTrivial`: managed,
 	// not owned) — an all-scalar struct key, a trivial generic instance — and a `destroyFunc@40` read off the
@@ -26034,7 +26238,7 @@ export type ProgramSignatures
 		// raw spelling stamped `__clone___Tuple2.String.Integer` into the descriptor of an
 		// `Array with (String, Integer)` and the PE writer died with `it was never installed`.
 		if self.isArrayInstance(id) 'theArrayIsTheColumn'
-			if position == 0 and self.instanceArgIsManaged(id, position: position) 'managedElement'
+			if position == 0 and self.instanceArgOwesDrop(id, position: position) 'managedElement'
 				return ManagedOpaqueArrayElement.present(self.canonicalInstanceArg(id, position: position))
 			end 'managedElement'
 			return ManagedOpaqueArrayElement.absent
@@ -26054,7 +26258,7 @@ export type ProgramSignatures
 				// names a parameter at all.
 				if maxonTypeTag(element) == ValueTypeTag.typeParameter 'opaqueElement'
 					let elementPosition = self.opaqueTypeParamPosition(element)
-					if elementPosition == position and self.instanceArgIsManaged(id, position: elementPosition) 'managedArrayElement'
+					if elementPosition == position and self.instanceArgOwesDrop(id, position: elementPosition) 'managedArrayElement'
 						return ManagedOpaqueArrayElement.present(self.canonicalInstanceArg(id, position: elementPosition))
 					end 'managedArrayElement'
 				end 'opaqueElement'
@@ -26065,7 +26269,7 @@ export type ProgramSignatures
 			// above.
 			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueBareField'
 				let fieldPosition = self.opaqueTypeParamPosition(fieldType)
-				if fieldPosition == position and self.instanceArgIsManaged(id, position: fieldPosition) 'managedBareField'
+				if fieldPosition == position and self.instanceArgOwesDrop(id, position: fieldPosition) 'managedBareField'
 					return ManagedOpaqueArrayElement.present(self.canonicalInstanceArg(id, position: fieldPosition))
 				end 'managedBareField'
 			end 'opaqueBareField'
@@ -26140,6 +26344,7 @@ export type ProgramSignatures
 	// matters because a scalar field must reach the `false` return without boxing a
 	// `DeclaredStruct`/`DeclaredEnum`. That is why the form answer is an enum and not a `DeclaredEnum`-shaped
 	// union, and why `declaredEnumIsBoxed` reads `enumTypes` directly rather than through `enumOf`.
+
 	export function typeIsManaged(fieldType MaxonType, from TypeNameInterner) returns bool
 		let tag = maxonTypeTag(fieldType)
 		// `tagIsByteRecord`: "does this own heap?" is a question about the REPRESENTATION, and a Character
@@ -26150,9 +26355,18 @@ export type ProgramSignatures
 		end 'byteRecordOrStruct'
 		// ⭐ **EVERY GENERIC INSTANCE IS A BASE-STRUCT BOX — EXCEPT THE ONE THAT IS A GREEN-THREAD HANDLE**
 		// (P1.5-B2c). `Promise with T` / `Promise with (T, E)` names a pointer into the scheduler's own slab,
-		// reclaimed by `__gt_promise_drop` at the sites the parser tracks and never by a refcount, so a slot
-		// holding one owes no drop, no clone and no retain. The whole argument — including why shv2 stores
-		// the handle where the bootstrap boxes it — is on `PromiseType.maxon`.
+		// reclaimed by `__gt_promise_drop` and never by a refcount, so a slot holding one owes no CLONE and
+		// no RETAIN. The whole argument — including why shv2 stores the handle where the bootstrap boxes it
+		// — is on `PromiseType.maxon`.
+		//
+		// ⛔⛔ **THIS ARM USED TO SAY "OWES NO DROP" TOO, AND THAT THIRD WAS A LEAK (`W217`/`W231`).** "Not
+		// refcounted" and "owes nothing" are different facts, and reading the first as the second is what
+		// stamped `element_destroy@40 = 0` on every `Array with Promise` and left `structHasManagedField`
+		// blind to a promise field: the container died, its elements' threads were never reclaimed, and
+		// `__gt_live_count` reported the leak as exit **75**. A promise owes exactly one drop, taken through
+		// `__gt_promise_drop`. ⇒ **`typeIsManaged` is now the NARROW question (is this an `__mm` box — may it
+		// be retained, may it be cloned) and `typeOwesDrop` below is the OWNERSHIP question**; a destructor
+		// stamp must ask the latter, and asking the former is the defect this note records.
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return not self.instanceIsPromiseHandle(typeNameIdOf(fieldType))
 		end 'instance'
@@ -26177,6 +26391,65 @@ export type ProgramSignatures
 		// field was dropped by nobody and the program exited 101 on the leak gate. See `denotedAggregateName`.
 		return self.declaredNameIsManaged(self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType))))
 	end 'typeIsManaged'
+
+	// ⭐⭐ **"DOES A SLOT OF THIS TYPE OWE A DROP?" — THE OWNERSHIP PROJECTION, AND THE ONE A DESTRUCTOR
+	// STAMP MUST ASK.** It is `typeIsManaged` widened by exactly one case: a green-thread handle, which is
+	// not an `__mm` box (so it may not be retained or cloned) and DOES owe a reclaim (so a container, a
+	// struct field, a union payload or a generic type-argument slot holding one must drop it).
+	//
+	// ⚠ **THE TWO ARE DELIBERATELY NOT ONE PREDICATE, AND MERGING THEM BREAKS ONE CALLER OR THE OTHER.**
+	// Answer `typeIsManaged` where a stamp is owed and the thread leaks (exit 75 — `W217`); answer
+	// `typeOwesDrop` where a RETAIN is emitted and `__mm_retain` is called on a pointer into the scheduler's
+	// slab, corrupting a header that is not a header. Every caller therefore has to choose, and the choice
+	// is legible: **retain/clone/"is this a box" → `typeIsManaged`; destructor stamp / drop routing /
+	// "must this slot be reclaimed" → `typeOwesDrop`.**
+	export function typeOwesDrop(fieldType MaxonType, from TypeNameInterner) returns bool
+		if self.typeIsManaged(fieldType, from: from) 'aManagedRecord'
+			return true
+		end 'aManagedRecord'
+
+		return self.typeIsAGreenThreadHandle(fieldType, from: from)
+	end 'typeOwesDrop'
+
+	// Is this type a promise — the one slot that owes a drop without being a box?
+	//
+	// ⛔⛔ **IT TAKES THE INTERNER AND RESOLVES A NAME, AND THE FIRST DRAFT DID NEITHER — WHICH MADE THE
+	// WHOLE `W217` FIX INERT.** `typealias IntPromise = Promise with Integer` reaches every classifier
+	// tagged `named`, NOT `genericInstance`, so a tag-only test answered `false` for the exact spelling every
+	// real program uses. MEASURED: with the stamp switched to `typeOwesDrop` and this predicate tag-only,
+	// `__managed_create` was still emitted `movRegImm32 rdx, 0` — a green fix over an unchanged wrong answer.
+	// `typeIsManaged`'s `genericAlias` arm carries the same warning in prose (*"it is needed at BOTH because
+	// a `typealias StrPromise = Promise with String` reaches this door by NAME"*); this is that warning
+	// obeyed.
+	export function typeIsAGreenThreadHandle(fieldType MaxonType, from TypeNameInterner) returns bool
+		let tag = maxonTypeTag(fieldType)
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.instanceIsPromiseHandle(typeNameIdOf(fieldType))
+		end 'instance'
+
+		if tag != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		return self.declaredNameIsAGreenThreadHandle(self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType))))
+	end 'typeIsAGreenThreadHandle'
+
+	// The NAME half, mirroring `declaredNameIsManaged`'s two promise exemptions exactly — a canonical mint
+	// (`Promise_Integer`) and a `genericAlias` (`IntPromise`). It is the same two arms read in the POSITIVE
+	// direction, which is why it is written beside them: an exemption added there and not here would make a
+	// promise unmanaged AND undroppable, which is the leak this whole slice is about.
+	function declaredNameIsAGreenThreadHandle(name ByteArray) returns bool
+		if self.isCanonicalInstanceName(name) 'aRenderedInstance'
+			return self.renderedNameIsPromiseHandle(name)
+		end 'aRenderedInstance'
+
+		return match try self.declaredFormOf(name) otherwise return false 'form'
+			structType to functionAlias gives false
+			genericAlias gives self.instanceIsPromiseHandle(self.bareGenericAliasInstance(name))
+			tupleAlias gives false
+		end 'form'
+	end 'declaredNameIsAGreenThreadHandle'
+
 
 	// Is `name` the CANONICAL rendering of an interned generic instance? The registry is keyed by the
 	// instance's structural KEY and its canonical NAME is derived, so the reverse direction needs an index of
@@ -26359,15 +26632,38 @@ export type ProgramSignatures
 	//
 	// The struct is a precondition, not a case: every caller reached here through a `structOf` that answered
 	// `declared`.
+	// ⭐ **DOES THIS STRUCT OWE A DESTRUCTOR AT ALL?** The gate `installOneStructDestructor` and
+	// `structBoxDropCallee` read — the OWNERSHIP twin of `structHasManagedField`. A struct whose only owning
+	// field is a promise answers `false` there and `true` here, and the difference is a leak: the destructor
+	// is never synthesized and the field's green thread dies with the box (exit 75, no `__destruct_<T>` in
+	// the emitted IR at all).
+	export function structHasFieldOwingDrop(structName ByteArray) returns bool
+		return self.structHasFieldSatisfying(structName, owning: FieldOwnershipQuestion.owesDrop)
+	end 'structHasFieldOwingDrop'
+
 	export function structHasManagedField(structName ByteArray) returns bool
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structHasManagedField: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		for i in 0 upto layout.fieldCount() 'eachField'
-			if self.structFieldIsManaged(structName, index: i) 'managed'
-				return true
-			end 'managed'
-		end 'eachField'
-		return false
+		return self.structHasFieldSatisfying(structName, owning: FieldOwnershipQuestion.isAManagedRecord)
 	end 'structHasManagedField'
+
+	// ⭐ **THE WALK, WRITTEN ONCE.** The two questions above differ in ONE predicate and in nothing else — the
+	// registry fetch, its panic, the loop and the `false` fallthrough were identical, which is the shape this
+	// file's own `structFieldDeclaredType` header calls out (*"written once because it was written three
+	// times and each copy carried its own two panic messages saying the same two things"*). A third ownership
+	// question later adds an arm here rather than a fourth copy of the loop.
+	function structHasFieldSatisfying(structName ByteArray, owning FieldOwnershipQuestion) returns bool
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structHasFieldSatisfying: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let holds = match owning 'question'
+				owesDrop gives self.structFieldOwesDrop(structName, index: i)
+				isAManagedRecord gives self.structFieldIsManaged(structName, index: i)
+			end 'question'
+			if holds 'satisfied'
+				return true
+			end 'satisfied'
+		end 'eachField'
+
+		return false
+	end 'structHasFieldSatisfying'
 
 	// ⭐ **THE UNION TWIN OF `structHasManagedField`, AND BY NAME FOR THE IDENTICAL REASON**: the layout comes
 	// out of THIS index's own `enumTypes` and is read over THIS index's own interner, so a caller cannot pair

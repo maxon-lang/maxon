@@ -1827,8 +1827,16 @@ error E3138: <fragment>:29:9: argument `cs` of the message `Svc.take` is a conta
 ```
 
 <!-- test: error.a-promise-may-not-be-sent -->
-A `Promise` is a green-thread handle its awaiter owns, and its value is a bare integer — so a message
-declaring an `int` parameter would take one without a word if the send site did not ask. It asks.
+A `Promise` is a green-thread handle its awaiter owns, and a message MOVES its arguments to another green
+thread — so sending one would leave a second thread holding a thread this one is still waiting on.
+
+⛔ **THE DIAGNOSTIC MOVED FROM E3135 TO E3005 WHEN PROMISES BECAME TYPED (`W230`), AND THAT IS THE HONEST
+FAULT.** The old sentence here read *"its value is a bare integer — so a message declaring an `int`
+parameter would take one without a word if the send site did not ask"*, and the rule existed precisely
+because the type system could not object. It can now: `keep(value Integer)` does not accept a
+`Promise with Integer`, so the ordinary argument check refuses this send before the service rule is
+consulted. The E3135 arm is KEPT as the structural backstop for the case the type check cannot reach — a
+message that DECLARES a promise parameter, which typechecks and must still be refused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1857,7 +1865,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:23:9: argument `value` of the message `Store.keep` is a Promise, which is a green-thread handle its awaiter owns, and a message MOVES its arguments to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message
+error E3005: <fragment>:23:9: argument type mismatch for 'value': expected 'Integer', got 'Promise with int(-9223372036854775808 to 9223372036854775807)'
 ```
 
 <!-- test: error.a-handle-of-another-service-is-refused -->

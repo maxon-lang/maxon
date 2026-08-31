@@ -307,6 +307,16 @@ export union ParseError implements Error
 	// is shv2's first ownership program-rejection; the reference compilers refcount and have no
 	// move model, so there is no bootstrap text to match.
 	useAfterMove(name String, line LineNumber, column ColumnNumber)
+	// A promise read out of a container through a door that cannot NAME the slot it came from — a cursor's
+	// `current`/`peek`, a list node's `value()`. A promise is move-only (it owns a green thread, and a green
+	// thread has one owner), so the read is a move whose source must be emptied when it is consumed; a door
+	// that hands back an element without an index gives the move nowhere to finish. Renders as E3141.
+	// `door` names what was used and `cure` says what to do instead. ⚠ **THE CURE IS CARRIED, NOT ASSUMED.**
+	// There are four throw sites and they are about different things — a container read that names no slot, a
+	// corpus member that hands an element back without giving it up, a `return` that would carry a borrow out
+	// of its frame, and a `match` on a union this frame does not own. One baked-in cure meant a union payload
+	// was told to *"use `get(i)` … or move it out with `pop`"*, advice for a container it is not.
+	promiseCannotBeBorrowed(door String, cure String, line LineNumber, column ColumnNumber)
 	// A `var` DECLARED FROM AN IMMUTABLE NAME OF A REFERENCE TYPE — `var b = a` / `var i = o.inner`
 	// where `a` / `o` is a `let` or a parameter. Maxon is single-ownership and everything is a
 	// reference, so the mutable name would reach the immutable one's storage and write through it;
@@ -4179,6 +4189,57 @@ let sharedEmptySizedContainerSelfCallees = ByteArrayArray.create()
 // ⚠ **THE SEPARATOR TEST IS LOAD-BEARING, NOT TIDINESS.** Without it this is a bare `bytesStartWith`, and
 // a user function called `internNames` begins with `int` — it would be classified compiler-internal and
 // so skip arity validation and signature slotting. A miscompile, from a missing byte compare.
+// Does this qualified corpus callee (`Array.pop`) name a member that MOVES the element out of the
+// container? See `requireCorpusElementReadIsNotABorrowedPromise` for why the answer is closed rather than
+// open-ended.
+function calleeIsAnElementMoveOut(callee ByteArray) returns bool
+	return qualifiedMemberIs(callee, member: ArrayPopMethod) or qualifiedMemberIs(callee, member: RemoveMethod) or qualifiedMemberIs(callee, member: ListRemoveFirstMethod) or qualifiedMemberIs(callee, member: ListRemoveLastMethod)
+end 'calleeIsAnElementMoveOut'
+
+// The MEMBER half of a qualified corpus callee — `Array.last` → `last`. A diagnostic must name what the
+// AUTHOR wrote; `calleeMemberNoun` states the same rule for the compiler-emitted doors, and this is it for
+// the corpus ones. Returns the whole name when it carries no separator, which is not reachable from the one
+// caller (it is past `isQualifiedUnderTypeName`) but is the only honest answer if it ever were.
+function unqualifiedMemberName(callee ByteArray) returns ByteArray
+	let separator = try MethodNameSeparatorBytes.get(0) otherwise panic("unqualifiedMemberName: MethodNameSeparatorBytes is a one-byte literal")
+	var start = 0
+	for i in 0 upto callee.count() 'eachByte'
+		if (try callee.get(i) otherwise panic("unqualifiedMemberName: index {i} is below count {callee.count()}")) == separator 'separatorHere'
+			start = i + 1
+		end 'separatorHere'
+	end 'eachByte'
+
+	var out = ByteArray.create()
+	for i in start upto callee.count() 'eachMemberByte'
+		out.push(try callee.get(i) otherwise panic("unqualifiedMemberName: index {i} is below count {callee.count()}"))
+	end 'eachMemberByte'
+
+	return out
+end 'unqualifiedMemberName'
+
+// Is the MEMBER half of a qualified callee (`Array.pop`) exactly `member`? Anchored at the separator, so
+// `Bag.pop` matches and a member merely ENDING in those letters (`Array.reshapePop`) does not.
+function qualifiedMemberIs(callee ByteArray, member ByteArray) returns bool
+	if callee.count() <= member.count() 'noRoomForATypeAndItsSeparator'
+		return false
+	end 'noRoomForATypeAndItsSeparator'
+
+	let start = callee.count() - member.count()
+	let separator = try MethodNameSeparatorBytes.get(0) otherwise panic("qualifiedMemberIs: MethodNameSeparatorBytes is a one-byte literal")
+	if (try callee.get(start - 1) otherwise panic("qualifiedMemberIs: index {start - 1} is in range by the guard above")) != separator 'notAtAMemberBoundary'
+		return false
+	end 'notAtAMemberBoundary'
+
+	for i in 0 upto member.count() 'eachByte'
+		let calleeByte = try callee.get(start + i) otherwise panic("qualifiedMemberIs: index {start + i} is below count {callee.count()}")
+		if calleeByte != (try member.get(i) otherwise panic("qualifiedMemberIs: index {i} is below count {member.count()}")) 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'qualifiedMemberIs'
+
 function isQualifiedUnderTypeName(name ByteArray, typeName ByteArray) returns bool
 	if name.count() <= typeName.count() 'noRoomForAMethod'
 		return false
@@ -4208,6 +4269,13 @@ end 'isQualifiedUnderTypeName'
 // by this file, and "no destructor" must be the same number in both — a second spelling of 0 is a second
 // thing to get wrong on the day it stops being 0.
 export let TrivialDestructor = 0 as ParsedInt
+
+// An accessor whose whole argument list is the container names no index — `first()`, a cursor's `current()`.
+let OneArgumentIsJustTheContainer = 1
+
+// The slot `first()` reads. It names no index ARGUMENT, but it names a slot as surely as `get(0)` does, so
+// a promise read through it is a nameable move rather than a refusal — see `notePromiseElementRead`.
+let FirstElementIndex = 0 as ParsedInt
 
 // ⭐ **A CELL HOLDS EXACTLY ONE VALUE, AT OFFSET 0 (PBR-2).** Named rather than spelled as a bare `0` at the
 // FIVE sites that address one, for the reason a global's read names its own: the offset field is not dead
@@ -11854,6 +11922,30 @@ export type Parser
 	// a call handing back a FIELD's handle, MEASURED at exit 139. The exemption now asks the question its own
 	// diagnostic claims to ask, by identity.
 	var nodeHandleMintedFrom as ValueIdArray
+
+	// ⭐⭐ **WHICH CONTAINER SLOT A PROMISE VALUE WAS READ OUT OF — the two columns that make a container
+	// read a PENDING MOVE rather than a copy** (`W217`). A promise has exactly one owner; reading one out of
+	// `arr.get(i)` does not make a second, it starts a move whose store has not been emitted yet. These
+	// record where to finish it: when the value is CONSUMED (awaited, cancelled), `vacateConsumedPromiseSlot`
+	// zeroes that slot so the container's element walk skips it.
+	//
+	// ⛔ **WITHOUT THEM THE DROP STAMP IS A DOUBLE RECLAIM, AND THAT IS MEASURED, NOT FEARED.** With
+	// `element_destroy@40` stamped and no vacate, ELEVEN committed cases went to exit 75 at once —
+	// `promise-array`, `managed-args-many`, both `storage.*` cases, both `branch-store-*` cases,
+	// `timer-growth.beyond-seed-capacity` and the rest: the await reclaimed the thread and the array's walk
+	// reclaimed it again, driving `__gt_live_count` NEGATIVE (the gate is `!= 0`, so an over-release reports
+	// the same 75 a leak does). The stamp and the vacate are one change and must not be landed apart.
+	//
+	// ⚠ **NOT-SET IS THE VALUE'S OWN ID**, `nodeHandleMintedFrom`'s convention one column up: a value can
+	// never be its own container, so the sentinel needs no reserved id and no parallel bool.
+	var promiseSlotContainer as ValueIdArray
+	var promiseSlotIndex as ValueIdArray
+	// ⭐ **WHICH KIND OF SLOT the pair above names.** A CONTAINER element is emptied by `__managed_vacate`
+	// (buffer + index × stride); a STRUCT FIELD is emptied by a direct store at its offset, the same shape
+	// `moveOutManagedPayload` uses for a union payload. One pair of columns serves both because the question
+	// they answer — "which slot does this pending move come out of" — is one question; only the store differs.
+	// For a field, `promiseSlotIndex` holds a minted literal of the field OFFSET.
+	var promiseSlotIsAField as BoolArray
 	// ⭐⭐ **WHICH VALUES ARE MERGES WHOSE DECLARED RANGED ALIAS NOTHING PROVED (G14)** — the column that
 	// stops a phi's DECLARED type being read as a statement about its RANGE. Same lockstep as
 	// `valuePromiseMarks`: pushed `false` in `mintValue`/`recordValueType`, set `true` by `mintPhi` for
@@ -13015,6 +13107,9 @@ export type Parser
 			valueFromFreshReturn: BoolArray.create(),
 			valuePromiseMarks: BoolArray.create(),
 			nodeHandleMintedFrom: ValueIdArray.create(),
+			promiseSlotContainer: ValueIdArray.create(),
+			promiseSlotIndex: ValueIdArray.create(),
+			promiseSlotIsAField: BoolArray.create(),
 			phiAliasUnprovenMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
@@ -24598,6 +24693,9 @@ export type Parser
 		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
+		self.promiseSlotContainer = ValueIdArray.create()
+		self.promiseSlotIndex = ValueIdArray.create()
+		self.promiseSlotIsAField = BoolArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -26114,6 +26212,9 @@ export type Parser
 		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
+		self.promiseSlotContainer = ValueIdArray.create()
+		self.promiseSlotIndex = ValueIdArray.create()
+		self.promiseSlotIsAField = BoolArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -26500,6 +26601,20 @@ export type Parser
 				self.ownedBindings.push(binding)
 			end 'consumedManaged'
 
+			// ⭐⭐ **A PROMISE PARAMETER IS OWNED BY THE CALLEE, BY TYPE, WITHOUT ASKING `paramIsConsumed`**
+			// (`W217`). Passing a promise is always a MOVE — `transferConsumedArgs` says so at the other end —
+			// because a green thread has exactly one owner and the caller has just stopped naming it. So the
+			// callee owns it on arrival however the body happens to use it, where the managed arm above must
+			// first ask whether the body consumes its argument.
+			//
+			// ⭐ **IT IS ALSO WHAT MAKES "UNOWNED AND SLOTLESS" MEAN BORROWED.** With parameters enrolled, the
+			// only promises that carry neither an ownership mark nor a container slot are ones no frame took
+			// responsibility for — which is what `requireConsumedPromiseIsOwned` refuses.
+			if not paramIsByRef and self.valueIsPromise(i as ValueId) 'aPromiseParameter'
+				self.markValuePromise(i as ValueId)
+				self.ownedBindings.push(binding)
+			end 'aPromiseParameter'
+
 			// ⭐ **A CONSUMED OPAQUE TYPE-PARAMETER FEED PARAMETER IS ENROLLED AS OWNED** (P1.7 slice 3b-v). A
 			// feed parameter (`push(item Element)` moving `item` into `self.items`, or a sibling forwarder the
 			// transitive fixpoint marked) is CONSUMED at its concrete call site — the callee OWNS the value — but
@@ -26654,8 +26769,33 @@ export type Parser
 		// pointer to a refcounted record with a baked destructor. It carries the SAME managed-aggregate
 		// obligations — owned, dropped once at scope exit, never handed off borrowed-as-owned — so it joins
 		// the boundary here rather than being read as a trivial scalar and leaked.
-		return tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.interfaceRef or self.valueIsBoxedUnion(value)
+		return tagIsStructRef(tag) or self.instanceValueIsAManagedRecord(tag, value: value) or tag == ValueTypeTag.interfaceRef or self.valueIsBoxedUnion(value)
 	end 'valueIsNonTextAggregate'
+
+	// ⭐⭐ **THE ONE EXCEPTION TO "A GENERIC INSTANCE IS A REFCOUNTED BOX": A PROMISE.** `Promise with T` is a
+	// generic instance like any other to the type system, and is NOT a `__mm_alloc` record at run time — its
+	// value is a pointer into the SCHEDULER'S OWN SLAB, whose lifetime is the green thread's and is
+	// discharged by `__gt_promise_drop`, never by a refcount. `PromiseType.maxon`'s first fact states it, and
+	// `ProgramSignatures.typeIsManaged` has said it about the TYPE since B2c; this is the same statement
+	// about a VALUE, and the two must not come to disagree.
+	//
+	// ⛔ **WITHOUT IT, TYPING THE PROMISE TURNS EVERY OWNERSHIP DOOR INTO A WRONG ANSWER AT ONCE.** MEASURED
+	// the moment `emitAsyncCall` began minting at the instance: `__mm_retain` on a GT pointer at `var q = p`,
+	// `__mm_decref` on one at every scope exit, and a COMPILER PANIC out of `pushMergedEdgeValue` — *"the
+	// merged binding's phi owns its heap but the incoming edge value does not"* — because a promise reaching
+	// a merge was suddenly a managed aggregate on one side of the join and not the other. 28 of the 139
+	// `async` cases went red on that one predicate.
+	//
+	// ⚠ It asks the TYPE (`typeIsPromiseStorage`), never the ownership MARK. Whether this frame owns the
+	// thread is a different question with a different door (`valueOwnsGreenThread`); what is being decided
+	// here is whether the value is a box, and a promise is not one whoever owns it.
+	function instanceValueIsAManagedRecord(tag ValueTypeTag, value ValueId) returns bool
+		if tag != ValueTypeTag.genericInstance 'notAnInstance'
+			return false
+		end 'notAnInstance'
+
+		return not typeIsPromiseStorage(self.signatures, t: self.valueMaxonType(value))
+	end 'instanceValueIsAManagedRecord'
 
 	// `returns <Type>` or nothing (void). The return type flows to the registry
 	// (for SemanticCheck) and to lowering (via the function signature).
@@ -31391,6 +31531,9 @@ export type Parser
 	// READS the box; dropping first would free the memory the loads are about to read. BEFORE the
 	// terminator, because a `ret` ENDS the block. `returned` is already in a register by then.
 	function emitOwnedValueReturn(retVal ValueId, anchor Token) throws ParseError
+		// A promise still naming a container slot is a borrow, and a borrow may not leave the frame — see the
+		// predicate for why this is what refuses `last()` on a promise array while leaving `pop` legal.
+		try self.requireReturnedPromiseIsNotABorrow(retVal, anchor: anchor)
 		// ⭐⭐ **W2′ — THE SIZED CONTAINER'S RECORD MAY NOT BE RETURNED (W192 review).** Asked on `retVal`
 		// BEFORE the promotion below, which mints a fresh id and would carry the mark onto it
 		// (`carryDeclaredSurface`): the value the SOURCE named is the one the sentence is about.
@@ -35793,7 +35936,32 @@ export type Parser
 	// correct — the pending-temp clear is all it needs. Unlike `poisonMoveSource`, it does NOT reject a move
 	// that escapes a loop: a promise spawned outside a loop and awaited inside is already E3100 (double-await
 	// across the back-edge), so it never reaches lowering, and marking its (outer) owner here is harmless.
-	function consumePromiseThread(promise ValueId)
+	// ⭐⭐ **A PROMISE NOBODY OWNS MAY NOT BE CONSUMED.** Three states are legitimate at a consume: this frame
+	// OWNS the thread (a spawn, a move-out, a promise parameter — the mark), or it holds a live pending move
+	// out of a container slot (the slot columns), or it is a value derived from one of those. A promise with
+	// NEITHER is one the compiler cannot account for, and consuming it reclaims a thread something else still
+	// names.
+	//
+	// ⛔ **THE SHAPE THIS CATCHES IS A MERGE.** `var p = try s.get(0)…; if c  p = try s.get(1)… end; await p`
+	// hands the await a PHI, and a phi is minted with the slot columns seeded NOT-SET — there is no single
+	// slot to carry, because the two edges name different ones. Finishing the move would need a store in each
+	// predecessor block, and the merge layer builds edge-argument LISTS with no per-edge emission context; a
+	// vacate emitted anyway landed in whichever block was current, emptied BOTH slots, and orphaned the
+	// untaken edge's thread — measured, still exit **75**. So the construct is cleanly refused rather than
+	// half-tracked, and the cure is to consume before the join.
+	function requireConsumedPromiseIsOwned(promise ValueId, anchor Token) throws ParseError
+		if self.valueOwnsGreenThread(promise) or self.promiseValueCarriesAContainerSlot(promise) 'accountedFor'
+			return
+		end 'accountedFor'
+
+		throw ParseError.promiseCannotBeBorrowed(String.from(b"await"), cure: "No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join", line: anchor.line, column: anchor.column)
+	end 'requireConsumedPromiseIsOwned'
+
+	function consumePromiseThread(promise ValueId, range SourceRange)
+		// ⭐⭐ **FIRST, BECAUSE THE SLOT MUST BE EMPTIED BEFORE ANYTHING ELSE CAN DROP IT.** If this promise
+		// was read out of a container, the frame has just finished MOVING it out; the container must stop
+		// naming it or its element walk reclaims a thread this consume already reclaimed.
+		self.vacateConsumedPromiseSlot(promise, range: range)
 		self.removeFromPendingTemps(promise)
 
 		let index = self.liveOwnerIndexOf(promise)
@@ -35806,6 +35974,100 @@ export type Parser
 		var owned = try self.ownedBindings.get(index) otherwise panic("consumePromiseThread: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 		owned.movedFrom = true
 	end 'consumePromiseThread'
+
+	// ⭐ **RECORD THAT `value` WAS READ OUT OF `container[index]` — the read half of a move out of a slot.**
+	// Called at the container-read door for a green-thread element only; every other element is a borrow or a
+	// retain and has no move to finish.
+	function recordConsumablePromiseSlot(value ValueId, container ValueId, index ValueId, isField bool)
+		try self.promiseSlotContainer.set(value, value: container) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot entry — every SSA value must be minted through mintValue, which seeds the columns")
+		try self.promiseSlotIndex.set(value, value: index) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot index entry — every SSA value must be minted through mintValue, which seeds the columns")
+		try self.promiseSlotIsAField.set(value, value: isField) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot kind entry — every SSA value must be minted through mintValue, which seeds the columns")
+	end 'recordConsumablePromiseSlot'
+
+	// Does this value still name a container slot it was read out of, and not yet vacated? NOT-SET is the
+	// value's own id — see the columns' header.
+	function promiseValueCarriesAContainerSlot(value ValueId) returns bool
+		return (try self.promiseSlotContainer.get(value) otherwise panic("promiseValueCarriesAContainerSlot: v{value} has no promise-slot entry — every SSA value must be minted through mintValue, which seeds the columns")) != value
+	end 'promiseValueCarriesAContainerSlot'
+
+	// ⭐⭐ **FINISH THE MOVE: EMPTY THE SLOT THIS PROMISE CAME OUT OF.** `__managed_vacate` stores a zero
+	// over it — no destroy (the thread has just been consumed by this frame, destroying it is the second
+	// reclaim) and no COW detach (that would copy the record and leave two of them naming one thread). The
+	// container's element walk null-guards every slot, so a vacated one is simply skipped.
+	//
+	// ⚠ **IT CLEARS THE COLUMNS AFTER EMITTING**, so a value consumed twice cannot vacate twice. The second
+	// consume is a compile error on its own (E3100 / E3102) and never reaches lowering — but a vacate that
+	// depended on that would be a second statement of it, and this one costs a store.
+	function vacateConsumedPromiseSlot(value ValueId, range SourceRange)
+		if not self.promiseValueCarriesAContainerSlot(value) 'cameFromNoSlot'
+			return
+		end 'cameFromNoSlot'
+
+		let container = try self.promiseSlotContainer.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot entry — the check above just read it")
+		let index = try self.promiseSlotIndex.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot index entry — the columns move in lockstep")
+		// A FIELD is emptied where it lives — a direct store at its offset, `moveOutManagedPayload`'s shape.
+		// A CONTAINER element goes through `__managed_vacate`, which must find the buffer and stride first.
+		let slotIsAField = try self.promiseSlotIsAField.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot kind entry — the columns move in lockstep")
+		if slotIsAField 'aStructField'
+			let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+			self.emitIndirectStore(container, offset: self.constOf(index) as ByteOffset, value: zero, storageType: MaxonType.integer, range: range)
+		end 'aStructField' else 'aContainerElement'
+			var args = ValueIdArray.create()
+			args.push(container)
+			args.push(index)
+			_ = self.emitRuntimeCall(ManagedVacateName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'aContainerElement'
+
+		self.retireEveryPendingReadOfSlot(container, index: index)
+	end 'vacateConsumedPromiseSlot'
+
+	// ⭐⭐ **EMPTYING A SLOT RETIRES EVERY PENDING READ OF IT, NOT JUST THE ONE BEING CONSUMED.** A slot can be
+	// read twice before either read is used — `let a = try s.get(0)…; let b = try s.get(0)…` — and both values
+	// then name ONE green thread. The first consume takes it; the second must not, and after this the second
+	// value carries neither an ownership mark nor a slot, so `requireConsumedPromiseIsOwned` refuses it with
+	// the reason rather than reclaiming a thread that is already gone.
+	//
+	// ⛔ MEASURED before this: `(await a) + (await b)` over one slot exited **75** — two reclaims of one
+	// thread. Found at review; no committed case reads one slot twice.
+	//
+	// ⚠ **THE INDEX IS MATCHED BY CONSTANT WHERE ONE IS KNOWN, NOT BY `ValueId`.** Two source-level `0`s mint
+	// two different literal values, so identity alone would call them different slots and see nothing. Where
+	// an index is not a known constant the identity test is all there is, which is why a NON-constant repeat
+	// read (`s.get(i)` twice) is left to the run-time null-handle guard rather than claimed here.
+	function retireEveryPendingReadOfSlot(container ValueId, index ValueId)
+		for candidate in 0 upto self.promiseSlotContainer.count() 'eachValue'
+			let other = candidate as ValueId
+			if not self.promiseValueCarriesAContainerSlot(other) 'notAPendingRead'
+				continue
+			end 'notAPendingRead'
+
+			if (try self.promiseSlotContainer.get(other) otherwise panic("retireEveryPendingReadOfSlot: v{other} carries a slot by the test above")) != container 'anotherContainer'
+				continue
+			end 'anotherContainer'
+
+			let otherIndex = try self.promiseSlotIndex.get(other) otherwise panic("retireEveryPendingReadOfSlot: the slot columns move in lockstep")
+			if not self.slotIndicesDenoteTheSameSlot(otherIndex, b: index) 'anotherSlot'
+				continue
+			end 'anotherSlot'
+
+			try self.promiseSlotContainer.set(other, value: other) otherwise panic("retireEveryPendingReadOfSlot: v{other} carries a slot by the test above")
+			try self.promiseSlotIndex.set(other, value: other) otherwise panic("retireEveryPendingReadOfSlot: the slot columns move in lockstep")
+		end 'eachValue'
+	end 'retireEveryPendingReadOfSlot'
+
+	// Do these two index values name the same slot? The same SSA value always does; two values both known to
+	// be the same constant do too, which is the case that matters (a repeated literal index).
+	function slotIndicesDenoteTheSameSlot(a ValueId, b ValueId) returns bool
+		if a == b 'sameValue'
+			return true
+		end 'sameValue'
+
+		if not (self.constIsKnown(a) and self.constIsKnown(b)) 'notBothConstant'
+			return false
+		end 'notBothConstant'
+
+		return self.constOf(a) == self.constOf(b)
+	end 'slotIndicesDenoteTheSameSlot'
 
 	// ⭐ **IS A GREEN THREAD `p` OWNS STILL NAMED BY A LIVE ALIAS? (P1.5-B2 #88, Finding 2)** `let q = p` binds
 	// `q` to `p`'s thread ValueId without enrolling a second owner (a promise aliases, it does not move), so
@@ -38491,7 +38753,7 @@ export type Parser
 		// ordinal. A corpus `List` is a declared `Iterable` now and reads its element through `current()` like
 		// every other cursor.
 		if not src.isRange and not src.isString and not methodSurfaceExists(src.cursorSurface) 'readElement'
-			loopValue = self.emitContainerElementAccessor(func, callee: ManagedGetUncheckedName, container: source, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), reference: ContainerElementReference.borrowed, borrowSubjectName: src.elementBorrowSubject, range: SourceRange.ofToken(patternTok))
+			loopValue = try self.emitContainerElementAccessor(func, callee: ManagedGetUncheckedName, container: source, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), reference: ContainerElementReference.borrowed, borrowSubjectName: src.elementBorrowSubject, range: SourceRange.ofToken(patternTok))
 		end 'readElement'
 		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
 		// NOT A THIRD RULE HERE.** The other four forms each needed one: an array/list element is a BORROW the
@@ -44181,7 +44443,26 @@ export type Parser
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, offset: offset, valueType: payloadValueTypeOf(class, declared: declared), storage: storage, range: range)
 			var bindingInfo = try self.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: scrutMutable and payloadBindingAcceptsWrites(class), value: loaded, scrutBox: scrutBox, slotOffset: offset, storage: storage) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
-			if payloadClassIsManaged(class) 'managedPayload'
+			// ⭐⭐ **A GREEN-THREAD PAYLOAD IS MOVED OUT AT THE BIND, AND THERE IS NO BORROWED TWIN.** The
+			// managed arm below has two shapes — move out of a box this frame owns, or RETAIN out of one it
+			// only borrows — and the second cannot exist for a promise: a retain needs a second reference and
+			// a green thread admits exactly one owner. So an owned scrutinee hands the thread to the binding
+			// and NULLS the slot, and a borrowed one is refused rather than silently aliased.
+			//
+			// ⛔ **THE NULL STORE IS WHAT STOPS THE UNION RECLAIMING A THREAD THE `await` ALREADY DID.** With
+			// the payload merely loaded, `Slot.held(async plain())` matched and awaited exited **75**: the
+			// await reclaimed the thread and the union's own destructor cascade reclaimed it again. It is the
+			// payload twin of `__managed_vacate`, and the union's slot is nulled by the same store the managed
+			// move-out uses.
+			if payloadClassIsAGreenThread(class) 'aGreenThreadPayload'
+				if not scrutSolelyOwned 'borrowedScrutinee'
+					throw ParseError.promiseCannotBeBorrowed(String.from(binding.field.name), cure: "A promise payload is MOVED out of the union when it is bound, and this scrutinee is only borrowed — there is nothing to move out of. `match` on the binding that owns the union", line: binding.nameTok.line, column: binding.nameTok.column)
+				end 'borrowedScrutinee'
+
+				self.markValuePromise(loaded)
+				self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
+				movedManaged = true
+			end 'aGreenThreadPayload' else if payloadClassIsManaged(class) 'managedPayload'
 				if scrutSolelyOwned 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
 					movedManaged = true
@@ -45331,6 +45612,11 @@ export type Parser
 		// The node-handle mint rides the same lockstep, seeded NOT-A-MINT — which is the value's OWN id, a
 		// list it can never have been minted off (see the field header).
 		self.nodeHandleMintedFrom.push(id)
+		// Seeded NOT-SET (its own id): a freshly minted value has been read out of no slot. The one door that
+		// sets these is `recordConsumablePromiseSlot`, at the container-read site.
+		self.promiseSlotContainer.push(id)
+		self.promiseSlotIndex.push(id)
+		self.promiseSlotIsAField.push(false)
 		// The merge-alias mark rides the same lockstep, seeded PROVEN — an ordinary value's declared alias is
 		// one it passed a door to acquire. Only `mintPhi` sets it, because only a merge can name an alias no
 		// door stood in front of (see the field header).
@@ -45453,6 +45739,11 @@ export type Parser
 		// `remove` therefore refuses a bare parameter handle only if no binding owns it, and `bindParameters`
 		// gives every parameter one.
 		self.nodeHandleMintedFrom.push(self.nodeHandleMintedFrom.count())
+		// A parameter was read out of no slot in THIS frame — whatever the caller moved it out of, the move
+		// finished at the call. NOT-SET is the final answer for every parameter.
+		self.promiseSlotContainer.push(self.promiseSlotContainer.count())
+		self.promiseSlotIndex.push(self.promiseSlotIndex.count())
+		self.promiseSlotIsAField.push(false)
 		// A parameter is never a merge, and its declared range IS proved — by the entry guard `guardRangedParams`
 		// stands in front of every caller (A1f). The slot must exist so the column stays indexable.
 		self.phiAliasUnprovenMarks.push(false)
@@ -53392,6 +53683,19 @@ export type Parser
 		if payloadClassIsTypeParam(class) 'opaqueSlot'
 			return try self.moveOpaqueValueInto(arg, argBareLocal: argBareLocal, owner: owner, anchor: anchor, range: range)
 		end 'opaqueSlot'
+		// ⭐⭐ **A GREEN-THREAD PAYLOAD IS MOVED IN, AND IT IS NOT A MANAGED MOVE.** `moveManagedValueInto`
+		// takes a reference (or poisons a source and takes its one); a promise has no reference to take, so
+		// the move IS the consume — the word is stored as it stands and this frame stops naming the thread.
+		//
+		// ⛔ **WITHOUT IT THE PAYLOAD FALLS TO THE `scalar` RETURN AND THE SPAWN IS CANCELLED UNDER THE UNION.**
+		// `Slot.held(async plain())` left the spawn a statement-scoped pending temporary of the CONSTRUCTING
+		// frame, so the drain reclaimed it at the end of that statement; the payload kept a dead handle and
+		// the `match`ed-out promise was awaited after cancellation. MEASURED at **exit 92**.
+		if payloadClassIsAGreenThread(class) 'aGreenThread'
+			self.consumePromiseThread(arg, range: range)
+			return arg
+		end 'aGreenThread'
+
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
 		end 'scalar'
@@ -53817,6 +54121,9 @@ export type Parser
 			// and a payload slot cannot, because every case shares one slot region. So this arm is the
 			// backstop for that refusal, not a second verdict on it (P1.7a-existentials slice 2).
 			existential then panic("requirePayloadLowerable: a union payload is declared at an interface type — `Parser.requireStorableDeclaredType` refuses that at the declaration, so a payload reaching here came through a route that refusal does not cover")
+			// A green-thread handle lowers as the one word it is, exactly as a scalar payload does — what
+			// differs is ownership, which is decided at the move-in and in the drop cascade, not here.
+			greenThread then break 'c'
 		end 'c'
 		return class
 	end 'requirePayloadLowerable'
@@ -53858,6 +54165,11 @@ export type Parser
 			undeclaredName then break 'c'
 			floatPayload then panic("requirePayloadArgType: a float payload reached the arg check — requirePayloadLowerable rejects it first")
 			existential then panic("requirePayloadArgType: an interface-typed payload reached the arg check — an interface-typed union payload is refused at its DECLARATION (`requireStorableDeclaredType`), and a struct FIELD at one is checked by `requireStructFieldArgType`, never here")
+			// ⭐ The promise's own type check, and it must NOT go through `requireScalarPayloadArg`: that door
+			// compares TAGS, and a `genericInstance` against the declared `named` alias is an E3005 about a
+			// promise being stored in the promise slot that declares it. `requireManagedValueMatches` compares
+			// the two as the aggregate identities they are.
+			greenThread(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: voice, anchor: argTok)
 		end 'c'
 	end 'requirePayloadArgType'
 
@@ -55091,7 +55403,7 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		try self.consumeEmptyArgList()
 		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-		self.consumePromiseThread(recv.value)
+		self.consumePromiseThread(recv.value, range: SourceRange.between(recv.anchor, last: methodTok))
 		return self.emitRuntimeCall(GtPromiseDropName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
 	end 'emitPromiseCancel'
 
@@ -55973,10 +56285,30 @@ export type Parser
 	// admit the same set, which is exactly what `ProgramSignatures.structSupportsDeepClone` is (it and
 	// `managedFieldCloneStrategy` are read off one walk). `requireArrayElementCopyable` is this clause's twin
 	// one container out, down to the E2015 it reports.
+	// See the call site for why this is asked at the receiver rather than folded into `structSupportsDeepClone`.
+	function requireStructHoldsNoGreenThread(layout StructLayout, memberTok Token) throws ParseError
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if self.signatures.structFieldOwesDrop(layout.name, index: i) and not self.signatures.structFieldIsManaged(layout.name, index: i) 'aGreenThreadField'
+				throw ParseError.promiseCannotBeBorrowed(String.from(b"clone"), cure: "`{String.from(layout.name)}` holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and clone a record holding its RESULT", line: memberTok.line, column: memberTok.column)
+			end 'aGreenThreadField'
+		end 'eachField'
+	end 'requireStructHoldsNoGreenThread'
+
 	function requireStructCloneSupported(layout StructLayout, memberTok Token) throws ParseError
 		if layout.typeParamCount() > 0 'genericBase'
 			throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which is a GENERIC type — a clone must be minted per INSTANCE (a `{String.from(layout.name)} with String` and a `{String.from(layout.name)} with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `{String.from(layout.name)}` that rebuilds it.", line: memberTok.line, column: memberTok.column)
 		end 'genericBase'
+
+		// ⛔⛔ **A STRUCT HOLDING A PROMISE IS NOT CLONEABLE, AND `structSupportsDeepClone` CANNOT SEE IT.** That
+		// walk asks `structFieldIsManaged`, the narrow "is this an `__mm` box" — correctly `false` for a
+		// promise — so a promise field reads as a TRIVIAL word and the synthesized cloner blits it. MEASURED:
+		// `h.clone()` on a `Holder{p as IntPromise}` compiled and produced two Holders naming ONE green
+		// thread, which is the double reclaim `await`'s linearity exists to make unrepresentable, and it
+		// silently contradicted the rule `promise-typing.error.clone-a-promise` had just pinned for a bare
+		// promise. Asked HERE, at the concrete receiver, rather than by widening `structSupportsDeepClone`:
+		// that walk's answer also gates cloner SYNTHESIS program-wide, and widening it would refuse the clone
+		// of every unrelated type that merely reaches the same classifier.
+		try self.requireStructHoldsNoGreenThread(layout, memberTok: memberTok)
 
 		if self.signatures.structSupportsDeepClone(layout.name) 'cloneable'
 			return
@@ -58893,9 +59225,13 @@ export type Parser
 	// is the one place "does this element own anything?" is answered, and both sites ask it — so what is
 	// written twice is a three-line composition, not a rule.
 	function arrayElementDestroyValue(giid GenericInstanceId, range SourceRange) returns ValueId
-		if self.signatures.containerElementIsManaged(giid) 'managed'
+		// ⚠ **`containerElementOwesDrop`, NOT `containerElementIsManaged` — THE STAMP IS AN OWNERSHIP
+		// QUESTION** (`W217`). A promise element is not an `__mm` box, so the narrower predicate answers
+		// `false` and this stamped `0`; the record's walk was then skipped and every un-awaited element's
+		// green thread died with the container unreclaimed (exit 75).
+		if self.signatures.containerElementOwesDrop(giid) 'owesDrop'
 			return self.emitRuntimeFuncAddr(self.signatures.arrayElementDropCallee(giid), range: range)
-		end 'managed'
+		end 'owesDrop'
 
 		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
 	end 'arrayElementDestroyValue'
@@ -60556,7 +60892,7 @@ export type Parser
 			// The element is MOVED OUT — the caller owns it, and a statement-position `remove` drops it at
 			// the statement's end like every other unbound owned temporary. Emitted through the ONE element
 			// accessor, so its ownership, its result type and its buffer-surface mark are the array's answers.
-			return self.emitContainerElementAccessor(func, callee: ListRemoveNodeName, container: list, args: pairArgs(list, second: node), giid: giid, reference: ContainerElementReference.movedOut, borrowSubjectName: borrowSubjectName, range: range)
+			return try self.emitContainerElementAccessor(func, callee: ListRemoveNodeName, container: list, args: pairArgs(list, second: node), giid: giid, reference: ContainerElementReference.movedOut, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
 
 		// ⭐ **`detach(node)` — THE MEMBER THE SECOND RULING UNLOCKED.** Void and statement-position, like
@@ -60794,7 +61130,7 @@ export type Parser
 		if methodTok.value.equals(ManagedListNodeValueMethod) 'value'
 			try self.consumeEmptyArgList()
 			let reference = ContainerElementReference.retained if self.signatures.containerElementIsManaged(giid) else ContainerElementReference.borrowed
-			return self.emitContainerElementAccessor(func, callee: ListNodeValueName, container: node, args: singletonArgs(node), giid: giid, reference: reference, borrowSubjectName: EmptySourceText, range: range)
+			return try self.emitContainerElementAccessor(func, callee: ListNodeValueName, container: node, args: singletonArgs(node), giid: giid, reference: reference, borrowSubjectName: EmptySourceText, range: range)
 		end 'value'
 
 		// ⭐ **`next()` / `prev()` — THE TWO THROWING NODE NAVIGATORS**, one arm because the direction is the
@@ -60858,7 +61194,7 @@ export type Parser
 		// nor released. `index()` yields a plain integer and is emitted as one.
 		if methodTok.value.equals(CursorCurrentMethod) 'current'
 			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ManagedCursorCurrentName, container: cursor, args: singletonArgs(cursor), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
+			return try self.emitContainerElementAccessor(func, callee: ManagedCursorCurrentName, container: cursor, args: singletonArgs(cursor), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
 		end 'current'
 		if methodTok.value.equals(CursorIndexMethod) 'index'
 			try self.consumeEmptyArgList()
@@ -60884,7 +61220,7 @@ export type Parser
 		// element — the accessor door again, and a BORROW again, for `current`'s reason.
 		if methodTok.value.equals(CursorPeekMethod) 'peek'
 			let ahead = try self.parseOneBuiltinIntegerArgList(func, paramName: CursorPeekParamName, methodTok: methodTok)
-			return self.emitContainerElementAccessor(func, callee: ManagedCursorPeekName, container: cursor, args: pairArgs(cursor, second: ahead), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
+			return try self.emitContainerElementAccessor(func, callee: ManagedCursorPeekName, container: cursor, args: pairArgs(cursor, second: ahead), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
 		end 'peek'
 
 		// ⚠ Unreachable while the roster and these arms agree — `dispatchArrayMethod`'s drift panic, for its
@@ -63046,7 +63382,7 @@ export type Parser
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
 			self.recordArmServedIndexRangeCheck(giid, member: methodTok.value, value: index, anchor: methodTok, bufferSurface: isManagedMemory)
-			return self.emitContainerElementAccessor(func, callee: ManagedGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
+			return try self.emitContainerElementAccessor(func, callee: ManagedGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 		// ⭐⭐ **ONE SPELLING, TWO ENTRIES — THE BUFFER'S `set` IS BOUNDED BY CAPACITY AND THE `Array`'s BY LENGTH
 		// (R4.6).** ⚖ The capacity bound is a USER RULING of 2026-07-30, taken after a measured three-way
@@ -63111,7 +63447,7 @@ export type Parser
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ManagedFirstName, container: arr, args: singletonArgs(arr), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
+			return try self.emitContainerElementAccessor(func, callee: ManagedFirstName, container: arr, args: singletonArgs(arr), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
 		end 'first'
 		// ⭐ **`remove` IS BUFFER-SURFACE ONLY SINCE X-array-retire, AND THE GATE IS WHAT SAYS SO.** The
 		// `Array` spelling is `stdlib/Array.maxon:327`'s, which is this same operation through
@@ -63122,7 +63458,7 @@ export type Parser
 		// that states the surface at the arm rather than only in a list.
 		if isManagedMemory and methodTok.value.equals(RemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitContainerElementAccessor(func, callee: ManagedRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.movedOut, borrowSubjectName: borrowSubjectName, range: range)
+			return try self.emitContainerElementAccessor(func, callee: ManagedRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.movedOut, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
 		// ⭐ **`slice` IS BUFFER-SURFACE ONLY SINCE ARR3a**, for `remove`'s reason above and by its gate. The
 		// `Array` spelling is `stdlib/Array.maxon:229`'s, whose body is this same `managed.slice(…)` wrapped in
@@ -63495,6 +63831,14 @@ export type Parser
 		// the provenance table, because unlike the buffer it does not share a `GenericInstanceId` with anything.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryCreateCursorMethod) 'createCursor'
 			try self.consumeEmptyArgList()
+			// ⛔⛔ **NO CURSOR OVER A CONTAINER OF PROMISES** (`W217`). A promise is move-only: reading one out
+			// of a container starts a move that is finished by EMPTYING the slot it came from, and a cursor's
+			// `current`/`peek` hand back an element without naming an index — there is nothing to empty. Refused
+			// HERE, at the mint, rather than at the read, because this is the door that still holds the SOURCE
+			// container's instance: a cursor accessor is dispatched on the CURSOR's own instance, so by then
+			// the element type the rule is about is no longer in hand (measured — a refusal written at the read
+			// answered `false` for its own subject and let `c.current()` through to exit 75).
+			try self.requireNoCursorOverGreenThreadElements(giid, methodTok: methodTok)
 			let cursor = self.emitOwnedRuntimeResult(ManagedCursorCreateName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedMemoryCursorInstanceFor(giid), range: range)
 
 			// ⭐⭐ **A CURSOR IS A STANDING BORROW OF ITS SOURCE, AND E3070 IS WHERE THAT IS ENFORCED.** ⚖ USER
@@ -64151,6 +64495,123 @@ export type Parser
 	// `containerElementIsManaged` reads the TAG and answers FALSE for a `typeParameter` — in a shared generic
 	// body that means *"no static answer"*, never *"owns nothing"* (W61, a measured use-after-free the whole
 	// suite was green over). So the opaque test is what keeps an `Array with Element` out of the trivial arm.
+	// ⭐⭐ **THE THREE WAYS A PROMISE CAN LEAVE A CONTAINER, AND THEY ARE NOT INTERCHANGEABLE.**
+	//
+	//   • A **MOVE-OUT** (`pop`, `remove`, a list `remove`) — the container has ALREADY stopped naming it, so
+	//     there is no slot to vacate later and the caller owns the thread outright. It is enrolled exactly as
+	//     a spawn is, which is what makes `let p = try s.pop() …` drop its thread at scope exit instead of
+	//     leaking it (measured before this: exit 101, the popped promise owned by NOBODY).
+	//   • A **NAMEABLE READ** (`get(i)`, `first()`, `for … in`) — the slot is recorded, and vacated when the
+	//     read is consumed.
+	//   • A read that **CANNOT NAME ITS SLOT** (a cursor's `current`/`peek`, a list node's `value()`) —
+	//     REFUSED. Its container argument is the CURSOR or the NODE, not the array, so there is no index to
+	//     record and nothing to empty; letting it through would leave the element walk reclaiming a thread the
+	//     await already reclaimed. This is the one door where the refusal is the feature: before the element
+	//     stamp existed the same program merely LEAKED, and a leak quietly becoming a double free is not a
+	//     trade this compiler may make.
+	//
+	// ⚠ `first()` carries no index ARGUMENT and still names a slot — slot 0 — so it mints the literal rather
+	// than being refused alongside the cursor. The distinction is "can this read name its slot", not "was an
+	// index written".
+	// Which slot a promise element read names, resolved BEFORE the accessor is emitted — see the call site
+	// for why the order is load-bearing. `container` itself is the "no slot" answer, the same NOT-SET
+	// convention the columns use: a read that is not a promise, or that MOVED the element out, has no slot to
+	// vacate later.
+	function promiseElementSlotOf(callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, reference ContainerElementReference, range SourceRange) returns ValueId
+		if not self.signatures.containerElementIsAGreenThreadHandle(giid) 'notAPromiseElement'
+			return container
+		end 'notAPromiseElement'
+
+		if self.containerReadMovesTheElementOut(reference) 'movedOut'
+			return container
+		end 'movedOut'
+
+		if not self.calleeNamesAnElementSlot(callee) 'cannotNameItsSlot'
+			return container
+		end 'cannotNameItsSlot'
+
+		if args.count() > OneArgumentIsJustTheContainer 'carriesAnIndexArgument'
+			return try args.get(1) otherwise panic("promiseElementSlotOf: args.get OOB at 1 — the count was just tested")
+		end 'carriesAnIndexArgument'
+
+		return self.emitLiteral(FirstElementIndex, valueType: MaxonType.integer, range: range)
+	end 'promiseElementSlotOf'
+
+	// Record what `promiseElementSlotOf` resolved, now that the read's value exists — and refuse the read
+	// outright when it produced a promise no slot can be named for.
+	//
+	// ⛔⛔ **THE REFUSAL IS DECIDED ON THE RESULT VALUE'S TYPE, NOT ON THE CONTAINER'S `giid`, AND THAT IS A
+	// MEASURED CORRECTION.** A CURSOR's accessor is handed `recv.nameId` — the cursor's own instance, not the
+	// array's — so `containerElementIsAGreenThreadHandle(giid)` answers `false` for exactly the door this
+	// rule exists to refuse, and the first draft of it compiled `c.current()` on a promise array and ran it to
+	// **exit 75**. The value that came back is a promise whoever was asked about it, so asking IT is the
+	// question that cannot be dodged by which instance a door happened to pass.
+	//
+	// ⚠ Throwing AFTER the accessor call is emitted is safe where emitting is not: a throw appends no op, so
+	// it cannot steal the last-op slot `parseTryCallTarget`'s rewrite depends on.
+	function notePromiseElementRead(value ValueId, container ValueId, slot ValueId, callee ByteArray, reference ContainerElementReference, range SourceRange) throws ParseError
+		if not self.valueIsPromise(value) 'notAPromiseElement'
+			return
+		end 'notAPromiseElement'
+
+		if self.containerReadMovesTheElementOut(reference) 'movedOut'
+			self.markValuePromise(value)
+			self.pendingTempDrops.push(value)
+			return
+		end 'movedOut'
+
+		if not self.calleeNamesAnElementSlot(callee) 'cannotNameItsSlot'
+			throw ParseError.promiseCannotBeBorrowed(String.from(self.calleeMemberNoun(callee)), cure: "Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`", line: range.line, column: range.column)
+		end 'cannotNameItsSlot'
+
+		self.recordConsumablePromiseSlot(value, container: container, index: slot, isField: false)
+	end 'notePromiseElementRead'
+
+	// Does this accessor hand the element over for good? `movedOut` is the container's own statement that it
+	// has stopped naming the element — the same fact `pop`/`remove` publish.
+	// Does this accessor's argument list name the SLOT the element came out of? `get`/`get_unchecked` carry
+	// the index as their second argument, and `first` names slot 0 by construction. A cursor's accessors and
+	// a list node's take the CURSOR or the NODE as their subject and name no index into the container at all,
+	// which is the whole of why they are refused for a promise.
+	function calleeNamesAnElementSlot(callee ByteArray) returns bool
+		return callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedFirstName)
+	end 'calleeNamesAnElementSlot'
+
+	// The SOURCE spelling of the member a runtime callee serves — a diagnostic must name what the AUTHOR
+	// wrote, never the `__managed_*` entry the compiler emitted for it.
+	function calleeMemberNoun(callee ByteArray) returns ByteArray
+		if callee.equals(ManagedCursorCurrentName) 'current'
+			return b"current"
+		end 'current'
+
+		if callee.equals(ManagedCursorPeekName) 'peek'
+			return b"peek"
+		end 'peek'
+
+		if callee.equals(ListNodeValueName) 'nodeValue'
+			return b"value"
+		end 'nodeValue'
+
+		panic("calleeMemberNoun: '{String.from(callee)}' is not one of the element accessors that cannot name its slot — every caller reaches here past `calleeNamesAnElementSlot`")
+	end 'calleeMemberNoun'
+
+	function containerReadMovesTheElementOut(reference ContainerElementReference) returns bool
+		return match reference 'reference'
+			movedOut gives true
+			borrowed gives false
+			retained gives false
+		end 'reference'
+	end 'containerReadMovesTheElementOut'
+
+	// See the `createCursor` arm for why this is asked at the MINT and not at the read.
+	function requireNoCursorOverGreenThreadElements(giid GenericInstanceId, methodTok Token) throws ParseError
+		if not self.signatures.containerElementIsAGreenThreadHandle(giid) 'notAPromiseElement'
+			return
+		end 'notAPromiseElement'
+
+		throw ParseError.promiseCannotBeBorrowed(String.from(b"cursor"), cure: "A cursor's `current`/`peek` name no index, so nothing can be emptied when the promise is consumed. Walk it with `for … in`, or index it with `get(i)`", line: methodTok.line, column: methodTok.column)
+	end 'requireNoCursorOverGreenThreadElements'
+
 	function containerElementOwnsNothing(giid GenericInstanceId) returns bool
 		return not self.signatures.containerElementIsManaged(giid) and not self.signatures.containerElementIsOpaque(giid)
 	end 'containerElementOwnsNothing'
@@ -64261,7 +64722,7 @@ export type Parser
 	// `.rdata`). So a retain here would copy the record on every element read and hand the reader a DIFFERENT
 	// record from the one the slot holds. The USER RULING two paragraphs down settled the same question for the
 	// container's own lifetime: it is the BASE that is promoted, not the element that is retained.
-	function emitContainerElementAccessor(func IrFunction, callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, reference ContainerElementReference, borrowSubjectName ByteArray, range SourceRange) returns ValueId
+	function emitContainerElementAccessor(func IrFunction, callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, reference ContainerElementReference, borrowSubjectName ByteArray, range SourceRange) returns ValueId throws ParseError
 		// A TRIVIAL CONCRETE element (int / Byte / ranged-int / bool) is a bare inline word that owns nothing, so
 		// it is NEVER tracked owned, read or moved out (a decref of an integer would corrupt the count). An
 		// OPAQUE element is NOT trivial here — `typeIsManaged` is false for a `typeParameter`, but a managed
@@ -64290,7 +64751,19 @@ export type Parser
 				return self.emitUnaryOp(bits, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
 			end 'floatElement'
 
+			// ⭐⭐ **A PROMISE ELEMENT IS READ AS A MOVE, AND THE SLOT IS RESOLVED BEFORE THE CALL IS EMITTED.**
+			// The LOWERING is exactly the trivial one — a promise owns no record, so there is nothing to incref
+			// — but the OWNERSHIP is not trivial: the slot and the reader now name one green thread, and exactly
+			// one of them may reclaim it. See `promiseSlotContainer`.
+			//
+			// ⛔ **RESOLVED FIRST BECAUSE `first()` MINTS A LITERAL, AND A LITERAL EMITTED AFTER THE ACCESSOR
+			// WOULD BE THE LAST OP.** `parseTryCallTarget` turns `try arr.get(i)` into a try-call by REWRITING
+			// THE LAST OP, so anything emitted between the accessor call and that rewrite steals it — measured
+			// as *"`try` must be applied to a call"* on four committed cases, the same trap the await door
+			// carries its own note about. Resolving here leaves the accessor call last, always.
+			let promiseSlot = self.promiseElementSlotOf(callee, container: container, args: args, giid: giid, reference: reference, range: range)
 			let slotValue = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
+			try self.notePromiseElementRead(slotValue, container: container, slot: promiseSlot, callee: callee, reference: reference, range: range)
 
 			// ⭐⭐ **A NARROW SIGNED SLOT IS SIGN-EXTENDED HERE (`enum-narrow-storage`).** The shared element
 			// load ZERO-EXTENDS — one compiled byte loop, strided by the record's runtime `element_size@24`,
@@ -64980,7 +65453,7 @@ export type Parser
 
 		let source = try self.promiseSourceStoredHere(func, value: value, storage: storage, anchor: anchor)
 		try self.requirePromiseStorageDescribesSource(source, storage: storage, anchor: anchor)
-		self.consumePromiseThread(value)
+		self.consumePromiseThread(value, range: SourceRange.ofToken(anchor))
 		self.retypeValue(value, valueType: MaxonType.genericInstance(storage))
 		return value
 	end 'storedPromiseValue'
@@ -67551,6 +68024,19 @@ export type Parser
 		let offset = layout.offsetOfField(index)
 		let result = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
 
+		// ⭐⭐ **READING A PROMISE OUT OF A FIELD IS A PENDING MOVE, exactly as reading one out of a container
+		// element is.** The field goes on owning the thread until the read is CONSUMED; at that point the
+		// field is nulled, so the struct's destructor does not reclaim a thread the `await` already did.
+		//
+		// ⛔ **MEASURED both ways.** Without the record, `await h.p` had no slot to empty and no ownership
+		// mark, so `requireConsumedPromiseIsOwned` refused a perfectly good program; with the record but
+		// without the null store, the await and `__destruct_Holder` each reclaimed the same thread. ⚠ It is
+		// NOT recorded as a consume: `h.p.inner` peeks the handle and moves nothing, which is the whole point
+		// of `.inner`.
+		if self.signatures.typeIsAGreenThreadHandle(declared, from: self.artifact.typeNames) 'aPromiseField'
+			self.recordConsumablePromiseSlot(result, container: box, index: self.emitLiteral(offset as ParsedInt, valueType: MaxonType.integer, range: range), isField: true)
+		end 'aPromiseField'
+
 		// ⭐⭐ **AN INTERFACE-TYPED FIELD READS AS TWO LOADS, AND THE SECOND IS THE WITNESS
 		// (P1.7a-existentials slice 2).** The field's carve-out holds both halves, so the witness comes out of
 		// the box beside the value rather than being re-derived — which is the only thing that can be right:
@@ -69201,6 +69687,9 @@ export type Parser
 		let savedValueFromFreshReturn = self.valueFromFreshReturn
 		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedNodeHandleMintedFrom = self.nodeHandleMintedFrom
+		let savedPromiseSlotContainer = self.promiseSlotContainer
+		let savedPromiseSlotIndex = self.promiseSlotIndex
+		let savedPromiseSlotIsAField = self.promiseSlotIsAField
 		let savedPhiAliasUnprovenMarks = self.phiAliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedUnusedCandidates = self.unusedCandidates
@@ -69405,6 +69894,9 @@ export type Parser
 		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
+		self.promiseSlotContainer = ValueIdArray.create()
+		self.promiseSlotIndex = ValueIdArray.create()
+		self.promiseSlotIsAField = BoolArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -69634,6 +70126,9 @@ export type Parser
 		self.valueFromFreshReturn = savedValueFromFreshReturn
 		self.valuePromiseMarks = savedValuePromiseMarks
 		self.nodeHandleMintedFrom = savedNodeHandleMintedFrom
+		self.promiseSlotContainer = savedPromiseSlotContainer
+		self.promiseSlotIndex = savedPromiseSlotIndex
+		self.promiseSlotIsAField = savedPromiseSlotIsAField
 		self.phiAliasUnprovenMarks = savedPhiAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
 		self.unusedCandidates = savedUnusedCandidates
@@ -74267,7 +74762,7 @@ export type Parser
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
-		let opaqueWordReading = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		let opaqueWordReading = try self.retypeOpaqueMethodResult(result, callee: callee, args: args, anchor: anchor)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
 		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
 		// nothing" (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither).
@@ -74536,7 +75031,7 @@ export type Parser
 	// RETURNED VALUE, so the two could disagree — and did, for every body that returned a value it already
 	// owned. The callee now discharges the hand-off for every shape (`emitOwnedValueReturn`), so there is one
 	// convention, no bit, and nothing here for a caller to read back.
-	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns OpaqueWordReading
+	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray, anchor Token) returns OpaqueWordReading throws ParseError
 		if args.isEmpty() 'noReceiver'
 			return OpaqueWordReading.asItStands
 		end 'noReceiver'
@@ -74552,11 +75047,78 @@ export type Parser
 			return OpaqueWordReading.asItStands
 		end 'notItsOwnMethod'
 
+		// ⭐⭐ **THE CORPUS-CALL DOOR IS THE ONLY PLACE A CORPUS MEMBER'S ELEMENT TYPE IS CONCRETE** (`W217`).
+		// `stdlib/Array.maxon` is compiled ONCE over an opaque `Element`, so no rule about promise elements can
+		// be written inside `last()` or `cursor()` — in there the element is a type parameter and nothing about
+		// green threads is true of it yet. Here the receiver's instance is known, so here is where a member
+		// that hands back a BORROWED promise element is refused.
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then return self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
+			declared(returnType) then break 'declared'
 			undeclared then return OpaqueWordReading.asItStands
 		end 'declared'
+
+		let declaredReturn = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'again'
+			declared(returnType) gives returnType
+			undeclared gives MaxonReturnType.void
+		end 'again'
+		try self.requireCorpusElementReadIsNotABorrowedPromise(callee, receiver: receiver, returnType: declaredReturn, anchor: anchor)
+		return self.retypeOpaqueReturn(result, receiver: receiver, returnType: declaredReturn)
 	end 'retypeOpaqueMethodResult'
+
+	// ⭐ **A CORPUS MEMBER MAY HAND A PROMISE ELEMENT OVER ONLY IF IT STOPPED HOLDING IT.**
+	//
+	// A promise has one owner. `pop`/`remove`/`removeFirst`/`removeLast` take the element OUT — the container
+	// no longer names it, so the caller owns it outright and `enrolOwnedCallTemp` adopts it. Every other
+	// member that yields an element (`last`, `first`, `cursor`, and a user generic's own accessor) leaves the
+	// container still holding it, which for a refcounted element is fine — the read RETAINS — and for a green
+	// thread is impossible: there is no second reference to take.
+	//
+	// ⛔ **MEASURED: `try s.last() …` then `await` was exit 7 before the element stamp and exit 75 after it**,
+	// because the await reclaimed the thread and the array's element walk reclaimed it again. That is a leak
+	// becoming a DOUBLE FREE, which is the one direction this change may not trade in — hence a refusal here
+	// rather than a note.
+	//
+	// ⚠ **THE ROSTER IS OF COMPILER-OWNED MOVE-OUT DOORS, NOT OF SPELLINGS AUTHORS MAY INVENT.** These four
+	// names are the buffer surface's own, already constants in `SignatureIndex`, and a member NOT on it is
+	// refused rather than assumed safe — so a user generic's `take()` is refused (conservative) instead of
+	// silently double-freeing (unsound). The safe direction is the closed one.
+	// ⭐ **DOES THIS RETURN TYPE PUT A GREEN THREAD IN THE CALLER'S HANDS?** Two shapes, and the second is not
+	// an afterthought: a member may hand back the promise ITSELF (`last()` → `Element`), or a VIEW that will
+	// hand one back later (`cursor()` → an `ArrayCursor` over promise elements, `slice()` → another array of
+	// them). Both put a second holder on a thread that admits exactly one, and a rule written for only the
+	// first reads `false` for `cursor()` — measured, with the cursor case going green-by-omission the moment
+	// the condition was narrowed to the element shape alone.
+	function typeHandsBackAGreenThread(t MaxonType) returns bool
+		if self.signatures.typeIsAGreenThreadHandle(t, from: self.artifact.typeNames) 'isOneItself'
+			return true
+		end 'isOneItself'
+
+		if maxonTypeTag(t) != ValueTypeTag.genericInstance 'notAView'
+			return false
+		end 'notAView'
+
+		return self.signatures.containerElementIsAGreenThreadHandle(typeNameIdOf(t))
+	end 'typeHandsBackAGreenThread'
+
+	function requireCorpusElementReadIsNotABorrowedPromise(callee ByteArray, receiver ValueId, returnType MaxonReturnType, anchor Token) throws ParseError
+		// ⚠ **GATED ON WHAT THE MEMBER RETURNS, NOT ON THE RECEIVER ALONE.** The rule is about handing an
+		// ELEMENT over; a member of the same container that returns something else — `count()`, `push()`,
+		// `clear()` — is untouched by it. Keyed on the receiver alone this would have refused every member of
+		// an `Array with Promise`, which is a ban on using the container rather than a rule about borrowing.
+		let declared = match returnType 'r'
+			value(inner) gives inner
+			void gives MaxonType.integer
+		end 'r'
+		if not self.typeHandsBackAGreenThread(self.slotTypeThroughReceiver(receiver, declared: declared)) 'doesNotYieldAPromise'
+			return
+		end 'doesNotYieldAPromise'
+
+		if calleeIsAnElementMoveOut(callee) 'movesItOut'
+			return
+		end 'movesItOut'
+
+		throw ParseError.promiseCannotBeBorrowed(String.from(unqualifiedMemberName(callee)), cure: "Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`", line: anchor.line, column: anchor.column)
+	end 'requireCorpusElementReadIsNotABorrowedPromise'
 
 	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns OpaqueWordReading
 		match returnType 'r'
@@ -74900,12 +75462,26 @@ export type Parser
 	// miscompiled. The callee's PARAMETER types are checked by SemanticCheck, which alone holds the resolved
 	// signature.
 	//
-	// ⭐ **THE PROMISE IS AN i64 HANDLE, tagged `integer` — NOT the awaited scalar (P1.5-B2b).** The handle is
-	// the spawned GT's pointer; its value is an i64 whatever the awaited result type is. Earlier B1a tagged it
-	// with the awaited scalar so `await` could read the result type off `tagOf`, but a VOID async's handle
-	// would then be void-tagged and `let p = async voidFn()` could not bind it (a void tag names no value).
-	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
-	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
+	// ⭐⭐ **THE PROMISE IS BORN AT ITS OWN TYPE — `Promise with T` / `Promise with (T, E)`, the instance
+	// `internPromiseInstanceForCallee` interns off the callee.** The handle's runtime value is still an i64
+	// (the spawned GT's pointer, whatever the awaited result type is) and still lowers as one word; what
+	// changed is that the i64 is now its REPRESENTATION rather than its TYPE.
+	//
+	// ⛔⛔ **IT USED TO BE TAGGED `integer`, AND THAT WAS A WRONG ANSWER WEARING A DESIGN NOTE (`W230`).** The
+	// note was true as far as it went — tagging the handle with the AWAITED SCALAR, which B1a did, makes a
+	// void async's handle void-tagged, and `let p = async voidFn()` cannot bind a tag that names no value.
+	// But "not the awaited scalar" does not imply "the machine word": a value carrying its representation as
+	// its type is accepted everywhere that representation is accepted, and nothing was left to object.
+	// MEASURED on `main`: `function grab() returns Integer { return async plain() }` compiled and printed the
+	// green thread's raw address; `p + 1` was pointer arithmetic; `p.clone()` handed out a second owner of a
+	// thread exactly one owner may reclaim; and an `Integer` parameter took a promise. The third argument in
+	// the void chain is `PromiseVoidResultName`, which fills the result position when there is no result —
+	// so a void spawn binds, and does so as a `Promise`.
+	//
+	// ⭐ **THE REFUSALS ARE THEREFORE DERIVED, NOT ENUMERATED.** Every position that wants an `Integer`
+	// already knows how to refuse something that is not one, so there is no roster of promise-misuse
+	// positions to keep in step with the language — which is the property a roster can never have.
+	// `await`/`try await` still recover the awaited result type from the callee, unchanged.
 	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, spawnSite AsyncSpawnSite) returns ValueId throws ParseError
 		// `written` is not a default here, it is the shape of the door: `parseAsyncCall` is the sole caller and
 		// it consumes a bare `identifier` callee, so an `async` spawn's name is always the author's own bytes.
@@ -74952,7 +75528,7 @@ export type Parser
 		// both gates, so only arguments that fit the channel are ever transferred — and after
 		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
 		try self.transferAsyncSpawnArgs(args, anchor: anchor)
-		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: self.signatures.internPromiseInstanceForCallee(callee))
 		self.markValuePromise(result)
 		// ⭐ P1.5-B2 #88: the spawn OWNS a green thread. Enrol it as a statement-scoped pending temporary,
 		// exactly as `trackOwnedTemp` enrols an interpolation result: `parseBinding` transfers it to
@@ -75209,12 +75785,21 @@ export type Parser
 		// ⭐⭐ **THE ONE PLACE THE BLOCKING GRAPH'S SEEDS ARE MINTED (SV2).** `awaitedPromiseFacts` has just
 		// resolved which road this promise came by — including a merge PHI — so the fact is free here and
 		// would be a second resolver anywhere else. See `Project.serviceAwaitSites`.
+		// ⛔⛔ **THE VACATE IS EMITTED HERE, BEFORE THE AWAIT OP, AND THE ORDER IS LOAD-BEARING.**
+		// `parseTryCallTarget` turns a `try await` into one by REWRITING THE LAST OP EMITTED
+		// (`rewriteLastCallToTryCall`). Emit the slot vacate after the await and the last op is the
+		// `__managed_vacate` call, so the rewrite retargets that instead — which is how the earlier attempt at
+		// this slice turned six committed `try await` cases into E3055. Emitting it first leaves the await op
+		// last, where the rewrite expects it. The rest of the consume (`consumePromiseThread`) has no emit and
+		// stays below; it finds the columns already cleared and does nothing further.
+		try self.requireConsumedPromiseIsOwned(promise, anchor: awaitTok)
+		self.vacateConsumedPromiseSlot(promise, range: SourceRange.ofToken(awaitTok))
 		self.recordServiceReplyAwait(func, promise: promise, awaitTok: awaitTok)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
 		// The await consumes the thread — the runtime reclaims its struct here — so its owning binding must not
 		// also drop it at scope exit (P1.5-B2 #88). Covers `try await` too: `parseTryCallTarget` emits its target
 		// through this same `emitAwaitOp`, then rewrites the op to `tryAwait` (the consume is independent).
-		self.consumePromiseThread(promise)
+		self.consumePromiseThread(promise, range: SourceRange.ofToken(awaitTok))
 		return result
 	end 'emitAwaitOp'
 
@@ -75270,6 +75855,21 @@ export type Parser
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
 			let position = argSlotPosition(info.paramNames, argIndex: i, label: label)
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
+			// ⭐⭐ **A PROMISE ARGUMENT IS A MOVE, BY TYPE, AT EVERY POSITION — CONSUMING OR NOT** (`W231`). A
+			// green thread has exactly one owner, so handing one to a callee is never a borrow: the callee
+			// either awaits it, stores it, or drops it at its own scope exit, and this frame must stop naming
+			// it either way. That is why the test is on the ARGUMENT's type and not on the parameter's
+			// consume class — the consume classes are swept from bodies, and "does the callee happen to
+			// consume it" is the wrong question to route ownership of a linear value on.
+			//
+			// ⛔ **WITHOUT IT THE SPAWN IS CANCELLED UNDER THE CALLEE'S FEET.** `Holder.of(async plain())`
+			// leaves the spawn a statement-scoped pending temporary of the CALLER, so the drain reclaims it at
+			// the end of the very statement that handed it away; the field then holds a dead handle and
+			// `await h.p` aborts. MEASURED at **exit 92** before this arm existed — and, because a cancelled
+			// thread is still a non-zero pointer, a peek at `h.p.inner` reported it as perfectly alive.
+			if self.valueIsPromise(argValue) 'aPromiseIsAlwaysMoved'
+				self.consumePromiseThread(argValue, range: SourceRange.ofToken(anchor))
+			end 'aPromiseIsAlwaysMoved'
 			// ⛔⛔ **THE THIRD ARRIVAL: A FEED HANDS THE CALLEE A VALUE IT WILL KEEP (BATCH41 arrival roster).**
 			// A `List with <inner alias>` reaches NO other door — `List` is a DECLARED corpus generic since
 			// W153, so its chain is built inside `List`'s OWN body over `List`'s own opaque `Element` and the
@@ -76198,10 +76798,49 @@ export type Parser
 	// is a whole-program fact (which returns launder a borrow), the same fixpoint the transitive consume waits
 	// on; until it exists a call result is a co-owner, which costs one refcount pair and never a stolen slot.
 	function enrolOwnedCallTemp(result ValueId)
+		// ⭐⭐ **A CALL THAT RETURNS A PROMISE HANDED ITS THREAD OVER, SO THIS FRAME OWNS IT** (`W217`). It is
+		// enrolled as a PROMISE and not as a heap box: `trackOwnedTemp` would drop it through `__mm_decref`,
+		// decrementing a word inside the scheduler's slab that is not a refcount.
+		//
+		// ⭐ **THE INFERENCE IS SOUND ONLY BECAUSE A BORROW CANNOT ESCAPE A FRAME.** A callee may return a
+		// promise it OWNED (`pop`, `remove`, a spawn) or one it merely READ out of a container it does not
+		// own — and the second is refused at the return door (`requireReturnedPromiseIsNotABorrow`), so
+		// everything that actually reaches a caller is a give-away. Without that refusal this arm would adopt
+		// `last()`'s borrowed element too, and the array would reclaim the same thread a second time — turning
+		// a leak into a double free, which is the worse of the two.
+		// ⚠ The void test comes FIRST and is not redundant: `valueMaxonType` PANICS on a void tag (a void
+		// call's result names no value to rebuild a type from), and `enrolOwnedCallTemp` is reached by every
+		// call, statement-position void ones included. Measured as a compiler panic across the whole
+		// `async-await` spec the moment the promise arm went in ahead of it.
+		if self.tagOf(result) != ValueTypeTag.void and self.valueIsPromise(result) 'adoptsAGreenThread'
+			self.markValuePromise(result)
+			self.pendingTempDrops.push(result)
+			return
+		end 'adoptsAGreenThread'
+
 		if self.valueIsManagedHeap(result) or self.tagOf(result) == ValueTypeTag.typeParameter 'adoptsHeapBox'
 			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.coOwned)
 		end 'adoptsHeapBox'
 	end 'enrolOwnedCallTemp'
+
+	// ⭐⭐ **A PROMISE STILL NAMING A CONTAINER SLOT MAY NOT BE RETURNED — THAT IS A BORROW ESCAPING ITS
+	// FRAME.** Reading a promise out of a container starts a MOVE that is finished by vacating the slot when
+	// the value is consumed; a `return` carries the value somewhere the slot is no longer nameable, so the
+	// move could never be completed and the container would go on owning a thread the caller now also holds.
+	//
+	// ⚠ **THIS IS WHAT MAKES `stdlib/Array.last()` A REFUSAL FOR A PROMISE ELEMENT, AND IT IS THE RIGHT
+	// SHAPE OF ANSWER.** `last` reads the element and hands it back without removing it — fine for a
+	// refcounted element, which is RETAINED on the way out, and impossible for a green thread, which has no
+	// second reference to take. `pop`/`remove` are unaffected: their element is `movedOut`, so it carries no
+	// slot and is owned outright by the body that returns it. The rule is stated over the VALUE's state
+	// rather than over a roster of member names, so a user's own generic wrapper obeys it too.
+	function requireReturnedPromiseIsNotABorrow(value ValueId, anchor Token) throws ParseError
+		if not self.promiseValueCarriesAContainerSlot(value) 'ownedOutright'
+			return
+		end 'ownedOutright'
+
+		throw ParseError.promiseCannotBeBorrowed(String.from(b"return"), cure: "This promise is still held by the container it was read out of, so returning it would leave two owners. `await` it and return the RESULT, or return one this frame owns outright — a spawn, or an element taken with `pop`/`remove`", line: anchor.line, column: anchor.column)
+	end 'requireReturnedPromiseIsNotABorrow'
 
 	// ⭐ **A CALL THROUGH A FUNCTION VALUE** (P1.5-A1) — `f(21)`, `h.op(21)`, `pick()(21)`. The cursor sits
 	// on the `(`; `callee` is the SSA value holding the code pointer (a `function`-tagged value produced by

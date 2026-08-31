@@ -337,8 +337,14 @@ error E3059: <fragment>:17:10: try propagates 'AError' but enclosing function th
 <!-- targets: x64-windows -->
 `try await` is LINEAR exactly as plain `await` is — awaiting one throwing promise twice would release its
 green thread twice. The linearity pass counts `tryAwait` sites, not only plain `await`, so the second
-`try await` of the same promise is refused (E3100). This locks in the soundness that the exhaustive
+`try await` of the same promise is refused. This locks in the soundness that the exhaustive
 op-match structurally protects.
+⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
+green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
+the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
+ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
+decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
+a loop back edge — so the two codes divide this family between them.
 ```maxon
 enum WorkError implements Error
 	failed
@@ -358,5 +364,5 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3100: <fragment>:14:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3102: <fragment>:14:20: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```

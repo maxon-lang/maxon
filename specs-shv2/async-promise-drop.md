@@ -414,12 +414,17 @@ typealias Integer = int(i64.min to i64.max)
 error E2015: <fragment>:9:2: Unsupported: cannot re-arm the promise binding ('p'): its green thread is still named by an alias, so dropping it here would leave that alias dangling — `await` through one name before re-arming
 ```
 
-<!-- test: async-promise-drop.await-then-reassign-nonpromise -->
-<!-- targets: x64-windows -->
-Once a promise's thread has been AWAITED, its binding owns nothing, so reassigning it to a plain scalar is fine
-(Finding 4): `await p` reclaims the thread, then `p = 5` makes `p` an ordinary int. It is neither dropped (the
-binding owes nothing) nor use-after-move (a scalar binding is always readable), so `return p` is 5. Before the
-fix this was wrongly rejected E2015.
+<!-- test: async-promise-drop.error.await-then-reassign-nonpromise -->
+⛔ **A `var` DOES NOT CHANGE TYPE, AND A PROMISE BINDING IS NO EXCEPTION.** This case used to RUN, and it
+ran only because a promise had no type of its own: the binding was declared from `async nine()`, which minted
+a bare machine word, so `p` was an `int` binding and `p = 5` was an ordinary scalar reassignment. Once the
+spawn is typed (`W230`), `p` holds a `Promise with Integer` for its whole life and assigning an `int` to it is
+the same refusal assigning an `int` to any other declared type earns.
+
+⚠ **THE OWNERSHIP FACT IT USED TO PIN IS UNCHANGED AND IS STILL PINNED** — that an AWAITED promise's binding
+owns nothing, so nothing is dropped at scope exit and no use-after-move is reported. That is what
+`rearm-var-across-loop`, `rearm-var-across-branch` and `await-rearmed-var` test, with a re-armed PROMISE
+rather than a scalar, which is the only re-arm the type now admits. What is gone is a spelling, not a rule.
 ```maxon
 function nine() returns Integer
 	Runtime.yield()
@@ -435,12 +440,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-5
-```
-```stdout
-9
-
+```maxoncstderr
+error E3005: <fragment>:11:2: cannot assign a value of type 'int' to variable 'p', which holds 'struct'
 ```
 
 <!-- test: async-promise-drop.branch-store-into-a-container-on-both-arms -->
@@ -576,4 +577,197 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: async-promise-drop.a-container-drops-its-un-awaited-elements -->
+<!-- targets: x64-windows -->
+⭐ The container is an OWNER. An array of promises that reaches scope exit holding un-awaited elements
+drops each one — the same `__gt_promise_drop` a bare binding gets, reached through the element
+destructor the array record stamps. Before this slice the record stamped `element_destroy@40 = 0`,
+because the compiler classed a promise as owing nothing, and the array died taking its elements'
+threads with it, unreclaimed: `__gt_live_count` stayed at 1 and the program exited **75**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.an-element-moved-out-by-pop-belongs-to-the-caller -->
+<!-- targets: x64-windows -->
+`pop` MOVES the element out: the array no longer holds it and the caller's binding does, so the binding
+drops it at scope exit like any other owned promise. Before this slice a popped promise was owned by
+NOBODY — the array had already forgotten it and the binding never adopted it — so both the promise's
+box and its green thread leaked. The heap gate is checked first, so the symptom was **101**, with the
+green-thread leak (75) hiding behind it. `.inner` peeks at the handle without consuming it, which is
+what lets this case observe the promise at all without awaiting it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		let p = try s.pop() otherwise panic("just pushed one")
+		print("popped a thread {p.inner > 0}, array now {s.count()}")
+		return 0 as ExitCode
+end 'main'
+```
+```stdout
+popped a thread true, array now 0
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-struct-field-drops-the-promise-it-holds -->
+<!-- targets: x64-windows -->
+A struct FIELD is an owner too, and the struct's synthesized destructor drops it. This case could not
+even be WRITTEN before promises were typed: `Holder.of(async plain())` was refused (`expected
+'IntPromise', got 'int'`) because the spawn was a bare machine word, so the only way a promise ever
+reached a field was through a container read — and once it did, nothing dropped it. Typing the promise
+opens the position; stamping the field destructor is what makes opening it safe.
+
+⚠ **IT AWAITS THE FIELD RATHER THAN PEEKING IT, AND THE DIFFERENCE IS THE WHOLE CASE.** An earlier draft
+observed the promise with `h.p.inner > 0` and PASSED the moment the spawn was typed — for the wrong
+reason. The spawn is a statement-scoped pending temporary, so storing it into a field without MOVING it
+leaves the drain to cancel the thread at the end of that statement; the field then holds a dead handle,
+and a peek reads a dangling pointer that is still non-zero. `await h.p` is what tells the two apart:
+against the cancelled thread it aborts (**exit 92**), and only a field that really owns a live promise
+answers 7.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+type Holder
+		public let p as IntPromise
+
+		static function of(p IntPromise) returns Holder
+				return Holder{p: p}
+		end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+		let h = Holder.of(async plain())
+		return (await h.p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.error.a-promise-element-read-through-a-borrow-door -->
+⭐ **A CORPUS MEMBER MAY HAND A PROMISE ELEMENT OVER ONLY IF IT STOPPED HOLDING IT.** `last()` reads the
+element and leaves it in the array. For a refcounted element that is sound — the read RETAINS, so both
+holders own a reference — and for a green thread it is impossible: there is no second reference to take,
+so the array and the caller would each reclaim the same thread.
+
+⛔ **THIS WAS THE ONE CASE THE ELEMENT STAMP MADE WORSE BEFORE IT WAS REFUSED, WHICH IS WHY THE REFUSAL IS
+PART OF THE SAME CHANGE.** Measured: `try s.last() … ; await l` exited **7** while an `Array with Promise`
+dropped nothing, and **75** once it dropped — a leak turning into a double free. A container of promises
+now refuses the read instead.
+
+⚠ **THE RULE IS DECIDED AT THE CALL SITE AND IT HAS TO BE.** `stdlib/Array.maxon` is compiled ONCE over an
+opaque `Element`, so inside `last()` the element is a type parameter and nothing about green threads is
+true of it yet; the caller is the only place the element type is concrete.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		let l = try s.last() otherwise panic("has one")
+		return (await l) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:14:17: a promise cannot be borrowed through 'last': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-cursor-over-a-container-of-promises -->
+A cursor's `current()`/`peek()` hand back an element without naming an index into the container, so a
+promise read through one has no slot to empty when it is consumed — and, unrefused, the `await` and the
+array's own element walk each reclaim the same green thread (measured: exit 75).
+
+⚠ **THE REFUSAL IS DECIDED ON THE VALUE THE READ PRODUCED, NOT ON THE CONTAINER IT WAS ASKED OF.** A cursor
+accessor is dispatched on the CURSOR's instance rather than the array's, so a rule keyed on the receiver's
+element type answers `false` about its own subject; an early draft did exactly that and let this program
+through. Asking what came BACK cannot be dodged that way.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		let c = try s.cursor() otherwise panic("has one")
+		let p = c.current()
+		return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:15:13: a promise cannot be borrowed through 'current': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.a-move-out-hands-the-thread-over -->
+<!-- targets: x64-windows -->
+The other side of the rule above: `pop` MOVES the element out, so the container has stopped naming it and
+the caller owns it outright — the read is legal and the awaited value arrives intact. This is what keeps
+the refusal a statement about BORROWING rather than a ban on getting a promise out of a container.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		let p = try s.pop() otherwise panic("has one")
+		return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```

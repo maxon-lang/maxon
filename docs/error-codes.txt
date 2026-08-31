@@ -2362,3 +2362,18 @@ E3139 SemanticServiceCallCycle
 	doc The cure is to break the cycle: make one of the calls fire-and-forget (drop the `returns` and `throws`
 	doc clauses, or send it as a statement and do not await it) and have the peer reply with a separate
 	doc message, or split the role into two types.
+
+E3141 SemanticPromiseCannotBeBorrowed
+	shv2 semanticPromiseCannotBeBorrowed
+	doc A promise owns a green thread, and a green thread has exactly ONE owner at every instant -- awaiting
+	doc it consumes it, so under the ownership model it is a mutable value and cannot be borrowed. Reading a
+	doc promise out of a container is therefore a MOVE, not a copy: the slot it came from must be emptied when
+	doc the read is consumed, or the container's element walk reclaims a thread the consume already reclaimed.
+	doc This refuses the reads that CANNOT NAME the slot they came from, because a move with nowhere to
+	doc record its source cannot be finished. A cursor's `current`/`peek` and a list node's `value()` are the
+	doc cases: each hands back an element without naming an index into the container, so nothing can be
+	doc vacated when the promise is later awaited.
+	doc The cure is a read that names its slot -- `get(i)`, `first()`, or `for ... in` -- or a move-out
+	doc (`pop`, `remove`), whose result the caller owns outright.
+	doc It is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good
+	doc promise. It is about there being no way to say which slot stopped owning it.

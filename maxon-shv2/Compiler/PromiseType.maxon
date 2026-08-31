@@ -68,6 +68,25 @@
 // `ProgramSignatures.instanceIsPromiseHandle` compare against this rather than against their own literal.
 export let PromiseTypeName = b"Promise"
 
+// ⭐⭐ **THE STAND-IN RESULT ARGUMENT FOR A VOID THUNK'S PROMISE.** `async voidFn()` is a promise like
+// any other and must carry a TYPE, but `MaxonType` has no void arm to put in the result position — void is
+// a property of a RETURN, spelled by `MaxonReturnType.void`, and a type argument position has nowhere to
+// say it. So a void thunk's promise interns `Promise with __Void`, on the precedent of
+// `SynthesizedByteElementName` (`b"__ManagedByte"`): a compiler-minted type NAME standing where a source
+// type would.
+//
+// ⚠ **IT IS DELIBERATELY UNSPELLABLE.** E2051 reserves the `__` prefix for the compiler, and
+// `checkGenericArgType` runs only over arguments an author actually wrote, so no program can name this and
+// no program can be shown it — `awaitedPromiseFacts` answers `MaxonReturnType.void` for such an instance
+// and the await yields nothing, exactly as it did when the handle was untyped.
+//
+// ⚠ **A ONE-ARGUMENT INSTANCE WOULD NOT DO, and that is why this exists at all rather than just
+// omitting the argument.** `promiseStorageThrows` keys on the argument COUNT: `Promise with (T, E)` throws
+// and `Promise with T` does not. A void THROWING thunk that interned a single error argument would read as
+// a non-throwing promise of an error-typed result — so the result position is always filled, and `__Void`
+// is what fills it when there is no result.
+export let PromiseVoidResultName = b"__Void"
+
 // The one member a promise carries — `p.cancel()`. `stdlib/Builtins.maxon` declares no methods on `Promise`
 // (its `inner` field is the whole of its written surface), so this name is the compiler's and lives with the
 // rest of what the compiler knows about the type rather than in a roster it is not on.

@@ -1471,6 +1471,19 @@ export enum ErrorCode
 	// The cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the
 	// `returns` and `throws` clauses -- which makes the message fire-and-forget, with no reply to carry.
 	semanticServiceReplyNotCarriable = "E3140"
+	// A promise owns a green thread, and a green thread has exactly ONE owner at every instant -- awaiting
+	// it consumes it, so under the ownership model it is a mutable value and cannot be borrowed. Reading a
+	// promise out of a container is therefore a MOVE, not a copy: the slot it came from must be emptied when
+	// the read is consumed, or the container's element walk reclaims a thread the consume already reclaimed.
+	// This refuses the reads that CANNOT NAME the slot they came from, because a move with nowhere to
+	// record its source cannot be finished. A cursor's `current`/`peek` and a list node's `value()` are the
+	// cases: each hands back an element without naming an index into the container, so nothing can be
+	// vacated when the promise is later awaited.
+	// The cure is a read that names its slot -- `get(i)`, `first()`, or `for ... in` -- or a move-out
+	// (`pop`, `remove`), whose result the caller owns outright.
+	// It is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good
+	// promise. It is about there being no way to say which slot stopped owning it.
+	semanticPromiseCannotBeBorrowed = "E3141"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

@@ -41,13 +41,13 @@ caller's to finish. Two outcomes, both live in this file:
 | **awaits the rest** (this file's `leaves-the-others-awaitable`) | correct and **leak-free**, exit 0 |
 | **drops the array with losers still in it** | **exit 75** — a reported green-thread leak |
 
-⛔ **THE SECOND ROW IS A PRE-EXISTING DEFECT (`W217`), NOT SOMETHING `awaitAny` INTRODUCES.** An
-`Array with Promise` emits no `__gt_promise_drop` per element when it dies: `__gt_live_count` stays up and
-the exit gate reports 75. That is true on a compiler built from `main` with or without this primitive —
-`var s = IntPromiseArray.create()` plus one `s.push(async f())` and nothing else is already exit 75. The
-case that pins the composition (`the-losers-are-dropped-when-the-array-dies`) is therefore `disabled-test`
-against `W217`, and a reader who meets that 75 has met the container's missing element walk rather than a
-bug in this primitive.
+✅ **THE SECOND ROW WAS A PRE-EXISTING DEFECT (`W217`), NOT SOMETHING `awaitAny` INTRODUCED, AND IT IS
+FIXED.** An `Array with Promise` used to emit no `__gt_promise_drop` per element when it died:
+`__gt_live_count` stayed up and the exit gate reported 75, on a compiler built from `main` with or
+without this primitive. A container is now an OWNER of its promise elements and drops each un-awaited
+one, so the case that pins the composition (`the-losers-are-dropped-when-the-array-dies`) runs — it was
+`disabled-test` against `W217` until the container's element walk existed. See
+`async-promise-drop.a-container-drops-its-un-awaited-elements` for the isolated statement of it.
 
 The motivating consumer is unaffected, and that is the point of choosing a primitive that does not
 consume: a worker pool selecting over drains **awaits every drain eventually**.
@@ -478,12 +478,12 @@ end 'main'
 92
 ```
 
-<!-- disabled-test: await-any.the-losers-are-dropped-when-the-array-dies -->
-<!-- W217 -->
-⭐ The composition: select, serve the winner, and let the array die with the losers still in it. Exit 0 is
-what a container that dropped its promise elements would give. Today it is **exit 75** — `W217`, the
-missing element walk on an `Array with Promise`, which is present on `main` with or without this
-primitive.
+<!-- test: await-any.the-losers-are-dropped-when-the-array-dies -->
+<!-- targets: x64-windows -->
+⭐ The composition: select, serve the winner, and let the array die with the losers still in it. Exit 0
+is what a container that drops its promise elements gives. This case was `disabled-test` until the
+container owned its elements: the missing element walk on an `Array with Promise` (`W217`) reported
+**exit 75** here, and on `main` with or without this primitive.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

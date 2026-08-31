@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "5fa18635e88507ba",
+  "sourceHash": "24758e717f3110c9",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1578,6 +1578,15 @@
       "stage": "semantic",
       "doc": "A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler\ncannot carry back to a sender.\nA reply resolves through a CELL -- a green thread that never runs -- and a cell carries exactly TWO\nwords: the value, and one error word.\nThe VALUE word is one machine word the awaiter reads back verbatim, so it holds what a green thread's\nresult register holds: an integer, a `bool`, a `String`, a struct, a service handle. A `float` comes\nback in a floating-point register the cell has no slot for; a value held at an interface type or an\nopaque type parameter is a pair whose second half is released through a companion the cell does not\ncarry.\nThe ERROR word holds the FUSED ORDINAL of a two-member dispatch line -- `ServiceError` (what the\ntransport can fail with, whatever the message declares) beneath the message's own error type -- which\nis what lets `match e` tell a stopped service apart from a handler that threw, using the same\ntag-interval dispatch every other `match` uses. A payload-free `enum` fits that line exactly, because\nits flag IS an ordinal. A payload-carrying `union`'s flag is a heap BOX POINTER instead, and a\nfloat-backed enum's tags are IEEE-754 bit patterns that can span more of the i64 range than the line\nhas left above `ServiceError`'s own slice.\nIt fires at the `spawn` rather than at a send, as every service diagnostic does, and for a reason of\nits own beyond the usual one: the dispatch loop the compiler synthesizes completes a reply for every\nreply-bearing message of the type, so a message the cell cannot carry would put a wrong-width store\ninto a body the service really runs, whether or not the program ever sends that message.\nThe cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the\n`returns` and `throws` clauses -- which makes the message fire-and-forget, with no reply to carry.",
       "emittedBy": {"shv2": "semanticServiceReplyNotCarriable"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3141,
+      "tag": "E3141",
+      "name": "SemanticPromiseCannotBeBorrowed",
+      "stage": "semantic",
+      "doc": "A promise owns a green thread, and a green thread has exactly ONE owner at every instant -- awaiting\nit consumes it, so under the ownership model it is a mutable value and cannot be borrowed. Reading a\npromise out of a container is therefore a MOVE, not a copy: the slot it came from must be emptied when\nthe read is consumed, or the container's element walk reclaims a thread the consume already reclaimed.\nThis refuses the reads that CANNOT NAME the slot they came from, because a move with nowhere to\nrecord its source cannot be finished. A cursor's `current`/`peek` and a list node's `value()` are the\ncases: each hands back an element without naming an index into the container, so nothing can be\nvacated when the promise is later awaited.\nThe cure is a read that names its slot -- `get(i)`, `first()`, or `for ... in` -- or a move-out\n(`pop`, `remove`), whose result the caller owns outright.\nIt is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good\npromise. It is about there being no way to say which slot stopped owning it.",
+      "emittedBy": {"shv2": "semanticPromiseCannotBeBorrowed"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

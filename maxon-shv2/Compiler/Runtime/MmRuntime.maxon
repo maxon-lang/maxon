@@ -2262,7 +2262,7 @@ function declareUnionPayloadDropNeeds(usage RuntimeUsage, layout EnumLayout, pro
 		for fi in 0 upto payloads.count() 'eachField'
 			let field = try payloads.get(fi) otherwise panic("declareUnionPayloadDropNeeds: payloadsAt count disagrees with get at {fi}")
 			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
-			if not payloadClassIsManaged(class) 'scalar'
+			if not payloadClassOwesDrop(class) 'scalar'
 				continue
 			end 'scalar'
 			recordCallUsage(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), usage: usage)
@@ -2513,7 +2513,7 @@ function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, projec
 		for fi in 0 upto payloads.count() 'eachField'
 			let field = try payloads.get(fi) otherwise panic("addNestedUnionDestructors: payloadsAt count disagrees with get at {fi}")
 			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
-			if not payloadClassIsManaged(class) 'scalar'
+			if not payloadClassOwesDrop(class) 'scalar'
 				continue
 			end 'scalar'
 			insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
@@ -2792,7 +2792,7 @@ end 'projectHasStructLayout'
 // substituted-tuple walk landed (W41) so the two walks share one admission test rather than each spelling
 // it — the shape where one of them comes to admit a layout the other would have declined.
 function installOneStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, needed DestructorSet)
-	if not signatures.structHasManagedField(layout.name) 'noManaged'
+	if not signatures.structHasFieldOwingDrop(layout.name) 'noManaged'
 		return
 	end 'noManaged'
 
@@ -2815,7 +2815,7 @@ end 'installOneStructDestructor'
 function synthesizeStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
 	for i in 0 upto layout.fieldCount() 'eachField'
-		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalarField'
+		if not signatures.structFieldOwesDrop(layout.name, index: i) 'scalarField'
 			continue
 		end 'scalarField'
 		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: structFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures)))
@@ -2882,7 +2882,7 @@ function dictionaryStructFieldDropKind(layout StructLayout, index FieldIndex, ty
 		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(DropTypeParamName, descriptor: DictionaryDestructorDescriptorParam, blockOffset: signatures.structFieldOpaqueBlockOffset(layout.name, index: index)))
 	end 'aBareParameterSlot'
 
-	if not signatures.structFieldIsManaged(layout.name, index: index) 'scalarField'
+	if not signatures.structFieldOwesDrop(layout.name, index: index) 'scalarField'
 		return FieldDropKindOption.none
 	end 'scalarField'
 
@@ -3127,7 +3127,7 @@ function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId
 	for fi in 0 upto payloads.count() 'eachField'
 		let field = try payloads.get(fi) otherwise panic("emitManagedFieldDrops: payloadsAt count disagrees with get at {fi}")
 		let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
-		if not payloadClassIsManaged(class) 'scalarField'
+		if not payloadClassOwesDrop(class) 'scalarField'
 			continue
 		end 'scalarField'
 		let callee = managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType)

@@ -1,0 +1,20 @@
+// Test: async-promise-drop.error.a-cursor-over-a-container-of-promises
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var s = IntPromiseArray.create()
+		s.push(async plain())
+		let c = try s.cursor() otherwise panic("has one")
+		let p = c.current()
+		return (await p) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3141: <fragment>:14:17: a promise cannot be read through 'Array.cursor': it owns a green thread, which has exactly one owner, so reading one out of a container MOVES it — and this door names no slot for the move to empty. Use a read that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`

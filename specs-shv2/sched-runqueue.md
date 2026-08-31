@@ -384,7 +384,7 @@ function main() returns ExitCode
 		let p = async done()
 		let q = async done()
 		total = total + await q
-		finished = finished + __Builtins.gtIsComplete(p)
+		finished = finished + __Builtins.gtIsComplete(p.inner)
 		i = i + 1
 	end 'warm'
 
@@ -395,7 +395,7 @@ function main() returns ExitCode
 		let p = async done()
 		let q = async done()
 		total = total + await q
-		finished = finished + __Builtins.gtIsComplete(p)
+		finished = finished + __Builtins.gtIsComplete(p.inner)
 		j = j + 1
 	end 'completedThenDropped'
 
@@ -440,7 +440,7 @@ function main() returns ExitCode
 		let s = async sleeper()
 		let f = async done()
 		total = total + await f
-		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s.inner))
 		i = i + 1
 	end 'warm'
 
@@ -451,7 +451,7 @@ function main() returns ExitCode
 		let s = async sleeper()
 		let f = async done()
 		total = total + await f
-		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s))
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s.inner))
 		j = j + 1
 	end 'parkedThenDropped'
 

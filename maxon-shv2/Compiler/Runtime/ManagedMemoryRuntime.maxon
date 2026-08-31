@@ -278,6 +278,25 @@ export let ManagedGetName = b"__managed_get"
 export let ManagedGetUncheckedName = b"__managed_get_unchecked"
 export let ManagedSetName = b"__managed_set"
 
+// ⭐⭐ **EMPTY A SLOT WITHOUT DESTROYING WHAT WAS IN IT — the write half of a MOVE OUT of a container**
+// (`W217`). `__managed_vacate(arr, index)` stores a zero over slot `index` and does nothing else: no bounds
+// throw, no COW detach, no occupant destroy.
+//
+// ⛔ **NEITHER SETTER CAN STAND IN, AND THAT IS THE WHOLE REASON THIS EXISTS.** `__managed_set` and
+// `__managed_mem_set` both DESTROY the occupant they overwrite (`emitElementStoreAndOkReturn`) — correct
+// when a new owner moves in, and exactly wrong here: the value being erased has just been CONSUMED by the
+// frame (awaited, cancelled, or moved on), so destroying it is the second reclaim of one green thread.
+//
+// ⛔⛔ **AND IT MUST NOT COW-DETACH.** A detach COPIES the record when the buffer is shared — which for a
+// promise array means two records naming the SAME green threads, and the double reclaim arrives later
+// instead of sooner. Vacating IN PLACE is correct for every holder rather than in spite of them: the thread
+// moved out for all of them, because it moved out of the one slot they all name.
+//
+// ⚠ **THE INDEX IS A PRECONDITION, NOT A CHECK.** Every emitter is `Parser.vacateConsumedPromiseSlot`, which
+// fires only on a slot a read in the SAME frame resolved and held live, so an out-of-range index here is a
+// compiler bug and a runtime throw would only hide it. That is why this returns void and cannot fail.
+export let ManagedVacateName = b"__managed_vacate"
+
 export let ManagedCountName = b"__managed_count"
 export let ManagedCapacityName = b"__managed_capacity"
 
@@ -1057,6 +1076,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	// BOTH THE FILE AND THE ENTRIES ARE GONE (W190)** — the bounds ELISION was `Vector`'s, and it retired with
 	// the members that reached it. See `Parser.elementAccessCallee`'s grave.
 	buildManagedSet(module)
+	buildManagedVacate(module)
 	buildManagedCount(module)
 	buildManagedCapacity(module)
 	buildManagedElementSize(module)
@@ -3188,6 +3208,26 @@ end 'buildManagedGetUnchecked'
 // surfaces sit on one record and this entry is the `Array` one; `__managed_mem_set` is the buffer's, and R4.6
 // exists because they were the same function. `specs/arrays.md` and the array corpus are written against
 // this bound.
+// See `ManagedVacateName` for the contract and for why neither setter can stand in.
+function buildManagedVacate(module StdModule)
+	var func = IrFunction.createFromStd(ManagedVacateName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let elementSize = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: index, elementSize: elementSize, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	module.appendOp(entry, op: StdOp.storeIndirect(slot, offset: 0, valueId: zero, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedVacate'
+
 function buildManagedSet(module StdModule)
 	var func = IrFunction.createFromStd(ManagedSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(3)

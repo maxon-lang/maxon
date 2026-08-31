@@ -53,6 +53,12 @@ moment one does.** Removing the marker before then re-creates the masking, silen
 <!-- test: async-linearity.error.double-await -->
 <!-- targets: x64-windows -->
 `await` is linear: awaiting one promise twice in straight-line code is refused at the second await.
+⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
+green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
+the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
+ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
+decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
+a loop back edge — so the two codes divide this family between them.
 ```maxon
 function makeValue() returns Integer
 	Runtime.yield()
@@ -68,7 +74,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3100: <fragment>:10:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3102: <fragment>:10:16: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: async-linearity.error.double-await-in-loop -->
@@ -186,6 +192,12 @@ error E3100: <fragment>:12:10: this promise has already been awaited: 'await' is
 An `await` in one ternary arm does NOT make the promise spent on the path where that arm was not taken —
 but the await AFTER the ternary is reachable from the arm that WAS taken, so on that path the thread is
 awaited twice. Exclusivity buys the arms nothing here: reachability decides, and the arm reaches the tail.
+⚠ **THE DIAGNOSTIC IS E3102 AND NOT E3100 SINCE A PROMISE BECAME MOVE-ONLY (`W217`).** A promise owns a
+green thread, which has exactly one owner, so the first `await` CONSUMES it and poisons the binding — and
+the parser's use-after-move check reaches the second read before the linearity pass, which runs later,
+ever sees it. Both refusals are correct and the program is rejected either way; which one speaks is
+decided by whether a BINDING was poisoned. E3100 still fires where none was — through an alias, or across
+a loop back edge — so the two codes divide this family between them.
 ```maxon
 function makeValue() returns Integer
 	Runtime.yield()
@@ -205,7 +217,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3100: <fragment>:14:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3102: <fragment>:14:16: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: async-linearity.await-in-exclusive-branches -->
