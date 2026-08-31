@@ -157,19 +157,6 @@ export let CarriageReturnByte = 13 as Byte
 // is exactly the reach `module` does not have (measured: `module` here is `E2004 Undefined variable`).
 export let NulTerminator = 0 as Byte
 
-// ⭐ EVERY BLOB IS PADDED TO AN 8-BYTE MULTIPLE, so the RECORD that registers right after it lands at an
-// 8-byte-aligned rdata offset. This is load-bearing for arm64-macOS ONLY: a String literal's `buffer@0`
-// there is a dyld chained-fixup REBASE (`MachOWriter.writeMachoStringBufferRebases`), and a chain links
-// its entries by a 4-byte-granular `next` delta, so every rebased slot MUST sit at an aligned offset or
-// the delta cannot be encoded. A String record is `StringRecordBytes` (an 8-multiple, whatever slot count
-// it is made of) and arm64 float islands are 8, so
-// once blobs are 8-multiples the rdata cursor stays 8-aligned across the whole section and every record
-// is naturally aligned. The trailing zero bytes are INVISIBLE to every consumer — the blob is read as a
-// NUL-terminated C string from `buffer@0` and `length@8` counts only the payload — so this is free on
-// x64 (which bakes an unaligned absolute VA and needs no alignment) and correct on arm64. `v1` does the
-// same at its `.data` string helpers (LowerMaxonToStd `addSubprocessString`/`addTraceTagEntry`).
-let StringBlobAlignment = 8 as ByteCount
-
 // `__int_to_string`'s decimal machinery. The digits are rendered without ever NEGATING the value, so
 // `i64.min` is handled with no overflow: signed `%`/`/` keep the value's sign (`x % 10 ∈ [-9,0]` for a
 // negative `x`), and the per-digit magnitude is recovered by MULTIPLYING by `sign = 1 - 2*neg` (`+1` for
@@ -528,13 +515,19 @@ function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
 end 'bytesAreSingleByteGraphemes'
 
 // The NUL-terminated blob for a literal's payload — the bytes, then one NUL.
+//
+// ⛔ **IT DOES NOT PAD, AND IT USED TO.** The pad to 8 lived here, and its comment claimed the
+// consequence for the WHOLE `.rdata` section — that a record registering right after a blob therefore
+// lands 8-aligned — which was true only for as long as no other producer registered an odd-length
+// payload. `installSlabRuntime`'s 129- and 249-byte class tables did exactly that (378 ≡ 2 mod 8), and
+// from that point every String record `installEnumLookupHelpers` registered was misaligned, which on
+// arm64-macOS is an unencodable dyld chained-fixup rebase delta and a compiler panic. Alignment is now
+// `GlobalDataTable.RdataPayloadAlignment`, applied by `appendRdataPayload` to every payload of every
+// kind — the one writer of a slot's offset, which is the only place that can promise it.
 function stringBlobBytes(bytes ByteArray) returns ByteArray
 	var blob = ByteArray.create()
 	blob.append(bytes)
 	blob.push(NulTerminator)
-	while blob.count() mod StringBlobAlignment != 0 'pad'
-		blob.push(NulTerminator)
-	end 'pad'
 	return blob
 end 'stringBlobBytes'
 

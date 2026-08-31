@@ -883,10 +883,11 @@ export union TargetOp
 	// `GetOrCreateAbsMask`/`EmitAbsF64`, v1's `lowerFloatAbs` + `andMaskRipRel`). Two mechanisms shv2 does
 	// not have stand in the way of copying that, and neither is small:
 	//   • **`andpd`'s MEMORY operand is 128-bit and FAULTS unless 16-byte ALIGNED**, and shv2's `.rdata`
-	//     has no alignment at all — `GlobalDataTable.rdataImage` says so in its own words ("No alignment
-	//     and no padding"), and payloads are laid out end to end in registration order. Giving one
-	//     constant an alignment guarantee means the shared data table AND every native writer taking on
-	//     an invariant none of them states today.
+	//     guarantees only 8 (`GlobalDataTable.RdataPayloadAlignment`, which every payload is stored
+	//     padded to). Raising that to 16 for one constant is not a local change: it doubles the pad on
+	//     EVERY payload in the section, and the two writers whose section base is not itself 16-aligned
+	//     (`MachOWriter`'s `__const` at `alignLog2: 3`, `StdToWasm`'s `WasmRdataAlignment`) would each
+	//     have to take on a guarantee neither states today.
 	//   • **`andpd`'s REGISTER form needs a second XMM holding the mask**, and the x64 isel cannot mint a
 	//     vreg: every `TargetVReg.virtual(id)` names a Std `ValueId`, and the class column is derived from
 	//     the **Std** module (`buildValueClassColumns`), so a backend-minted vreg would be filled `gpr`

@@ -402,7 +402,7 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 		let slotOffset = try slots.get(i) otherwise panic("writeMachoRdataRebases: i < count but slots.get({i}) failed")
 		let target = try slotTargets.get(i) otherwise panic("writeMachoRdataRebases: slotTargets.get({i}) failed")
 		if slotOffset mod DyldChainedNextStride != 0 'misaligned'
-			panic("writeMachoRdataRebases: rebased slot at rdata offset {slotOffset} is not {DyldChainedNextStride}-byte aligned — a String record fell off the 8-byte cursor (the StringRuntime blob pad broke), or a witness table was emitted unaligned")
+			panic("writeMachoRdataRebases: rebased slot at rdata offset {slotOffset} is not {DyldChainedNextStride}-byte aligned — a slot offset is a payload BASE plus an offset WITHIN it, and both halves are aligned today: every payload is stored padded to `GlobalDataTable.RdataPayloadAlignment` by `appendRdataPayload`, and every slot a rebase claims sits at a multiple of it inside its blob (`StringBufferOffset`, a witness method slot, a descriptor's `copyFunc`/`destroyFunc`). So this is either a payload that reached `values` without going through `appendRdataPayload`, or a NEW `recordFuncAbs64InRdata` slot whose `offsetInLabel` is not a multiple of that alignment")
 		end 'misaligned'
 		if target > DyldChainedRebaseTargetMask 'targetTooLarge'
 			panic("writeMachoRdataRebases: rebase target offset {target} does not fit in {DyldChainedRebaseTargetBits} bits — the image outgrew the DYLD_CHAINED_PTR_64_OFFSET reach")

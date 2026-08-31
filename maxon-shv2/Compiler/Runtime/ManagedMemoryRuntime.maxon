@@ -128,28 +128,21 @@ export let ByteStringElementSize = 1 as ParsedInt
 // distinct from `__str_blob_` so a reader of the section can tell the two apart.
 let ByteArrayBlobPrefix = "__barr_blob_"
 
-// Every blob is padded to an 8-byte multiple, the same reason `StringRuntime.stringBlobBytes` pads: a
-// future arm64 record fixup links its rebased slots by a 4-byte-granular delta, so keeping the rdata
-// cursor 8-aligned across the section keeps every following slot encodable. The padding bytes sit BEYOND
-// `length@8`, so no Array read (which strides `[0, length)`) ever observes them, and it is free on x64.
-let ByteArrayBlobAlignment = 8 as ByteCount
-let ByteArrayBlobPadByte = 0 as Byte
-
 // Register a byte-string literal's payload as an immortal `.rdata` blob and return its label. The bytes
 // are ALREADY decoded (escapes resolved, one Latin-1 byte per source codepoint — `Parser.decodeByteStringLiteral`),
 // so this is a pure `.rdata` registration: identical literals dedup to one blob (`registerRdataConstant`).
+//
+// ⛔ **IT DOES NOT PAD, AND IT USED TO.** A file-local `ByteArrayBlobAlignment = 8` and a
+// `paddedByteArrayBlob` stood here, whose comment said the pad was *"the same reason
+// `StringRuntime.stringBlobBytes` pads"* — a second copy of a whole-section invariant, resting on a
+// producer that no longer pads at all. Alignment is `GlobalDataTable.RdataPayloadAlignment`, applied by
+// `appendRdataPayload` to every payload of every kind, so the stored blob is byte-identical to what this
+// produced; what the pad here still changed was the DEDUP KEY, which is keyed on the bytes handed in — so
+// two literals whose padded forms coincided were being pooled by a rule the String blobs beside them no
+// longer used.
 export function registerByteArrayLiteralBlob(globalData GlobalDataTable, bytes ByteArray) returns String
-	return globalData.registerRdataConstant(ByteArrayBlobPrefix, bytes: paddedByteArrayBlob(bytes), kind: RdataPayloadKind.byteArrayBlob)
+	return globalData.registerRdataConstant(ByteArrayBlobPrefix, bytes: bytes, kind: RdataPayloadKind.byteArrayBlob)
 end 'registerByteArrayLiteralBlob'
-
-function paddedByteArrayBlob(bytes ByteArray) returns ByteArray
-	var blob = ByteArray.create()
-	blob.append(bytes)
-	while blob.count() mod ByteArrayBlobAlignment != 0 'pad'
-		blob.push(ByteArrayBlobPadByte)
-	end 'pad'
-	return blob
-end 'paddedByteArrayBlob'
 
 // ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** They used to be four
 // file-local `let`s picked against a file-local list, which is how this file's element-size-zero code and

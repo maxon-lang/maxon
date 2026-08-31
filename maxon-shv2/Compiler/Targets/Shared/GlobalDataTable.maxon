@@ -23,6 +23,31 @@
 export typealias GlobalNameIndexMap = Map with (String, MachineWord)
 export typealias GlobalDedupMap = Map with (ByteArray, String)
 
+// ⭐⭐ **EVERY `.rdata` PAYLOAD IS STORED PADDED TO A MULTIPLE OF THIS — WHICH IS WHAT MAKES EVERY
+// PAYLOAD'S OFFSET A MULTIPLE OF IT TOO**, by induction from zero, in `appendRdataPayload`: the one
+// writer of a slot's offset is the one place the discipline can live.
+//
+// ⚠ **IT USED TO BE ONE PRODUCER'S RULE ABOUT THE WHOLE SECTION, AND THAT IS THE BUG IT CLOSES.**
+// `StringRuntime.stringBlobBytes` padded ITS blobs to 8 and its comment claimed the consequence for
+// everyone — *"once blobs are 8-multiples the rdata cursor stays 8-aligned across the whole section"* —
+// while `installSlabRuntime` registered a 129-byte and a 249-byte table through the same door. 129 + 249
+// = 378 ≡ 2 (mod 8), so from that point the cursor was PERMANENTLY 2 mod 8 and every String record
+// registered afterwards (`installEnumLookupHelpers`, which runs later) landed misaligned. On arm64-macOS
+// a record's `buffer@0` is a dyld chained-fixup rebase whose chain links by a 4-byte-granular delta, so
+// `MachOWriter.writeMachoRdataRebases` panicked and killed the spec worker; on x64 the same image was
+// emitted misaligned-but-working and NOTHING SAID SO. A whole-section invariant cannot be one
+// registrant's habit — it has to be the table's, enforced where slots are appended.
+//
+// ⚠ **8 AND NOT 4**, though the chained-fixup stride that catches the break is 4: the slots being aligned
+// are POINTERS (a String record's `buffer@0`, a witness table's method slots, a layout descriptor's), so
+// 8 is what the loads want and 4 is merely the coarsest granularity at which the breakage becomes visible.
+let RdataPayloadAlignment = 8 as ByteCount
+
+// The byte a payload is padded WITH. Named because it is read back rather than merely written: a text
+// payload's pad is indistinguishable from its NUL terminator, which is exactly what lets
+// `TargetPrinter.quotedPayloadText` stop at the first one and never render alignment as content.
+let RdataPadByte = 0 as Byte
+
 // The synthetic-label prefix a dense-`match` jump table's `.rdata` blob is minted under
 // (`registerJumpTable`). Distinct from the float/String prefixes so a jump table is recognisable in a
 // fragment golden and never collides with them.
@@ -86,7 +111,8 @@ export typealias FloatConstantLabelMap = Map with (ParsedInt, String)
 // you did. The match is exhaustive either way, so a new kind cannot compile until it has been placed.
 export enum RdataPayloadKind
 	// --- TEXT: bytes a reader can read, so a golden renders them beside the label ---
-	// A String literal's payload — its bytes, a NUL, and padding to 8.
+	// A String literal's payload — its bytes and a NUL. The pad to `RdataPayloadAlignment` is the
+	// table's, applied to every kind alike by `appendRdataPayload`.
 	stringBlob
 	// A green-thread trace tag's text (`GtRuntime`). No terminator: the length rides beside it.
 	traceTag
@@ -425,12 +451,20 @@ export type GlobalDataTable
 	// deliberately NOT touched here: only the label-minting caller joins it (a structural descriptor label
 	// must never be handed back as a later bytes-dedup answer), so pool membership — the sole real difference
 	// between the two callers — stays with the caller that owns it.
+	//
+	// ⭐ **IT IS ALSO WHERE THE SECTION'S ALIGNMENT IS ESTABLISHED**, and being the one writer of an
+	// offset is what qualifies it: the payload is stored PADDED to `RdataPayloadAlignment`, so the
+	// running total it advances is always a multiple of that, so the offset it hands the NEXT payload is
+	// aligned too. The invariant is therefore local and checkable in one line — *every stored payload's
+	// length is a multiple of 8* — rather than a property each producer has to preserve and one of them
+	// silently did not. See `RdataPayloadAlignment` for the defect that shape produced.
 	function appendRdataPayload(label String, bytes ByteArray, kind RdataPayloadKind)
+		let payload = rdataStoredPayload(bytes)
 		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
-		self.rdataSizeSoFar = self.rdataSizeSoFar + bytes.count()
+		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count()
 		self.nameIndex.upsert(label, value: self.names.count())
 		self.names.push(label)
-		self.values.push(bytes)
+		self.values.push(payload)
 		self.payloadKinds.push(kind)
 	end 'appendRdataPayload'
 
@@ -539,9 +573,13 @@ export type GlobalDataTable
 	// the LABEL (`IrInterface.witnessTableLabel`); what this catches is the residue: two derivations of one
 	// name whose CONTENT also disagrees, which is the `__layout_` family's shape.
 	function requireIdenticalPayload(label String, bytes ByteArray)
+		// ⚠ Compared in the STORED form, because that is what `payloadOf` returns: `appendRdataPayload`
+		// pads to `RdataPayloadAlignment`, so comparing the incumbent's padded bytes against a caller's
+		// raw ones would report every odd-length payload as a collision with itself.
 		let existing = self.payloadOf(label)
-		if not existing.equals(bytes) 'differs'
-			panic("GlobalDataTable.requireIdenticalPayload: '{label}' is registered twice with DIFFERENT payloads ({existing.count()} bytes, then {bytes.count()}) — a structural .rdata label names its content, so two payloads under one label means two derivations produced one name and the second would be silently dropped")
+		let incoming = rdataStoredPayload(bytes)
+		if not existing.equals(incoming) 'differs'
+			panic("GlobalDataTable.requireIdenticalPayload: '{label}' is registered twice with DIFFERENT payloads ({existing.count()} and {incoming.count()} STORED bytes — each padded up to RdataPayloadAlignment, so a 13- and a 17-byte payload read here as 16 and 24) — a structural .rdata label names its content, so two payloads under one label means two derivations produced one name and the second would be silently dropped")
 		end 'differs'
 	end 'requireIdenticalPayload'
 
@@ -592,8 +630,13 @@ export type GlobalDataTable
 	// resolves against and the bytes the writer emits have parted company, which is a silently
 	// wrong constant rather than a crash.
 	//
-	// No alignment and no padding: a scalar SSE load (`movsd`) tolerates any address, so a float
-	// island needs none — the section's own RVA alignment is the PE writer's business.
+	// ⭐ **NO PADDING HAPPENS HERE, AND THAT IS THE POINT OF DOING IT AT REGISTRATION.** Every payload
+	// was stored padded to `RdataPayloadAlignment` by `appendRdataPayload`, so concatenating them in
+	// registration order lands each one exactly on its recorded offset — which is what lets the drift
+	// assert below stay an EQUALITY. An image that padded as it went would have to relax that check to
+	// "not past it", and the check is the only thing standing between a relocation's idea of where a
+	// constant is and where these bytes actually put it. The section's own RVA alignment remains the
+	// writer's business; this is alignment WITHIN the section, which the writers cannot see.
 	export function rdataImage() returns ByteArray
 		self.requireColumnsAgree()
 
@@ -773,6 +816,28 @@ function sortBySizeDescendingStable(declared DataSectionEntryArray) returns Data
 	return sorted
 end 'sortBySizeDescendingStable'
 
+// A payload as the table STORES it: the caller's bytes, zero-padded up to `RdataPayloadAlignment`.
+//
+// ⚠ **THE ALREADY-ALIGNED PATH RETURNS THE ARGUMENT UNTOUCHED, AND IT IS THE COMMON ONE** — a String
+// record is 56 bytes, a float island 8, a jump table `4 × slotCount` for an even slot count — so the
+// discipline costs no copy for the payloads that already satisfied it, and the ones it does copy are the
+// handful of odd-length tables that broke the cursor in the first place.
+//
+// ⚠ The padding is invisible to every consumer by construction: a text payload is read to its NUL
+// (`TargetPrinter.quotedPayloadText`, and `length@8` for a String), and a structural payload is decoded by
+// a reader that knows its own slot count. Nothing derives a count from a stored payload's length.
+function rdataStoredPayload(bytes ByteArray) returns ByteArray
+	let storedCount = alignUp(bytes.count(), alignment: RdataPayloadAlignment)
+	if storedCount == bytes.count() 'alreadyAligned'
+		return bytes
+	end 'alreadyAligned'
+
+	var padded = ByteArray.create()
+	padded.append(bytes)
+	padded.growFilled(storedCount, value: RdataPadByte)
+	return padded
+end 'rdataStoredPayload'
+
 // `value` rendered as a standalone `byteCount`-byte little-endian payload — what
 // `registerFloatConstant` mints a float island out of.
 //
@@ -781,6 +846,7 @@ end 'sortBySizeDescendingStable'
 // `.rdata` and an f64 global in `.data` are the same 8 bytes of IEEE pattern, and there is exactly one piece
 // of code that decides what those bytes are. A second renderer here would be this project's signature bug —
 // one fact written twice — with the two free to disagree about what `3.14` is.
+
 export function scalarImage(value ParsedInt, byteCount ByteCount) returns ByteArray
 	var bytes = ByteArray.create()
 	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)

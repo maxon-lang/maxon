@@ -432,9 +432,10 @@ end 'payloadTextNote'
 // A text payload as a quoted, escaped, length-capped literal.
 //
 // ⚠ **IT STOPS AT THE FIRST NUL, WHICH IS WHERE THE TEXT STOPS AND NOT WHERE THE PAYLOAD DOES.** A
-// String blob is its bytes, a NUL, and then padding to an 8-byte boundary (`stringBlobBytes`), so
-// rendering the whole payload would put one to seven escaped zero bytes at the end of most notes —
-// alignment, in a note about content. A trace tag carries no terminator at all and simply reaches the end.
+// String blob is its bytes and a NUL, and the table then pads every payload to
+// `GlobalDataTable.RdataPayloadAlignment`, so rendering the whole payload would put one to seven escaped
+// zero bytes at the end of most notes — alignment, in a note about content. A trace tag carries no
+// terminator of its own and simply reaches its pad, which stops this for the same reason.
 function quotedPayloadText(bytes ByteArray) returns String
 	var out = StringBuilder.create()
 	out.append(DoubleQuoteText)
