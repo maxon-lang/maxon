@@ -9254,8 +9254,10 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 // a Character is a `stringLiteral` op, and `LowerMaxonToStd.lowerStringLiteral`
 // registers `.rdata` for one whether or not anything reads it — a blob, a 56-byte record and a fixup off the
 // ONE `GlobalDataTable.nextStringId` counter every rdata prefix shares. A single stray blob in a whitelisted
-// stdlib module therefore renumbers every later `__str_blob_`/`__fconst_`/`__jumptable_` label in EVERY
-// program. So the op is rewritten in place, and this is how its index is found in O(1).
+// stdlib module therefore renumbers every later `__str_blob_`/`__jumptable_` label in EVERY program.
+// (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED and left the counter — see
+// `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged for the two prefixes that remain.)
+// So the op is rewritten in place, and this is how its index is found in O(1).
 //
 // A Map rather than a dense column for `ValueDeclaredAliasMap`'s reason: the population is a function's
 // character literals, which is zero for almost every function. Reset per function and SWAPPED across a
@@ -21809,8 +21811,9 @@ export type Parser
 	// `requireCalleeIsNotReservedName` — the rule this very file states — refuses a `__` callee written
 	// out in a file that does not DECLARE it. The primitive-static spelling mints exactly those bytes
 	// (`primitiveStaticCallee`), so it links to the same body through the door the rule leaves open.
-	// `TypeRules.formatBound` spells the printer the same way. See
-	// `specs-shv2/reserved-double-underscore.md`'s primitive-static pair.
+	// `NumberParsing.scalarConstantText` — the reader in this direction's mirror, and this file's
+	// neighbour — spells the printer the same way. See `specs-shv2/reserved-double-underscore.md`'s
+	// primitive-static pair.
 	function floatLiteralBits(tok Token) returns ParsedInt throws ParseError
 		match float.bitsFromText(String.from(tok.value)) 'decoded'
 			bits(value) then return value
@@ -49753,8 +49756,8 @@ export type Parser
 	// `LowerMaxonToStd.lowerStringLiteral` walks `block.opRefs` and registers a blob + a 56-byte record +
 	// a fixup for EVERY `stringLiteral` op it finds, read or not; `foldConstOperands`'s const DCE
 	// deliberately excludes `rdataAddr`, and no general DCE pass is scheduled. One orphan in a whitelisted
-	// stdlib module would therefore renumber every later `__str_blob_`/`__fconst_`/`__jumptable_` label in
-	// EVERY program off the single `GlobalDataTable.nextStringId` counter — the measured 317-golden move
+	// stdlib module would therefore renumber every later `__str_blob_`/`__jumptable_` label in EVERY program
+	// off the single `GlobalDataTable.nextStringId` counter — the measured 317-golden move
 	// that listing `Builtins.maxon` cost. Rewriting the op in place leaves the op stream, the op INDEX, the
 	// ValueId and the source range exactly as an integer literal's always were, so `cp == '-'` emits the
 	// byte-identical code it emitted under the old width rule.

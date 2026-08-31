@@ -29,7 +29,7 @@ func @safeRoot {
     x64.jcc greaterEqual, ifcont
   neg:
     x64.movRegImm32 r10, 1
-    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
     x64.popReg rbp
     x64.ret
   ifcont:
@@ -50,7 +50,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr#2:
-    x64.movsdRegRip xmm6, [rip + __fconst_1]
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
     x64.jmp trycont#3
   tryok:
     x64.movRegReg xmm6, xmm0
@@ -60,7 +60,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont#6
   tryerr#5:
-    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
   trycont#6:
     x64.cvttsd2siRegReg rax, xmm6
     x64.cvttsd2siRegReg rcx, xmm0
@@ -72,7 +72,7 @@ func @main {
     x64.cmpRegReg r8, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at error.throwing-float-return.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.loadRegSlot xmm6, slot0

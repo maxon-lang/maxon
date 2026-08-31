@@ -230,14 +230,20 @@ export function insertRangeChecks(project Project, module StdModule)
 		// this pass registers the guard's PANIC MESSAGE as an `.rdata` constant
 		// (`emitPanicBlock` → `registerStringBlob`), and DFE prunes FUNCTIONS, never `.rdata`. The blob
 		// therefore survives its own function — and `GlobalDataTable.nextStringId` is ONE counter shared by
-		// every rdata prefix, so a surviving blob RENUMBERS every later `__fconst_`/`__str_blob_`/jump-table
-		// label in the program.
+		// every rdata prefix, so a surviving blob RENUMBERS every later `__str_blob_`/jump-table label in the
+		// program. (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED and left the
+		// counter — see `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged for the two
+		// prefixes that remain.)
 		//
 		// ⚠ MEASURED, and it is exactly what `StdlibLoader`'s "adding a module changes NOTHING for a program
 		// that does not use it" forbids: listing `helpers/string/utf16.maxon` — whose
 		// `utf16LeadSurrogate`/`utf16TrailSurrogate` each `return` a computed value through a ranged
 		// `CodeUnit16` — moved a two-float program from `__fconst_0`/`__fconst_1` to `__fconst_2`/`__fconst_3`
-		// and shifted **193 committed goldens** across the suite, for two functions nothing calls.
+		// and shifted **193 committed goldens** across the suite, for two functions nothing calls. ⚠ THAT
+		// MEASUREMENT PREDATES VALUE-NAMED FLOAT LABELS and its two-float program would no longer move; the
+		// same listing would move the `__str_blob_`/`__jumptable_` labels beside them instead. Kept as
+		// measured — the mechanism it demonstrates is what this skip exists for, and the prefixes it can
+		// still reach are the ones the case below names.
 		//
 		// It is the SAME reachability fact `SemanticCheck.checkCalls` skips on and `scanRuntimeUsage` is
 		// handed, stated the same way — never "is this whitelisted", which would not outlive the filter. A
@@ -257,8 +263,9 @@ export function insertRangeChecks(project Project, module StdModule)
 		// `lowerStringLiteral`/`lowerConstArrayLiteral` registered `.rdata` for the body of ANY function —
 		// including a whitelisted stdlib function no path from `main` reaches. It was MEASURED when filed (an
 		// unreachable string-returning function appended to `stdlib/helpers/string/utf16.maxon` moved a
-		// two-float program's md5 `765a309c…` → `57d2a6cd…`, the literal's blob displacing both `__fconst_`
-		// payloads), and it came DUE the moment `stdlib/Builtins.maxon` was listed — the first listed module
+		// two-float program's md5 `765a309c…` → `57d2a6cd…`, the literal's blob displacing both float
+		// payloads — an OFFSET shift, which value-named labels do not prevent), and it came DUE the moment
+		// `stdlib/Builtins.maxon` was listed — the first listed module
 		// containing literals — which moved **317 committed goldens**. `lowerMaxonToStd` now skips an
 		// unreachable stdlib BODY with this same test, stated the same way, and `eliminateDeadFunctions`
 		// PROVES the skip (`requireUnreachableStdlibStayedDead`) rather than assuming it.

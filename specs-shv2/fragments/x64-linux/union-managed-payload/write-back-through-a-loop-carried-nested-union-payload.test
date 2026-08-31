@@ -44,7 +44,7 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.leaRegRdata rbx, [rip + __str_rec_3]
+    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "the first nested payload, long enough to be a real heap allocation"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -77,7 +77,7 @@ func @main {
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.leaRegRdata r14, [rip + __str_rec_4]
+    x64.leaRegRdata r14, [rip + __str_rec_4]  ; "a replacement, also a real heap allocation"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -101,7 +101,7 @@ func @main {
   matcharm#6:
     x64.leaRegRegImm32 r12, r12, 1
   matchcont:
-    x64.leaRegRdata r13, [rip + __str_rec_5]
+    x64.leaRegRdata r13, [rip + __str_rec_5]  ; "the next round's payload, a real heap allocation too"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -135,7 +135,7 @@ func @main {
     x64.cmpRegImm32 r12, 255
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at write-back-through-a-loop-carried-nested-union-payload.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

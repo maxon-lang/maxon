@@ -806,9 +806,11 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalD
 		// walk's siblings shut — the body lowering below and `insertRangeChecks` — both skip a stdlib
 		// function no path from `main` reaches, and both say why in the same words: DFE prunes FUNCTIONS,
 		// never `.rdata`, so a blob registered for a body the back end never receives SURVIVES it, and one
-		// shared counter means a surviving blob renumbers every later `__str_blob_`/`__fconst_`/
-		// `__jumptable_` label in EVERY program. This walk runs EARLIER THAN EITHER and had no such test, so
-		// it registered the blob those two exist to prevent.
+		// shared counter means a surviving blob renumbers every later `__str_blob_`/`__jumptable_` label
+		// in EVERY program. (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED and left
+		// the counter — see `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged for the two
+		// prefixes that remain.) This walk runs EARLIER THAN EITHER and had no such test, so it registered
+		// the blob those two exist to prevent.
 		//
 		// ⚠ **MEASURED at `stdlib/Json.maxon`'s entry, which is the first listed module to reach it.** A
 		// STRING field default is not a `FieldDefault.literal` (that payload is a `ParsedInt`), so
@@ -1247,8 +1249,10 @@ type MaxonToStdLowering
 			// and `ensureWitnessTable`/`ensureLayoutDescriptor` mint a labelled payload. Dead-function
 			// elimination prunes FUNCTIONS, never `.rdata`, so every one of those SURVIVES its own function —
 			// and `GlobalDataTable.nextStringId` is ONE counter shared by every rdata prefix, so a surviving
-			// blob renumbers every later `__str_blob_`/`__fconst_`/`__jumptable_` label in the whole program
-			// and moves its `.rdata` offset besides.
+			// blob renumbers every later `__str_blob_`/`__jumptable_` label in the whole program and moves its
+			// `.rdata` offset besides. (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED
+			// and left the counter — see `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged
+			// for the two prefixes that remain.)
 			//
 			// ⚠ MEASURED, and it is the debt `InsertRangeChecks` filed against this exact site (A1s): listing
 			// `stdlib/Builtins.maxon` — the first listed module that contains LITERALS — moved **317 committed
@@ -2019,7 +2023,7 @@ type MaxonToStdLowering
 		var blob = ByteArray.create()
 		blob.append(scalarImage(methodCount, byteCount: WitnessSlotBytes as ByteCount))
 		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)) as ElementCount, value: 0)
-		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob)
+		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
 		// HOW A SECOND OWNER OF ONE IS TAKEN (P1.7a-existentials slices 2 and 2b).** Both are derived from
@@ -3006,7 +3010,7 @@ type MaxonToStdLowering
 		// `destroyFunc@40` caused on a two-parameter generic. A one-parameter instance emits one block and is
 		// byte-identical to what it always emitted.
 		let paramCount = self.signatures.genericInstanceArgCount(gid)
-		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor, typeParamCount: paramCount))
+		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor, typeParamCount: paramCount), kind: RdataPayloadKind.layoutDescriptor)
 		self.layoutDescriptors.record(gid, label: label)
 
 		// A MANAGED opaque-`T` `Array` field's `destroyFunc@40` is the ONLY compile-time reference to the

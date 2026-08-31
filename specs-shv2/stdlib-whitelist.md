@@ -74,10 +74,15 @@ and a generic receiver mints a layout descriptor. Elimination prunes FUNCTIONS, 
 every one of those payloads outlives the function that asked for it.
 
 That matters because the synthetic `.rdata` labels are minted from ONE counter shared by every prefix.
-A single surviving blob therefore renumbers `__str_blob_`, `__fconst_` AND `__jumptable_` labels
-program-wide — in a program that mentions no string at all. Measured when the first listed module
-containing literals was added: **317 committed fragments moved**, for declarations no user program
-reaches.
+A single surviving blob therefore renumbers `__str_blob_` AND `__jumptable_` labels program-wide — in a
+program that mentions no string at all. Measured when the first listed module containing literals was
+added: **317 committed fragments moved**, for declarations no user program reaches.
+
+⚠ **`__fconst_` USED TO BE ON THAT LIST AND NO LONGER IS.** A float island is named by its VALUE
+(`__fconst_-5.5`, `GlobalDataTable.registerFloatConstant`) and registered through the LABELLED door, which does not touch the
+shared counter — so a float label cannot move for a reason outside its own value. That removes one prefix
+from the blast radius; it does not shrink the detection, because the two remaining prefixes still renumber
+together and the case below names both.
 
 So a pre-elimination pass may not let an unreachable stdlib body register anything either, and
 `lowerMaxonToStd` skips such a body on exactly the reachability fact the runtime-floor scan skips on.
@@ -270,10 +275,14 @@ end 'main'
 <!-- targets: x64-windows -->
 The sibling of `no-clock-is-byte-neutral`, for the half that case cannot see. That program's fragment
 names no `.rdata` label at all, so it stays green while every synthetic label in the corpus renumbers.
-This one holds a float constant and a dense-`match` jump table, so its fragment NAMES labels off the one
-shared counter — `__fconst_1`, `__jumptable_2` and `__str_blob_0`, the last being the range-check panic
-message that took id 0. A listed module that registers ANY `.rdata` for code no path from `main` reaches
-moves all three.
+This one holds a dense-`match` jump table and a String blob, so its fragment NAMES labels off the one
+shared counter — `__jumptable_1` and `__str_blob_0`, the last being the range-check panic message that took
+id 0. A listed module that registers ANY `.rdata` for code no path from `main` reaches moves both.
+
+⚠ The float constant is still in the program and is still worth having — it is what makes the jump table
+share a compile with an island of another kind — but its `__fconst_12.5` label is NO LONGER a counter
+reading: float islands are named by their value and take the labelled door. This paragraph said
+`__fconst_1` for as long as they did.
 
 ⛔⛔ **BUT IT DETECTS THAT THROUGH ITS GOLDEN, SO IT CANNOT FAIL — IT IS A READING, NOT A GATE (W69
 review).** A fragment mismatch prints a `note:`, counts as no failure and leaves the exit code at 0 (user

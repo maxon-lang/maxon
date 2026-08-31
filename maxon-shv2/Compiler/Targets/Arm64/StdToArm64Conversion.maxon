@@ -140,13 +140,6 @@ let Arm64Scratch = Arm64Register.x16
 // truthy). The INTEGER `not` is a separate Std opcode (`bitNot` → `mvn`), so this can never reach one.
 let Arm64LogicalNotMask = 1 as Imm32
 
-// The label every f64 constant island carries — an immutable IEEE bit pattern the code only ever
-// loads, so it belongs in read-only `.rdata`. Mirrors x64's `FloatConstantLabelPrefix`.
-let Arm64FloatConstantLabelPrefix = "__fconst_"
-
-// The IEEE storage width of an f64 — the byte count `.rdata`'s island reserves and the `ldr d` loads.
-let Arm64DoubleBytes = 8 as ByteCount
-
 // The memory-access WIDTH door (`accessWidthFor`) and the byte-offset → displacement door
 // (`memoryDisplacement`) are shared with the x64 lowering — see `Targets/Shared/StdLoweringShared.maxon`.
 // The width is not ISA-specific; only the encoder that turns `byte`/`word64` into `ldrb`/`ldr` (vs
@@ -862,12 +855,15 @@ type StdToArm64Lowering
 
 	// Materialize a FLOAT constant: register its IEEE bits as a `.rdata` island and load them with the
 	// ADRP+LDR pair (`ldr d, [pc-rel]`). A constant POOL, not an immediate — there is no `fmov d, imm64`
-	// for an arbitrary double. The bits are rendered by `scalarImage`, the same serializer a `.data`
-	// f64 global uses, so a constant and a global spelled `3.14` are the same eight bytes.
+	// for an arbitrary double.
+	//
+	// The island's NAME and its eight bytes are both the shared table's
+	// (`GlobalDataTable.registerFloatConstant`), not this file's: the width and the serializer are the same
+	// fact x64 needs, and this function used to carry its own `Arm64DoubleBytes` spelling of it beside its
+	// own copy of the label prefix. What is genuinely arm64's stays — the type check and the load op.
 	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef BlockRef)
 		arm64RequireScalarDouble(valueType, what: "lowerFloatConst")
-		let bytes = scalarImage(value, byteCount: Arm64DoubleBytes)
-		let label = self.globalData.registerRdataConstant(Arm64FloatConstantLabelPrefix, bytes: bytes)
+		let label = self.globalData.registerFloatConstant(value)
 		self.emit(dstRef, op: TargetOp.arm64FpLoadRdata(TargetVReg.virtual(resultId), label: label.toByteArray()))
 	end 'lowerFloatConst'
 

@@ -781,17 +781,6 @@ enum ShiftInstruction
 	shr
 end 'ShiftInstruction'
 
-// The label prefix every f64 constant island carries: an immutable IEEE bit pattern the code only
-// ever loads, so it belongs in read-only `.rdata`.
-//
-// ⚠ THE PREFIX DOES NOT PUT IT THERE — the RELOCATION KIND does. A float island lands in `.rdata`
-// because it is filed as `RdataRelocKind.ripRelDisp32`, and a global lands in `.data` because it is
-// filed as `dataSectionRipRelDisp32`; the label's text is never consulted on the way. This comment
-// used to say the routing was by NAME, crediting a `classifyGlobalLabel` that had no callers and was
-// deleted; `DataLabelPrefix` in SignatureIndex.maxon records the measurement that settled it. So the
-// prefix buys READABILITY in a golden fragment, and nothing else.
-let FloatConstantLabelPrefix = "__fconst_"
-
 // The label every `ordered` block carries — the second half of a split float equality (see
 // `reserveFloatEqualityBlocks`). A file-scope constant, beside `CritSplitLabel`'s reasoning: one
 // slice, shared by every split, rather than a fresh allocation per branch on the lowering's path.
@@ -1672,17 +1661,20 @@ type StdToX64Lowering
 	// unreachable. The IEEE bits ARE an integer we are holding right here, but the only routes
 	// into an XMM are a load or a `movq` through a GPR, and the load costs no register.
 	//
-	// The bits are rendered by `scalarImage` — the very serializer the `.data` image uses for an
-	// f64 global — so a constant and a global spelled `3.14` are the same eight bytes by
-	// construction rather than by agreement.
+	// The island is named by its VALUE and its eight bytes are rendered by `scalarImage` — the very
+	// serializer the `.data` image uses for an f64 global, so a constant and a global spelled `3.14` are
+	// the same bytes by construction rather than by agreement. Both happen inside the ONE door on the table
+	// that owns `.rdata` labels: see `GlobalDataTable.registerFloatConstant` for why the value, why the
+	// labelled door and not the byte-dedup one, why the payload is minted there rather than at each isel,
+	// and why the mint is memoized. What stays here is what is this target's own — the type check below,
+	// and which load op carries the label.
 	//
 	// ⚠ THE OP IS NOT REMATERIALIZABLE, which is worth knowing precisely because it reads no
 	// register and therefore looks like it should be. See `movsdRegRip` in TargetDialect: rebuilding
 	// it needs a fresh RELOCATION, which the remat path has no way to express.
 	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstBlock IrBlock)
 		requireScalarDouble(valueType, what: "lowerFloatConst")
-		let bytes = scalarImage(value, byteCount: stdTypeStorageBytes(valueType))
-		let label = self.globalData.registerRdataConstant(FloatConstantLabelPrefix, bytes: bytes)
+		let label = self.globalData.registerFloatConstant(value)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(TargetVReg.virtual(resultId), label: label.toByteArray()))
 	end 'lowerFloatConst'
 

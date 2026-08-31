@@ -75,6 +75,12 @@ export typealias RuntimeFunctionNameArray = Array with String
 // So the two gates are complementary, not redundant: this golden pins what the compiler DECIDED,
 // RequiredData pins what the linker actually WROTE.
 //
+// ⭐ **AN f64 SLOT SHOWS THE NUMBER SOMEBODY WROTE.** `entry.value` is a `ParsedInt` holding an IEEE
+// BIT PATTERN when the slot is a float, so this printed `__data_pi@0 = f64 4614253070214989087` — a
+// gate whose whole purpose is *"a slot that changes its initial value is a FAILING TEST with a reviewable
+// diff"*, rendering the one field a reviewer cannot review. `scalarConstantText` is the shared renderer,
+// the same one an E3005 range bound goes through, so the two cannot disagree about what `3.14` is.
+//
 // A program with no global prints NOTHING here, not an empty header: the section does not exist, and
 // every pre-existing golden is unchanged by this rung as a result.
 function printDataSection(globalData GlobalDataTable) returns String
@@ -85,7 +91,7 @@ function printDataSection(globalData GlobalDataTable) returns String
 	var out = StringBuilder.create()
 	out.append("data {OpenBrace}\n")
 	for entry in globalData.dataSection 'each'
-		out.append("  {entry.label}@{entry.offset} = {entry.valueType.name} {entry.value}\n")
+		out.append("  {entry.label}@{entry.offset} = {entry.valueType.name} {scalarConstantText(entry.value, isFloat: stdTypeIsFloat(entry.valueType))}\n")
 	end 'each'
 	out.append("{CloseBrace}\n")
 	return out.build()
@@ -200,7 +206,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 			body.append("\n")
 		end 'separator'
 
-		body.append(printTargetFunction(module, func: func, cpu: cpu))
+		body.append(printTargetFunction(module, func: func, cpu: cpu, globalData: globalData))
 		afterFirst = true
 	end 'eachFunc'
 
@@ -342,15 +348,139 @@ export function hexByte(b MachineWord) returns String
 	return "{hexDigit((b shr BitsPerHexDigit) and HexDigitMask)}{hexDigit(b and HexDigitMask)}"
 end 'hexByte'
 
-// One lowercase hex digit. A `ByteArray` lookup rather than a `String` index: the digits are ASCII
-// bytes and `String.from` of a one-byte array is the shortest honest route to a one-character String
-// in a language whose String is UTF-8 and whose indices are byte positions.
+// One lowercase hex digit.
 function hexDigit(nibble MachineWord) returns String
 	let digits = b"0123456789abcdef"
-	var one = ByteArray.create()
-	one.push(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`"))
-	return String.from(one)
+	return oneByteText(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with `HexDigitMask`"))
 end 'hexDigit'
+
+// ONE byte as a one-character String. A `ByteArray` of length one rather than a `String` index: both
+// callers hold BYTES, and `String.from` of a one-byte array is the shortest honest route to a
+// one-character String in a language whose String is UTF-8 and whose indices are byte positions.
+function oneByteText(b MachineWord) returns String
+	var one = ByteArray.create()
+	one.push(b)
+	return String.from(one)
+end 'oneByteText'
+
+// --- The VALUE a `.rdata` label names, printed beside the label ---
+//
+// ⭐⭐ **A LABEL IS A NAME FOR BYTES A FRAGMENT DOES NOT OTHERWISE SHOW.** `leaRegRdata rcx,
+// [rip + __str_blob_0]` pins WHICH slot the code addresses and says nothing whatever about what is in it —
+// so the message a range-check panic prints, which is the entire observable behaviour of that block, was
+// invisible in every golden that contains one. The note closes that: the label still identifies the slot,
+// and the text says what the slot holds.
+//
+// ⚠ **IT IS DRIVEN BY THE PAYLOAD'S KIND AND NEVER BY THE LABEL'S SPELLING** (`rdataPayloadNote` matches
+// on `GlobalDataTable.payloadKindOf`). A prefix test would fail OPEN on a structural label — a witness
+// table and a layout descriptor wear no prefix a matcher could enumerate — and routing `.rdata` by name is
+// a rule this compiler has already deleted once; `GlobalDataTable.RdataPayloadKind` carries that argument.
+//
+// ⚠ The FLOAT islands deliberately get no note: their label already IS their value
+// (`GlobalDataTable.registerFloatConstant`), and `[rip + __fconst_-5.5]  ; -5.5` would say it twice.
+let RdataNoteSeparator = "  ; "
+
+// How much of a payload a note shows. A cap exists because a String literal has no length limit and a
+// golden is read as text; the SIZE is chosen from the corpus rather than picked: the longest thing that
+// routinely lands here is a range-check panic, `panic at <file>:<line>: Range check failed: value outside
+// typealias '<name>'`, whose file part is a spec's own test name and runs to ~60 bytes — about 140 in
+// total. At 72 every one of them was cut at `typealias 'Exi`, hiding the one clause that says which
+// check this is, which is the whole reason to print it. 160 shows those whole and still bounds the line.
+//
+// The cap counts the payload's OWN bytes, not the rendered escapes, so a run of unprintables cannot move
+// it.
+let RdataNoteMaxBytes = 160 as ElementCount
+
+// What marks a note as cut short. OUTSIDE the closing quote, so it can never be read as content: a
+// payload really ending in three dots renders `"a..."` and a truncated one renders `"a"...`.
+let RdataNoteEllipsis = "..."
+
+// The printable-ASCII band a note renders verbatim; everything outside it becomes a hex escape. Named as
+// a BAND rather than as two bare numbers because the two ends are one decision — "what can a golden carry
+// literally?" — and 0x7F is excluded for the same reason 0x00 is: it is a control code, not a character.
+let PrintableAsciiLow = 0x20 as MachineWord
+let PrintableAsciiHigh = 0x7E as MachineWord
+
+// The note for one `.rdata` operand — WHERE this slot's text is, and the empty string when it has none.
+// EXHAUSTIVE over `RdataPayloadKind` for the reason the file header gives about `formatTargetOp`: a new
+// payload kind must not be able to arrive and silently render as nothing.
+//
+// ⭐⭐ **A STRING RECORD IS THE CASE THAT MATTERS, AND IT IS ONE HOP AWAY.** Emitted code addresses a
+// String literal through its 56-byte RECORD, never through its blob — `print("hi")` lowers to
+// `leaRegRdata rcx, [rip + __str_rec_1]` — so a note that rendered only its OWN payload would show the
+// text of a range-check panic (which does pass its blob) and nothing at all for every string a program
+// actually mentions. The record's meaning IS the blob it names; `stringBlobLabelOfRecord` is that link,
+// indexed by the table rather than scanned for.
+function rdataPayloadNote(label ByteArray, globalData GlobalDataTable) returns String
+	let name = String.from(label)
+	return match globalData.payloadKindOf(name) 'kind'
+		// TEXT by construction: the payload's own bytes.
+		stringBlob to envName gives payloadTextNote(globalData.payloadOf(name))
+		// A float island needs none — its LABEL is its value (`GlobalDataTable.registerFloatConstant`).
+		floatConstant gives ""
+		stringRecord gives payloadTextNote(globalData.payloadOf(globalData.stringBlobLabelOfRecord(name)))
+		// STRUCTURE: bytes only a decoder can read, so the label stands alone.
+		byteArrayBlob to unicodeTable gives ""
+	end 'kind'
+end 'rdataPayloadNote'
+
+// One text payload, as the note that follows an operand.
+function payloadTextNote(bytes ByteArray) returns String
+	return "{RdataNoteSeparator}{quotedPayloadText(bytes)}"
+end 'payloadTextNote'
+
+// A text payload as a quoted, escaped, length-capped literal.
+//
+// ⚠ **IT STOPS AT THE FIRST NUL, WHICH IS WHERE THE TEXT STOPS AND NOT WHERE THE PAYLOAD DOES.** A
+// String blob is its bytes, a NUL, and then padding to an 8-byte boundary (`stringBlobBytes`), so
+// rendering the whole payload would put one to seven escaped zero bytes at the end of most notes —
+// alignment, in a note about content. A trace tag carries no terminator at all and simply reaches the end.
+function quotedPayloadText(bytes ByteArray) returns String
+	var out = StringBuilder.create()
+	out.append(DoubleQuoteText)
+
+	var shown = 0 as ElementCount
+	for b in bytes 'eachByte'
+		if b == NulTerminator 'endOfText'
+			break
+		end 'endOfText'
+
+		if shown == RdataNoteMaxBytes 'capped'
+			return "{out.build()}{DoubleQuoteText}{RdataNoteEllipsis}"
+		end 'capped'
+
+		out.append(escapedPayloadByte(b))
+		shown = shown + 1
+	end 'eachByte'
+
+	return "{out.build()}{DoubleQuoteText}"
+end 'quotedPayloadText'
+
+// The quote a note's text is wrapped in, and the backslash that escapes one. Named because each is
+// written at more than one place in the renderer above and both are a FORMAT CONTRACT with every
+// committed fragment, not an incidental character.
+let DoubleQuoteText = "\""
+let BackslashText = "\\"
+
+// One payload byte as it appears inside a note. Quote and backslash are escaped so the note cannot be
+// mis-read as ending early; everything outside printable ASCII becomes a hex escape, which keeps a golden
+// pure ASCII whatever a String literal holds — including a NEWLINE, which would otherwise break the
+// one-op-per-line format the whole file rests on.
+//
+// The two special bytes come from the LEXER's `Ascii`, not from two fresh constants here: "34 is a double
+// quote" is one fact, and this file's own `BitsPerHexDigit`/`HexDigitMask` pair records what happens when
+// such a fact is written down twice.
+function escapedPayloadByte(b MachineWord) returns String
+	if b == Ascii.dquote or b == Ascii.backslash 'escapedVerbatim'
+		return "{BackslashText}{oneByteText(b)}"
+	end 'escapedVerbatim'
+
+	if b < PrintableAsciiLow or b > PrintableAsciiHigh 'notPrintable'
+		return "{BackslashText}x{hexByte(b)}"
+	end 'notPrintable'
+
+	return oneByteText(b)
+end 'escapedPayloadByte'
 
 // ⭐ **A NAME THAT RENDERED NOTHING IS REFUSED, because the alternative is a test that claims a gate
 // it does not have.** A ```RequiredRuntime block exists to put ONE body under a golden; a typo in it
@@ -571,7 +701,7 @@ end 'blockPrintName'
 // Serialize one function: `func @<name> {`, then each block as `<name>:` (see
 // `buildBlockPrintNames` — NOT its raw label, which is not unique) followed by
 // its ops (and terminator) one per line, then the closing brace.
-function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch) returns String
+function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch, globalData GlobalDataTable) returns String
 	var sb = StringBuilder.create()
 	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {OpenBrace}\n")
 
@@ -585,11 +715,11 @@ function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch) 
 		sb.append("{BlockLabelIndent}{blockPrintName(block.id, names: names)}:\n")
 
 		for opIdx in block.opRefs 'eachOp'
-			sb.append(printOpLine(module, opIdx: opIdx, names: names, cpu: cpu))
+			sb.append(printOpLine(module, opIdx: opIdx, names: names, cpu: cpu, globalData: globalData))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), names: names, cpu: cpu))
+			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), names: names, cpu: cpu, globalData: globalData))
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -600,9 +730,9 @@ end 'printTargetFunction'
 // One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index
 // is an invariant violation (a block references an op not in `module.ops`), not
 // a user error, so it panics rather than printing a sentinel.
-function printOpLine(module TargetModule, opIdx OpIndex, names BlockPrintNames, cpu CpuArch) returns String
+function printOpLine(module TargetModule, opIdx OpIndex, names BlockPrintNames, cpu CpuArch, globalData GlobalDataTable) returns String
 	let op = try module.ops.get(opIdx) otherwise panic("printOpLine: op index {opIdx} out of range in module.ops")
-	return "{OpIndent}{opIsaPrefix(cpu)}{formatTargetOp(op, names: names, cpu: cpu)}\n"
+	return "{OpIndent}{opIsaPrefix(cpu)}{formatTargetOp(op, names: names, cpu: cpu, globalData: globalData)}\n"
 end 'printOpLine'
 
 // The ISA namespace ops print under — the whole module's, not the op's. A module is single-target
@@ -694,7 +824,7 @@ end 'x64DivideOpName'
 // a compile error here, not a silent `??`. `cpu` names the module's ISA so the SHARED ops render their
 // operands against the right register file (`sharedVregName`); the x64/arm64-specific arms need no
 // dispatch (they only ever appear in their own ISA's modules).
-function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns String
+function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalData GlobalDataTable) returns String
 	return match op 'op'
 		prologue(stackSize) gives "prologue {stackSize}"
 		epilogue(stackSize) gives "epilogue {stackSize}"
@@ -770,7 +900,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		absF64RegReg(dest, src) gives "absF64RegReg {vregName(dest)}, {vregName(src)}"
 		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
 		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
-		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]"
+		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]{rdataPayloadNote(label, globalData: globalData)}"
 		// `minsd`/`maxsd` print their real mnemonic, unlike `absF64RegReg` above: each IS one
 		// instruction, so there is no encoder expansion for a golden to leak. The mnemonic's PREFIX is
 		// the `FloatMinMaxKind` member name spliced in — NOT the suffix construction `roundsd` uses
@@ -829,7 +959,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		arm64CmpImm(reg, imm) gives "cmp {arm64VregName(reg)}, {imm}"
 		arm64Cset(dest, cond) gives "cset {arm64VregName(dest)}, {cond.name}"
 		arm64LeaFuncAddr(dest, funcName) gives "leaFuncAddr {arm64VregName(dest)}, {String.from(funcName)}"
-		arm64LeaRdata(dest, label) gives "leaRdata {arm64VregName(dest)}, {String.from(label)}"
+		arm64LeaRdata(dest, label) gives "leaRdata {arm64VregName(dest)}, {String.from(label)}{rdataPayloadNote(label, globalData: globalData)}"
 		arm64LeaGlobal(dest, label) gives "leaGlobal {arm64VregName(dest)}, {String.from(label)}"
 		arm64BranchLink(targetName) gives "bl {String.from(targetName)}"
 		arm64BranchLinkReg(reg) gives "blr {arm64VregName(reg)}"

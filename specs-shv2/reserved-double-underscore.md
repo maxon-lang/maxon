@@ -468,10 +468,11 @@ exemption, and links to the same body. Two spellings, one function, opposite ver
 them is bytes the author typed into the reserved space and the other is not.
 
 ⚠ **THE COMPILER ITSELF IS A CALLER, WHICH IS WHY THIS IS PINNED RATHER THAN MERELY TRUE.**
-`Compiler/IR/Maxon/TypeRules.formatBound` renders the f64 bounds of a ranged float alias into an E3005
-sentence, and `Compiler/Parser.floatLiteralBits` decodes every float literal — both through this
-surface. shv2 compiling its own source is an ordinary program calling ordinary stdlib functions, and it
-gets no exemption from this file's rule; it spells the surface instead.
+`Compiler/NumberParsing.scalarConstantText` renders the f64 bounds of a ranged float alias into an E3005
+sentence — and, through the same one renderer, a `data {}` slot's initial value and the `__fconst_<value>`
+label of a float island — while `Compiler/Parser.floatLiteralBits` decodes every float literal. All of
+them through this surface. shv2 compiling its own source is an ordinary program calling ordinary stdlib
+functions, and it gets no exemption from this file's rule; it spells the surface instead.
 
 ⚠ The rendered digits are the BOOTSTRAP's notation and not `float.toString`'s — `100` and not `100.0`,
 and `-0` keeping its sign. `stdlib/Builtins.maxon`'s FLOAT TEXT band states why the two spellings are

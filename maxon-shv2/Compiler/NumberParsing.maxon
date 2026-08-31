@@ -44,6 +44,43 @@ let I64MinMagnitudeDigits = b"9223372036854775808"
 // ⚠ `ParserError` stays HERE and is the INTEGER path's: the float entry point answers with
 // `__FloatTextResult` instead, for the reason that union's header gives.
 
+// ⭐⭐ **A SCALAR CONSTANT AS THE TEXT SOMEBODY WROTE — the ONE renderer, for a payload the compiler
+// carries as a bare `ParsedInt` in both of the shapes it can mean.** An integer constant IS its number;
+// a FLOAT constant is an f64 BIT PATTERN, and printing the pattern names a number nobody wrote
+// (`4614253070214989087` for `3.14`). The caller knows which it holds and nothing else can.
+//
+// It lives beside the PARSE direction because it is the same fact read backwards, and it is here rather
+// than in either caller's file because its callers are in different TIERS and neither may reach the
+// other: `TypeRules.formatRangeDisplay` renders an E3005's range bounds in the Maxon tier, and
+// `TargetPrinter.printDataSection` renders a `.data` slot's initial value in the Target tier — which is
+// the read that found it, having spelled `f64 4614253070214989087` into every golden holding a float
+// global. Two copies of "an f64 pattern, as text" is one fact written twice.
+//
+// FLOAT renders through `stdlib/Builtins.maxon`'s `__float_textFromBits`: the shortest decimal that reads
+// back as the same double, which is what the bootstrap prints, and its own hex bits for the non-finite
+// patterns no literal can produce.
+//
+// ⭐⭐ **IT IS SPELLED `float.textFromBits`, AND THE RESERVED SPELLING IS NOT AVAILABLE HERE.** This file
+// is COMPILER source, and to the compiler compiling it that is an ordinary user program: a `__` callee
+// written out in a file that does not DECLARE the name is refused by
+// `Parser.requireCalleeIsNotReservedName` (E3004), which is the rule
+// `specs-shv2/reserved-double-underscore.md` pins as *"a `__` name may be REFERENCED from exactly one
+// file, not from user code generally"*. The PRIMITIVE-STATIC spelling is the surface over that reserved
+// name — `Parser.primitiveStaticCallee` mints exactly the `__float_textFromBits` bytes out of it — so
+// this reaches the identical stdlib body through the door the rule leaves open, and self-compilation
+// needs no exemption. `Parser.floatLiteralBits` spells its own reader the same way for the same reason.
+//
+// ⚠ **THE `u64.max` SENTINEL IS DELIBERATELY NOT SPELLED HERE** — a renderer holding ONE number cannot
+// tell a stored `-1` that means `u64.max` from one that means `-1`. `TypeRules.formatRangeDisplay` holds
+// BOTH bounds, is the only party that can ask, and carries that reasoning in full.
+module function scalarConstantText(value ParsedInt, isFloat bool) returns String
+	if isFloat 'float'
+		return float.textFromBits(value)
+	end 'float'
+
+	return "{value}"
+end 'scalarConstantText'
+
 // Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
 // Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.
 //

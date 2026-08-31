@@ -100,7 +100,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.leaRegRdata rbx, [rip + __str_rec_2]
+    x64.leaRegRdata rbx, [rip + __str_rec_2]  ; "the outer label string, long enough to be a heap allocation"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -110,7 +110,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_retain
     x64.storeBaseDispReg.word64 [r12 + 8], r8
-    x64.leaRegRdata rbx, [rip + __str_rec_3]
+    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "the inner word string, long enough to be a heap allocation"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -135,7 +135,7 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at nested-matches-of-two-borrowed-unions.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

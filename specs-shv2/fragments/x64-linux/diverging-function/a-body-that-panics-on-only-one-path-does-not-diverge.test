@@ -22,13 +22,13 @@ func @notFatal {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, ifcont
   y:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-body-that-panics-on-only-one-path-does-not-diverge.test:4: boom\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "survived\x0a"
     x64.callDirect print
     x64.epilogue 32
     x64.popReg rbp
@@ -42,7 +42,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rcx, 0
     x64.callDirect notFatal
-    x64.leaRegRdata rcx, [rip + __str_rec_4]
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "back in main\x0a"
     x64.callDirect print
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -137,7 +137,7 @@ func @joinLengths {
     x64.cmpRegImm32 r8, 100000
     x64.jcc lessEqual, __rc_ok#1
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at managed-string-arguments-in-stack-slots.test:5: Range check failed: value outside typealias 'ByteTotal'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -164,14 +164,14 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 48
-    x64.leaRegRdata rcx, [rip + __str_rec_8]
-    x64.leaRegRdata rdx, [rip + __str_rec_9]
-    x64.leaRegRdata rax, [rip + __str_rec_10]
-    x64.leaRegRdata r9, [rip + __str_rec_11]
-    x64.leaRegRdata rsi, [rip + __str_rec_12]
-    x64.leaRegRdata rdi, [rip + __str_rec_13]
-    x64.leaRegRdata r8, [rip + __str_rec_14]
-    x64.leaRegRdata r10, [rip + __str_rec_15]
+    x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "a string long enough to be heap allocated, one"
+    x64.leaRegRdata rdx, [rip + __str_rec_9]  ; "bb"
+    x64.leaRegRdata rax, [rip + __str_rec_10]  ; "ccc"
+    x64.leaRegRdata r9, [rip + __str_rec_11]  ; "dddd"
+    x64.leaRegRdata rsi, [rip + __str_rec_12]  ; "eeeee"
+    x64.leaRegRdata rdi, [rip + __str_rec_13]  ; "ffffff"
+    x64.leaRegRdata r8, [rip + __str_rec_14]  ; "another heap allocated string, seven"
+    x64.leaRegRdata r10, [rip + __str_rec_15]  ; "hhhhhhhhhhhhhhhhhhhhhhhhh"
     x64.storeBaseDispReg.word64 [rsp + 32], r8
     x64.storeBaseDispReg.word64 [rsp + 40], r10
     x64.callDirect joinLengths
@@ -181,7 +181,7 @@ func @main {
     x64.cmpRegImm32 r8, 255
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at managed-string-arguments-in-stack-slots.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 48

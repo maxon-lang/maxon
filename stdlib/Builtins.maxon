@@ -1486,18 +1486,34 @@ function __float_exactDigits(magnitude ParsedInt) returns __ScaledDigits
 end '__float_exactDigits'
 
 // The decimal text of the double `bits` encodes: the shortest string that reads back as the same
-// double, in the notation the bootstrap uses. Finite values only — see `__InfiniteExponentField`.
+// double, in the notation the bootstrap uses.
 //
 // ⚠ **THIS IS THE COMPILE-TIME SPELLING AND IT IS NOT `__float_toString`'s.** It renders the f64
 // BOUNDS of a ranged float alias into a diagnostic (`Value 500 is outside the range of 'Pct'
 // (float(0 to 100))`), so it prints `0`, `100` and `-0` — no forced decimal point — and switches to
 // .NET's `1E+17` outside the fixed window. `specs-shv2/ranged-typealias.md` pins those spellings.
+//
+// ⭐⭐ **A NON-FINITE PATTERN RENDERS AS ITS BITS, AND THAT USED TO BE A `panic`.** The panic's premise
+// was about ONE caller — *"a float literal overflows to E2011 before it can become one, and no writable
+// range bound names one"* — which is still true of a range bound, and was never a statement about the
+// function. Two callers have since appeared that it does not cover, both in `maxon-shv2`: the `.rdata`
+// float island's LABEL is minted from this text (`GlobalDataTable.registerFloatConstant`), and its
+// `TargetPrinter` renders a
+// `data {}` f64 slot through it. Neither may crash a compile over a bit pattern, so the domain is now
+// TOTAL and every caller is served by one function rather than by one function plus a premise.
+//
+// ⭐ **HEX, NOT `inf`/`nan`, BECAUSE THE LABEL MINTER NEEDS AN INJECTIVE ANSWER.** Distinct doubles get
+// distinct text here — that is what shortest-round-trip means — and a `.rdata` label derived from this
+// inherits that injectivity, which is what lets `registerRdataConstantLabeled`'s payload compare be a
+// real guard rather than a formality. A `nan` spelling would collapse every NaN PAYLOAD onto one name and
+// open exactly the label-space collision that guard exists to catch. The pattern is always sixteen digits
+// (a non-finite exponent field sets bit 62), so it needs no padding.
 public function __float_textFromBits(bits ParsedInt) returns String
 	let negative = bits < 0
 	let magnitude = bits and __FloatMagnitudeMask
 	let exponentField = (magnitude shr __SignificandFieldBits) and __ExponentFieldMask
 	if exponentField == __InfiniteExponentField 'notFinite'
-		panic("__float_textFromBits: {magnitude} is an infinity or a NaN — a float literal overflows to E2011 before it can become one, and no writable range bound names one, so nothing should reach here")
+		return "0x{bits:x}"
 	end 'notFinite'
 
 	let sign = "-" if negative else ""
@@ -1525,7 +1541,8 @@ function __shortestRoundTrip(digits DigitString, scale DecimalPointScale, target
 		// and FALSE at its top, where there is no neighbour above. MEASURED: `f64.max`'s expansion opens
 		// `17976931348623157…`, so the ONE-digit candidate rounds to `2` at scale 309 — 2e308, past
 		// f64.max — and `"{1.7976931348623157e308}"` killed every program that printed it, while the
-		// COMPILER died rendering the same bound into a diagnostic (`formatBound`).
+		// COMPILER died rendering the same bound into a diagnostic (`TypeRules.formatRangeDisplay`, through
+		// `scalarConstantText`).
 		//
 		// An overflowing candidate is simply not this double: `target` is finite by construction (both
 		// callers return early on zero and on the infinity/NaN exponent field), and nothing past f64.max

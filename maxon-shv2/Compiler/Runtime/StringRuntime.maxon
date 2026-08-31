@@ -150,7 +150,12 @@ export let CarriageReturnByte = 13 as Byte
 
 // The blob is the payload bytes followed by a single NUL — a C string, so the record's pointer is
 // usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
-let NulTerminator = 0 as Byte
+// ⚠ EXPORTED — and `export` rather than `module` is the correct one, which the self-compile's own
+// visibility check confirms by NOT flagging it. The blob's READER needs the same terminator its writer
+// used: `TargetPrinter` renders a blob's text into a golden and must stop where this stops, not at the
+// padding — and it lives in `Compiler/IR/Target/`, outside this file's `Compiler/Runtime/` subtree, which
+// is exactly the reach `module` does not have (measured: `module` here is `E2004 Undefined variable`).
+export let NulTerminator = 0 as Byte
 
 // ⭐ EVERY BLOB IS PADDED TO AN 8-BYTE MULTIPLE, so the RECORD that registers right after it lands at an
 // 8-byte-aligned rdata offset. This is load-bearing for arm64-macOS ONLY: a String literal's `buffer@0`
@@ -593,14 +598,14 @@ end 'singleByteGraphemesFlagValue'
 // The `.rdata` labels a literal's blob and record register under. Split out so the two prefixes are
 // named at the one place that uses them and `LowerMaxonToStd` names neither.
 export function registerStringBlob(globalData GlobalDataTable, bytes ByteArray) returns String
-	return globalData.registerRdataConstant(StringBlobPrefix, bytes: stringBlobBytes(bytes))
+	return globalData.registerRdataConstant(StringBlobPrefix, bytes: stringBlobBytes(bytes), kind: RdataPayloadKind.stringBlob)
 end 'registerStringBlob'
 
 // Register a literal's record, seeded with its blob's offset (see `buildStringRecordBytes` for why the
 // offset, not 0). `blobLabel` must already be registered — its offset is read back here.
 function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength ByteCount, singleByteGraphemes bool) returns String
 	let blobOffset = globalData.rdataOffsetOf(blobLabel)
-	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes))
+	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes), kind: RdataPayloadKind.stringRecord)
 end 'registerStringRecord'
 
 // ⭐ **THE WHOLE OF "MAKE THESE BYTES AN IMMORTAL `.rdata` String", AS ONE CALL — blob, record, and the

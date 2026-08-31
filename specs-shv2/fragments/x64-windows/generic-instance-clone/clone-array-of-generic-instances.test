@@ -80,7 +80,7 @@ func @makeClone {
     x64.leaRegFunc rdx, [rip + __destruct_Box_String]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_2]
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "first boxed string, long enough to live on the heap"
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.leaRegRegImm32 rcx, r13, 57
@@ -105,7 +105,7 @@ func @makeClone {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "second boxed string, long enough to live on the heap"
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.leaRegRegImm32 rcx, r13, 57
@@ -210,7 +210,7 @@ func @main {
     x64.ret
   tryok:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "second boxed string, long enough to live on the heap"
     x64.callDirect String.equals
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
@@ -236,7 +236,7 @@ func @main {
     x64.cmpRegReg r12, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at clone-array-of-generic-instances.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

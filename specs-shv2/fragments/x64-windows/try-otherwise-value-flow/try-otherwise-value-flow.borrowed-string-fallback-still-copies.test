@@ -39,7 +39,7 @@ func @risky {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, ifcont
   good:
-    x64.leaRegRdata rcx, [rip + __str_rec_2]
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "a freshly built heap string for the ok path"
     x64.callDirect __str_retain
     x64.movRegImm32 r10, 0
     x64.epilogue 32
@@ -84,7 +84,7 @@ func @choose {
     x64.cmpRegImm32 r12, 1000
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_15]
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at try-otherwise-value-flow.borrowed-string-fallback-still-copies.test:17: Range check failed: value outside typealias 'Len'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -108,7 +108,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.leaRegRdata rbx, [rip + __str_rec_3]
+    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "twelve chars"
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect choose
@@ -124,7 +124,7 @@ func @main {
     x64.cmpRegReg r8, rax
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at try-otherwise-value-flow.borrowed-string-fallback-still-copies.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

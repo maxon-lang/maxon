@@ -1869,7 +1869,7 @@ end 'rangeCoversDenotedRange'
 // `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
 // the real bounds beside the suffix that was supposed to carry them.
 export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
-	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}"
+	return "Value {scalarConstantText(value, isFloat: isFloat)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}"
 end 'literalOutOfRangeMessage'
 
 // The E3005 an out-of-range `otherwise` DEFAULT reports — the sentence above with its own subject, since
@@ -1885,9 +1885,9 @@ end 'literalOutOfRangeMessage'
 // real bounds printed in the same sentence. One alias, two spellings, decided by which of two E3005s the
 // value happened to meet.
 //
-// ⚠ The VALUE is spelled plainly and deliberately NOT through `formatBound`: an `otherwise` default is an
-// integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists to un-wrap, and
-// the oracle prints it plainly too.
+// ⚠ The VALUE is spelled plainly and deliberately NOT through `scalarConstantText`: an `otherwise`
+// default is an integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists
+// to un-wrap, and the oracle prints it plainly too.
 export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt) returns String
 	return "otherwise value {value} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false)}"
 end 'otherwiseOutOfRangeMessage'
@@ -1902,9 +1902,9 @@ end 'otherwiseOutOfRangeMessage'
 // author of `b"\x41\xdf\x02"` to work out WHICH byte is 223. The offset is the only thing this sentence
 // carries that its sibling cannot, and it is exactly why it is a sentence rather than a reuse.
 //
-// ⚠ The VALUE is a byte and is spelled plainly — it is never the wrapped `u64.max` pattern `formatBound`
-// exists to un-wrap. The RANGE is not: an element alias's bounds may be a float's bit patterns, so it keeps
-// the alias's own domain rather than assuming the byte's.
+// ⚠ The VALUE is a byte and is spelled plainly — it is never the wrapped `u64.max` pattern
+// `scalarConstantText` exists to un-wrap. The RANGE is not: an element alias's bounds may be a float's bit
+// patterns, so it keeps the alias's own domain rather than assuming the byte's.
 export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
 	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}"
 end 'byteStringByteOutOfRangeMessage'
@@ -2000,55 +2000,29 @@ function quotedAliasName(aliasName String) returns String
 	return String.from(sourceSpelledAliasName(aliasName.toByteArray()))
 end 'quotedAliasName'
 
-// A single range bound (or the offending value) as source text — the SIGNED spelling.
-//
-// FLOAT: the bound is an f64 BIT PATTERN, so it renders through `stdlib/Builtins.maxon`'s
-// `__float_textFromBits` — the shortest
-// decimal that reads back as the same double, which is what the bootstrap prints. Printing the
-// pattern itself would name a number nobody wrote.
-//
-// ⭐⭐ **IT IS SPELLED `float.textFromBits`, AND THE RESERVED SPELLING IS NOT AVAILABLE HERE.** This file
-// is COMPILER source, and to the compiler compiling it that is an ordinary user program: a `__` callee
-// written out in a file that does not DECLARE the name is refused by
-// `Parser.requireCalleeIsNotReservedName` (E3004), which is the rule
-// `specs-shv2/reserved-double-underscore.md` pins as *"a `__` name may be REFERENCED from exactly one
-// file, not from user code generally"*. The PRIMITIVE-STATIC spelling is the surface over that reserved
-// name — `Parser.primitiveStaticCallee` mints exactly the `__float_textFromBits` bytes out of it — so
-// this reaches the identical stdlib body through the door the rule leaves open, and self-compilation
-// needs no exemption. `Parser.floatLiteralBits` spells its own reader the same way for the same reason.
-//
-// ⚠⚠ **THE `u64.max` SENTINEL IS DELIBERATELY NOT SPELLED HERE, AND MOVING IT OUT IS A FIX.** This used
-// to render ANY `-1` as `18446744073709551615`, which is the same one-shape fact
-// `rangeNeedsUpperCheck` got wrong: a stored `-1` means `u64.max` only in the
+// ⚠⚠ **THE `u64.max` SENTINEL IS SPELLED HERE AND NOWHERE BELOW, AND MOVING IT UP WAS A FIX.**
+// `scalarConstantText` used to render ANY `-1` as `18446744073709551615`, which is the same one-shape
+// fact `rangeNeedsUpperCheck` got wrong: a stored `-1` means `u64.max` only in the
 // `rangeIsUnsignedMaxUpper` shape. A renderer holding ONE number cannot tell which it has, so it
 // produced sentences that contradicted themselves — `int(-1 to -1)` reported as
 // `int(18446744073709551615 to 18446744073709551615)` (a declaration nobody wrote), and a `-1` VALUE
-// reported as `Value 18446744073709551615` beside signed bounds on the same line. `formatRangeDisplay`
-// holds BOTH bounds and is the only party that can ask, so the reinterpretation lives there and the
-// offending VALUE — which is a signed i64 the author wrote — never receives it.
-function formatBound(bound ParsedInt, isFloat bool) returns String
-	if isFloat 'float'
-		return float.textFromBits(bound)
-	end 'float'
-
-	return "{bound}"
-end 'formatBound'
-
+// reported as `Value 18446744073709551615` beside signed bounds on the same line. This function holds
+// BOTH bounds and is the only party that can ask, so the reinterpretation lives here and the offending
+// VALUE — which is a signed i64 the author wrote — never receives it.
+//
 // The `int(<lo> to <hi>)` / `float(<lo> to <hi>)` spelling for an E3005 message (`Value N is outside
-// the range of 'Alias' (int(lo to hi))`). Each bound renders through `formatBound`, so a float bound
+// the range of 'Alias' (int(lo to hi))`). Each bound renders through `scalarConstantText`, so a float bound
 // shows as its decimal value — matching the bootstrap's `FormatRange` — rather than the raw pattern. An
 // exclusive `upto` alias is normalized to `high - 1` at parse and no enabled case surfaces one here, so
 // the `to` spelling is the only one reached.
 //
-// ⭐ **THE ONE PLACE THE `-1`-MEANS-`u64.max` REINTERPRETATION IS SPELLED FOR A READER**, gated on the
-// one place that shape is RECOGNIZED, because only a party holding both bounds can tell the sentinel
-// from a real `-1` (see `formatBound`). It applies to the UPPER alone: a negative low paired with a
-// `u64.max` upper is refused at declaration, so a low bound never carries the sentinel.
+// It applies to the UPPER alone: a negative low paired with a `u64.max` upper is refused at declaration,
+// so a low bound never carries the sentinel.
 function formatRangeDisplay(low ParsedInt, high ParsedInt, isFloat bool) returns String
 	let keyword = "float" if isFloat else "int"
-	let upper = UnsignedFullUpperDecimal if not isFloat and rangeIsUnsignedMaxUpper(low, high: high) else formatBound(high, isFloat: isFloat)
+	let upper = UnsignedFullUpperDecimal if not isFloat and rangeIsUnsignedMaxUpper(low, high: high) else scalarConstantText(high, isFloat: isFloat)
 
-	return "{keyword}({formatBound(low, isFloat: isFloat)} to {upper})"
+	return "{keyword}({scalarConstantText(low, isFloat: isFloat)} to {upper})"
 end 'formatRangeDisplay'
 
 // **DOES THIS SHIFT FILL WITH THE SIGN, OR WITH ZEROS?** THE one place THAT is answered — the

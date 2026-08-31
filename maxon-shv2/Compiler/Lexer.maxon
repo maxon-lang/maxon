@@ -1761,7 +1761,13 @@ function classifyDirective(name String) returns TokenKind
 end 'classifyDirective'
 
 // ASCII byte enum
-enum Ascii
+// ⚠ VISIBLE ACROSS THE MODULE for `isHexDigit`'s reason, stated one function below: a second spelling
+// of *"34 is a double quote"* is a second spelling however far away it is written.
+// `TargetPrinter.escapedPayloadByte` reads `dquote` and `backslash` from here when it renders a `.rdata`
+// blob's text into a golden. `module` and not `export`: every reader is inside `Compiler/`, and shv2
+// compiling ITSELF refuses an `export` nothing outside the subtree reads (E3093) — a gate the bootstrap
+// does not run, so only `scripts/self-host-ab.sh` sees it.
+module enum Ascii
 	lf = 10
 	dquote = 34
 	hash = 35

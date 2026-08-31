@@ -39,7 +39,7 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-    x64.leaRegRdata rbx, [rip + __str_rec_3]
+    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "the first payload, long enough to be a real heap allocation"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -67,7 +67,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 8], rax
-    x64.leaRegRdata rax, [rip + __str_rec_4]
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; "a replacement, also a real heap allocation"
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.leaRegRegImm32 rcx, r13, 57
@@ -103,7 +103,7 @@ func @main {
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rbx, rax, 1
   matchcont:
-    x64.leaRegRdata r12, [rip + __str_rec_5]
+    x64.leaRegRdata r12, [rip + __str_rec_5]  ; "the next round's payload, a real heap allocation too"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -130,7 +130,7 @@ func @main {
     x64.cmpRegImm32 rbx, 255
     x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at write-back-through-a-loop-carried-string-payload-is-the-same-answer.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
