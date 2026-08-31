@@ -1,0 +1,82 @@
+// Test: an-and-does-not-launder-an-unproven-merge-into-a-proof
+typealias Num = int(i64.min to i64.max)
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var n = 1 as Bits
+	var i = 0 as Num
+	while i < 7 'step'
+		n = n + 10
+		i = i + 1
+	end 'step'
+
+	// The premise, asserted before it is spent: the merge really does hold a value its alias cannot.
+	if n != 71 'reached'
+		return 1
+	end 'reached'
+
+	let m = n and 127
+	if m != 71 'laundered'
+		return 2
+	end 'laundered'
+
+	if 1 shl m != 0 'shl'
+		return 3
+	end 'shl'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+  whilehdr:
+    x64.cmpRegImm32 rcx, 7
+    x64.jcc greaterEqual, whileexit
+  step:
+    x64.leaRegRegImm32 rax, rax, 10
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 rax, 71
+    x64.jcc equal, ifcont#5
+  reached:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont#5:
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, 127
+    x64.cmpRegImm32 rcx, 71
+    x64.jcc equal, ifcont#7
+  laundered:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont#7:
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, -64
+    x64.movRegReg rsi, rdx
+    x64.negReg rsi, rdx
+    x64.orRegReg rsi, rsi, rdx
+    x64.sarRegImm8 rsi, rsi, 63
+    x64.shlRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.andRegReg rax, rax, rsi
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#9
+  shl:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont#9:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

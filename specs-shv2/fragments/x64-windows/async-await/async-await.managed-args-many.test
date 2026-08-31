@@ -181,7 +181,7 @@ func @main {
     x64.pushReg r15
     x64.prologue 136
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
     x64.callDirect __managed_create
     x64.storeSlotReg slot0, r8
     x64.movRegImm32 rbx, 0
@@ -371,8 +371,12 @@ func @main {
   await:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rax + r12*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r13, [rax + r12*8 + 0]
   __im_cont:
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r13
     x64.callDirect __gt_await
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r13

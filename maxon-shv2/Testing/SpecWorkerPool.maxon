@@ -1384,7 +1384,7 @@ end 'recordLinesOf'
 // read error here means the handle is already gone, and there is nothing left to say about a worker
 // whose pipe we can no longer read.
 function drainChildStderr(child StreamingSubprocess) returns String
-	var out = LineJoiner.create()
+	var out = TextJoiner.create(LineSeparator)
 
 	while true 'lineLoop'
 		let line = try child.readStderrLine() otherwise break
@@ -1722,7 +1722,7 @@ end 'drainHasAnswered'
 // at most one poll on a real wedge and by an unbounded amount on a suspended machine, which is the
 // case the header exists to let an operator tell apart: a run idle for 4000 s did not wedge, it slept.
 function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SlotInstantArray, expired BoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
-	var report = LineJoiner.create()
+	var report = TextJoiner.create(LineSeparator)
 	report.push("\n=== spec worker pool WEDGED: nothing dispatched or collected for {formatSeconds(idleFor)} (limit {formatSeconds(WedgeWatchdogMs)}) ===")
 	report.push("{dispatched} job(s) dispatched, {completed} collected, {queued} still queued")
 

@@ -63,9 +63,11 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
     x64.prologue 32
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 2
@@ -89,6 +91,8 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -99,19 +103,19 @@ func @main {
     x64.jcc aboveEqual, __im_slow
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rax + r12*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r13, [rax + r12*8 + 0]
     x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
-    x64.cmpRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc equal, critsplit#12
   __im_empty:
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 r13, 0
     x64.jcc notEqual, critsplit#13
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
+    x64.movRegReg r13, r8
     x64.jmp __im_cont
   critsplit#13:
     x64.movRegReg r10, rax
@@ -126,14 +130,20 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.imulRegRegImm32 r12, r12, 10
+    x64.imulRegRegImm32 r14, r12, 10
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r13
     x64.callDirect __gt_await
-    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRegReg r12, r14, r8
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic#6
   __rc_chk:
@@ -145,6 +155,8 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -154,6 +166,8 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

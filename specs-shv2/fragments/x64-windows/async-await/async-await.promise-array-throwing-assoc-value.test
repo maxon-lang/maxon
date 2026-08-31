@@ -111,7 +111,7 @@ func @main {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 10
@@ -158,8 +158,12 @@ func @main {
     x64.jcc greaterEqual, forexit
   each:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rax + r13*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r14, [rax + r13*8 + 0]
   __im_cont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r14
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok

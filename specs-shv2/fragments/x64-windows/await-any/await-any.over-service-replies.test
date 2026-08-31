@@ -133,7 +133,7 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 56
     x64.callDirect Slow.create
     x64.leaRegFunc rcx, [rip + Slow.__loop]
     x64.leaRegFunc rax, [rip + Slow.__abandon]
@@ -156,9 +156,10 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
     x64.storeBaseDispReg.word64 [r13 + 0], rbx
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 0
@@ -199,16 +200,20 @@ func @main {
   thequickreplywonthoughitwassentsecond:
     x64.movRegImm32 r12, 3
   ifcont#2:
+    x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
-    x64.movRegImm32 r15, 0
   forhdr:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r15, rax
+    x64.cmpRegReg r14, rax
     x64.jcc greaterEqual, forexit
   drainbothreplies:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rax + r15*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r15, [rax + r14*8 + 0]
   __im_cont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r15
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
@@ -218,12 +223,12 @@ func @main {
   tryok:
     x64.movRegReg rax, r8
   trycont:
-    x64.leaRegRegReg r14, r14, rax
+    x64.leaRegRegReg r13, r13, rax
   forstep:
-    x64.leaRegRegImm32 r15, r15, 1
+    x64.leaRegRegImm32 r14, r14, 1
     x64.jmp forhdr
   forexit:
-    x64.cmpRegImm32 r14, 3
+    x64.cmpRegImm32 r13, 3
     x64.jcc notEqual, ifcont#11
   bothrepliessurvivedtheselect:
     x64.leaRegRegImm32 r12, r12, 4
@@ -238,7 +243,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at await-any.over-service-replies.test:49: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -249,12 +254,12 @@ func @main {
   __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg rcx, r13
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __mbox_handle_drop_box
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, r12
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

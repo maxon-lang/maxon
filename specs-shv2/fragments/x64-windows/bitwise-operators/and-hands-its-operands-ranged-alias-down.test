@@ -1,0 +1,109 @@
+// Test: and-hands-its-operands-ranged-alias-down
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function andThenShift(a Wide, b Wide) returns Wide
+	let m = a and b
+	return m shr 60
+end 'andThenShift'
+
+function andThenDivide(a Wide, b Wide) returns Wide
+	let m = a and b
+	return m / 3
+end 'andThenDivide'
+
+function orThenShift(a Wide, b Wide) returns Num
+	let m = a or b
+	return m shr 60
+end 'orThenShift'
+
+function xorThenShift(a Wide, b Wide) returns Num
+	let m = a xor b
+	return m shr 60
+end 'xorThenShift'
+
+function main() returns ExitCode
+	if andThenShift(u64.max, b: u64.max) != 15 'andKeepsUnsigned'
+		return 1
+	end 'andKeepsUnsigned'
+	if andThenDivide(u64.max, b: u64.max) != 6148914691236517205 'andDividesUnsigned'
+		return 2
+	end 'andDividesUnsigned'
+	if orThenShift(u64.max, b: 0) != -1 'orCarriesNothing'
+		return 3
+	end 'orCarriesNothing'
+	if xorThenShift(u64.max, b: 0) != -1 'xorCarriesNothing'
+		return 4
+	end 'xorCarriesNothing'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @andThenDivide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.andRegReg rax, rcx, rdx
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.movRegReg r8, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body#10:
+    x64.movRegImm32 rax, 15
+  __il_cont#9:
+    x64.cmpRegImm32 rax, 15
+    x64.jcc equal, ifcont#2
+  andKeepsUnsigned:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm rcx, 18446744073709551615
+    x64.movRegImm rdx, 18446744073709551615
+    x64.callDirect andThenDivide
+    x64.movRegImm rax, 6148914691236517205
+    x64.cmpRegReg r8, rax
+    x64.jcc equal, __il_body#12
+  andDividesUnsigned:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __il_body#12:
+    x64.movRegImm rax, 18446744073709551615
+  __il_cont#11:
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, __il_body#14
+  orCarriesNothing:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __il_body#14:
+    x64.movRegImm rax, 18446744073709551615
+  __il_cont#13:
+    x64.cmpRegImm32 rax, -1
+    x64.jcc equal, ifcont#8
+  xorCarriesNothing:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

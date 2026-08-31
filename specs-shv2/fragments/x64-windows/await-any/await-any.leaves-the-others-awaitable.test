@@ -80,9 +80,10 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 10
@@ -137,8 +138,12 @@ func @main {
     x64.jcc greaterEqual, forexit
   awaiteveryone:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rax + r14*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r15, [rax + r14*8 + 0]
   __im_cont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r15
     x64.callDirect __gt_await
     x64.leaRegRegReg r13, r13, r8
   forstep:
@@ -160,7 +165,8 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at await-any.leaves-the-others-awaitable.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -171,7 +177,8 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

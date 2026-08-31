@@ -1930,41 +1930,82 @@ function parseProgramArgs(line String) returns ProgramArgArray
 	return args
 end 'parseProgramArgs'
 
-// Lines joined by "\n", with no leading and no trailing newline.
+// ⭐ THE INVERSE OF `parseProgramArgs` — argv written back out as the `<!-- Args: … -->` payload it was
+// read from, for the `Args:` line of a committed golden (`SpecTestRunner.fragmentArgsLine`).
 //
-// The suite accumulates line-oriented text in exactly two places — a spec's fenced blocks
-// (`readFence`, below) and a worker's whole stderr (`drainChildStderr`, SpecWorkerPool) — and both used
-// to hand-roll this dance identically. Both are also UNBOUNDED in the input: a fence is a whole test
-// program, a drain is everything a crashed child said. So both must accumulate into a `StringBuilder`,
-// because a `String` owns exactly the bytes it holds and its `append` recopies all of them
-// (stdlib/String.maxon), making a join Θ(n²) in its own output.
+// It lives HERE, beside the parser, because the QUOTING RULE IS ONE FACT. A renderer written in the
+// runner would be a second, independent statement of what a quote means, free to drift from the split
+// that produced these very strings — and the drift would put a line into a golden claiming the program
+// received arguments it never got, which is the one thing the golden is read to find out.
 //
-// `hasLine` is NOT `out.isEmpty()`. A first line that is itself EMPTY leaves the builder empty and must
-// still be separated from the line after it — a spec fence opening on a blank line is ordinary, and
-// inferring the flag from the buffer would silently eat that newline.
-export type LineJoiner
-	var out as StringBuilder
-	var hasLine as bool
+// TWO SHAPES MUST BE QUOTED or the payload stops denoting the argv it came from: an EMPTY argument
+// (which contributes no characters and would otherwise vanish — `command-line-args.empty-string-arg`
+// writes exactly this) and one CONTAINING A SPACE (which would read back as two arguments).
+//
+// An argument containing a QUOTE is UNREACHABLE rather than unhandled: `parseProgramArgs` consumes
+// every `"` as a toggle, so no argument it produces can carry one, and `SpecTest.programArgs` has no
+// other source. It panics rather than emit a line that would re-read as a different argv.
+export function renderProgramArgs(args ProgramArgArray) returns String
+	var payload = TextJoiner.create(ArgSeparator)
 
-	export static function create() returns LineJoiner
-		return LineJoiner{out: StringBuilder.create(), hasLine: false}
+	for arg in args 'eachArg'
+		if arg.contains(ArgQuote) 'unwritable'
+			panic("SpecParser.renderProgramArgs: argument '{arg}' contains a quote, which parseProgramArgs consumes as a toggle and can therefore never produce — an argv reaching here with one did not come from an `<!-- Args: … -->` marker")
+		end 'unwritable'
+
+		payload.push("{ArgQuote}{arg}{ArgQuote}" if arg.isEmpty() or arg.contains(ArgSeparator) else arg)
+	end 'eachArg'
+
+	return payload.build()
+end 'renderProgramArgs'
+
+// The one line terminator this harness builds and splits its text on. EXPORTED because three files
+// join lines with it and the runner splits captured output on it, and a bare `"\n"` is exactly the
+// kind of literal that gets retyped rather than referenced — one fact, one spelling.
+export let LineSeparator = "\n"
+
+// Parts joined by a separator, with no leading and no trailing copy of it.
+//
+// The suite accumulates separated text in three places — a spec's fenced blocks (`readFence`, below),
+// a worker's whole stderr (`drainChildStderr`, SpecWorkerPool) and an `<!-- Args: … -->` payload
+// written back out (`renderProgramArgs`) — and the first two hand-rolled this dance identically before
+// it existed. Those two are also UNBOUNDED in their input: a fence is a whole test program, a drain is
+// everything a crashed child said. So the accumulator is a `StringBuilder`, because a `String` owns
+// exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), making a join
+// Θ(n²) in its own output.
+//
+// ⚠ IT CARRIES THE SEPARATOR RATHER THAN ASSUMING A NEWLINE, and the third caller is why: an argv
+// payload is joined by a SPACE and is the same dance in every other respect. A second joiner beside
+// this one would be one fact written twice — the failure the first two callers had already shipped.
+//
+// `hasPart` is NOT `out.isEmpty()`. A first part that is itself EMPTY leaves the builder empty and must
+// still be separated from the part after it — a spec fence opening on a blank line is ordinary, and an
+// empty argv argument is a case `/specs` actually writes (`command-line-args.empty-string-arg`) — so
+// inferring the flag from the buffer would silently eat that separator.
+export type TextJoiner
+	var out as StringBuilder
+	var separator as String
+	var hasPart as bool
+
+	export static function create(separator String) returns TextJoiner
+		return TextJoiner{out: StringBuilder.create(), separator: separator, hasPart: false}
 	end 'create'
 
-	export function push(line String)
-		if hasLine 'separator'
-			out.append("\n")
-		end 'separator'
+	export function push(part String)
+		if hasPart 'separate'
+			out.append(separator)
+		end 'separate'
 
-		out.append(line)
-		hasLine = true
+		out.append(part)
+		hasPart = true
 	end 'push'
 
 	/// The joined text. CONSUMING, as `StringBuilder.build` is: the joiner is empty afterwards.
 	export function build() returns String
-		hasLine = false
+		hasPart = false
 		return out.build()
 	end 'build'
-end 'LineJoiner'
+end 'TextJoiner'
 
 // Read the fenced block whose opening ``` is at `openIndex`. Content lines are
 // joined with "\n" and NO trailing newline, so a ```maxon block is reproduced
@@ -1975,7 +2016,7 @@ end 'LineJoiner'
 // than looping).
 function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
 	let lineCount = lines.count()
-	var text = LineJoiner.create()
+	var text = TextJoiner.create(LineSeparator)
 	var i = openIndex + 1
 
 	while i < lineCount 'read'

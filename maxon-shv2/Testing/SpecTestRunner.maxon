@@ -123,6 +123,13 @@ export let FragmentsSubdir = "fragments"
 export let FragmentExtension = ".test"
 let FragmentTestPrefix = "// Test: "
 let FragmentSectionSep = "---"
+
+// The RUNTIME ARGUMENTS the case's program was spawned with (an `<!-- Args: … -->` marker), written
+// only when the spec named some. The spelling and the POSITION — first line after the source's `---`,
+// ahead of `ExitCode:` — are the C# reference's (`FragmentGenerator.BuildFragmentPrelude`), which
+// writes this same line for this same reason; a second spelling of one directive's echo would be this
+// project's signature bug in the one place two compilers' goldens are read side by side.
+let ArgsLabel = "Args: "
 let ExitCodeLabel = "ExitCode: "
 
 // What follows `ExitCode: ` in the fragment of a case that pins no exit code (see `fragmentExitCodeText`).
@@ -162,9 +169,6 @@ let MessageFieldStart = MinPositionFields
 // halves — what came before it, and its `:line:col: message`. Any other count is a line this
 // routine does not understand, and it says so by declining to renumber rather than by guessing.
 let PathSplitHalves = 2
-
-// Compiler output is line-oriented — one diagnostic, one line — and the renumbering walks it that way.
-let LineSeparator = "\n"
 
 // How a rendered diagnostic opens: `error <code>: <message>` (`Diagnostics.render`). Two constants
 // rather than one interpolation because the CODE goes between them, and the code is never written down
@@ -3042,10 +3046,29 @@ function fragmentSource(test SpecTest) returns String
 end 'fragmentSource'
 
 // The shared fragment head both expectation kinds carry: the compiled fragment's bytes verbatim,
-// then the section separator that closes the source block.
+// the section separator that closes the source block, and — for the cases that name any — the argv
+// the program was run with.
 function fragmentHeader(test SpecTest) returns String
-	return "{fragmentSource(test)}{FragmentSectionSep}\n"
+	return "{fragmentSource(test)}{FragmentSectionSep}\n{fragmentArgsLine(test)}"
 end 'fragmentHeader'
+
+// ⭐ WHAT THE PROGRAM WAS GIVEN — without which a golden of an argv-reading case CANNOT BE READ.
+// `abs.rt-float` and `abs.rt-negative-int` are the same five lines of source emitting the same
+// instructions (their only other difference is the filename inside a panic message), pinned to exit 5
+// and exit 42; EVERYTHING that distinguishes their ANSWERS is the argv, so a fragment omitting it puts
+// a flat contradiction in front of its reader — one program, two exit codes — and offers nothing to
+// resolve it with. `/specs` carries 51 such cases across 12 files.
+//
+// EMPTY for the ordinary case that names no arguments, which is why not one committed golden of a
+// program that reads no argv moves. A bare `Args:` line there would be a claim the spec never made —
+// the argument `fragmentExitCodeText` makes for writing `unpinned` rather than `0`.
+function fragmentArgsLine(test SpecTest) returns String
+	if test.programArgs.isEmpty() 'noArgs'
+		return ""
+	end 'noArgs'
+
+	return "{ArgsLabel}{renderProgramArgs(test.programArgs)}\n"
+end 'fragmentArgsLine'
 
 // An exitCode test's fragment: the shared head, the expected exit code, and the generated Target IR.
 //
@@ -4141,7 +4164,7 @@ function normalizeAsyncTraceStderr(text String, asyncTrace bool) returns String
 		return text
 	end 'notATraceCase'
 
-	var out = LineJoiner.create()
+	var out = TextJoiner.create(LineSeparator)
 	for line in text.split(LineSeparator) 'eachLine'
 		let stripped = stripWorkerMarkerFromLine(line)
 		if isAsyncWorkerLine(stripped) 'timingDependent'
@@ -4251,7 +4274,7 @@ function stripFaultRipSuffix(text String) returns String
 		return text
 	end 'noFault'
 
-	var out = LineJoiner.create()
+	var out = TextJoiner.create(LineSeparator)
 	for line in text.split(LineSeparator) 'eachLine'
 		out.push(stripFaultRipFromLine(line))
 	end 'eachLine'
