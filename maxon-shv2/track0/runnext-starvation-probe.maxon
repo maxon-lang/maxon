@@ -1,0 +1,113 @@
+// Track-0 `runnext` STARVATION PROBE (MC1) — the program that ANSWERS "is Go's
+// objection to `runnext` without `sysmon` applicable to a COOPERATIVE runtime?",
+// which `SchedRuntime.POffRunnext` had been answering with a quotation.
+//
+// ⭐⭐ IT IS NOT DRIVEN BY `pin-matrix.sh`, AND THAT IS DELIBERATE. Every program in
+// that matrix asserts a property of the SHIPPED compiler across processor counts.
+// This one asserts a property of a compiler that does not exist: it goes red only
+// when `runnext` is BUILT, so a driver that ran it here would assert nothing on any
+// tree this repository can produce. It is committed because the measurement is the
+// reason the slot stays reserved, and a reason nobody can re-run is a reason that
+// rots. Run it by hand, against the two compilers, exactly as MC1 did.
+//
+// ⭐⭐⭐ THE READING, MEASURED — ONE PROGRAM, TWO COMPILERS, `MAXON_MAX_PROCS=1`:
+//
+//   • SHIPPED (no `runnext`):      `bystander-ran` then `pingpong-done`, 3 of 3.
+//   • WITH AN EXPERIMENTAL SLOT:   `pingpong-done` then `bystander-ran`, 3 of 3 —
+//     the bystander waited out all 4,000 bounces.
+//
+// The experimental slot was Go's own two sites and nothing else: `__sched_runq_put`
+// takes `p.runnext` when it is free, and `__sched_runq_get` consults it ahead of the
+// ring. It was reverted; this file is what is left of it.
+//
+// ⛔⛔ AND THE 61-SCHEDULE FAIRNESS CHECK DOES NOT RESCUE IT, WHICH IS THE HALF THAT
+// LOOKS LIKE IT SHOULD. `GtFairnessInterval` consults the GLOBAL QUEUE; the starved
+// bystander is in a P's LOCAL RING, and nothing but a ring OVERFLOW ever moves a
+// thread between the two. So the one mechanism shv2 has that Go's argument does not
+// account for is pointed at a different queue from the one that starves.
+//
+// ⚠ PINNED AT ONE PROCESSOR, AND THAT IS THE HONEST CASE RATHER THAN THE CONVENIENT
+// ONE. At N >= 2 a second M steals the bystander out of the ring and the starvation
+// is masked — but one processor is a supported configuration (`MAXON_MAX_PROCS=1`,
+// and any single-core host), so a starvation that only one processor exhibits is
+// still a starvation this language would ship.
+//
+// ⚠ SPAWN ORDER IS THE SETUP, NOT SEND ORDER, and the first cut of this file had it
+// backwards and read GREEN under the experimental compiler for the wrong reason. A
+// `spawn` readies its service green thread immediately; a send to a service that has
+// not yet run only appends to a mailbox nobody is parked on. So the pair must be
+// spawned FIRST, which is what leaves the bystander last in the ring.
+
+typealias Integer = int(i64.min to i64.max)
+
+let totalBounces = 4000
+
+type Ping
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function hit(pong Pong.handle, me Ping.handle, n Integer)
+		self.seen = self.seen + 1
+
+		if n > 0 'bounce'
+			pong.hit(me.clone(), pong: pong.clone(), n: n - 1)
+		end 'bounce'
+
+		if n == 0 'last'
+			print("pingpong-done\n")
+		end 'last'
+	end 'hit'
+end 'Ping'
+
+type Pong
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function hit(ping Ping.handle, pong Pong.handle, n Integer)
+		self.seen = self.seen + 1
+
+		if n > 0 'bounce'
+			ping.hit(pong.clone(), me: ping.clone(), n: n - 1)
+		end 'bounce'
+	end 'hit'
+end 'Pong'
+
+type Bystander
+	var poked as Integer
+
+	static function create() returns Self
+		return Self{poked: 0}
+	end 'create'
+
+	export function poke()
+		self.poked = self.poked + 1
+		print("bystander-ran\n")
+	end 'poke'
+end 'Bystander'
+
+function main() returns ExitCode
+	// ⚠ SPAWN ORDER IS WHAT SEEDS THE QUEUES, not send order: `spawn` readies the
+	// service green thread immediately, while a send to a service that has not yet
+	// run only appends to a mailbox nobody is parked on. The pair goes first so the
+	// bystander is the LAST thing in the ring.
+	let ping = spawn Ping.create()
+	let pong = spawn Pong.create()
+	let idle = spawn Bystander.create()
+
+	// The ping-pong is kicked off FIRST so that a `runnext` slot is taken by `Ping`
+	// and the bystander lands in the RING behind it — which is the arrangement the
+	// question is about. Under a FIFO ring the bystander is second and runs after one
+	// bounce; under a `runnext` refilled by whichever green thread is running, the
+	// ring is never consulted at all until the pair is finished.
+	ping.hit(pong.clone(), me: ping.clone(), n: totalBounces)
+
+	idle.poke()
+
+	return 42
+end 'main'

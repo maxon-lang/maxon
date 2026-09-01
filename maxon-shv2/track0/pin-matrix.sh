@@ -76,6 +76,93 @@
 # `aggregate` is what is byte-identical, and it was, across both runs and all ten
 # rows. (SV1 wave 3 read 1/0, 2/886, 7/7790 and 9/8120 for the four explicit rows.)
 #
+# ⭐⭐ RE-MEASURED AT MC1 (SPINNING-M ACCOUNTING), AND THE STEAL COLUMN FELL BY AN
+# ORDER OF MAGNITUDE: `service-torture` reads 1/0, 2/582, 7/896, 12/1006 and default
+# 9/1023, where the readings above it are 2/692, 7/7882 and 8/8071. That is the
+# change working — a publisher that sees an M already looking for work wakes nobody,
+# so far fewer green threads cross an M — and it is the reason every number in these
+# paragraphs is a DATED READING and never a target.
+#
+# ⛔⛔ ASSERTION 4 WAS FLAKY AND THE PROGRAMS ARE WHAT WAS FIXED — NOT THE BAR (MC1's
+# REVIEW). The review measured 6/40 and 7/40 `1/0` readings on its own box at
+# `MAXON_MAX_PROCS=2` — about 15%. ⚠ THAT RATE DID NOT REPRODUCE HERE AT ANY PARTIAL
+# LOAD, and the table below is why that is worth stating rather than quietly
+# inheriting: on this box the OLD length reads 0/40 with up to half the processors
+# busy and 40/40 with all of them busy. So the ~15% is real but its condition is the
+# BOX, not the program, and no number here should be quoted as the flake rate.
+# The two SPAWNING_PROGRAMS now run 4000 rounds where they ran 400,
+# so EVERY `aggregate=42680` AND `taken=4800` ANYWHERE IN THIS HEADER IS A READING OF
+# THE SHORTER PROGRAMS — both now answer `aggregate=474680`, and the fan-in
+# `taken=48000`. The numbers are left as they were measured rather than rewritten:
+# they are dated readings, and a reading edited to match a later program is a
+# fabrication. Both new constants carry the argument at their own `let`.
+#
+# THE FAILURE. `service-torture` sent 4,800 messages and read
+# `schedMaxActiveWorkers()` inside about 40 ms, which is a race against the OS thread
+# `__sched_wake_or_spawn` created ever reaching its first instruction. Win that race
+# and the row reads `workers=1 steals=0` — failing BOTH halves of assertion 4, not
+# passing by one. It is not a wrong answer: the `aggregate` was byte-identical across
+# every run in the table below and the exit code was 42 throughout. The program
+# simply drained on the main thread before a second M was ever needed.
+#
+# ⭐ THE MECHANISM, SEEN RED ON DEMAND — because a gate nobody has watched move is
+# not a gate. The SAME program at `rounds = 1` (a ~1 ms run) reads below the bar
+# 37 of 40 at `MAXON_MAX_PROCS=2`. Run length is the lever, and this is it pulled.
+#
+# MEASURED at MC1's review, `MAXON_MAX_PROCS=2`, 40 consecutive runs per cell, on a
+# 16-processor box, with `yes > /dev/null` x K as the competing load:
+#
+#                                   K=0    K=4    K=8   K=16
+#     service-torture  rounds=400    0/40   0/40   0/40  40/40
+#     service-torture  rounds=4000   0/40   0/40   0/40  36/40
+#     service-fanin    rounds=400    0/40   0/40   0/40  40/40
+#     service-fanin    rounds=4000   0/40   0/40   0/40  37/40
+#
+# ⛔⛔ READ THE K=16 COLUMN BEFORE QUOTING THIS SCRIPT AS GREEN: AT TOTAL CPU
+# SATURATION BOTH LENGTHS FAIL, AND NO PROGRAM-SIDE CHANGE CAN FIX THAT. With every
+# processor already held by a runnable CPU-bound thread, whether the worker M gets a
+# timeslice inside the program's lifetime is the OS scheduler's decision and nothing
+# the program does can compel it; ten times the work bought 4 runs out of 40. ⇒ this
+# gate's readings are only meaningful on a box with a spare processor, which is the
+# condition every K < 16 column is. What WOULD make it unconditional is a different
+# shape, not a longer one: `main` must BLOCK until the property holds — spin on
+# `schedMaxActiveWorkers() >= 2` with a bounded timeout and report the timeout — which
+# tests "a worker M ran" instead of sampling for it. That needs a `numProcs` builtin
+# the runtime does not expose (the program cannot otherwise tell a one-P row, where
+# the wait must not happen, from a starved multi-P one), so it is a rung, not a patch.
+#
+# ⛔ THE BAR IS NOT WEAKENED AND MUST NOT BE. "A spawned green thread reached a
+# worker M at least once" is the whole content of the row; a program too short to
+# give it a chance is what was wrong. A future change that shaves another wakeup off
+# these programs gets a LONGER RUN too.
+#
+# THE ROWS AT THE NEW LENGTH, this box, ALL CHECKS PASSED: service-torture reads
+# `workers/steals` of 1/0, 2/7976, 7/13679, 12/13124 and default 11/14342;
+# service-fanin-torture 1/0, 2/1, 7/8, 12/10 and default 7/8 — both with
+# `aggregate=474680` byte-identical at every row and exit 42 throughout. ⚠ NOTE WHICH
+# COLUMN THE LENGTH BOUGHT MARGIN IN: service-torture's steals went from hundreds to
+# thousands, and service-fanin-torture's N=2 row still reads ONE. Its steal count is
+# not a function of run length — the worker M steals one batch of senders and then has
+# work for the rest of the program — so what the tenfold buys THERE is a ten times
+# longer window in which P0's ring is non-empty for a late-waking M to steal from at
+# all, which is the `workers >= 2` half. The `steals >= 1` half still passes by one.
+#
+# ⚠⚠ AND MC1 DID *NOT* MOVE service-fanin-torture's MARGIN — THIS HEADER CLAIMED IT
+# DID, AND THE CLAIM WAS READ OFF THE CODE RATHER THAN MEASURED. That row's
+# `steals >= 1` at N=2 does pass by ONE most runs, and it passed by one before MC1
+# too. MEASURED at MC1's review on the UNCHANGED 400-round program — same box, same
+# source (this diff does not touch it), the two binaries INTERLEAVED run by run in
+# one session, 20 runs each at `MAXON_MAX_PROCS=2`:
+#
+#     steals    1    2    3    6    7
+#     parent   16    1    1    2    -
+#     MC1      12    5    1    1    1
+#
+# ⇒ the PARENT is the tighter of the two. A second, independent 40-run pair read
+# `steals=1` on 30/40 parent and 25/40 MC1 — same direction, same conclusion. The
+# thin margin is PRE-EXISTING; what MC1 moved is the steal COUNT on service-torture,
+# one paragraph up, which is a different program and a different column.
+#
 # ⚠ refcount-torture IS IN THE LIST FOR ITS workers/steals ROW ONLY. Its own
 # subject — whether a contended refcount word survives — is INTERMITTENT, so a
 # single run per processor count cannot see it and this script never claims to:

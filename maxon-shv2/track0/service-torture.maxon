@@ -43,7 +43,31 @@ let sinkCount = 12
 
 // Messages per sink. Each is one fresh `String` moved across, so a round is
 // `sinkCount` allocations handed to `sinkCount` different green threads.
-let rounds = 400
+//
+// ⭐⭐ **IT IS 4000 AND IT WAS 400, AND THE TENFOLD IS A GATE FIX, NOT A BIGGER
+// NUMBER FOR ITS OWN SAKE (MC1's REVIEW).** `pin-matrix.sh`'s assertion 4 asks
+// whether a SPAWNED green thread reached a worker M, and at 400 the answer was a
+// coin flip on a busy box: `main` sends all 4,800 messages and reads
+// `schedMaxActiveWorkers()` in about 40 ms, which is a race against the OS thread
+// `__sched_wake_or_spawn` created ever executing its first instruction. It reads
+// `workers=1 steals=0` when it wins that race — not a wrong answer, and the
+// `aggregate` is byte-identical either way, but assertion 4 goes red.
+//
+// ⛔ **THE BAR IS NOT WHAT MOVED, AND MUST NOT BE.** "A spawned green thread
+// reached a worker M at least once" is the whole content of the row; a program too
+// short to give it a chance is the thing that was wrong. MEASURED at MC1's review,
+// same box, `MAXON_MAX_PROCS=2`, 40 consecutive runs at each length: `rounds = 1`
+// (a ~1 ms run) reads below the bar **37 of 40**. That is the lever seen moving —
+// the failure is a function of RUN LENGTH — and it is the whole of the evidence for
+// this constant, which is honest about what it is: TEN TIMES the margin against a
+// perturbation, not a proof that any particular box stops flaking.
+//
+// ⚠ **AND THE LENGTH DOES NOT SURVIVE TOTAL CPU SATURATION — `pin-matrix.sh`'s
+// header carries the four-column table and the reason.** At 400 rounds and at 4000
+// the reading is clean 40/40 with up to half this 16-processor box busy, and both
+// fail with all of it busy. What that costs and what would actually fix it are
+// stated there, at the gate that reads these programs.
+let rounds = 4000
 
 type Sink
 	var taken as Integer

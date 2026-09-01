@@ -28,6 +28,14 @@ produced the binary*.
 | `pin-matrix.sh` | **shv2** (`maxon-shv2/.maxon/maxon-shv2.exe`) | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS` and at the default — while a SPAWNED one reaches a worker M? |
 | `refcount-race.sh` | **shv2** | does a contended refcount word survive, and can the pin be removed to break it? |
 
+⭐⭐ **AND ONE PROGRAM HERE HAS NO DRIVER ON PURPOSE: `runnext-starvation-probe.maxon`
+(MC1).** Every program the three drivers run asserts something about the SHIPPED
+compiler; that one goes red only against a compiler with `runnext` BUILT, which no
+tree here produces — so a driver would assert nothing, for ever. It is committed
+because it is the measurement `SchedRuntime.POffRunnext` cites for keeping the slot
+reserved, and a reason nobody can re-run is a reason that rots. Its own header
+carries both readings and how to reproduce them.
+
 ⚠ **`validate.sh` DOES NOT MEASURE SHV2 AND NEVER DID.** It defaults `MAXON` to
 `$REPO/bin/maxon.exe`, and one of its checks calls `maxon monitor`, which shv2
 does not have. Everything it says is about the bootstrap's emitted runtime. The

@@ -1497,6 +1497,90 @@ The four earliest rows predate the automated log; their numbers are reconstructe
 git, so they are accurate but were not written by the tool. They also predate the exponent table,
 which is why it starts empty.
 
+**2026-09-01 — MC1: SPINNING-M ACCOUNTING. A RUNTIME row, not a compiler one — no `scale-test` numbers
+exist for it and none should be looked for.** `scale-test` measures the COMPILER compiling; this change is
+in the scheduler the compiler EMITS, and its subject is a program with twelve services and half a million
+messages. The instrument is `maxon-shv2/track0/service-torture.maxon` scaled to 480,000 sends
+(`rounds = 40000`), driven by a PowerShell harness that reads **process-wide CPU off `GetProcessTimes`**
+(`TotalProcessorTime` / `UserProcessorTime` / `PrivilegedProcessorTime`) rather than a wall clock, with the
+two binaries **interleaved rep by rep in one session**. Medians of 3 reps, all times in ms:
+
+| `MAXON_MAX_PROCS` | | CPU | user | kernel | wall | steals |
+|---|---|---:|---:|---:|---:|---:|
+| 1 | before | 172 | 125 | 47 | 176 | 0 |
+| 1 | **after** | **156** | 125 | 31 | **168** | 0 |
+| 4 | before | 1516 | 766 | 781 | 604 | 443,053 |
+| 4 | **after** | **797** | 406 | **297** | **251** | **120,801** |
+| 16 | before | 3172 | 1172 | 2000 | 1244 | 812,867 |
+| 16 | **after** | **859** | 531 | **281** | **269** | **143,229** |
+
+**At sixteen processors: −73% CPU, −86% KERNEL, −78% wall, −82% steals, and the aggregate byte-identical
+at every count.** The wall gap against one processor closes from ×7.1 to ×1.60. ⚠ **THE NOISE BAND ON THIS
+BOX IS ±5-10% ON CPU AND 25-30% ON WALL**, which is why wall is reported but never argued from; every
+number above is outside the CPU band by an order of magnitude, and the N=1 row — unchanged, as it must be,
+since one processor reaches none of this code — is the control.
+
+**What it is.** Go's `sched.nmspinning` (`proc.go:3228`), ported with its *"delicate dance"*
+(`proc.go:3638-3673`): a publisher that sees an M already looking for work skips the wakeup entirely, and
+an M going non-spinning decrements FIRST and re-checks every source afterwards. Before it, every publish
+`SetEvent`ed an idle M and the woken M found the queue already drained as often as not — one kernel
+round trip per message, on work finer-grained than the round trip.
+
+**What it is NOT: the lock — and that reading is INHERITED, not MC1's.** The measure-first pass that
+preceded this change built an ablation with `emitSchedLockEnter`/`Leave` emptied — no scheduler lock at
+all, the ceiling any lock work could reach — and read **−5.7%** of total CPU at N=16 with the kernel column
+barely moved (1953 → 1844), that build exiting 101/139 at N≥2 as the positive control that the lock is
+load-bearing. MC1 did not re-take it and the ablation is not committed; it is written down here because it
+is the reason the lock was not what got changed.
+
+**Sabotaged, on the column that discriminates.** With the reservation's give-back deleted (one line), the
+count leaks on the first exhausted scan and no publish ever wakes anybody again: `steals` reads **12 at
+`MAXON_MAX_PROCS=2` and 21-30 at 4, against ~79,000 and ~120,000** with it, the workers sitting out their
+park timeouts. ⚠ It is invisible at N=16, and `pin-matrix.sh` does not catch it either — `steals=12`
+satisfies its `steals > 0` family assertion. The steal COUNT is the instrument, not the family.
+
+**Two things were measured and deliberately NOT built, and the numbers are the reason.**
+
+- **Go's `pidleget`/`pidleput` idle-P list (`proc.go:7425`/`7454`).** An instrumented build counted every
+  `idleFlag` load in the wake scan: **108,322 for the whole 480,000-message run at N=16** — FEWER than the
+  **298,552** at N=2, because more processors means the first idle P is found sooner and the gate
+  suppresses more calls outright. Against 797-953 ms of CPU an O(1) list can save single-digit
+  milliseconds, and it would have to buy them with a lock-free stack whose ABA argument is harder than the
+  `idleFlag` protocol it replaces — on the one path that deliberately runs with the run-queue lock
+  RELEASED, because that release is the StoreLoad fence.
+- **`runnext` (`POffRunnext`, reserved since W212).** Whether shv2's cooperative model makes Go's
+  no-`sysmon` objection inapplicable was settled by a probe rather than by argument:
+  `maxon-shv2/track0/runnext-starvation-probe.maxon`, one program, two compilers, `MAXON_MAX_PROCS=1` —
+  shipped compiler runs the bystander FIRST on 3 of 3, an experimental `runnext` runs it LAST on 3 of 3,
+  after all 4,000 bounces. The 61-schedule fairness check does not rescue it: it consults the GLOBAL
+  queue, and the starved thread is in a P's LOCAL RING. The slot stays reserved for W213.
+
+**RE-MEASURED AT MC1's REVIEW, WHICH FOUND A STRANDED CREDIT AND CLOSED IT — AND THE NUMBERS DID NOT
+MOVE.** An M that parks publishes `idleFlag = 1` before its re-search; a waker can win that flag and hand
+the P a credit in the gap, and if the M's OWN re-search then succeeds it used to run a green thread with
+that credit standing on its P — so the gate above wakes nobody for the whole duration of that thread while
+nobody is searching (self-healing at the M's next search, or at `ParkTimeoutIdleMs`). Go calls
+`resetspinning` before `execute` and does not have the window; `wredeq` now releases through the same CAS,
+which steps by zero where no waker intervened. **It was MEASURED, not argued**: a probe build counting the
+reclaim reads **5-16 occurrences per 4,800-message run of `service-torture` at N ∈ {2, 4, 12, 16}**, and a
+second probe that only READS the word in the unfixed build agrees to within a few counts, so the fix fires
+on essentially every occurrence the old code stranded.
+
+The A/B above was then re-taken against the fixed binary, same harness, two interleaved sessions on one
+box — medians of 3 and of 5. At N=16 it reads **CPU 891 → 812 (3 reps) and 953 → 922 (5 reps)**, at N=4
+**703 → 766 then 750 → 656** — the N=4 sign FLIPS between sessions, which is what a reading inside the
+±5-10% band looks like — and N=1 is 172 both ways, the control. `aggregate=5226680` is byte-identical
+across all 32 runs and the exit code is 42 throughout. ⇒ **the fix is free at this resolution**, which is
+what one `lock cmpxchg` on a path taken a few thousand times in half a million messages should be.
+
+**What still costs, and it is not what an idle-P list would fix.** The residual at N=16 is ~640 ms of CPU
+over the one-processor run, and it grows only mildly with the count (734 → 953 ms from N=4 to N=16 while
+`numProcs` goes ×4). The work-conservation hand-off — an M that finds work waking another, Go's
+`resetspinning` → `wakep` — is a third of it: deleting it reads **625 ms against 922 at an identical wall
+and MORE steals**, and it is kept anyway, because what it buys is bounded by `ParkTimeoutIdleMs` and a
+bursty producer that goes quiet would otherwise wait 100 ms for its second M. That trade is the next
+thing to measure here, and it needs a LATENCY corpus `track0/` does not have.
+
 **2026-08-11 — CORPUS CHANGE, NO ROW: the scaling corpus grew one statement per SCOPE-FILLER LOCAL, so
 rows above this line are not comparable term for term with rows below it.** The `var-should-be-let` spec
 port made E3077 (a `var` that is never reassigned) a compile error, and `ScaleCorpus.fillerLocalsDecl`

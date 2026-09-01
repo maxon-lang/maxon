@@ -28,7 +28,7 @@
 // ⚠ LEAK-FREEDOM IS THE EXIT CODE HERE, NOT A `leaked=` FIELD. `drop-running-torture`
 // can print one because it takes `mmRawAllocLive()` at two QUIESCENT points it can
 // name; this program has no such point it can observe from — `main` cannot see the
-// senders finish. What covers it is the runtime's own exit leak gate: 4,800 heap
+// senders finish. What covers it is the runtime's own exit leak gate: 48,000 heap
 // `String`s are built by twelve green threads and dropped by a thirteenth, and a
 // single lost decref is exit 101. `pin-matrix.sh` asserts the exit code is identical
 // at every processor count AND never 101, which is the same fact read off the door
@@ -44,7 +44,27 @@ let senderCount = 12
 // Messages per sender. Each is one fresh `String` moved across, so the sink takes
 // `senderCount * roundsPerSender` payloads from `senderCount` different green
 // threads and drops every one of them on its own.
-let roundsPerSender = 400
+//
+// ⭐⭐ **IT IS 4000 AND IT WAS 400, FOR THE REASON `service-torture.maxon`'s OWN
+// `rounds` CARRIES IN FULL (MC1's REVIEW): the run was short enough that
+// `pin-matrix.sh`'s assertion 4 was reading a race rather than a property.** Here
+// the thin column is `steals`, not `workers` — MEASURED at MC1's review, 20 runs of
+// each binary INTERLEAVED at `MAXON_MAX_PROCS=2`, the parent read `steals=1` on 16
+// of 20 and MC1 on 12 of 20, both sitting on a bar of 1. ⚠ **AND THAT MARGIN IS
+// PRE-EXISTING, NOT MC1's** — the parent is the tighter of the two, and this program
+// is untouched by that change; `pin-matrix.sh`'s header records the A/B in full,
+// because a claim about which change moved a margin is exactly the kind that is read
+// off code and never measured.
+//
+// ⛔ **AND BE PRECISE ABOUT WHAT THE TENFOLD BOUGHT HERE, BECAUSE IT IS NOT THE STEAL
+// COUNT: THAT STILL READS 1 AT N=2.** A steal is one `__sched_find_runnable` call
+// that found work on another P, and the worker M takes ONE batch of senders and then
+// has work for the rest of the program however long that program is — so no run
+// length raises this column. What the length buys is the `workers >= 2` half: a ten
+// times longer window in which `main`'s ring still holds senders for a late-waking M
+// to steal from at all. Raising the steal count would mean restructuring the program,
+// and that is not what a margin on assertion 4 needs.
+let roundsPerSender = 4000
 
 // The message that completes the run. Stated once, so the sink's print gate and the
 // count it reports cannot disagree.
