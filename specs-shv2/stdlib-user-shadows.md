@@ -668,3 +668,88 @@ end 'main'
 ```stdout
 2.5
 ```
+
+<!-- test: stdlib-user-shadows.the-format-spec-path-keeps-the-modules-alias -->
+⭐⭐ **The route the two cases above cannot reach, and it was still wrong when they went green.** Float
+printing enters `stdlib/Builtins.maxon` through `__float_toString`; an INTEGER format spec — `"{n:x}"`,
+`"{n:b}"`, `"{n:o}"`, `"{n:d}"` and their padded forms — enters somewhere else entirely, at
+`__int_toStringFormatted(value ParsedInt, …)`, whose FIRST PARAMETER is the contested name. Nothing about
+a working float path constrains it: a compiler that resolved `ParsedInt` correctly for the module's
+arrays and still let its meaning slip in this signature passes every case above and faults here, which is
+what was MEASURED — **exit 0xC0000005 with no diagnostic and no output at all**, the plain integer
+argument arriving at a parameter typed as the user's STRUCT.
+
+One case covers all four bases deliberately: they are not four features but one entry point, reached
+through one lowering, so a fix that reached only the base the case happened to name would be a fix that
+was never tested. The user's struct is live in the same program and answers for the exit code, so the
+case also fails if the module's meaning wins in the other direction.
+```maxon
+typealias Value = int(0 to 200)
+typealias Bits = int(0 to u64.max)
+
+type ParsedInt
+	export let value as Value
+
+	export static function create(value Value) returns ParsedInt
+		return Self{value: value}
+	end 'create'
+end 'ParsedInt'
+
+function main() returns ExitCode
+	let p = ParsedInt.create(11)
+	let n = 48879 as Bits
+
+	print("{n:x}")
+	print("|{n:X}")
+	print("|{n:o}")
+	print("|{n:b}")
+	print("|{n:06x}")
+	print("|{n:d}")
+
+	return p.value
+end 'main'
+```
+```exitcode
+11
+```
+```stdout
+beef|BEEF|137357|1011111011101111|00beef|48879
+```
+
+<!-- test: stdlib-user-shadows.the-format-spec-path-control-under-an-uncontested-name -->
+The CONTROL for the case above, and the reason its failure can be attributed to the name rather than to
+the format specs. Byte for byte the same program with the type renamed to `UserParsedInt`, so nothing in
+`stdlib/Builtins.maxon` is contested — same six spellings, same expected text. It passed while its twin
+faulted, which is what makes the pair a measurement of the SHADOW and not of `"{n:x}"`.
+```maxon
+typealias Value = int(0 to 200)
+typealias Bits = int(0 to u64.max)
+
+type UserParsedInt
+	export let value as Value
+
+	export static function create(value Value) returns UserParsedInt
+		return Self{value: value}
+	end 'create'
+end 'UserParsedInt'
+
+function main() returns ExitCode
+	let p = UserParsedInt.create(11)
+	let n = 48879 as Bits
+
+	print("{n:x}")
+	print("|{n:X}")
+	print("|{n:o}")
+	print("|{n:b}")
+	print("|{n:06x}")
+	print("|{n:d}")
+
+	return p.value
+end 'main'
+```
+```exitcode
+11
+```
+```stdout
+beef|BEEF|137357|1011111011101111|00beef|48879
+```

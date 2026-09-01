@@ -25921,7 +25921,7 @@ export type ProgramSignatures
 		if not self.structTypes.contains(structName) 'notStruct'
 			return false
 		end 'notStruct'
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.isManagedOpaqueTypeParamField: structTypes.contains({String.from(structName)}) is true but get failed")
+		let layout = self.structLayoutOf(structName)
 		let index = layout.indexOfField(fieldName)
 		if index >= layout.fieldCount() 'noField'
 			return false
@@ -26912,27 +26912,58 @@ export type ProgramSignatures
 		return maxonTypeTag(self.structFieldDeclaredType(structName, index: index)) == ValueTypeTag.interfaceRef
 	end 'structFieldIsExistential'
 
+	// ⛔⛔ **ASKED ON THE DECLARING STRUCT'S BEHALF, AND THE READER-FREE DOOR HERE WAS A WILD DECREF.**
+	// `typeIsManagedFor`'s header calls the struct-field cascade and the destructor stamp "genuinely
+	// file-less" callers. They are not: a field's declared type is a name spelled in the struct's OWN file,
+	// so the file that decides what it means is `layout.declFilePath` — the same reader `resolveTypes`
+	// already passes for the field types themselves (`TypeResolution.resolveStructFieldTypes`).
+	//
+	// MEASURED with a name-only control: `stdlib/Builtins.maxon`'s `type __UnsignedDigitStep` declares
+	// `public var quotient as ParsedInt`, its own file-private `typealias ParsedInt = int(...)`. A user
+	// program declaring `type ParsedInt` made this door read the USER's struct, so the module's integer
+	// field was classified managed, `__destruct___UnsignedDigitStep` was synthesized over it, and every
+	// integer format spec — `"{n:x}"`, `"{n:X}"`, `"{n:o}"`, `"{n:b}"`, `"{n:d}"` — decref'd a digit as a
+	// pointer: **exit 0xC0000005 on x64 and a trap on wasm, with no diagnostic and no output**, against a
+	// control of 11. The IR diff is one line, `call $__mm_decref` becoming
+	// `call $__destruct___UnsignedDigitStep`.
 	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
-		return self.typeIsManaged(self.structFieldDeclaredType(structName, index: index), from: self.typeNames)
+		let layout = self.structLayoutOf(structName)
+		return self.typeIsManagedFor(self.fieldTypeOf(layout, structName: structName, index: index), from: self.typeNames, readerFilePath: layout.declFilePath)
 	end 'structFieldIsManaged'
 
 	// ⭐ **THE OWNERSHIP PROJECTION OF THE FIELD QUESTION — what a DESTRUCTOR must ask** (`W231`). A promise
 	// field is not managed (not a box, never retained, never cloned) and does owe a reclaim, so the
 	// synthesized `__destruct_<T>` has to walk it. Asking `structFieldIsManaged` there is what left a
 	// `type Holder { let p as IntPromise }` with no destructor at all.
+	// Reader-aware for the same reason and by the same file as `structFieldIsManaged` above — the two must
+	// agree about a contested name or a slot is dropped by nobody, or by everybody twice.
 	export function structFieldOwesDrop(structName ByteArray, index FieldIndex) returns bool
-		return self.typeOwesDrop(self.structFieldDeclaredType(structName, index: index), from: self.typeNames)
+		let layout = self.structLayoutOf(structName)
+		return self.typeOwesDropFor(self.fieldTypeOf(layout, structName: structName, index: index), from: self.typeNames, readerFilePath: layout.declFilePath)
 	end 'structFieldOwesDrop'
 
-	// The DECLARED type of struct field `index`, read off THIS index's own registry. The preamble every
-	// by-name field question shares — fetch the layout, fetch the field — written once because it was written
-	// three times and each copy carried its own two panic messages saying the same two things.
+	// THE declared-record layout for `structName`, read off THIS index's own registry. The preamble every
+	// by-name struct question shares, written once because it was written SIX times, each copy carrying its
+	// own panic message saying the same one thing. A miss is a precondition rather than a case: the name
+	// came from a `structOf` the caller already asked.
+	function structLayoutOf(structName ByteArray) returns StructLayout
+		return try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structLayoutOf: no `type {String.from(structName)}` is declared — every caller resolves the name before asking")
+	end 'structLayoutOf'
+
+	// Field `index` off a layout the caller already holds — for the doors that need the layout's
+	// `declFilePath` too and would otherwise fetch it twice.
+	function fieldTypeOf(layout StructLayout, structName ByteArray, index FieldIndex) returns MaxonType
+		return try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldTypeOf'
+
+	// The DECLARED type of struct field `index`.
 	//
-	// Both misses are preconditions rather than cases: the name came from a `structOf` the caller already
-	// asked, and the index from an `indexOfField` or a `fieldCount()` loop.
+	// ⚠ **THIS DOOR IS READER-FREE AND ITS CALLERS MUST NOT ASK A MANAGEDNESS QUESTION THROUGH IT** — the
+	// two that did are `structFieldIsManaged`/`structFieldOwesDrop` above, which now read the layout
+	// themselves so they can name the reader. A caller that only wants the TAG (existential, opaque) is
+	// unaffected: a tag is not contestable.
 	function structFieldDeclaredType(structName ByteArray, index FieldIndex) returns MaxonType
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldDeclaredType: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		return try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldDeclaredType: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+		return self.fieldTypeOf(self.structLayoutOf(structName), structName: structName, index: index)
 	end 'structFieldDeclaredType'
 
 	// ⭐ **IS STRUCT FIELD `index` STANDING AT A BARE TYPE PARAMETER (W183)?** The declared-record twin of
@@ -26967,7 +26998,7 @@ export type ProgramSignatures
 	// `dictionaryInstanceFieldDropKind`'s deleted third arm, for its reason. A record resting its slot one
 	// level down is refused at the store instead (`Parser.requireStoredNestedViewDropIsNameable`).
 	export function recordOpaqueSlotDeclaration(structName ByteArray) returns OpaqueSlotDeclaration
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.recordOpaqueSlotDeclaration: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		let layout = self.structLayoutOf(structName)
 		for i in 0 upto layout.fieldCount() 'firstOpaqueSlot'
 			if not self.structFieldIsOpaque(structName, index: i) 'notOpaque'
 				continue
@@ -26991,7 +27022,7 @@ export type ProgramSignatures
 	// assumed, because two owners would mean one descriptor laying out two `uses` lists, and the cascade would
 	// release half the record against the wrong one: a wild free with no diagnostic anywhere.
 	function requireRemainingOpaqueSlotsAgree(structName ByteArray, from FieldIndex, owner ByteArray)
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.requireRemainingOpaqueSlotsAgree: no `type {String.from(structName)}` is declared — the caller resolved it one line up")
+		let layout = self.structLayoutOf(structName)
 		for i in from upto layout.fieldCount() 'eachLaterField'
 			if not self.structFieldIsOpaque(structName, index: i) 'notOpaque'
 				continue
@@ -27655,7 +27686,7 @@ export type ProgramSignatures
 	// times and each copy carried its own two panic messages saying the same two things"*). A third ownership
 	// question later adds an arm here rather than a fourth copy of the loop.
 	function structHasFieldSatisfying(structName ByteArray, owning FieldOwnershipQuestion) returns bool
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structHasFieldSatisfying: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		let layout = self.structLayoutOf(structName)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let holds = match owning 'question'
 				owesDrop gives self.structFieldOwesDrop(structName, index: i)
@@ -27907,7 +27938,7 @@ export type ProgramSignatures
 	end 'declaredInstanceSupportsDeepClone'
 
 	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet) returns bool
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldsSupportDeepClone: no `type {String.from(structName)}` is declared — the caller reached here through a declared struct name")
+		let layout = self.structLayoutOf(structName)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			if not self.structFieldIsManaged(structName, index: i) 'scalar'
 				continue
