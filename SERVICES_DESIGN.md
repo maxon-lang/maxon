@@ -847,11 +847,15 @@ Two consequences worth stating:
 ### Proposed rows — in the board's form, not the ladder's
 
 ⚠ CHANGED: `P1.5c` / `P1.7c` named positions on a ladder that closed. Work is claimed on `PLAN.md`'s
-🧭 SLICE BOARD as rows with lanes; these are the rows, in dependency order. **`DefaultMaxProcs` is 1 and
-`MAXON_MAX_PROCS>1` is opt-in** (G1 made it so "precisely so this class could be found and fixed one
-arm at a time"), so the first landing of `spawn` is **single-M by default and multi-M under the
-`track0` matrix** — the ring, the steal and the worker loop get their first producer without the
-default build changing.
+🧭 SLICE BOARD as rows with lanes; these are the rows, in dependency order.
+
+⚠ **THIS PARAGRAPH'S PREMISE HAS EXPIRED, AND IT WAS DELIBERATE ON BOTH ENDS.** It said `DefaultMaxProcs`
+was 1 and `MAXON_MAX_PROCS>1` opt-in — G1 made it so *"precisely so this class could be found and fixed
+one arm at a time"* — so the first landing of `spawn` was single-M by default and multi-M only under the
+`track0` matrix. The arms were then fixed one at a time, and the constant is GONE: the default is the
+machine's processor count (`specs-shv2/sched-default-procs.md`). ⇒ a `spawn` in an ordinary build runs on
+several Ms, and the ring, the steal and the worker loop are under the program that runs rather than under
+a driver script.
 
 | row | scope | lane(s) | gated on |
 |---|---|---|---|

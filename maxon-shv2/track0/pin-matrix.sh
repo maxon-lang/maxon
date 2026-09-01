@@ -10,7 +10,17 @@
 # torture programs under shv2 BY HAND ("240 runs at 1/2/7/12") and left no script;
 # this is that script, so the next person re-measures rather than re-invents.
 #
-# What it asserts, per program, across MAXON_MAX_PROCS in {1, 2, 7, 12}:
+# What it asserts, per program, across MAXON_MAX_PROCS in {1, 2, 7, 12} and with
+# the variable UNSET:
+#
+#   0. ⭐⭐ THE `default` ROW — NO ENVIRONMENT VARIABLE AT ALL, which since the
+#      `DefaultMaxProcs` flip is the count an ordinary program actually runs at.
+#      Every other row here sets the knob, so before this row existed the script
+#      measured only configurations no shipped program uses. It runs LAST, so the
+#      N=1 row stays the reference the others are compared against, and its
+#      family assertion is keyed on the MACHINE's count (HOST_CPUS below) rather
+#      than on a literal: on a single-processor box the default IS one and a
+#      spawn-driven program correctly reads `workers=1`.
 #
 #   1. `aggregate=` (or `leaked=`) is BYTE-IDENTICAL at every N and equal to the
 #      N=1 answer. Each torture program's result is an order-independent function
@@ -54,12 +64,17 @@
 # TWO programs here whose rows are asserted the other way; every other program stays
 # coroutine-only and stays 1/0.
 #
-# MEASURED at SV1 wave 3, same box, this script (12 services x 400 String sends
-# each): `workers/steals` of 1/0, 2/886, 7/7790 and 9/8120 at N=1/2/7/12, with a
-# byte-identical `aggregate=42680` and exit 42 at every N. The N=1 row is not a
-# weaker reading than the others — it is the control: with one P there is no
-# second M to wake, so the services are driven cooperatively by the main thread
-# and the same answer comes out.
+# RE-MEASURED at the `DefaultMaxProcs` flip, same box, this script (12 services x
+# 400 String sends each): `workers/steals` of 1/0, 2/692, 7/7882, 8/8071 and — on
+# the new `default` row, this 16-processor host — 8/8339, with a byte-identical
+# `aggregate=42680` and exit 42 at every one. The N=1 row is not a weaker reading
+# than the others — it is the control: with one P there is no second M to wake, so
+# the services are driven cooperatively by the main thread and the same answer
+# comes out. ⚠ A SECOND RUN OF THE SAME BINARY READ 1/0, 2/480, 7/7495, 10/8127 and
+# 12/8253: the worker and steal counts are an OUTCOME of how the work happened to be
+# scheduled, so they move run to run and only their FAMILY is asserted — the
+# `aggregate` is what is byte-identical, and it was, across both runs and all ten
+# rows. (SV1 wave 3 read 1/0, 2/886, 7/7790 and 9/8120 for the four explicit rows.)
 #
 # ⚠ refcount-torture IS IN THE LIST FOR ITS workers/steals ROW ONLY. Its own
 # subject — whether a contended refcount word survives — is INTERMITTENT, so a
@@ -89,8 +104,15 @@
 # multi-producer half of `__mbox_send` finally has more than one producer. Its
 # aggregate is accumulated by the SINK — whose handlers its own mailbox serializes
 # — rather than by `main`, which is what makes the reading sound at N >= 2 without
-# a cross-thread flag. MEASURED at SV1 wave 4: `aggregate=42680 taken=4800` at
-# every N, with workers/steals of 1/0, 2/2, 7/20 and 12/23 at N=1/2/7/12.
+# a cross-thread flag. RE-MEASURED at the flip: `aggregate=42680 taken=4800` at
+# every row, with workers/steals of 1/0, 2/6, 7/1, 12/24 and, on the new `default`
+# row of this 16-processor host, **16/23** — the first reading in this table to
+# show every one of the host's processors carrying an M. ⚠ A SECOND RUN OF THE SAME
+# BINARY READ **15/25** THERE, which is the caveat above cashed: the worker and
+# steal counts are an outcome of how the work happened to be scheduled, they move
+# run to run, and only the FAMILY (1/0 at one P, >= 2 workers and >= 1 steal above
+# it) is asserted. The `aggregate` was byte-identical across both runs and all ten
+# rows. (SV1 wave 4 read 1/0, 2/2, 7/20 and 12/23.)
 #
 # ⚠ AND THAT IS ALSO WHAT alloc-torture AND remote-free-torture STILL COST. Both
 # exist to drive the sharded allocator's CROSS-P paths, and both do it by getting
@@ -131,7 +153,51 @@ MAXON="${MAXON:-$REPO/maxon-shv2/.maxon/maxon-shv2.exe}"
 [ -x "$MAXON" ] || MAXON="$MAXON.exe"
 
 WORK="$HERE/.pin-matrix"
-PROCS_LIST="${PROCS_LIST:-1 2 7 12}"
+
+# ⭐⭐ `default` IS A ROW, NOT A COUNT — it means "run with MAXON_MAX_PROCS UNSET",
+# which since the `DefaultMaxProcs` flip is the configuration every shipped program
+# actually has. It goes LAST so the N=1 row remains the determinism reference.
+PROCS_LIST="${PROCS_LIST:-1 2 7 12 default}"
+DEFAULT_ROW=default
+
+# What the machine reports. EVERY row needs it, not just `default` — see `effective`
+# below: the runtime resolves `min(max(N,1), osCpuCount)`, so a row asking for 12 on a
+# 4-way box gets 4, and an assertion keyed on the column's string would call that a
+# failure.
+#
+# ⛔ NO SILENT FALLBACK. This was `${NUMBER_OF_PROCESSORS:-$(nproc … || echo 1)}`, and
+# both halves were wrong off Windows: `NUMBER_OF_PROCESSORS` is Windows-only and macOS
+# has NO `nproc`, so the arm64-macOS lane took `echo 1` and then read a real
+# `workers=8` as a failure. A count this script cannot determine is a BROKEN RUN, not
+# a 1 — a sentinel in a gate is how a false red gets called a measurement.
+#
+# `getconf _NPROCESSORS_ONLN` is literally `sysconf(_SC_NPROCESSORS_ONLN)`, the same
+# call `StdToArm64Conversion.lowerOsCpuCount` emits, so the script and the runtime
+# agree by construction rather than by luck.
+HOST_CPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+case "$HOST_CPUS" in
+	''|*[!0-9]*) HOST_CPUS="${NUMBER_OF_PROCESSORS:-}" ;;
+esac
+case "$HOST_CPUS" in
+	''|*[!0-9]*)
+		echo "FAIL: cannot determine this host's processor count (tried getconf _NPROCESSORS_ONLN and NUMBER_OF_PROCESSORS)."
+		echo "  Every row's expected count is min(N, that number); without it this script cannot judge any row."
+		exit 1
+		;;
+esac
+
+# The runtime's rule, written down ONCE: `min(N, HOST_CPUS)`, and the `default` row is
+# HOST_CPUS itself. Both branches below call this, so a row cannot acquire the ceiling
+# while its neighbours drop it.
+effective_count() {
+	if [ "$1" = "$DEFAULT_ROW" ]; then
+		echo "$HOST_CPUS"
+	elif [ "$1" -lt "$HOST_CPUS" ]; then
+		echo "$1"
+	else
+		echo "$HOST_CPUS"
+	fi
+}
 PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture}"
 
 # ⭐⭐ WHICH PROGRAMS CREATE REAL GREEN THREADS — the one fact assertion 4 is keyed
@@ -225,22 +291,30 @@ field() {
 	printf '%s' "${v:--}"
 }
 
-printf '%-24s %5s %14s %9s %9s %6s %8s\n' program procs aggregate workers steals exit leaked
-printf '%-24s %5s %14s %9s %9s %6s %8s\n' ------- ----- --------- ------- ------ ---- ------
+printf '%-24s %7s %14s %9s %9s %6s %8s\n' program procs aggregate workers steals exit leaked
+printf '%-24s %7s %14s %9s %9s %6s %8s\n' ------- ------- --------- ------- ------ ---- ------
 
 for prog in $PROGRAMS; do
 	REF_AGG=""
 	REF_RC=""
 
 	for p in $PROCS_LIST; do
-		MAXON_MAX_PROCS="$p" "$WORK/$prog" >"$WORK/$prog.$p.out" 2>"$WORK/$prog.$p.err"
-		rc=$?
+		# `env -u` rather than "just don't prefix it": this script must measure the
+		# UNSET case even when its own caller has MAXON_MAX_PROCS in the environment.
+		if [ "$p" = "$DEFAULT_ROW" ]; then
+			env -u MAXON_MAX_PROCS "$WORK/$prog" >"$WORK/$prog.$p.out" 2>"$WORK/$prog.$p.err"
+			rc=$?
+		else
+			MAXON_MAX_PROCS="$p" "$WORK/$prog" >"$WORK/$prog.$p.out" 2>"$WORK/$prog.$p.err"
+			rc=$?
+		fi
+		effective="$(effective_count "$p")"
 
 		agg="$(field "$WORK/$prog.$p.out" aggregate)"
 		wk="$(field "$WORK/$prog.$p.out" workers)"
 		st="$(field "$WORK/$prog.$p.out" steals)"
 		lk="$(field "$WORK/$prog.$p.out" leaked)"
-		printf '%-24s %5s %14s %9s %9s %6s %8s\n' "$prog" "$p" "$agg" "$wk" "$st" "$rc" "$lk"
+		printf '%-24s %7s %14s %9s %9s %6s %8s\n' "$prog" "$p" "$agg" "$wk" "$st" "$rc" "$lk"
 
 		# 1 + 2: determinism against the N=1 row.
 		if [ -z "$REF_AGG" ]; then
@@ -261,14 +335,16 @@ for prog in $PROGRAMS; do
 		# 4: THE PIN, per family — see the header. A program that prints neither
 		# counter (`-`) is asserted nothing, which is how it has always been.
 		if spawns_green_threads "$prog"; then
-			# A SPAWN-driven program. At N=1 there is no second M to wake, so it reads
-			# like a coroutine program and that row is the CONTROL for the others.
-			if [ "$p" = 1 ]; then
+			# A SPAWN-driven program. At an EFFECTIVE count of 1 there is no second M to
+			# wake, so it reads like a coroutine program and that row is the CONTROL for
+			# the others. `effective` rather than `$p` because the `default` row's count
+			# is the machine's, and on a one-processor box that is this arm.
+			if [ "$effective" = 1 ]; then
 				if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
-					bad "$prog procs=1 workers=$wk — with one P there is no second M for a spawned green thread to wake"
+					bad "$prog procs=$p (resolves to 1 P) workers=$wk — with one P there is no second M for a spawned green thread to wake"
 				fi
 				if [ "$st" != "-" ] && [ "$st" != 0 ]; then
-					bad "$prog procs=1 steals=$st — with one P there is nobody to steal from"
+					bad "$prog procs=$p (resolves to 1 P) steals=$st — with one P there is nobody to steal from"
 				fi
 			else
 				if [ "$wk" != "-" ] && [ "$wk" -lt 2 ]; then

@@ -19,9 +19,11 @@
 //
 // ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
 // emitted program creates an OS thread at exactly two `osThreadCreate` sites: `buildIoInit`'s completion
-// thread and `emitSchedWakeOrSpawn`'s worker M, which since EC10 has no caller with a producer. So there is
-// ONE non-owning OS thread today, and its whole Maxon call graph — read off the emitted bytes of a program
-// using `async`, a subprocess and a heap `String` — is `__io_completion_loop` → `__gt_coro_enqueue`: one
+// thread and `buildSchedWakeOrSpawn`'s worker M. **A worker M is not a counter-example to the clause above
+// and never was**: it RUNS green threads, so every refcount it touches belongs to the one green thread it is
+// running — which is the invariant, not an exception to it. The completion thread is the one that owns no
+// green thread at all, and its whole Maxon call graph — read off the emitted bytes of a program using
+// `async`, a subprocess and a heap `String` — is `__io_completion_loop` → `__gt_coro_enqueue`: one
 // direct call, five Win32 IAT calls, no further Maxon function, and not one `lock` prefix. A queue append
 // is the entire job. ⚠ **A rung that gives that thread more to do owes this measurement again** — the
 // refcount door's argument is exactly this graph.
@@ -31,19 +33,26 @@
 // guarantee that only 1 green thread can hold references to a box at a time"*. Crossing threads is actors,
 // which is not built. `GtRuntime.GtOffOwner` is where the ownership is a FIELD rather than a convention.
 //
-// ⛔⛔ **THE PROCESS RUNS ON ONE M, AND SINCE EC10 THAT IS A CONSEQUENCE RATHER THAN A POLICY.**
-// `DefaultMaxProcs` is **1**, so `__sched_init_procs` builds exactly one P — but raising `MAXON_MAX_PROCS`
-// no longer starts a worker either, because the only thing that starts one is `__sched_wake_or_spawn` and
-// **nothing reaches it**: it is called from the green-thread arms of the publish doors and from the wake a
-// locked publish owes, and only a GREEN THREAD selects any of those — which nothing creates until `spawn`. G1 built the whole P/M substrate — the CAS claim, the
-// Dekker park, the wake, the per-P system stack — and W212 built the run-queue hierarchy on top of it;
-// EC10 leaves both intact and UNREACHED, which is a stronger statement than *"turned off by a constant"*
-// and is what makes the refcount argument above hold at every `MAXON_MAX_PROCS`.
+// ⛔⛔ **THE PROCESS RUNS ON AS MANY Ms AS IT HAS GREEN THREADS TO RUN, AND SINCE THE DEFAULT FLIP THAT IS
+// WHAT AN ORDINARY BUILD DOES.** `__sched_init_procs` builds one P per processor the machine reports
+// (`emitResolveMaxProcs`), and `MAXON_MAX_PROCS` sets that count exactly — down as well as up.
 //
-// ⚠ **EVERY UNREACHED PIECE SAYS SO AT ITS OWN DECLARATION AND NAMES `spawn`**, which is this file's
-// existing idiom for *"built, waiting for its producer"* (`POffRunnext`, `POffPendingWaiter`, the P
-// free-list slots). G2's audit below is unchanged and still discharged: it is what will still be true the
-// day `spawn` gives the tier its producer back.
+// ⭐ **BUT THE COUNT IS NOT WHAT STARTS AN M; THE WORK IS.** The only thing that starts one is
+// `__sched_wake_or_spawn`, reached from the green-thread arms of the publish doors and from the wake a
+// locked publish owes, and only a GREEN THREAD selects any of those. `spawn` is the producer of green
+// threads — so a program that spawns services really does run on several Ms, and an `async`-only program
+// still runs on one at EVERY count, because an `async` frame is a COROUTINE of its caller and is published
+// only to its owner's queue. That is what makes the refcount argument above hold at every
+// `MAXON_MAX_PROCS`, and it is a property of the publish doors rather than of a constant.
+//
+// ⭐ **WHAT THE FLIP CHANGED IS WHETHER ANY OF IT RUNS BY DEFAULT.** G1 built the whole P/M substrate — the
+// CAS claim, the Dekker park, the wake, the per-P system stack — and W212 built the run-queue hierarchy on
+// top of it; both were correct, shipped, and reachable only from a driver script that set the variable by
+// hand. `specs-shv2/sched-default-procs.md` is where that is stated as the rung's own subject.
+//
+// ⚠ **A PIECE THAT IS STILL UNREACHED SAYS SO AT ITS OWN DECLARATION**, which is this file's idiom for
+// *"built, waiting for its producer"* (`POffRunnext`, `POffPendingWaiter`, the P free-list slots). G2's
+// audit below is unchanged and still discharged.
 //
 // ⭐⭐ **THE AUDIT IS NO LONGER PROSE — IT IS `MultiMSharing`, A REQUIRED ARGUMENT ON EVERY RUNTIME `.data`
 // SLOT'S BIRTH (`pushRuntimeGlobal`, below).** This paragraph used to BE the audit: a list derived by grepping
@@ -574,9 +583,10 @@ let SchedProcsLabel = b"__sched_procs"
 // The day a P is retired, the pair splits here, in one place.
 //
 // ⭐⭐ **IT IS ALSO THE ANSWER `__Builtins.schedProcessorCount()` GIVES, WHICH IS WHY IT IS EXPORTED.** That
-// query is `MAXON_MAX_PROCS`'s only observable consequence that does not depend on how the work happened to
-// be scheduled: `emitResolveMaxProcs` settles this word to `min(requested, osCpuCount)` before a single
-// green thread runs, so reading it is reading the marker itself. `CpuParallelRuntime` owns the query's body.
+// query is the processor count's only observable consequence that does not depend on how the work happened
+// to be scheduled: `emitResolveMaxProcs` settles this word to `osCpuCount`, or to `min(requested,
+// osCpuCount)` when `MAXON_MAX_PROCS` names a count, before a single green thread runs — so reading it is
+// reading the resolution itself. `CpuParallelRuntime` owns the query's body.
 export let SchedNumProcsLabel = b"__sched_num_procs"
 
 // ⭐ **HOW MANY Ms ARE LIVE, AND THE HIGH-WATER MARK OF THAT COUNT.** The mark is what
@@ -799,49 +809,71 @@ end 'emitLoadCurrentP'
 // Every `GtRuntime` caller satisfies the precondition because the entry points that reach them all open with
 // a lazy `__gt_init` — `__gt_spawn`, `__gt_sleep`, `__gt_resched` and `__gt_io_park` each call it as their
 // first act, which is the discipline that made this safe before and still does. A caller that CANNOT make
-// that claim takes `emitLoadCurrentGtOrZero` below instead.
+// that claim takes `emitLoadCurrentGtAndProcIdOrZero` below instead.
 export function emitLoadCurrentGt(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitLoadField(module, block: block, record: emitLoadCurrentP(module, block: block, ids: ids), offset: POffCurrentGt, ids: ids)
 end 'emitLoadCurrentGt'
 
 // ⭐⭐ **THE SAME READ FOR A CALLER THAT MAY RUN BEFORE THE SCHEDULER EXISTS — or on an OS thread that owns
-// no P.** Answers the running green thread, or 0. It costs two branches, which is why it is not the door
-// above: every scheduler-internal reader has already run `__gt_init` and would pay them for nothing.
+// no P.** Answers the running green thread AND the id of the processor running it, or 0 for each. It costs
+// two branches, which is why it is not the door above: every scheduler-internal reader has already run
+// `__gt_init` and would pay them for nothing.
+//
+// ⭐⭐ **IT ANSWERS A PAIR RATHER THAN A GREEN THREAD, AND THAT IS WHY IT IS ONE CALL AND NOT TWO.** The
+// walk to the green thread goes THROUGH the P (`tlsSlotLoad`, then `POffCurrentGt`), so the processor is
+// already in hand on the arm that answers — the id is one more field load off a pointer this function had
+// and used to throw away. Asking the two questions separately would mean a second TLS read and a second
+// pair of branches to reach a value the first walk had already computed.
 //
 // **THE TWO ZEROS ARE DIFFERENT QUESTIONS AND BOTH MUST BE ASKED**, exactly as the hand-assembled twin in
-// `X64GtRuntime.emitLoadCurrentPOrBail` states: a zero TEB OFFSET means `__sched_init_procs` has not run (and
+// `X64GtRuntime.emitLoadCurrentGtOrBail` states: a zero TEB OFFSET means `__sched_init_procs` has not run (and
 // `gs:[0]` is not null, so reading through it is a wild load); a zero P means this OS thread owns none, which
-// the IOCP completion thread does for its whole life.
+// the IOCP completion thread does for its whole life. Both arms answer 0 for BOTH halves, which for the
+// processor id is a stand-in rather than a truth — a caller that cannot promise the scheduler exists cannot
+// be told the id of a processor that does not exist either.
 //
-// It terminates `cur` and returns the block to CONTINUE IN, whose single block arg is the answer — the shape
+// ⚠ **AND THE STAND-IN IS NOT SELF-IDENTIFYING — DO NOT BUILD A RULE ON IT.** An earlier version of this
+// paragraph argued that `P0` could not be mistaken for a real answer "because the same arm's green thread is
+// 0 and no real green thread ever is". That is false in the direction that matters: a REAL P whose
+// `POffCurrentGt` is 0 — one that exists but is running nothing at this instant — stamps exactly the same
+// `gt=0 P0`. The pair is therefore ambiguous between "no scheduler" and "a live, idle P0", and the only
+// reason nothing is wrong today is that its one consumer (`DebugStreamRuntime`) has its `gt=0x… P<n>` text
+// stripped by `normalizeTrace` before any golden sees it. A consumer that wanted to TELL THE TWO APART would
+// need a third answer here, not a cleverer reading of these two.
+//
+// It terminates `cur` and returns the block to CONTINUE IN, whose two block args are the answers — the shape
 // every branching emit helper in this runtime uses, because the Std tier has no select.
-export function emitLoadCurrentGtOrZero(module StdModule, func IrFunction, cur IrBlock, gtId ValueId, ids ValueMinter) returns IrBlock
+export function emitLoadCurrentGtAndProcIdOrZero(module StdModule, func IrFunction, cur IrBlock, gtId ValueId, procIdId ValueId, ids ValueMinter) returns IrBlock
 	var haveOffset = module.addBlock(func, label: b"gtoffset")
 	var haveProc = module.addBlock(func, label: b"gtproc")
 	var merge = module.addBlock(func, label: b"gtmerge")
 	merge.blockArgs.push(IrBlockArg.create(gtId, argType: StdType.i64))
+	merge.blockArgs.push(IrBlockArg.create(procIdId, argType: StdType.i64))
 
 	let offsetAddr = ids.mint()
 	module.appendOp(cur, op: StdOp.globalAddr(offsetAddr, label: SchedTlsTebOffsetLabel))
 	let tebOffset = emitLoadField(module, block: cur, record: offsetAddr, offset: 0, ids: ids)
 	let curZero = emitConst(module, block: cur, value: 0, ids: ids)
+	let curZeroProc = emitConst(module, block: cur, value: 0, ids: ids)
 	let noScheduler = emitCmp(module, block: cur, a: tebOffset, b: curZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(noScheduler, thenBlockId: merge.id, elseBlockId: haveOffset.id))
-	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(curZero)))
+	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: twoArgs(curZero, second: curZeroProc)))
 
 	let p = ids.mint()
 	module.appendOp(haveOffset, op: StdOp.tlsSlotLoad(p, tebOffsetId: tebOffset))
 	let offsetZero = emitConst(module, block: haveOffset, value: 0, ids: ids)
+	let offsetZeroProc = emitConst(module, block: haveOffset, value: 0, ids: ids)
 	let noProc = emitCmp(module, block: haveOffset, a: p, b: offsetZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(haveOffset, op: StdOp.condBranch(noProc, thenBlockId: merge.id, elseBlockId: haveProc.id))
-	haveOffset.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(offsetZero)))
+	haveOffset.branchEdges.push(BranchEdge.create(merge.id, argIds: twoArgs(offsetZero, second: offsetZeroProc)))
 
 	let gt = emitLoadField(module, block: haveProc, record: p, offset: POffCurrentGt, ids: ids)
+	let procId = emitLoadField(module, block: haveProc, record: p, offset: POffId, ids: ids)
 	module.setTerminator(haveProc, op: StdOp.branch(merge.id))
-	haveProc.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(gt)))
+	haveProc.branchEdges.push(BranchEdge.create(merge.id, argIds: twoArgs(gt, second: procId)))
 
 	return merge
-end 'emitLoadCurrentGtOrZero'
+end 'emitLoadCurrentGtAndProcIdOrZero'
 
 // ⚠ **THERE IS DELIBERATELY NO `emitStoreCurrentGt` TWIN.** The only writer is `GtRuntime.emitGtRunOne`,
 // which already HOLDS the P — it is handed one — so a helper that re-read TLS to store through it would be a
@@ -857,18 +889,24 @@ end 'emitLoadCurrentGtOrZero'
 // `.data` and installation
 // ==========================================================================
 
-// ⭐ **DEFAULT ONE M. See this file's header** — the machinery below is built, proven and not turned on, and
-// this constant is where that decision physically lives.
-let DefaultMaxProcs = 1 as ParsedInt
+// ⛔ **THERE IS NO `DefaultMaxProcs` CONSTANT ANY MORE, AND ITS ABSENCE IS THE DECISION.** It was `1`, and
+// this is where that decision physically lived; the default is now the MACHINE'S OWN PROCESSOR COUNT, which
+// is not a number a compile-time constant can hold. It is read by `StdOp.osCpuCount` inside
+// `emitResolveMaxProcs`, once, at scheduler bring-up — so the default and the ceiling are one reading of one
+// machine rather than a constant and a clamp that could disagree.
 
-// The environment variable that raises the ceiling for a deliberate multi-M run. ⚠ The bootstrap's spelling
-// (`X86CodeEmitter.Runtime.cs:3601-3631`), taken so a harness that drives both compilers needs one knob.
+// The environment variable that SETS the processor count for a deliberate run. ⚠ The bootstrap's spelling
+// (`X86CodeEmitter.Runtime.cs:3767-3797`), taken so a harness that drives both compilers needs one knob.
 //
-// ⚠⚠ **IT CLAMPS AGAINST THE MACHINE, WHERE THE REFERENCE CLAMPS AGAINST THE DETECTED COUNT — and the
-// difference is which number is the DEFAULT.** The bootstrap defaults to the processor count and lets the
-// variable only LOWER it; shv2 defaults to 1, so a variable that could only lower would have nothing to
-// lower to and the structure below could never be exercised at all. The ceiling neither may exceed is the
-// same: the machine's own processor count, because a P nothing can ever run on is a P nobody can schedule.
+// ⭐⭐ **IT IS GOMAXPROCS: AN EXACT SETTING, CLAMPED TO `[MinimumProcessorCount, osCpuCount]`, WHICH CAN
+// LOWER THE COUNT AS WELL AS RAISE IT — and that is now the same rule the bootstrap has.** It used to be
+// able only to RAISE, because shv2 defaulted to 1 and a variable that could only lower would have had
+// nothing to lower to; the whole P/M structure would then have been unreachable from a default build. That
+// argument died with the default. The ceiling is unchanged and is the reason there is one: a P nothing can
+// ever run on is a P nobody can schedule.
+//
+// ⚠ **A VALUE THAT IS NOT A PROCESSOR COUNT IS THE DEFAULT, NEVER AN ERROR** — unset, longer than the
+// buffer, non-numeric, or below one. `emitResolveMaxProcs` carries which readings land where.
 //
 // ⭐ **EXPORTED BECAUSE THE SPEC HARNESS NOW WRITES IT.** `<!-- procs: N -->` puts this variable into the
 // environment of one case's program (`SpecParser.ProcsMarker`, `SpecTestRunner.runEnvironmentFor`), and the
@@ -1316,8 +1354,8 @@ function buildSchedInitProcs(module StdModule, target Target)
 	let tebBase = emitConst(module, block: entry, value: tlsSlotArrayBase(target), ids: ids)
 	emitStoreGlobalWord(module, block: entry, label: SchedTlsTebOffsetLabel, value: emitBin(module, block: entry, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids), ids: ids)
 
-	// How many Ps: `DefaultMaxProcs` unless `MAXON_MAX_PROCS` names more, never above the machine's count.
-	// The answer arrives as `settled`'s block arg, because the decision is a four-way merge.
+	// How many Ps: the machine's processor count, unless `MAXON_MAX_PROCS` names another count within it.
+	// The answer arrives as `settled`'s block arg, because the decision is a five-way merge.
 	let numProcs = ids.mint()
 	settled.blockArgs.push(IrBlockArg.create(numProcs, argType: StdType.i64))
 	emitResolveMaxProcs(module, func: func, cur: entry, settled: settled, ids: ids)
@@ -1421,29 +1459,63 @@ function emitSchedAdoptProc(module StdModule, block IrBlock, p ValueId, ids Valu
 	module.appendOp(block, op: StdOp.tlsSetValue(tlsIndex, valueId: p))
 end 'emitSchedAdoptProc'
 
-// ⭐ **HOW MANY Ps TO BUILD:** `DefaultMaxProcs`, unless `MAXON_MAX_PROCS` names a larger positive integer,
-// and never more than the machine reports. The answer reaches `settled` as its single block arg; every arm
-// below terminates in a branch that supplies it.
+// ⭐⭐ **HOW MANY Ps TO BUILD: THE MACHINE'S PROCESSOR COUNT, unless `MAXON_MAX_PROCS` names a different
+// count in `[MinimumProcessorCount, osCpuCount]`.** The answer reaches `settled` as its single block arg;
+// every arm below terminates in a branch that supplies it.
 //
-// ⚠ **A MALFORMED OR ABSENT VALUE IS THE DEFAULT, NEVER AN ERROR.** `osEnvRead` answers 0 for unset, and the
-// digit walk answers 0 for anything that does not start with a digit; both land on the same `< 1` test a
-// literal `0` lands on, which is what makes *"leave the default alone"* one predicate rather than three.
+// ⭐⭐ **THE MACHINE IS READ FIRST AND UNCONDITIONALLY, BECAUSE IT IS BOTH THE DEFAULT AND THE CEILING.**
+// It used to be read only on the one arm that had a value to clamp, since the default was the constant `1`;
+// with the default gone there is no arm that does not need it, and reading it once at the top is what keeps
+// *"the default"* and *"the ceiling"* the same number by construction rather than by two agreeing readings.
+// `osCpuCount` is read directly rather than through `__cpu_count`, which is a separate runtime entry a
+// program opts into and which a scheduler must not drag in.
+//
+// ⛔⛔ **THE FLOOR IS APPLIED TO THE RAW ANSWER, BECAUSE `osCpuCount` CAN REPORT ZERO.**
+// `GetActiveProcessorCount` returns 0 on failure and `sysconf` returns -1;
+// `CpuParallelRuntime.buildCpuCount` clamps for exactly that reason and has the sabotage to prove the arm is
+// reached. Nothing downstream re-checks it: a `cpus` of 0 would become `numProcs`, `__slab_alloc(0)` would
+// size the `P*` array, the build loop would run zero times, and `adopt` would then read `__sched_procs[0]`
+// out of a zero-byte region and write three fields through whatever it found. A wild write, from a comment
+// that said the guard was unnecessary. ⭐ **AND THE FLOOR IS LOAD-BEARING IN A SECOND WAY NOW THAT THIS
+// READING IS THE DEFAULT** — before the flip a failed read could only lose a clamp on a variable almost
+// nobody set; today it decides the count of every program that runs.
+//
+// ⚠ **A VALUE THAT IS NOT A PROCESSOR COUNT IS THE MACHINE'S COUNT, NEVER AN ERROR, AND THE THREE WAYS OF
+// NOT BEING ONE ARE THREE ARMS OF ONE ANSWER.** `osEnvRead` answers 0 for unset; a value too long for the
+// buffer declines; the digit walk answers 0 for anything that does not start with a digit, which is the same
+// answer a literal `0` gives — so `< MinimumProcessorCount` covers the malformed value and the out-of-range
+// one together. This is the bootstrap's rule exactly (`EmitReadMaxProcsEnvOverride`: *"parsed < 1 -> ignore"*),
+// which matters because one harness drives both compilers through this one variable.
 function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, settled IrBlock, ids ValueMinter)
+	var cpuFloor = module.addBlock(func, label: b"maxprocscpufloor")
+	var cpuKnown = module.addBlock(func, label: b"maxprocscpuok")
 	var lengthOk = module.addBlock(func, label: b"maxprocslen")
 	var parseStart = module.addBlock(func, label: b"maxprocsparse")
 	var parsed = module.addBlock(func, label: b"maxprocsparsed")
-	var clampToCpu = module.addBlock(func, label: b"maxprocsclamp")
-	var cpuFloor = module.addBlock(func, label: b"maxprocscpufloor")
-	var cpuKnown = module.addBlock(func, label: b"maxprocscpuok")
-	var takeCpu = module.addBlock(func, label: b"maxprocscpu")
+	var underCeiling = module.addBlock(func, label: b"maxprocsceiling")
 	var takeRequested = module.addBlock(func, label: b"maxprocsreq")
 
-	let nameBuf = emitLiteralCString(module, block: cur, ids: ids, text: MaxProcsEnvName)
-	let bufBytes = emitConst(module, block: cur, value: MaxProcsEnvBufBytes, ids: ids)
+	let cpus = ids.mint()
+	module.appendOp(cur, op: StdOp.osCpuCount(cpus))
+	let cpuFloorConst = emitConst(module, block: cur, value: MinimumProcessorCount, ids: ids)
+	let belowFloor = emitCmp(module, block: cur, a: cpus, b: cpuFloorConst, pred: StdCmpPred.lt, ids: ids)
+	let liveCpus = ids.mint()
+	cpuKnown.blockArgs.push(IrBlockArg.create(liveCpus, argType: StdType.i64))
+	module.setTerminator(cur, op: StdOp.condBranch(belowFloor, thenBlockId: cpuFloor.id, elseBlockId: cpuKnown.id))
+	cur.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(cpus)))
+	let flooredCpus = emitConst(module, block: cpuFloor, value: MinimumProcessorCount, ids: ids)
+	module.setTerminator(cpuFloor, op: StdOp.branch(cpuKnown.id))
+	cpuFloor.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(flooredCpus)))
+
+	// ⚠ **`cpuKnown` DOMINATES EVERY BLOCK BELOW, WHICH IS WHY `liveCpus` NEEDS NO SECOND BLOCK ARG.** The
+	// decimal walk's own blocks hang off `parseStart`, which this block reaches, so the four arms that answer
+	// *"the machine's count"* all name the one value this block settled.
+	let nameBuf = emitLiteralCString(module, block: cpuKnown, ids: ids, text: MaxProcsEnvName)
+	let bufBytes = emitConst(module, block: cpuKnown, value: MaxProcsEnvBufBytes, ids: ids)
 	let buf = ids.mint()
-	module.appendOp(cur, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(bufBytes)))
+	module.appendOp(cpuKnown, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(bufBytes)))
 	let written = ids.mint()
-	module.appendOp(cur, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: buf, bufLenId: bufBytes))
+	module.appendOp(cpuKnown, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: buf, bufLenId: bufBytes))
 
 	// ⚠ **`osEnvRead` HAS THREE ANSWERS AND THIS SITE DECODES THEM DIFFERENTLY FROM ITS SIBLING, ON PURPOSE.**
 	// `GetEnvironmentVariableA` returns 0 for unset, the CHARACTERS WRITTEN when the value fits, and the size it
@@ -1451,58 +1523,32 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 	// size, because a `PATH` legitimately overflows any guess. A processor count does not: a value longer than
 	// 32 bytes is not one, so declining is the right answer and a retry would be machinery for a case that
 	// cannot occur. The two are one API contract decoded twice, which is why they name each other here.
-	//
-	// A value that did not fit is not a processor count — decline rather than retry at the size Win32 named.
-	let tooLong = emitCmp(module, block: cur, a: written, b: bufBytes, pred: StdCmpPred.ge, ids: ids)
-	let curDefault = emitConst(module, block: cur, value: DefaultMaxProcs, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(tooLong, thenBlockId: settled.id, elseBlockId: lengthOk.id))
-	cur.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(curDefault)))
+	let tooLong = emitCmp(module, block: cpuKnown, a: written, b: bufBytes, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(cpuKnown, op: StdOp.condBranch(tooLong, thenBlockId: settled.id, elseBlockId: lengthOk.id))
+	cpuKnown.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 
 	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)
 	let unset = emitCmp(module, block: lengthOk, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
-	let lengthOkDefault = emitConst(module, block: lengthOk, value: DefaultMaxProcs, ids: ids)
 	module.setTerminator(lengthOk, op: StdOp.condBranch(unset, thenBlockId: settled.id, elseBlockId: parseStart.id))
-	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(lengthOkDefault)))
+	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 
 	// The decimal walk hands its accumulator to `parsed` as that block's arg.
 	let requested = ids.mint()
 	parsed.blockArgs.push(IrBlockArg.create(requested, argType: StdType.i64))
 	emitParseUnsignedDecimal(module, func: func, cur: parseStart, cstr: buf, parsed: parsed, ids: ids)
 
-	let one = emitConst(module, block: parsed, value: 1, ids: ids)
-	let belowOne = emitCmp(module, block: parsed, a: requested, b: one, pred: StdCmpPred.lt, ids: ids)
-	let parsedDefault = emitConst(module, block: parsed, value: DefaultMaxProcs, ids: ids)
-	module.setTerminator(parsed, op: StdOp.condBranch(belowOne, thenBlockId: settled.id, elseBlockId: clampToCpu.id))
-	parsed.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(parsedDefault)))
+	let requestFloor = emitConst(module, block: parsed, value: MinimumProcessorCount, ids: ids)
+	let belowFloorRequest = emitCmp(module, block: parsed, a: requested, b: requestFloor, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(parsed, op: StdOp.condBranch(belowFloorRequest, thenBlockId: settled.id, elseBlockId: underCeiling.id))
+	parsed.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 
-	// ⭐ Never above the machine. `osCpuCount` is read directly rather than through `__cpu_count`, which is a
-	// separate runtime entry a program opts into and which a scheduler must not drag in.
-	//
-	// ⛔⛔ **AND ITS FLOOR IS APPLIED HERE, BECAUSE `osCpuCount` IS THE RAW ANSWER AND THE RAW ANSWER CAN BE
-	// ZERO.** `GetActiveProcessorCount` returns 0 on failure and `sysconf` returns -1;
-	// `CpuParallelRuntime.buildCpuCount` clamps for exactly that reason and has the sabotage to prove the arm
-	// is reached. Excluding `requested < 1` one block up says nothing about `cpus`, and a `cpus` of 0 wins the
-	// `requested > cpus` test below — so `numProcs` would be 0, `__slab_alloc(0)` would size the `P*` array,
-	// the build loop would run zero times, and `adopt` would then read `__sched_procs[0]` out of a zero-byte
-	// region and write three fields through whatever it found. A wild write, from a comment that said the
-	// guard was unnecessary.
-	let cpus = ids.mint()
-	module.appendOp(clampToCpu, op: StdOp.osCpuCount(cpus))
-	let cpuFloorConst = emitConst(module, block: clampToCpu, value: MinimumProcessorCount, ids: ids)
-	let belowFloor = emitCmp(module, block: clampToCpu, a: cpus, b: cpuFloorConst, pred: StdCmpPred.lt, ids: ids)
-	let liveCpus = ids.mint()
-	cpuKnown.blockArgs.push(IrBlockArg.create(liveCpus, argType: StdType.i64))
-	module.setTerminator(clampToCpu, op: StdOp.condBranch(belowFloor, thenBlockId: cpuFloor.id, elseBlockId: cpuKnown.id))
-	clampToCpu.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(cpus)))
-	let flooredCpus = emitConst(module, block: cpuFloor, value: MinimumProcessorCount, ids: ids)
-	module.setTerminator(cpuFloor, op: StdOp.branch(cpuKnown.id))
-	cpuFloor.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(flooredCpus)))
+	// ⭐ **THE CEILING, AND IT IS THE ONLY TEST LEFT — a request at or below the machine is taken EXACTLY, so
+	// `MAXON_MAX_PROCS=1` on a 16-way box builds one P.** That direction is what the variable gained with the
+	// flip: it used to be able only to raise a default of 1.
+	let overCpu = emitCmp(module, block: underCeiling, a: requested, b: liveCpus, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(underCeiling, op: StdOp.condBranch(overCpu, thenBlockId: settled.id, elseBlockId: takeRequested.id))
+	underCeiling.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 
-	let overCpu = emitCmp(module, block: cpuKnown, a: requested, b: liveCpus, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(cpuKnown, op: StdOp.condBranch(overCpu, thenBlockId: takeCpu.id, elseBlockId: takeRequested.id))
-
-	module.setTerminator(takeCpu, op: StdOp.branch(settled.id))
-	takeCpu.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 	module.setTerminator(takeRequested, op: StdOp.branch(settled.id))
 	takeRequested.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(requested)))
 end 'emitResolveMaxProcs'
@@ -2800,9 +2846,11 @@ end 'emitSchedRaiseHighWater'
 // releases nothing (`osLockEnter` is a recursive CRITICAL_SECTION). The `lock xadd` is what covers it, which
 // is why `__gt_timer_check` and `__gt_proc_check` may publish inside their walk and wake once after it.
 //
-// ⚠ **AT `DefaultMaxProcs == 1` BOTH SCANS WOULD BE EMPTY ANYWAY** — `numProcs` is 1 and both start at
-// index 1 — so even a call would cost one load and one compare. Since EC10 that is the WEAKER of the two
-// reasons no worker is created; the stronger one is above, and it does not depend on a constant.
+// ⚠ **ON A ONE-PROCESSOR MACHINE, OR UNDER `MAXON_MAX_PROCS=1`, BOTH SCANS ARE EMPTY** — `numProcs` is 1
+// and both start at index 1 — so even a call costs one load and one compare. That used to be true of every
+// default build, because the default WAS 1; since the flip it is true only where the count really is one,
+// and it was always the WEAKER of the two reasons an `async` program creates no worker. The stronger one is
+// above, and it never depended on the count at all.
 function buildSchedWakeOrSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)

@@ -13,14 +13,19 @@ varies.
 
 ## ⛔ THREE DRIVERS, AND THEY MEASURE TWO DIFFERENT COMPILERS
 
-This directory holds programs that no spec case can run, because a spec case
-cannot set an environment variable. It holds **three** drivers, and the first
-question to ask of any reading from here is *which compiler produced the binary*.
+This directory holds programs whose readings a spec case has no reason to assert:
+they sweep the processor count across four values plus the default, and a case
+that named one of those counts would be pinning the harness rather than the
+runtime. (A spec case CAN set the count now — `<!-- procs: N -->`, which
+`specs-shv2/sched-default-procs.md` owns — so the old reason given here, that it
+could not set an environment variable at all, has expired.) It holds **three**
+drivers, and the first question to ask of any reading from here is *which compiler
+produced the binary*.
 
 | Driver | Compiler it drives | What it answers |
 |---|---|---|
 | `validate.sh` | **the C# BOOTSTRAP** (`$REPO/bin/maxon.exe`) | is the bootstrap's per-P sharded allocator + multi-M scheduler correct above one P? |
-| `pin-matrix.sh` | **shv2** (`maxon-shv2/.maxon/maxon-shv2.exe`) | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS`? |
+| `pin-matrix.sh` | **shv2** (`maxon-shv2/.maxon/maxon-shv2.exe`) | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS` and at the default — while a SPAWNED one reaches a worker M? |
 | `refcount-race.sh` | **shv2** | does a contended refcount word survive, and can the pin be removed to break it? |
 
 ⚠ **`validate.sh` DOES NOT MEASURE SHV2 AND NEVER DID.** It defaults `MAXON` to
@@ -46,14 +51,20 @@ checkout, because it locates `stdlib/` relative to itself.
 `alloc-torture` and `remote-free-torture` reach the allocator's CROSS-P paths by
 getting worker Ms to run their tasks. Since EC10 an `async f(...)` call creates a
 COROUTINE of the calling green thread — published only to that green thread's
-queue, never to a P ring — so **no worker M is ever created at any
-`MAXON_MAX_PROCS`** and both programs run entirely on one M. They still prove
-determinism, leak-freedom and single-shard churn; they no longer reach the per-P
-mcache handoff, the remote-free MPSC queue or the span ownership gate **in shv2**.
+queue, never to a P ring — so **those two programs create no worker M at any
+`MAXON_MAX_PROCS`, nor at the default**, and run entirely on one M. They still prove
+determinism, leak-freedom and single-shard churn; they do not reach the per-P
+mcache handoff, the remote-free MPSC queue or the span ownership gate.
 `validate.sh` still reaches all three **in the bootstrap**, whose scheduler is
-unchanged. Those paths regain a shv2 producer when a `spawn` primitive lands
-(`SERVICES_DESIGN.md §"Ownership — the spine"`); until then, do not read a green shv2 run as
-covering them.
+unchanged.
+
+⭐ **AND THE SHV2 PRODUCER THIS PARAGRAPH SAID WOULD ARRIVE HAS ARRIVED.** `spawn`
+(`SERVICES_DESIGN.md §"Ownership — the spine"`) creates real green threads, and
+`service-torture` / `service-fanin-torture` move 4,800 heap `String`s each across
+Ms — a record allocated on one M and released on another, which is the remote-free
+push. So a green run of the two SERVICE rows is a cross-P allocation reading; a
+green run of `alloc-torture`'s rows still is not, and converting those two to drive
+it themselves is separate work nobody has done.
 
 ## Pieces
 

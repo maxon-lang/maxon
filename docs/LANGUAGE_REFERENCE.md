@@ -4277,7 +4277,7 @@ Creating a green thread that is scheduled independently is `spawn`, and `spawn` 
 
 `spawn` is a **contextual** keyword, not a reserved word: it is recognized as an identifier followed by a name, so `spawn` remains a perfectly good spelling for a function, a static, a parameter, a field or a local. A `spawn Calc.create()` anywhere in a program makes `Calc` a **service**, and the compiler synthesizes two companion types beside it — `Calc.request` (the message union) and `Calc.handle` (what a `spawn` yields, whose method surface is exactly `Calc`'s `export`/`public` INSTANCE methods). There is no bare `spawn f()` green thread: the target must be a static factory of a declared type returning that type, and anything else is **E3134**. A message's arguments are MOVED, so a parameter that cannot have exactly one owner on the far side — a `Promise`, a function value, a value held at an interface type — is **E3135**.
 
-Services **run**: the mailbox, the green thread and the dispatch loop are built. What is not built yet is the **reply** — a message is fire-and-forget, so a handler delivers no value back to its sender (`SV2`), and there is no `awaitAny` (`SV3`). `specs-shv2/services.md` carries the live cases and, as `disabled-test` entries, the ones those rows unlock.
+Services **run**, and so do their **replies**: the mailbox, the green thread, the dispatch loop and the reply channel are all built. A handler that returns a value hands it back through `try await handle.method()` — the reply slot is a green thread that never runs, so `Promise`, `await`, `try await` and `awaitAny` are the ordinary ones. `specs-shv2/services.md` carries the live cases and, as `disabled-test` entries, the two shapes still owed (a generic service's per-instantiation companions, and the transitive half of param-consume).
 
 ### Starting a Coroutine
 
@@ -4419,6 +4419,8 @@ end 'join'
 These properties are the same on every target. `wasm32-wasi` differs only in the *mechanism* of suspension -- having no native stack switching, it implements it with Binaryen Asyncify, unwinding a live call stack into linear memory at an `await` and rewinding it on resume -- and not in the semantics. There is no multi-threaded carve-out to exclude it from: `async` reaches no worker thread and no work stealing on any target.
 
 A **service** is where those six read differently, and it is the only place they do: a `spawn`ed green thread is scheduled by the P/M substrate, so it may run on another OS thread, may be stolen from one processor to another, and is what makes the ring, the work stealing and the worker loop reachable at all. The single-owner guarantee is unchanged and is what a send being a MOVE buys — the box crosses, and only one green thread ever holds it.
+
+**How many processors a program gets: all of them**, by default — the scheduler builds one processor per logical CPU the OS reports. `MAXON_MAX_PROCS=N` in the environment sets that count exactly, clamped to the range `1 … cpuCount`, so it lowers as well as raises; a value that is not a processor count (unset, non-numeric, or below one) leaves the default alone and is never an error. It is `GOMAXPROCS` under another name, and it is the same knob the C# bootstrap reads. An `async`-only program is unaffected either way — its coroutines never leave the green thread that made them, whatever the count.
 
 ---
 

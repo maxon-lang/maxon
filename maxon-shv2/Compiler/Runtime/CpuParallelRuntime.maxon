@@ -65,8 +65,9 @@ export let SchedMaxActiveWorkersName = b"__sched_max_active_workers"
 // ⭐⭐ **`__sched_processor_count()` — HOW MANY Ps THE SCHEDULER RESOLVED, which is the ONE thing
 // `MAXON_MAX_PROCS` actually decides.** Its band-mate above reads how parallel the run TURNED OUT; this reads
 // what the run was CONFIGURED for, and the difference is that the second is not a race. `emitResolveMaxProcs`
-// settles `__sched_num_procs` to `min(requested, osCpuCount)` in `__sched_init_procs`, before any green
-// thread runs and without consulting the workload, so two runs of one program on one machine cannot disagree.
+// settles `__sched_num_procs` to `osCpuCount`, or to `min(requested, osCpuCount)` when the variable names a
+// count, in `__sched_init_procs` — before any green thread runs and without consulting the workload, so two
+// runs of one program on one machine cannot disagree.
 //
 // ⚠ **NEITHER REFERENCE DECLARES IT**, exactly as neither declares `__Builtins.schedStealCount` — shv2's
 // P/M split is shv2's own (the bootstrap resolves its processor count but exposes no reading of it, and v1
@@ -203,10 +204,13 @@ end 'buildCpuCount'
 // which is exactly where the bootstrap raises its own and exactly where it declines to count its completion
 // thread either.
 //
-// ⚠ **AND IT STILL ANSWERS 1 BY DEFAULT**, because `SchedRuntime.DefaultMaxProcs` is 1 and no second M is ever
-// spawned without `MAXON_MAX_PROCS`. `specs-shv2/builtins-cpu-parallel.md`'s
-// `sched-max-active-workers-is-one-under-async` pins that, and it is what makes the mark a measurement rather
-// than a promise.
+// ⚠ **AND IT STILL ANSWERS 1 FOR AN `async` PROGRAM, THOUGH NO LONGER FOR THE REASON IT USED TO.** The old
+// reason was the default: `SchedRuntime.DefaultMaxProcs` was 1, so there was no second P to start an M on.
+// That constant is gone and the default is the machine's count — but an `async` frame is a COROUTINE of its
+// caller, published only to its owner's queue, so nothing calls `__sched_wake_or_spawn` and no worker M is
+// created at ANY count. `specs-shv2/builtins-cpu-parallel.md`'s `sched-max-active-workers-is-one-under-async`
+// pins that, and it is what makes the mark a measurement rather than a promise. A `spawn` DOES produce green
+// threads and does raise the mark; `track0/pin-matrix.sh` asserts both families.
 //
 // ⭐⭐ **AND IT IS EXACTLY WHY THE PROCESSOR COUNT HAD TO EXIST (2026-09-01).** The mark is a reading of what
 // the SCHEDULER DID, so a program that finishes its backlog before `__sched_wake_or_spawn` needs a second M

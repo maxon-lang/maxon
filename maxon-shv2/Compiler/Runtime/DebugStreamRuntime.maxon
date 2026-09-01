@@ -1053,12 +1053,28 @@ end 'buildDsEmitMm'
 // pile. Read HERE rather than passed in from the call site, so a site costs only its own arguments and
 // there is one place to get it right.
 //
-// ⚠ **`p_id` IS ALWAYS ZERO, AND THAT IS NOW A CHOICE RATHER THAN AN ABSENCE.** The reference schedules
-// green threads across N processors and stamps which one ran the event; shv2 HAS a `P` since G1 (its id is
-// `SchedRuntime.POffId`) but runs one M by default, so every event would carry the same 0 and the field would
-// cost a TLS read per entry to say nothing. It becomes worth stamping the day more than one M runs by
-// default, which is the same day it stops being constant. `unit_id` is what shv2's own emitters demux by, and
-// it is carried on every one of these entries.
+// ⭐⭐ **`p_id` IS STAMPED, AND THE DAY THIS PARAGRAPH NAMED IS THE DAY IT WAS.** It used to be a hard zero
+// under an argument that was true while it lasted: shv2 ran one M by default, so every event would have
+// carried the same 0 and the field would have cost a TLS read to say nothing — *"it becomes worth stamping
+// the day more than one M runs by default, which is the same day it stops being constant."* The
+// `DefaultMaxProcs` flip is that day, and it also made the field the only thing on the entry that can tell
+// two Ms apart: `unit_id` demuxes shv2's own emitters and `gt` names the green thread, but neither says
+// which PROCESSOR ran it, which is the question a multi-M timeline is read to answer.
+//
+// ⭐ **AND IT COSTS NOTHING THE `gt` READ WAS NOT ALREADY PAYING.** The walk to the green thread goes
+// THROUGH the P, so `emitLoadCurrentGtAndProcIdOrZero` returns both from the one guarded TLS read it always
+// did — one extra field load on the arm that already holds the pointer, no second branch. That is why this
+// is a stamp and not a rung. It also puts shv2 on the wire format `ARCHITECTURE.md` documents, which has
+// said `gt` + `p_id` since the ring was specified.
+//
+// ⭐⭐ **SEEN MOVE, WITH ITS CONTROL — because a field that reads 0 everywhere and a field nobody looks at
+// are indistinguishable in a golden.** A `--debugstream` program that spawns eight services and logs one
+// event per message, under `bin/maxon.exe monitor --filter=log`, 16 events: **P0×5, P1×8, P2×2, P3×1** at
+// the default, and **P0×16** under `MAXON_MAX_PROCS=1`. The old hard zero produced the second reading in
+// both cases. ⚠ **NO SPEC CASE ASSERTS THIS AND NONE CAN**: `SpecTestRunner.normalizeTrace` strips
+// `gt=0x<hex> P<n>` from every decoded log line, deliberately, because WHICH processor ran an event is a
+// property of the RUN — the same reason the timestamp goes. The stamp is EXERCISED by all 17
+// `debugstream-log-events` cases and its VALUE is pinned by the measurement above and nothing else.
 //
 // ⚠ **THE CURRENT GT IS READ ONLY WHEN THIS BUILD CARRIES THE SCHEDULER.** The read goes through the P
 // (`SchedRuntime`), whose `.data` word is `usesGt`'s (`Compiler.maxon`'s `gtGlobals` arm), so naming it in a
@@ -1079,16 +1095,19 @@ function emitStoreLogIdentity(module StdModule, func IrFunction, block IrBlock, 
 	var cur = block
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	var gt = zero
+	var procId = zero
 	if usesGt 'scheduled'
 		let liveGt = ids.mint()
-		cur = emitLoadCurrentGtOrZero(module, func: func, cur: cur, gtId: liveGt, ids: ids)
+		let liveProcId = ids.mint()
+		cur = emitLoadCurrentGtAndProcIdOrZero(module, func: func, cur: cur, gtId: liveGt, procIdId: liveProcId, ids: ids)
 		gt = liveGt
+		procId = liveProcId
 	end 'scheduled'
 
 	module.appendOp(cur, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffGt, valueId: gt, valueType: StdType.i64))
-	// ⚠ The zero the PID field stores is minted in `block`, which dominates `cur` on every arm above, so the
-	// branch the guarded read introduces cannot strand it.
-	module.appendOp(cur, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffPid, valueId: zero, valueType: StdType.i64))
+	// ⚠ The zeros both fields fall back to are minted in `block`, which dominates `cur` on every arm above,
+	// so the branch the guarded read introduces cannot strand them.
+	module.appendOp(cur, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffPid, valueId: procId, valueType: StdType.i64))
 	return cur
 end 'emitStoreLogIdentity'
 

@@ -2946,12 +2946,15 @@ what W212's ring, its stealing and its worker loop schedule. `track0/service-tor
 shape at torture scale, and `track0/pin-matrix.sh` reads its `workers >= 2, steals > 0` at
 `MAXON_MAX_PROCS >= 2`.
 
-⚠ **TWO THINGS A DRIVER WRITTEN TODAY WOULD HIT, AND NEITHER IS A GAP IN THE SCHEDULER.** A message is
-**fire-and-forget** — there is no reply until `SV2` — so a worker cannot hand a result back and the
-driver must collect through state the worker owns; and a message's arguments are **MOVED**, so what
-crosses must be solely owned by the sender and must be a type whose contents can be proven sole
-(**E3135**). A `perFunction` pass handed an `IrFunction` out of a module the driver still holds is
-exactly the shape that rule refuses.
+⚠ **ONE THING A DRIVER WRITTEN TODAY WOULD HIT, AND IT IS NOT A GAP IN THE SCHEDULER.** A message's
+arguments are **MOVED**, so what crosses must be solely owned by the sender and must be a type whose
+contents can be proven sole (**E3135**). A `perFunction` pass handed an `IrFunction` out of a module the
+driver still holds is exactly the shape that rule refuses.
+
+⛔ **THE OTHER THING THIS PARAGRAPH LISTED HAS EXPIRED: A MESSAGE IS NO LONGER FIRE-AND-FORGET.** It said
+*"there is no reply until `SV2`"*, so a worker could not hand a result back and the driver had to collect
+through state the worker owns. `SV2` closed 2026-08-28: a reply slot is a real GT that never runs, and
+`try await handle.method()` is an ordinary awaited value. A driver collects results directly.
 
 **The runtime underneath it is proven** (x64-windows). The C# emitter's green-thread scheduler and
 sharded allocator run correctly across many worker Ps: a 32-green-thread CPU/alloc burst runs on 16
