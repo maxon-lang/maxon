@@ -20,8 +20,7 @@ saying why the two cannot be one).
 
 > ### ⛔ DO NOT RUN THE FULL SUITE. YOU ARE THE LAST STEP BEFORE THE COORDINATOR RUNS IT.
 >
-> You finish, and `scripts/rung-finish.sh` runs the full unfiltered suite **on the identical tree,
-> minutes later**. A full run here is not extra assurance — it is the same run twice, and it is the
+> You finish, and your CALLER runs the full unfiltered suite **on the identical tree, minutes later**. A full run here is not extra assurance — it is the same run twice, and it is the
 > single largest piece of duplicated work in this process. *(Counted over a 3-agent wave: three
 > implementers, the reviewer and the coordinator each ran one, so the same suite ran FIVE times per
 > rung. Only the last one gates anything.)*
@@ -82,9 +81,9 @@ READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not pa
 - **Make the call on anything the author flagged for a decision, and justify it.**
 - If you find something real but genuinely OUTSIDE this rung — a **`maxon-sharp` bug** (needs the full C#
   suite as its gate), a **distinct feature** for its own ladder rung, or a **measured-linear perf debt** —
-  **say so and leave it for the coordinator to triage**, rather than smuggling it in OR deferring it on
-  your own authority. There is no backlog file; the coordinator decides what becomes a future rung in
-  `PLAN.md`. ⚠ **"Too big to ride along" is NOT the same as "a wrong answer in the
+  **say so and leave it for your caller to triage**, rather than smuggling it in OR deferring it on
+  your own authority. There is no backlog file — `PLAN.md` and the slice board were retired — so it goes
+  in your REPORT and the caller decides. ⚠ **"Too big to ride along" is NOT the same as "a wrong answer in the
   files I just reviewed"** — that one you fix, exactly like a leak. Do not let this bullet become an
   escape hatch for a defect the rung owns.
 

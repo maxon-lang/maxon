@@ -345,11 +345,12 @@ neither can you. ⚠ **Write no row you did not measure.**
 **`maxon-rung-reviewer` on the working diff — uncommitted, main checkout — after §4 and before the
 commit.** It must not be the agent that wrote the code; that independence is the whole point.
 
-⚠ **Both this agent and `maxon-rung-optimizer` are named for `/rung` and their briefs mention
-`scripts/rung-finish.sh`. Say in the brief that this is a `/land` change**: the diff is uncommitted in
-the main checkout, there is no worktree and no branch, and the full battery is YOURS, minutes later.
-Their `rung-finish.sh` reference means *"the caller runs the suite after you, so you do not"* — which is
-exactly true here. **A report of theirs recommending a rung is out of scope; note it and carry on.**
+⚠ **Both this agent and `maxon-rung-optimizer` are still NAMED for `/rung`, which no longer exists** —
+the slice board, `PLAN.md` and `scripts/rung-{start,finish}.sh` were retired with it, and these two were
+kept because `/land` is now their only caller. **Say in the brief that this is a `/land` change**: the
+diff is uncommitted in the main checkout, there is no worktree and no branch, and the full battery is
+YOURS, minutes later. **A report of theirs recommending "a rung" or a `PLAN.md` row is naming machinery
+that is gone — read it as ordinary deferred work, decide it here, and carry on.**
 
 - **Brief it for the "Code Quality" checklist in `.claude/CLAUDE.md`** — **duplication first**, including
   pre-existing duplication in the files touched, and especially logic copied across a boundary where
