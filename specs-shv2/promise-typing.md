@@ -47,7 +47,7 @@ peek at the handle word, which reads the promise without consuming it.
 ## Tests
 
 <!-- test: promise-typing.error.return-a-promise-as-its-result-type -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 A promise is not its result. `grab` is declared `returns Integer` and returns `async plain()`, which is a
 `Promise with Integer` — the value that will eventually produce an `Integer`, not an `Integer`. Before
 promises were typed this compiled and printed the green thread's raw address (a different number on every
@@ -74,7 +74,7 @@ error E3005: <fragment>:10:3: Cannot return 'struct' from function declared to r
 ```
 
 <!-- test: promise-typing.error.arithmetic-on-a-promise -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 A promise is not a number, so it has no arithmetic. `p + 1` used to be pointer arithmetic on a green-
 thread address that happened to compile.
 ```maxon
@@ -97,7 +97,7 @@ error E2004: <fragment>:11:18: Cannot operate on struct and int
 ```
 
 <!-- test: promise-typing.error.a-promise-in-an-integer-parameter -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 An `Integer` parameter does not take a promise. The cure is to `await` it and pass the RESULT — which is
 also the only spelling that keeps the thread's one owner intact.
 ```maxon
@@ -122,7 +122,7 @@ error E3005: <fragment>:15:10: argument type mismatch for 'n': expected 'Integer
 ```
 
 <!-- test: promise-typing.error.clone-a-promise -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 ⭐ The one that was a latent double-reclaim rather than merely a wrong type. A promise owns a green
 thread that exactly one owner may reclaim; `p.clone()` used to hand back a second copy of the handle,
 with nothing to say which of the two owned the thread. `Promise` declares no `clone`, and synthesizing
@@ -147,7 +147,7 @@ error E2015: <fragment>:11:16: Unsupported: `clone` on `Promise`, which is a GEN
 ```
 
 <!-- test: promise-typing.inner-is-the-one-unwrap -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 The sanctioned promise → `int` conversion. `.inner` peeks at the handle word without consuming the
 promise, so the `await` that follows still reclaims the thread and the program still balances to zero.
 ```maxon

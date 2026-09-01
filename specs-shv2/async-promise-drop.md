@@ -35,7 +35,7 @@ statement of it.** Dropping a promise reaps a green-thread struct and releases i
 ## Tests
 
 <!-- test: async-promise-drop.never-ran-drop-no-leak -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A spawned green thread that is never awaited is DROPPED at scope exit: it is unlinked from the run queue, its
 seed stack freed and its struct reclaimed, and `__gt_live_count` balances to zero — so the program exits with
 `main`'s own code (0), not the GT-leak abort (75). Before #88 this spawn leaked its struct + stack silently.
@@ -57,7 +57,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.completed-sibling-drop-no-leak -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A sibling promise that COMPLETES as a side effect of driving another await is dropped through the `completed`
 arm — its struct is reclaimed WITHOUT double-freeing the stack (`__gt_drive_until` already freed it at
 completion). `await b` drives the FIFO run queue and runs `a` to completion; `return (await b)` then drops the
@@ -86,7 +86,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.never-ran-drop-not-run -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Pins the divergence from a fire-and-forget-run model: a dropped thread's body NEVER RUNS. `incFlag` would set
 the global to 1 if it ran, but `p` is never awaited (nothing drives the scheduler), so `incFlag` is never
 scheduled and the global stays 0. The drop cancels the never-run thread; it does not run it.
@@ -110,7 +110,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.spawn-drop-loop-bounded -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The real #88 leak shape: a loop that spawns a promise every iteration and never awaits it. Each iteration's
 promise is dropped at the loop body's scope exit — unlinked from the run queue (so it cannot be run by a later
 drive) and its struct recycled onto the free-list, which the next spawn reuses. Memory stays bounded across
@@ -138,7 +138,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-timer-drop-cancel -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A promise PARKED on a timer is dropped-cancelled at scope exit. `slow` sleeps 200 ms (parks on the timer);
 `fast` completes immediately. `await q` drives the scheduler: `slow` runs first, parks on its timer and yields;
 `fast` then runs to completion, so `await q` returns 42 while `slow` is still parked. `return r` drops `slow` —
@@ -170,7 +170,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-timer-drop-through-a-rearm -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⛔⛔ **THE CASE ABOVE DOES NOT REACH THE `waiting` ARM, AND ITS OWN DESCRIPTION SAYS IT DOES.** It reads *"`return
 r` drops `slow` — the `waiting` arm removes it from the timer store"*, and `_ = async sleeper()` DISCARDS the
 promise at its own statement, before `await q` has driven anything: `sleeper` has never run, its status is the
@@ -211,7 +211,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.branch-await-one-drop-other -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The path-sensitive case: a promise `await`ed on ONE branch and DROPPED on the other, reconciled at the merge.
 `pick` spawns `p`, then on `x > 0` awaits it (the runtime reclaims the struct at the await) and on the else
 path lets it drop at scope exit (the `ready` arm cancels the never-run thread). Compiling ONE body with both
@@ -245,7 +245,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-subprocess-drop-cancel -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The process-store twin of the parked-timer case. `slowProc` spawns a child that runs for ~2 s and parks on the
 process store; `fast` completes immediately, so `await q` returns 42 while `slowProc` is still parked on its
 child. `return r` drops `slowProc` — the `waiting` arm scans the process store, `CloseHandle`s the child (abandon
@@ -275,7 +275,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.rearm-var-across-loop -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Re-arming a promise `var` INSIDE A LOOP is not phi-blind (P1.5-B2 #88, review Finding 1): the loop-header phi
 carries the promise mark, so each iteration DROPS the previous thread (cancelling it) and the last one drops at
 scope exit — the live count balances to zero (exit 0). Before the fix the loop body emitted no drop (the phi was
@@ -303,7 +303,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.rearm-var-across-branch -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Re-arming a promise `var` in ONE ARM OF A BRANCH is likewise not phi-blind (Finding 1): the if-continuation phi
 merges the re-armed thread and the untouched one, both marked promises, so the scope-exit drop cancels whichever
 the taken path holds — balanced on every path (exit 0). Before the fix this exited 101.
@@ -331,7 +331,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.await-rearmed-var -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 AWAITING a promise `var` re-armed across a branch works and yields the re-armed thread's result (Finding 1): the
 merge phi is recognised as a promise, and its awaited result type is recovered by tracing the phi's incoming
 `async` calls. `positive()` is true, so `p` holds the re-armed thread; `await p` returns 7 and both threads are
@@ -362,7 +362,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.await-rearmed-loop-var -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 AWAITING a promise `var` re-armed INSIDE A LOOP, from AFTER the loop — the loop-EXIT phi (P1.5-B2 #88; this
 closes residual #89's E2015 over-rejection of an `await` on a block-arg-carried promise). `p` is re-armed each
 iteration (dropping the previous thread); after the loop `await p` targets the loop-exit phi, whose promise mark
@@ -445,7 +445,7 @@ error E3005: <fragment>:11:2: cannot assign a value of type 'int' to variable 'p
 ```
 
 <!-- test: async-promise-drop.branch-store-into-a-container-on-both-arms -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐ **STORING THE SPAWN IS A CONSUMING MOVE ON *EVERY* ARM THAT DOES IT, INCLUDING THE SECOND ONE THE PARSER
 READS.** A dispatcher arms a slot through two doors — `push` the first time a slot exists, `set` every time
 after — so ONE `async` spawn reaches a merge having been given to the container on both paths, and the merge
@@ -514,7 +514,7 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.branch-store-into-a-container-reads-the-doors-in-either-order -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The mirror of the case above, and the reason it is a second case rather than a second assertion: the defect it
 pins was ORDER-DEPENDENT — the first store door the parser read retyped the spawn's value to the storage
 instance, and the SECOND one then mistook it for a promise already read back out of a container and skipped
@@ -580,7 +580,7 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.a-container-drops-its-un-awaited-elements -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 ⭐ The container is an OWNER. An array of promises that reaches scope exit holding un-awaited elements
 drops each one — the same `__gt_promise_drop` a bare binding gets, reached through the element
 destructor the array record stamps. Before this slice the record stamped `element_destroy@40 = 0`,
@@ -607,7 +607,7 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.an-element-moved-out-by-pop-belongs-to-the-caller -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 `pop` MOVES the element out: the array no longer holds it and the caller's binding does, so the binding
 drops it at scope exit like any other owned promise. Before this slice a popped promise was owned by
 NOBODY — the array had already forgotten it and the binding never adopted it — so both the promise's
@@ -640,7 +640,7 @@ popped a thread true, array now 0
 ```
 
 <!-- test: async-promise-drop.a-struct-field-drops-the-promise-it-holds -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 A struct FIELD is an owner too, and the struct's synthesized destructor drops it. This case could not
 even be WRITTEN before promises were typed: `Holder.of(async plain())` was refused (`expected
 'IntPromise', got 'int'`) because the spawn was a bare machine word, so the only way a promise ever
@@ -747,7 +747,7 @@ error E3141: <fragment>:15:13: a promise cannot be borrowed through 'current': i
 ```
 
 <!-- test: async-promise-drop.a-move-out-hands-the-thread-over -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-linux -->
 The other side of the rule above: `pop` MOVES the element out, so the container has stopped naming it and
 the caller owns it outright — the read is legal and the awaited value arrives intact. This is what keeps
 the refusal a statement about BORROWING rather than a ban on getting a promise out of a container.

@@ -6011,6 +6011,16 @@ end 'buildGtIoPark'
 //
 // A void call mints an unread result id.
 export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)
+	// ⭐ **A TARGET WITH NO SCHEDULER EMITS NO PARK.** The park exists to let OTHER green threads run while
+	// this one waits; a lane `targetProvidesFacility` denies `greenThreads` has exactly one thread of
+	// execution and nothing to yield to, so the call would be a `bl` into machinery nothing installed —
+	// `__gt_init`, the P/M tier, `__gt_now_ns`, the timer store. `RuntimeUsage.parksOnIo` reads the same
+	// answer and keeps that machinery out of the program; see `IrModule.parksOnIo` for why the question is
+	// asked of the module rather than threaded to nineteen builders.
+	if not module.parksOnIo 'noScheduler'
+		return
+	end 'noScheduler'
+
 	// The suffix travels as `(rdata address, byte length)`, and an untraced build's park has no suffix
 	// parameters to fill, so the call carries no arguments at all.
 	//

@@ -1,0 +1,436 @@
+// Test: slab-sharding.the-traffic-counters-are-exact-across-green-threads
+typealias Integer = int(i64.min to i64.max)
+typealias Count = int(0 to 65536)
+
+function churn(seed Count) returns Integer
+	var acc = 0
+	for j in 0 upto 400 'alloc'
+		let tmp = "count-{seed}-{j}"
+		if not tmp.isEmpty() 'nonEmpty'
+			acc = acc + 1
+		end 'nonEmpty'
+	end 'alloc'
+	return acc
+end 'churn'
+
+function wave(base Count) returns Integer
+	let a = async churn(base)
+	let b = async churn((base + 1) as Count)
+	return (await a) + (await b)
+end 'wave'
+
+function main() returns ExitCode
+	// Bring the scheduler up before anything is measured.
+	if wave(0) != 800 'warmupLost'
+		return 1
+	end 'warmupLost'
+
+	let liveBefore = __Builtins.mmAllocLive()
+	let totalBefore = __Builtins.mmAllocTotal()
+
+	if wave(10) != 800 'firstLost'
+		return 2
+	end 'firstLost'
+	let totalMid = __Builtins.mmAllocTotal()
+
+	if wave(20) != 800 'secondLost'
+		return 3
+	end 'secondLost'
+	let totalAfter = __Builtins.mmAllocTotal()
+	let liveAfter = __Builtins.mmAllocLive()
+
+	let first = totalMid - totalBefore
+	let second = totalAfter - totalMid
+
+	var score = 0
+	if liveAfter == liveBefore 'liveCameBack'
+		score = score + 1
+	end 'liveCameBack'
+	if first == second 'wavesAgree'
+		score = score + 2
+	end 'wavesAgree'
+	if first > 0 'itMoved'
+		score = score + 4
+	end 'itMoved'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mm_alloc_total@8 = i64 0
+  __mm_alloc_bytes@16 = i64 0
+  __mm_raw_alloc_count@24 = i64 0
+  __mm_raw_live_count@32 = i64 0
+  __mm_raw_alloc_bytes@40 = i64 0
+  __gt_run_queue_head@48 = i64 0
+  __gt_run_queue_tail@56 = i64 0
+  __gt_init_done@64 = i64 0
+  __gt_timer_count@72 = i64 0
+  __gt_timer_heap_base@80 = i64 0
+  __gt_timer_capacity@88 = i64 0
+  __gt_trace_counter@96 = i64 0
+  __gt_proc_count@104 = i64 0
+  __gt_proc_handles_base@112 = i64 0
+  __gt_proc_gts_base@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_num_procs@176 = i64 0
+  __sched_shutdown_flag@184 = i64 0
+  __sched_lock@192 = i64 0
+  __mrt_envp@200 = i64 0
+  __mrt_tls_next_key@208 = i64 0
+  __slab_arena_list@216 = i64 0
+  __slab_arena_map_l1@224 = i64 0
+  __slab_state@232 = i64 0
+}
+
+func @churn {
+  entry:
+    arm64.prologue 128
+    arm64.storeSlotReg slot13, x28
+    arm64.storeSlotReg slot12, x27
+    arm64.storeSlotReg slot11, x26
+    arm64.storeSlotReg slot10, x25
+    arm64.storeSlotReg slot9, x24
+    arm64.storeSlotReg slot8, x23
+    arm64.storeSlotReg slot7, x22
+    arm64.storeSlotReg slot6, x21
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 65536
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:5: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot0, x20
+    arm64.cmp x20, 400
+    arm64.cset x0, lt
+    arm64.cbnz x0, alloc
+    arm64.b forexit
+  alloc:
+    arm64.leaRdata x0, __str_rec_2  ; "count-"
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x24, x0
+    arm64.leaRdata x0, __str_rec_3  ; "-"
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x27
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.add x0, x22, x24
+    arm64.add x0, x0, x26
+    arm64.add x0, x0, x20
+    arm64.storeSlotReg slot2, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot3, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x21, x21, x24
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x21, x21, x26
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x27
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x21, x20
+    arm64.loadRegSlot x20, slot3
+    arm64.storeBaseDispReg.word64 [x20 + 0], x28
+    arm64.loadRegSlot x0, slot2
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl String.isEmpty
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, nonEmpty
+    arm64.b critsplit
+  nonEmpty:
+    arm64.loadRegSlot x0, slot1
+    arm64.add x20, x0, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.loadRegSlot x20, slot1
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __str_decref
+    arm64.b forstep
+  forstep:
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, 1
+    arm64.xchgRegReg x20, x0
+    arm64.b forhdr
+  forexit:
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+}
+
+func @wave {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#2
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x19, 65536
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:16: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#1:
+    arm64.leaFuncAddr x0, churn
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.add x19, x19, 1
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#5
+    arm64.b __rc_chk#6
+  __rc_chk#6:
+    arm64.cmp x19, 65536
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:18: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#4:
+    arm64.leaFuncAddr x0, churn
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x19
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_await
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl wave
+    arm64.cmp x0, 800
+    arm64.cset x0, ne
+    arm64.cbnz x0, warmupLost
+    arm64.b ifcont#2
+  warmupLost:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#2:
+    arm64.bl __mm_counter_alloc_live
+    arm64.movRegReg x19, x0
+    arm64.bl __mm_counter_alloc_total
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 10
+    arm64.bl wave
+    arm64.cmp x0, 800
+    arm64.cset x0, ne
+    arm64.cbnz x0, firstLost
+    arm64.b ifcont#4
+  firstLost:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.bl __mm_counter_alloc_total
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 20
+    arm64.bl wave
+    arm64.cmp x0, 800
+    arm64.cset x0, ne
+    arm64.cbnz x0, secondLost
+    arm64.b ifcont#6
+  secondLost:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.bl __mm_counter_alloc_total
+    arm64.movRegReg x22, x0
+    arm64.bl __mm_counter_alloc_live
+    arm64.sub x1, x21, x20
+    arm64.sub x2, x22, x21
+    arm64.movImm x3, 0
+    arm64.cmp x0, x19
+    arm64.cset x0, eq
+    arm64.cbnz x0, liveCameBack
+    arm64.b critsplit#16
+  liveCameBack:
+    arm64.movImm x0, 1
+    arm64.b ifcont#8
+  critsplit#16:
+    arm64.movRegReg x0, x3
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.cmp x1, x2
+    arm64.cset x2, eq
+    arm64.cbnz x2, wavesAgree
+    arm64.b critsplit#17
+  wavesAgree:
+    arm64.add x0, x0, 2
+    arm64.b ifcont#10
+  critsplit#17:
+    arm64.b ifcont#10
+  ifcont#10:
+    arm64.cmp x1, 0
+    arm64.cset x1, gt
+    arm64.cbnz x1, itMoved
+    arm64.b critsplit#18
+  itMoved:
+    arm64.add x0, x0, 4
+    arm64.b ifcont#12
+  critsplit#18:
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:55: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

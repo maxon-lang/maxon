@@ -80,7 +80,7 @@ four wore one until the 2026-07-28 targets audit measured them green on x64-linu
 ## Tests
 
 <!-- test: builtins-sleep.statement-position -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A void wrapper shaped exactly like `stdlib/Sleep.maxon` — one `__Builtins.sleep(…)` statement and
 nothing else — compiles, and the sleep is OBSERVABLE: the elapsed time measured across it with
 stdlib's `Clock` is at least most of the requested duration. Two stdlib-loading mechanisms in one

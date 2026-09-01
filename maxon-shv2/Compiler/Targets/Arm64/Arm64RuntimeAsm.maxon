@@ -281,3 +281,98 @@ export function arm64EmitOsPrimitive(asm Arm64RuntimeAsm, os Os, importSlot OsIm
 		syscall then arm64EmitSyscall(asm.code, number: syscallNumber)
 	end 'route'
 end 'arm64EmitOsPrimitive'
+
+// ==========================================================================
+// The POSIX host surfaces' shared fragments
+// ==========================================================================
+
+// ⭐ **THESE SEVEN WERE `Arm64DarwinRuntime`'s PRIVATE FRAGMENTS UNTIL THERE WERE TWO POSIX LANES.** They
+// carry no Darwin content at all — a `str` at an unaligned offset, a `strlen`, a bounded copy — and the
+// arm64-LINUX host surface (`Arm64LinuxRuntime`) needs every one of them. They moved here whole for the
+// reason this file exists at all: a copied frame-layout or copied loop-termination fragment drifts into a
+// corrupted stack rather than into a compile error. The test each one passes is the header's: a second
+// consumer can use it UNCHANGED.
+
+// `add Xd, x29, #<slot>` — the ADDRESS of a frame local, for the out-param calls that fill one.
+export function arm64EmitSlotAddr(asm Arm64RuntimeAsm, dest Arm64Register, slot StackSize)
+	arm64EmitAddRuntimeImm(asm, dest: dest, base: Arm64Register.x29, imm: asm.slotOffset(slot) as Imm32)
+end 'arm64EmitSlotAddr'
+
+// `<op> Xd, Xn, Xm` for the three-register arithmetic these chunks need (`mul`, `udiv`, `and`, `orr`). The
+// register-name spelling goes through `arm64RuntimeReg` like every other operand in a runtime chunk, so the
+// GPR class check that guards an allocated operand guards these too.
+export function arm64EmitRuntimeRrr(asm Arm64RuntimeAsm, opcode MachineWord, dest Arm64Register, lhs Arm64Register, rhs Arm64Register)
+	emitArm64Rrr(asm.code, opcode: opcode, rd: arm64RuntimeReg(dest), rn: arm64RuntimeReg(lhs), rm: arm64RuntimeReg(rhs))
+end 'arm64EmitRuntimeRrr'
+
+// `ldr Wt, [Xn, #byteOffset]` — a 32-bit ZERO-EXTENDING load, for the C `int`s and `mode_t`s these surfaces
+// read out of structures the OS owns. The offset must be 4-aligned, which every field read through it is.
+export function arm64EmitLoadWord32At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrW, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: RuntimeWord32Bytes)
+end 'arm64EmitLoadWord32At'
+
+// `str Wt, [Xn, #byteOffset]` — the store twin, and the ONLY width that may be used on a C `int` the OS
+// owns: `*__error()` on Darwin is one, and a 64-bit store there would write four bytes into whatever the C
+// library placed after it.
+export function arm64EmitStoreWord32At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrW, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: RuntimeWord32Bytes)
+end 'arm64EmitStoreWord32At'
+
+// A C `int` is four bytes wide.
+let RuntimeWord32Bytes = 4
+
+// `str Xt, [Xn, #byteOffset]` for an offset that is NOT 8-aligned — the address is formed first and the
+// store then uses offset 0. `WIN32_FIND_DATAA` begins with a DWORD, so three of its four 64-bit fields sit
+// at 4, 12 and 20; the scaled store form cannot encode any of them and the unscaled one is not exposed.
+export function arm64EmitStoreWord64Unaligned(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord, scratch Arm64Register)
+	arm64EmitAddRuntimeImm(asm, dest: scratch, base: base, imm: byteOffset as Imm32)
+	arm64EmitStoreWord64At(asm, src: src, base: scratch, byteOffset: 0)
+end 'arm64EmitStoreWord64Unaligned'
+
+// ⭐ **`dest = strlen(src)`** — a C string carries no length and none of the APIs that hand one over here
+// answers one either.
+//
+// ⚠ **IT WAS WRITTEN OUT TWICE BEFORE MAC4** (`mrt_host_exe_path` and `mrt_host_env_read` each had a
+// copy) and MAC4 would have made it four. Both of those call this, which is why the fragment takes its
+// registers as parameters rather than fixing them: the two callers had already chosen different ones.
+export function arm64EmitCStringLength(asm Arm64RuntimeAsm, src Arm64Register, dest Arm64Register, cursor Arm64Register, scratch Arm64Register)
+	let walk = asm.newLabel()
+	let atNul = asm.newLabel()
+
+	arm64EmitMovRuntimeReg(asm, dest: cursor, src: src)
+
+	asm.placeLabel(walk)
+	arm64EmitLoadByte(asm, dest: scratch, base: cursor)
+	arm64EmitCbzTo(asm, reg: scratch, label: atNul)
+	arm64EmitAddRuntimeImm(asm, dest: cursor, base: cursor, imm: 1)
+	arm64EmitBranchTo(asm, label: walk)
+
+	asm.placeLabel(atNul)
+	arm64EmitSubRuntimeReg(asm, dest: dest, lhs: cursor, rhs: src)
+end 'arm64EmitCStringLength'
+
+// ⭐ **COPY BYTES FROM `src` TO `dest` UNTIL A NUL OR UNTIL `limit` BYTES HAVE MOVED, AND ALWAYS TERMINATE.**
+// Callers with different reasons for a bound: a directory prefix is cut at a `/` the source does not mark, a
+// duplicated string is bounded by its own length, and a `cFileName` is bounded by `MAX_PATH`. One loop,
+// because the part that is easy to get silently wrong — writing the terminator on BOTH exits — is the part
+// they share.
+//
+// ⚠ It CONSUMES `src`, `dest` and `limit` (all three are stepped) and clobbers `scratch`.
+export function arm64EmitCopyCStringBounded(asm Arm64RuntimeAsm, src Arm64Register, dest Arm64Register, limit Arm64Register, scratch Arm64Register)
+	let step = asm.newLabel()
+	let terminate = asm.newLabel()
+
+	asm.placeLabel(step)
+	arm64EmitCbzTo(asm, reg: limit, label: terminate)
+	arm64EmitLoadByte(asm, dest: scratch, base: src)
+	arm64EmitCbzTo(asm, reg: scratch, label: terminate)
+	arm64EmitStoreByte(asm, src: scratch, base: dest)
+	arm64EmitAddRuntimeImm(asm, dest: src, base: src, imm: 1)
+	arm64EmitAddRuntimeImm(asm, dest: dest, base: dest, imm: 1)
+	arm64EmitAddRuntimeImm(asm, dest: limit, base: limit, imm: -1)
+	arm64EmitBranchTo(asm, label: step)
+
+	asm.placeLabel(terminate)
+	arm64EmitMovRuntimeImm(asm, dest: scratch, value: NulByte as MachineWord)
+	arm64EmitStoreByte(asm, src: scratch, base: dest)
+end 'arm64EmitCopyCStringBounded'

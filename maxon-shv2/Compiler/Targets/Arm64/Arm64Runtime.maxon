@@ -44,60 +44,33 @@ export function arm64OsCallKind(os Os) returns Arm64OsCallKind
 	end 'os'
 end 'arm64OsCallKind'
 
-// --- Linux syscall numbers (AArch64) ---
-//
-// The AArch64 table, NOT x86-64's: `write` is 64 here and 1 there, `mmap` 222 and 9. Named because
-// a bare 64 at a call site is unreadable and the number IS the primitive's identity.
-//
-// ⚠⚠ **THE `Arm64` PREFIX IS LOAD-BEARING, NOT DECORATION — IT WAS THE BUG** (found by A1y's review).
-// These three were spelled `LinuxSyscallWrite`/`LinuxSyscallMmap`/`LinuxSyscallExitGroup`, and
-// `Targets/X64/X64LinuxRuntime` exported THE SAME THREE NAMES over the x86-64 numbers. Maxon's top-level
-// name space is FLAT: a declaration's directory grants it nothing, `export` publishes to the whole
-// program, and two exported globals of one name are resolved SILENTLY BY FILE ORDER with no diagnostic
-// (probed against the bootstrap — the reader's own directory is irrelevant, and the winner follows
-// POSITION, not value). x64's file came last, so every CROSS-FILE read lost, including this backend's.
-//
-// MEASURED on arm64-linux, by disassembling every `svc #0` in a cross-compiled binary:
-// `StdToArm64Conversion.lowerOsExit`/`lowerPanic` emitted **231**, `lowerOsWrite` **1** and
-// `lowerOsMmap` **9** — the x86-64 numbers. On AArch64 those are `munlockall`, `io_destroy` and
-// `lgetxattr`: none exits, writes or maps, and none fails loudly, so a violated range guard did not
-// abort at all — it fell through to `mov x0, xzr; ret` and the program carried on with a zero. The ONE
-// use that was right is the entry stub's below, because a file's own declaration shadows the import.
-//
-// ⭐ The committed `specs-shv2/fragments/arm64-linux/**` goldens record `arm64.syscall 94` at all 97
-// sites, so this restores agreement with them rather than moving them — and their disagreement with what
-// this compiler emitted was the tell. ⚠ THOSE GOLDENS WERE PRODUCED ON THE arm64 HOST, AFTER the
-// collision existed, which means the losing declaration was not even the SAME one on both machines: file
-// order is a property of the CHECKOUT, so a name collision makes the emitted code depend on which box
-// compiled the compiler. That is the strongest reason the cure is a name and not a comment, and it is why
-// this must never be "left for the lane that can run it" — nothing about it is arm64-specific but the
-// numbers. The comment two paragraphs up said "NOT x86-64's" the whole time,
-// which is the project's cure ladder (DERIVE > CHECK > COMMENT) failing at its bottom rung: a comment
-// cannot make a name resolve. One name per fact can.
-//
-// ⚠ `exit_group` (94), NOT `exit` (93) — a DELIBERATE DIVERGENCE from v1, which emits 93. `exit`
-// terminates the calling THREAD; `exit_group` terminates the whole thread group, which is what a C
-// `_exit` actually invokes and what `main` returning means. The two are indistinguishable in a
-// single-threaded process, so this costs nothing today and stays correct the day shv2 grows OS
-// threads (P1.5) — at which point 93 would silently leave the other threads running.
-export let Arm64LinuxSyscallWrite = 64
-export let Arm64LinuxSyscallMmap = 222
-export let Arm64LinuxSyscallExitGroup = 94
+// ⭐⭐ **WHICH SYSTEM REGISTER HOLDS THIS OS THREAD'S PER-THREAD BASE (L4).** The second per-OS question this
+// backend asks, and it is DELIBERATELY NOT `arm64OsCallKind` re-read: that one answers *how this backend
+// reaches the kernel*, this one answers *which register the kernel left the thread pointer in*. The two
+// happen to split the same two OSes today, and fusing them is how a hypothetical third lane would inherit
+// the wrong answer from a question it was never asked.
+export enum Arm64ThreadPointerSource
+	// `TPIDRRO_EL0` with the CPU number masked out of its low three bits — Darwin's TSD base.
+	darwinMaskedReadOnly
+	// `TPIDR_EL0` verbatim — the writable register a raw static Linux image owns outright, because nothing
+	// else on that lane reads or writes it. `Arm64LinuxRuntime.buildArm64LinuxTlsAllocChunk` is its writer.
+	linuxWritable
+end 'Arm64ThreadPointerSource'
 
-// F1a — the page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
-// backing while keeping the mapping. AArch64's numbers, NOT x86-64's (11 and 28 there — see the twin block in
-// `Targets/X64/X64LinuxRuntime.maxon`), which is the whole reason this table carries an arch prefix. There is
-// deliberately no recommit number: a `MADV_DONTNEED`ed page refaults on the next touch, so re-backing one is a
-// Windows-only call and arm64 emits nothing for it.
-export let Arm64LinuxSyscallMunmap = 215
-export let Arm64LinuxSyscallMadvise = 233
+// Exported: the isel (`StdToArm64Conversion.lowerTlsSlotLoad`) and the two hand-assembled current-P readers
+// in `Arm64GtRuntime` ask it — the one place either can.
+export function arm64ThreadPointerSource(os Os) returns Arm64ThreadPointerSource
+	return match os 'os'
+		macos gives Arm64ThreadPointerSource.darwinMaskedReadOnly
+		linux gives Arm64ThreadPointerSource.linuxWritable
+		windows panic("arm64ThreadPointerSource: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
+		wasi panic("arm64ThreadPointerSource: wasm32-wasi is not an arm64 target — a WASI component has no OS-thread concept at all, let alone a thread-pointer register")
+	end 'os'
+end 'arm64ThreadPointerSource'
 
-// F2 — the per-thread identity word. `gettid` answers the calling thread's kernel thread id: per-thread
-// stable and never 0, which is exactly `StdOp.currentThreadToken`'s contract. It is asked instead of reading
-// `TPIDR_EL0` because shv2's Linux lane is a raw static binary with no libc, so nothing has written that
-// register and it reads 0 — the op's own header carries the full argument. 178 on AArch64, 186 on x86-64
-// (`X64LinuxRuntime`'s twin), which is exactly why these numbers wear the arch prefix.
-export let Arm64LinuxSyscallGettid = 178
+// THE AArch64 LINUX SYSCALL NUMBERS ARE NOT HERE. They are one table, in `Arm64LinuxRuntime` — the file
+// named for the OS whose facts they are, exactly as `X64LinuxRuntime` holds x86-64's. This file holds the
+// OS-boundary QUESTION (`arm64OsCallKind`) and the entry stub; the answers live with their lane.
 
 // Build `mrt_start` and return it as a `FunctionCodeChunk`. It bridges Maxon's `main` (AAPCS64,
 // ExitCode in x0) to the platform's process-exit primitive — which takes its code in x0 too, so the
@@ -148,7 +121,7 @@ export let Arm64LinuxSyscallGettid = 178
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, os Os) returns FunctionCodeChunk
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, os Os) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -160,6 +133,19 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	if captureArgv 'argv'
 		emitArm64ArgvCapture(code, rdataRelocs: rdataRelocs, os: os)
 	end 'argv'
+
+	// ⭐⭐ **THE ENVIRONMENT VECTOR, AND ONLY arm64-LINUX NEEDS IT CAPTURED AT ALL (L4).** Every other lane
+	// asks the platform for a variable — `GetEnvironmentVariableA` on Windows, `getenv` through libSystem on
+	// macOS — and a raw static image has neither, so the one moment the vector is reachable is HERE, where
+	// the kernel left it on the stack. It rides `usesGt` because `__sched_init_procs` is the only reader
+	// (`MAXON_MAX_PROCS`), which is the same one-bit-two-tiers arrangement argv's capture uses.
+	//
+	// ⚠ **IT IS INDEPENDENT OF THE argv CAPTURE ABOVE, DELIBERATELY.** The two ride different bits — a
+	// green-thread program that never asks for its arguments carries this and not that — so it re-reads `sp`
+	// rather than depending on a register the other arm happened to leave behind.
+	if captureEnvp 'envp'
+		emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
+	end 'envp'
 
 	// Fill every EAGER managed global's `.data` slot BEFORE user code (P1.7 slice 2a) — a `static` member's
 	// is filled on first access instead (see `ModuleInit`). `__module_init` takes
@@ -227,7 +213,7 @@ function emitArm64ArgvCapture(code ByteArray, rdataRelocs RdataRelocationArray, 
 	match os 'argvLocation'
 		macos then emitArm64ArgvFromEntryRegisters(code, rdataRelocs: rdataRelocs)
 		wasi then panic("buildArm64EntryStubChunk: `wasm32-wasi` is not an arm64 lane — a WASI component has no `mrt_start` and no arm64 `.text` at all, so an `Os.wasi` reaching this stub is a target-construction bug")
-		linux then panic("buildArm64EntryStubChunk: arm64-Linux enters `_start` with argc at [sp] and argv at sp+8, and with x0/x1 architecturally UNSPECIFIED — so this capture cannot be the macOS one and `targetProvidesFacility` gives `commandLine` to arm64-macOS alone, which refuses such a program at its own source span (E3104). Reaching here means a program carrying `usesCommandLine` got past that gate on a Linux target, which is a compiler bug rather than the user-facing rejection")
+		linux then emitArm64ArgvFromEntryStack(code, rdataRelocs: rdataRelocs)
 		windows then panic("buildArm64EntryStubChunk: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes, so an `Os.windows` reaching the arm64 entry stub is a target-construction bug")
 	end 'argvLocation'
 end 'emitArm64ArgvCapture'
@@ -238,6 +224,74 @@ function emitArm64ArgvFromEntryRegisters(code ByteArray, rdataRelocs RdataReloca
 	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
 	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
 end 'emitArm64ArgvFromEntryRegisters'
+
+// ⭐⭐ **THE LINUX KERNEL PUTS THE VECTOR ON THE STACK, NOT IN REGISTERS.** `execve` enters `_start` with
+// **argc at `[sp]`, argv at `sp+8`** (the pointers themselves, NUL-terminated, with envp following) and with
+// **x0..x7 architecturally UNSPECIFIED** — so the macOS capture two lines up is not merely a different
+// spelling of this one, it would store whatever the kernel happened to leave in x0/x1. (v1 stashes from
+// x0/x1 on BOTH platforms — `Arm64Dialect.maxon:266-272` — which is a latent wrong answer on this lane and
+// is why this arm exists rather than the two sharing one sequence.)
+//
+// ⚠ **argv IS AN ADDRESS THIS STUB COMPUTES, NOT A WORD IT LOADS.** `[sp]` holds the COUNT, but `sp+8` IS
+// the vector: `argv[0]` lives there. So argc is a load and argv is an `add`.
+//
+// ⚠ **THE ENTRY `sp` IS READ INTO x17 (IP1) FIRST.** A `ldr` off SP would encode, but the `add` for
+// `sp+8` and the ADRP+ADD address pair both want an ordinary GPR, and x16 (IP0) is already the address
+// scratch `emitArm64ArgvStore` claims. x17 is the other intra-procedure-call temporary, free at process
+// entry and claimed by nothing here. The capture runs before any `bl` (see the stub), so nothing has
+// perturbed sp when this reads it.
+function emitArm64ArgvFromEntryStack(code ByteArray, rdataRelocs RdataRelocationArray)
+	let stackTop = arm64RuntimeReg(Arm64Register.x17)
+	arm64EmitMovFromSp(code, dest: stackTop)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(Arm64Register.x0), baseReg: stackTop, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitAddImmSigned(code, rd: arm64RuntimeReg(Arm64Register.x1), rn: stackTop, imm: LinuxEntryArgvOffset)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
+end 'emitArm64ArgvFromEntryStack'
+
+// ⭐⭐ **`envp` IS `argv + (argc + 1) * 8`, AND THE `+ 1` IS argv's OWN NUL TERMINATOR.** The Linux kernel
+// lays the entry stack as `[sp] = argc`, then `argc` argument pointers, then a NULL, then the environment
+// pointers, then another NULL. So relative to the entry `sp` the environment begins at `(argc + 2) * 8` —
+// one word for the count, `argc` for the vector, one for its terminator.
+//
+// ⚠ **IT IS A COMPUTED ADDRESS, NOT A WORD LOADED FROM ANYWHERE.** Nothing in the entry frame holds a
+// pointer to the environment; the only way to it is this arithmetic, which is why the capture cannot be
+// deferred to the first `getenv`-shaped call the way the other lanes' can.
+//
+// ⚠ **x17 (IP1) HOLDS THE ENTRY `sp`, AND x16 (IP0) IS `emitArm64ArgvStore`'s ADDRESS SCRATCH** — the same
+// division of the two intra-procedure-call temporaries `emitArm64ArgvFromEntryStack` makes, and for the same
+// reason: this runs before any `bl`, so nothing has perturbed sp and neither temporary is claimed.
+function emitArm64EnvpCapture(code ByteArray, rdataRelocs RdataRelocationArray, os Os)
+	match os 'envpLocation'
+		linux then emitArm64EnvpFromEntryStack(code, rdataRelocs: rdataRelocs)
+		macos then panic("buildArm64EntryStubChunk: arm64-macOS reads an environment variable through libSystem's `getenv` and captures no vector — `captureEnvp` is asked only of the Linux lane, so a `true` here is a backend wiring bug")
+		windows then panic("buildArm64EntryStubChunk: there is no arm64-Windows lane in this compiler")
+		wasi then panic("buildArm64EntryStubChunk: `wasm32-wasi` is not an arm64 lane")
+	end 'envpLocation'
+end 'emitArm64EnvpCapture'
+
+function emitArm64EnvpFromEntryStack(code ByteArray, rdataRelocs RdataRelocationArray)
+	let stackTop = arm64RuntimeReg(Arm64Register.x17)
+	let envp = arm64RuntimeReg(Arm64Register.x0)
+
+	arm64EmitMovFromSp(code, dest: stackTop)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: envp, baseReg: stackTop, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitAddImmSigned(code, rd: envp, rn: envp, imm: LinuxEntryEnvpSkippedWords)
+	arm64EmitLslImm(code, rd: envp, rn: envp, sh: LinuxEntryWordScaleBits)
+	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: envp, rn: stackTop, rm: envp)
+	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: LinuxEnvpLabel, src: Arm64Register.x0)
+end 'emitArm64EnvpFromEntryStack'
+
+// The two words between the count and the environment: the count's own slot and argv's NUL terminator.
+let LinuxEntryEnvpSkippedWords = 2 as Imm32
+
+// A word index scales to a byte offset by the machine word width, spelled as a shift because `lsl` is what
+// the instruction takes. Derived from `SpillSlotBytes`'s 8 rather than written as a 3.
+let LinuxEntryWordScaleBits = 3 as ShiftCount
+
+// Where the vector starts relative to the entry `sp`: one machine word past the count that precedes it.
+// Derived from `SpillSlotBytes` rather than written as an 8 so it says WHY it is 8.
+let LinuxEntryArgvOffset = SpillSlotBytes as Imm32
 
 // One captured register into one `.data` word.
 function emitArm64ArgvStore(code ByteArray, rdataRelocs RdataRelocationArray, label ByteArray, src Arm64Register)

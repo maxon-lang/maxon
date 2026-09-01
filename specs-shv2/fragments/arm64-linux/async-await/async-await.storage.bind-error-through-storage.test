@@ -1,0 +1,228 @@
+// Test: async-await.storage.bind-error-through-storage
+typealias Integer = int(i64.min to i64.max)
+typealias TaskPromise = Promise with (Integer, TaskError)
+typealias TaskPromiseArray = Array with TaskPromise
+
+enum TaskError implements Error
+		timedOut
+		crashed
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+		var arr = TaskPromiseArray.create()
+		arr.push(async mayFail())
+		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
+		let r = try await p otherwise (e) 'failed'
+				return match e 'why'
+						timedOut gives 7
+						crashed gives 9
+				end 'why'
+		end 'failed'
+		return r
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_num_procs@144 = i64 0
+  __sched_shutdown_flag@152 = i64 0
+  __sched_lock@160 = i64 0
+  __mrt_errno@168 = i64 0
+  __mrt_envp@176 = i64 0
+  __mrt_tls_next_key@184 = i64 0
+  __slab_arena_list@192 = i64 0
+  __slab_arena_map_l1@200 = i64 0
+  __slab_state@208 = i64 0
+}
+
+func @mayFail {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_17  ; "noyield.txt"
+    arm64.bl FilePath.init
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl File.exists
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movImm x9, 2
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __gt_promise_drop
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x0, mayFail
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+    arm64.movImm x20, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, __im_empty
+    arm64.b critsplit#20
+  __im_empty:
+    arm64.cmp x21, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_slow
+    arm64.b critsplit#21
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_get
+    arm64.movRegReg x21, x0
+    arm64.b __im_cont
+  critsplit#21:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  critsplit#20:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_18  ; "panic at async-await.storage.bind-error-through-storage.test:19: index 0 is in bounds by construction\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_vacate
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_try_await
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#5
+    arm64.b matchnext
+  matcharm#5:
+    arm64.movImm x20, 7
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#6
+    arm64.b matchdead
+  matcharm#6:
+    arm64.movImm x20, 9
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#11
+    arm64.b __rc_chk#12
+  __rc_chk#12:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#11
+    arm64.b __rc_ok#10
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_87  ; "panic at async-await.storage.bind-error-through-storage.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#10:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchdead:
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#14
+    arm64.b __rc_chk#15
+  __rc_chk#15:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#14
+    arm64.b __rc_ok#13
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_88  ; "panic at async-await.storage.bind-error-through-storage.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#13:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -1,0 +1,169 @@
+// Test: managed-directory.exists-discriminates-file-from-directory
+export enum ProbeError implements Error
+	failed
+end 'ProbeError'
+
+function writeFile(path String) throws ProbeError
+	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+		throw ProbeError.failed
+	end 'openFail'
+	try f.write("x".toByteArray().managed) otherwise 'writeFail'
+		f.close()
+		throw ProbeError.failed
+	end 'writeFail'
+	f.close()
+end 'writeFile'
+
+function main() returns ExitCode
+	let path = "test_md_plain_file.txt"
+	try writeFile(path) otherwise return 1
+	let isDir = __ManagedDirectory.exists(path.toByteArray().managed)
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise return 2
+	if isDir 'aFileIsNotADirectory'
+		return 3
+	end 'aFileIsNotADirectory'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @writeFile {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_open_write
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.leaRdata x0, __str_rec_2  ; "x"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __mf_write
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_close
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_destruct
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_close
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_destruct
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_3  ; "test_md_plain_file.txt"
+    arm64.movRegReg x0, x19
+    arm64.bl writeFile
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_exists
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_delete
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cbnz x21, aFileIsNotADirectory
+    arm64.b ifcont
+  aFileIsNotADirectory:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -101,11 +101,19 @@ import asked with three different `clockid_t`s (`clock_gettime_nsec_np`), which 
 arithmetic is exact where Windows's is not: `Arm64DarwinRuntime` reports the monotonic frequency as 1e9
 against a reading already in nanoseconds, making the ticks-to-nanos scaling the identity.
 
+⭐ **arm64-LINUX SERVES TWO OF THE FOUR, AND WHICH TWO IS DECIDED BY WHO OWNS THE ENTRY RATHER THAN
+BY WHICH CLOCK IT IS.** The calendar and the thread-CPU read are `clock_gettime` with two `clockid_t`s
+and lower there; the two MONOTONIC readers do not, because both reach `__gt_now_ns`, a SCHEDULER entry
+that lands with the green-thread floor. So a case that reads only the calendar or only the thread cost
+names that lane below, and a case that reads the monotonic clock — or that sleeps — does not.
+
 For `threadCpuTicks` the refusal is stronger than *"not yet"*, and it is the SHAPE argument the
 machine query makes one family over: `QueryThreadCycleTime` answers TSC ticks through a `ULONG64*`
 while `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` answers nanoseconds through a `timespec`, so a POSIX
 lane is a rung rather than a lowering — and WASI exposes no per-thread CPU clock at all. A lowering
-there could only fabricate a cost, which is a silent wrong answer rather than a missing feature.
+there could only fabricate a cost, which is a silent wrong answer rather than a missing feature. Both
+POSIX lanes have now paid that rung, in nanoseconds, and nothing converts between their unit and
+Windows's: `__thread_cpu_ticks` promises only that two readings may be SUBTRACTED.
 
 ⚠ **ITS BAND IS `__thread_`, DELIBERATELY NOT `__clock_`**, and the split is about COST rather than
 about targets: the two reach different kernel32 imports, and shv2 emits the optional trailing import
@@ -123,7 +131,7 @@ wasm32-wasi. See `async-scheduler.md`'s *Targets* section for the one statement 
 ## Tests
 
 <!-- test: builtins-clock.nanos-monotonic -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A monotonic clock never moves backwards: each successive reading is `>=` the previous one. The
 epoch is platform-defined, so only ordering is asserted, never a magnitude.
 ```maxon
@@ -146,7 +154,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.nanos-advances -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The clock is LIVE, not a constant folded in at compile time: busy-work between two readings shows
 up as a positive delta, and the delta is in the units the intrinsic claims (a millisecond of
 spinning is at least 1,000 nanoseconds by a wide margin, which raw QPC ticks — ~10,000 for a
@@ -171,7 +179,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.ms-tracks-nanos -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 `currentTimeMs()` IS `currentTimeNanos()` scaled: two readings taken back to back must agree once
 the nanosecond one is divided by 1,000,000. The window is generous (a scheduler preemption between
 the two reads is legal) but tiny compared with any unit error — a millisecond reading that was
@@ -196,7 +204,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.ms-resolves-sub-tick -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **The test that pins the ruling above.** It walks a tight loop, records the SMALLEST non-zero delta
 between two successive `currentTimeMs()` readings — which is precisely the source counter's period,
 expressed in milliseconds — and asserts it is 1.
@@ -232,7 +240,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.unix-seconds-is-a-calendar-time -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 `currentUnixTimeSeconds()` returns a real calendar time, and the bounds are the whole test.
 
 The LOWER bound catches the regression it exists for: a wall clock silently wired to the monotonic
@@ -260,7 +268,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.unix-seconds-advances -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The wall clock is live, not a constant read once at startup. Sleeping 1.1 s must cross at least one
 whole-second boundary no matter where in the current second the first reading landed.
 ```maxon
@@ -279,7 +287,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.wall-clock-is-not-the-monotonic-clock -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The two clocks are DIFFERENT instruments, and this is what says so: seconds-since-1970 is four
 orders of magnitude larger than seconds-since-boot on any machine that has not been running since
 1970, so a wall clock wired to the monotonic source collapses the gap.
@@ -387,7 +395,7 @@ error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: i
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-monotonic -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Three reads in one program never go backwards. A thread's consumed CPU time cannot decrease, so
 this is what a capture of the wrong register, a sign-extension of a 32-bit half or a stale value
 left in the out-param word would fail.
@@ -411,7 +419,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-advances-under-work -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Two million additions move it. The direct statement of the contract, and the property a lowering
 that never called the OS — answering the `.data` scratch word's zero initializer forever — fails
 first.
@@ -438,7 +446,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-is-not-wall-time -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE DISCRIMINATOR, AND THE WHOLE REASON THIS INTRINSIC EXISTS.** The program measures its own CPU
 across two intervals of comparable WALL length — one spent RUNNING, one spent asleep — and requires
 the running one to cost multiples more. A wall clock, which is the wrong lowering somebody would

@@ -1,0 +1,35 @@
+// Test: first-class-function.error.generic-instance-returned-through-alias-refuses-a-different-instance-either-order
+
+typealias Integer = int(i64.min to i64.max)
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+typealias FieldsBuilder = function(Integer) returns FieldArray
+
+function buildSmalls(_ Integer) returns SmallArray
+	var out = SmallArray.create()
+	out.push(3)
+	return out
+end 'buildSmalls'
+
+function apply(f FieldsBuilder) returns Integer
+	let produced = f(7)
+	let first = try produced.get(0) otherwise panic("apply: empty array")
+	return first.v
+end 'apply'
+
+function main() returns ExitCode
+	return apply(buildSmalls) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'

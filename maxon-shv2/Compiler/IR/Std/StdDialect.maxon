@@ -1396,15 +1396,18 @@ export union StdOp
 	//
 	// ⚠ **THAT IS NOT A UNIVERSAL PROPERTY, AND THE LINUX LANES ARE THE ONES IT BREAKS ON.** POSIX splits:
 	// MAC2 MEASURED Darwin's half and landed it, but LINUX scopes `nice` to the THREAD — a thread already
-	// running keeps its old value, and a new one inherits only its CREATOR's. ⇒ **A Linux lane that lowers
-	// `osEnterBackgroundPriority` owes work HERE as well**, making the M adopt the priority at its own birth
-	// rather than assuming the process call reached it. It cannot forget: that lane must delete the refusal
-	// in `StdToArm64Conversion.lowerOsEnterBackgroundPriority`'s `syscall` arm / `StdToWasm`, whose panic text
-	// names this obligation.
+	// running keeps its old value, and a new one inherits only its CREATOR's. ⭐ **HALF OF THAT IS PAID BY
+	// THE KERNEL AND NEEDS NOTHING EMITTED HERE**: `clone` gives the child its creator's nice value at birth,
+	// so an M started AFTER `__proc_bg_priority` is already at background priority. ⛔ **The half that is NOT
+	// paid is an M that was ALREADY RUNNING when the call happened**, and closing it needs each M's tid
+	// recorded where the priority lowering can walk them. The two sites that would change are the
+	// `processPriority` row in `TargetFacilities.targetProvidesFacility` and
+	// `StdToArm64Conversion.lowerOsEnterBackgroundPriorityLinux`, and both say so.
 	//
-	// ⚠ shv2 reaches neither site today — `emitSchedWakeOrSpawn` has had no producer since EC10, and
-	// `buildIoInit` is lazy — so this is a contract written down BEFORE it can be tested, deliberately, at
-	// the seam that will still be the only one the day `spawn` gives the tier its producer back.
+	// ⚠ **THE WORKER-M SITE IS NOW REACHED, WHICH THIS NOTE SAID IT WAS NOT.** It read *"shv2 reaches neither
+	// site today — `emitSchedWakeOrSpawn` has had no producer since EC10"*; `spawn` publishes a green thread,
+	// the publish doors' green arms wake or spawn, and every M in every green-threaded program is minted
+	// through this op. `buildIoInit`'s completion thread is still lazy and still Windows-only.
 	osThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 	// `osLockInit(lockPtr)` = `InitializeCriticalSection(lockPtr)`. One VALUE operand (the CRITICAL_SECTION region), no result.
 	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
@@ -2407,12 +2410,12 @@ export union StdOp
 	// 10)` states an ABSOLUTE value, which is what makes the "set" idempotent and what
 	// `is-stable-across-calls` (both spellings) is written to test.
 	//
-	// ⭐ Which targets lower it is `TargetFacilities.targetProvidesFacility`'s `processInfo` row and is NOT
-	// counted here; the refusal elsewhere needs no `SemanticCheck` edit, because its entry point is
-	// `ProcessRuntime.ProcessBackgroundPriorityName`, which wears the `__proc_` prefix the roster already
-	// keys on. That is the promise `isProcessRuntimeCallee`'s header makes — a third entry point is covered
-	// by construction — being collected for the second time. Full call-barrier metadata: it IS two indirect
-	// calls once lowered, on both lanes.
+	// ⭐ Which targets lower it is `TargetFacilities.targetProvidesFacility`'s `processPriority` row — its
+	// OWN row since L3, and no longer `processInfo`'s: arm64-linux serves the two identity reads in that band
+	// and cannot serve this WRITE, whose POSIX scope is the calling thread there and the process on Darwin.
+	// The refusal still needs no `SemanticCheck` edit; `calleeHostFacility` names
+	// `ProcessRuntime.ProcessBackgroundPriorityName` explicitly, ahead of the `__proc_` band the other two
+	// reach by prefix. Full call-barrier metadata: it IS two indirect calls once lowered, on both lanes.
 	osEnterBackgroundPriority(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osEnterBackgroundPriority`, per the band-append
 	// invariant: a mid-band insertion would silently re-point every `to`-range arm that spans this region.

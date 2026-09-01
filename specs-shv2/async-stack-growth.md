@@ -44,7 +44,7 @@ statement of it.** `__gt_morestack` is hand-written x64 assembly and relocates a
 ## Tests
 
 <!-- test: async-stack-growth.deep-recursion -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 `async deepRecurse(200)` recurses ~200 frames deep — far past the 2 KB seed stack, forcing several
 grow-and-relocate rounds — and the awaited sum is exact, proving the relocated stack carried every frame's
 partial result correctly.
@@ -70,7 +70,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-stack-growth.multi-growth -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A deeper recursion (~400 frames) forces MORE grow-and-relocate rounds and a longer saved-rbp chain to walk at
 the deepest growth — the stress case for the chain walk across multiple relocations. The awaited sum (400) is
 exact; `main` returns it less 250 to fit the exit code.
@@ -96,7 +96,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-stack-growth.grow-across-yield -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A thread `sleep`s (parks on the timer, context-switches back to the driver), RESUMES, and only THEN recurses
 deep — so the growth happens on a stack the scheduler switched out and back in. The awaited sum is exact,
 proving `gt.sp`/`gt.fp` and the saved-rbp chain are consistent across a yield followed by a relocation.
@@ -126,7 +126,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-stack-growth.grow-then-complete-then-respawn -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A thread grows, completes (its grown stack is released), then a SECOND thread spawns on a fresh 2 KB seed and
 grows in turn — proving free-on-complete leaves no corruption for the next spawn. Both awaited sums are exact.
 ```maxon

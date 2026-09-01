@@ -3583,12 +3583,32 @@ end 'spawnOneRun'
 // ⚠ The variable is spelled from `SchedRuntime.MaxProcsEnvName` — the same constant the emitted scheduler
 // reads it back through — because a marker set under one name and read under another is accepted, ignored
 // and silent.
+//
+// ⛔⛔ **AND A SECOND VARIABLE IS SET, BECAUSE ON ONE LANE THE CHILD THIS RUNNER SPAWNS IS NOT THE PROGRAM.**
+// An `arm64-linux` case runs as `orb run -m <machine> <exe>`: the environment below reaches ORB, and `orb
+// run` does NOT carry the host's environment into the Linux machine — it forwards exactly the variables
+// named in `ORBENV` (`orb run --help`: *"To pass environment variables, set ORBENV to a colon-separated
+// list of variables"*). Without this line the marker was set, accepted and silently DROPPED at the VM
+// boundary: MEASURED on this host, one program that prints `__Builtins.schedMaxActiveWorkers()` —
+// `MAXON_MAX_PROCS=1 orb run …` reached the guest as an EMPTY variable and started **7** worker Ms, while
+// `ORBENV=MAXON_MAX_PROCS MAXON_MAX_PROCS=1 orb run …` started **1**. Every `<!-- procs: N -->` case on that
+// lane was running unpinned, which is the opposite of what the marker exists to guarantee.
+//
+// ⚠ **IT IS SET FOR EVERY PINNED RUN AND NOT ONLY THE `orb` ONES, AND THAT IS THE POINT.** A host binary
+// and a wasm module never read `ORBENV`, so the variable costs them nothing — and asking the RUNNER here
+// would put "which variable must cross" in two places, where the whole reason it is spelled from
+// `MaxProcsEnvName` is that it must be in one.
 function runEnvironmentFor(procs SpecProcs) returns Environment
 	return match procs 'p'
 		unset gives Environment.inherit
-		pinned(count) gives Environment.inheritUpdating([String.from(MaxProcsEnvName): "{count}"])
+		pinned(count) gives Environment.inheritUpdating([String.from(MaxProcsEnvName): "{count}", OrbForwardedEnvName: String.from(MaxProcsEnvName)])
 	end 'p'
 end 'runEnvironmentFor'
+
+// `orb run`'s own forwarding list: the names — colon-separated, were there ever more than one — that cross
+// from the host's environment into the Linux machine. See `runEnvironmentFor` for the measurement that
+// nothing else does.
+let OrbForwardedEnvName = "ORBENV"
 
 // Whether the one `wsl` entry happened at all. A launch that never got off the ground is not one test's
 // failure — every test the batch was carrying has to be told, in its own record, which is what keeps

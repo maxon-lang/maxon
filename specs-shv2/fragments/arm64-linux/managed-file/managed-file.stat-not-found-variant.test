@@ -1,0 +1,85 @@
+// Test: managed-file.stat-not-found-variant
+function main() returns ExitCode
+	var result = 0
+	try __ManagedFile.stat("nonexistent_phaseB_stat_xyz.txt".toByteArray().managed) otherwise (e) 'h'
+		match e 'k'
+			notFound then result = 42
+			default panic("expected notFound")
+		end 'k'
+	end 'h'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.leaRdata x0, __str_rec_1  ; "nonexistent_phaseB_stat_xyz.txt"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mf_stat
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.movImm x19, 42
+    arm64.b matchcont
+  matchcont:
+    arm64.b trycont
+  matchdefault:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at managed-file.stat-not-found-variant.test:7: expected notFound\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at managed-file.stat-not-found-variant.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -79,20 +79,42 @@ let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0
 // this machine's SDK header (`MacOSX.sdk/usr/include/unistd.h:283`) rather than from memory. ⚠ It is
 // DARWIN-NUMBERED: Linux spells the same parameter 84 — and reaches it through a libc FUNCTION rather than
 // a syscall — so the two lanes share neither the call nor the number. That is why `OsImportSlot.sysconf`
-// carries no Linux route, why `targetProvidesFacility` gives `cpuCount` to arm64-macOS alone, and why
-// `lowerOsCpuCount` asks the route oracle before emitting an import call. Those three say what they DO;
-// the number and its provenance live here, once.
+// carries no Linux route and why `lowerOsCpuCount` asks the route oracle before emitting an import call:
+// the Linux answer is not this constant through another door, it is `sched_getaffinity` and a popcount in a
+// chunk (`Arm64LinuxRuntime.buildArm64LinuxCpuCountChunk`). Those two say what they DO; the number and its
+// provenance live here, once.
 let DarwinScNprocessorsOnln = 58
 
 // ⭐ **THE POSIX PRIORITY TRIPLE, AND THE ONE PLACE IT IS WRITTEN.** `setpriority(which, who, value)` /
 // `getpriority(which, who)`: `PRIO_PROCESS` selects the PROCESS scope (read from this host's
-// `sys/resource.h`, not from memory) and `who = 0` names the calling one. ⚠ Darwin scopes a nice value to
-// the PROCESS, which is what discharges `StdOp.osThreadCreate`'s inheritance contract on this lane with
-// nothing emitted at a thread's birth; LINUX scopes it to the THREAD, so a Linux lane owes real work there
-// as well as here. That asymmetry is why `targetProvidesFacility` gives `processInfo` to arm64-macOS alone
-// and why `lowerOsEnterBackgroundPriority` asks the route oracle rather than assuming POSIX is one thing.
+// `sys/resource.h`, not from memory) and `who = 0` names the calling one — and MEASURED to be 0 on an aarch64
+// Linux guest too (`bits/resource.h`), which is why one pair of constants serves both arms.
+//
+// ⚠⚠ **THE TWO OSes DISAGREE ABOUT WHAT `PRIO_PROCESS` SCOPES TO, AND THE NAME HIDES IT.** Darwin scopes a
+// nice value to the PROCESS, which discharges `StdOp.osThreadCreate`'s inheritance contract there with
+// nothing emitted at a thread's birth. LINUX scopes it to the calling THREAD — `who` is a TID, not a PID
+// (MEASURED: one thread at nice 15 while its sibling sat at 10, same process, simultaneously). That is why
+// `lowerOsEnterBackgroundPriority` asks the route oracle rather than assuming POSIX is one thing, and why
+// `processPriority` is its OWN row in `targetProvidesFacility` — arm64-linux served the rest of the `__proc_`
+// band a whole rung before it could serve this one.
+//
+// ⚠ On arm64-linux the disagreement HAS a consequence now that the lane starts worker Ms, and the consequence
+// is bounded rather than absent: `clone` inherits its creator's nice value at birth, so every M started after
+// the call runs at the priority asked for, and only an M that already existed keeps the default. See
+// `lowerOsEnterBackgroundPriorityLinux`, and the `processPriority` row in `targetProvidesFacility`.
 let PosixPrioProcess = 0
 let PosixPriorityWhoIsSelf = 0
+
+// ⭐⭐ **`getpriority`'s SYSCALL DOES NOT ANSWER A NICE VALUE — IT ANSWERS `20 - nice`.** A syscall reports
+// failure as a small negative number, and a nice value is legitimately negative, so the kernel biases the
+// answer into a non-negative range and every libc subtracts the bias back off. `lowerOsEnterBackgroundPriorityLinux`
+// is that libc. ⚠ The macOS lane needs no such fold because it calls the LIBRARY function, which has already
+// done it — this is a raw-syscall fact, which is why it lives beside the numbers and not beside the nice
+// value below.
+//
+// ⚠ **IT WOULD HAVE HIDDEN ITSELF AT EXACTLY THIS NICE VALUE:** `20 - 10` is 10, so a lowering that forgot
+// the fold still answers 10 for the one value the specs pin, and is wrong for every other.
+let LinuxGetPriorityBias = 20
 
 // The nice value background work runs at. ⚠ NOT 19, the maximum, for the reason Windows does not use
 // `IDLE_PRIORITY_CLASS`: a starve long enough to trip a caller's timeout is reported as a harness bug
@@ -167,7 +189,7 @@ let Arm64Scratch = Arm64Register.x16
 // that compare would read as an ordinary zero rather than as the state it means.
 let TlsUninitialisedSlotOffset = 0 as Imm32
 
-// ⭐ The message `osCancelIo` aborts with — see `lowerDarwinRuntimeAbort` for why a runtime abort is the
+// ⭐ The message `osCancelIo` aborts with — see `lowerRuntimeAbort` for why a runtime abort is the
 // honest lowering of an op that the Std tier builds unconditionally and this lane can never execute.
 //
 // ⚠ **THIS CONSTANT USED TO SERVE `osWaitHandles`, WHOSE ABORT MAC8 REPLACED WITH A REAL WAIT.** That arm's
@@ -732,14 +754,14 @@ type StdToArm64Lowering
 			// separates them on Windows — `bInheritHandles` — has no POSIX twin: `POSIX_SPAWN_CLOEXEC_DEFAULT`
 			// plus the file actions decide what crosses the exec, whichever op asked.
 			osProcessSpawn(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
-			osProcessExitCode(handleId, codePtrId) then self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinProcExitCodeName, args: twoArgs(handleId, second: codePtrId), opName: "osProcessExitCode")
+			osProcessExitCode(handleId, codePtrId) then self.emitHostChunkCall(dstRef, chunk: HostProcExitCodeName, args: twoArgs(handleId, second: codePtrId))
 			// ⭐⭐ **MAC3: THE THREE WAIT/HANDLE OPS DO LOWER HERE, AND THEY HAD TO — they are STATICALLY
 			// REACHABLE in a pure-`async` program.** The netpoll's process arm and `__gt_proc_check` sit on
 			// paths the dead-function prune keeps, so the isel sees them even though the proc store they read
 			// is provably empty on a lane where nothing can spawn a child. `osWaitHandle` is exercised for
 			// real, by the worker park and the join; the other two are lowered so the compile succeeds and are
 			// never executed.
-			osWaitHandles(handlesBase, countId, timeoutMsId) then self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinWaitAnyName, args: threeArgs(handlesBase, second: countId, third: timeoutMsId), opName: "osWaitHandles")
+			osWaitHandles(handlesBase, countId, timeoutMsId) then self.emitHostChunkCall(dstRef, chunk: HostWaitAnyName, args: threeArgs(handlesBase, second: countId, third: timeoutMsId))
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstRef: dstRef)
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstRef: dstRef)
 			// F1a + F1c: the four PAGE-LIFECYCLE ops all lower here — `munmap`, `madvise`, and two spellings of
@@ -763,7 +785,7 @@ type StdToArm64Lowering
 			// ⭐ **MAC8: A PIPE IS A PIPE; A COMPLETION PORT IS NOT.** `osPipeCreate`'s name, security
 			// attributes and port operands are Windows shapes with nothing to bind to here — see
 			// `Arm64DarwinRuntime.buildArm64DarwinPipeChunk` — so only the two out-params are passed on.
-			osPipeCreate(_, _, _, readPtrId, writePtrId) then self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinPipeName, args: twoArgs(readPtrId, second: writePtrId), opName: "osPipeCreate")
+			osPipeCreate(_, _, _, readPtrId, writePtrId) then self.emitHostChunkCall(dstRef, chunk: HostPipeName, args: twoArgs(readPtrId, second: writePtrId))
 			// ⛔ **`osIocpCreate` CANNOT BE EMITTED ON THIS LANE, AND THAT IS A BUILD-TIME FACT RATHER THAN A
 			// HOPE.** Its ONE producer is `GtRuntime.buildIoInit`, which `installGtRuntime` builds only under
 			// the `completionPort` half of `IoCompletionShape` — and this lane answers `inlineCompletion`, where
@@ -780,8 +802,8 @@ type StdToArm64Lowering
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstRef: dstRef)
 			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstRef: dstRef)
 			osLockInit(lockPtrId) then self.lowerOsLockInit(lockPtrId, dstRef: dstRef)
-			osLockEnter(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexLock, dstRef: dstRef)
-			osLockLeave(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexUnlock, dstRef: dstRef)
+			osLockEnter(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexLock, chunk: LinuxLockEnterName, dstRef: dstRef)
+			osLockLeave(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexUnlock, chunk: LinuxLockLeaveName, dstRef: dstRef)
 			// ⭐⭐ **MAC8: AN "OVERLAPPED" READ ON THIS LANE IS A PLAIN `read`, AND ITS OVERLAPPED OPERAND IS
 			// DEAD.** The op's contract is *"answer TRUE with the count in `bytesOutPtr` if the read completed
 			// SYNCHRONOUSLY, FALSE with `ERROR_IO_PENDING` if it is in flight"*. A blocking descriptor read
@@ -795,19 +817,20 @@ type StdToArm64Lowering
 			// EAGAIN would latch a false end-of-stream. The cost is that the streaming line reader blocks its M
 			// until the child writes or exits; the COLLECT loop never blocks, because `osPipePeek` has already
 			// said bytes are there. Lifting that would need a kqueue netpoll to park on, which is its own rung.
-			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, _) then self.lowerDarwinChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), chunk: DarwinReadFileName, dstRef: dstRef)
+			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, _) then self.lowerHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), chunk: HostReadFileName, dstRef: dstRef)
 			// ⭐⭐ **MAC4: `GetLastError` SITS INSIDE THE IOCP BAND BY DECLARATION ORDER AND BELONGS TO THE
 			// FILESYSTEM.** It is the op every failing file and directory call is classified through, so it
 			// lands here with them rather than with the overlapped reads it was declared beside.
-			osLastError(resultId) then self.lowerDarwinChunkValue(resultId, args: ValueIdArray.create(), chunk: DarwinLastErrorName, dstRef: dstRef)
+			osLastError(resultId) then self.lowerHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostLastErrorName, dstRef: dstRef)
 			osProcessSpawnInherit(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
 			// ⛔ **`osCancelIo` IS STATICALLY REACHABLE AND DYNAMICALLY UNREACHABLE HERE, so it is a RUNTIME
-			// abort rather than a compile-time one** — `lowerOsWaitHandles`' old shape, and the same argument.
+			// abort rather than a compile-time one** — `osThreadCreate`'s shape on the Linux lane, and the same
+			// argument.
 			// `__gt_promise_drop`'s cancel arm is built whenever the pipe substrate is, but it runs only when
 			// the dropped promise's green thread has `ioParked` set, and nothing sets that on a lane where
 			// every read completes in its caller. A silent no-op would turn "this promise was dropped mid-read"
 			// into a read nobody cancelled and a handle nobody closed.
-			osCancelIo then self.lowerDarwinRuntimeAbort(dstRef, message: Arm64NoCancelIoMessage)
+			osCancelIo then self.lowerRuntimeAbort(dstRef, message: Arm64NoCancelIoMessage)
 			// ⭐ MAC2: the PROCESS ID. It sits inside the IOCP band because the pipe-name uniquifier minted it
 			// (`GtRuntime.emitGtPipeNameUniquifier`), but the question it asks is the OS's and not the
 			// scheduler's — `getpid()` here, `GetCurrentProcessId()` there.
@@ -815,10 +838,10 @@ type StdToArm64Lowering
 			// MAC8: the same `pipe` as its inbound twin. Win32 needs two calls because one end must be a
 			// SYNCHRONOUS handle and the other an overlapped one; POSIX makes no such distinction, so the two
 			// ops share one chunk and differ only in which out-param is which end.
-			osPipeCreateOutbound(_, _, childReadPtrId, parentWritePtrId) then self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinPipeName, args: twoArgs(childReadPtrId, second: parentWritePtrId), opName: "osPipeCreateOutbound")
+			osPipeCreateOutbound(_, _, childReadPtrId, parentWritePtrId) then self.emitHostChunkCall(dstRef, chunk: HostPipeName, args: twoArgs(childReadPtrId, second: parentWritePtrId))
 			// ⭐ MAC4: `WriteFile` is a `write` here, and it is the SAME chunk shape `osReadFile` takes one band
 			// down — a descriptor, a buffer, a length and the out-param the count is published through.
-			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerDarwinChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: DarwinWriteFileName, dstRef: dstRef)
+			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: HostWriteFileName, dstRef: dstRef)
 			// The `__Builtins` WALL clock reads `GetSystemTimeAsFileTime`, a Win32 import with no arm64
 			// counterpart at this rung; SemanticCheck refuses such a program at its source span (E3104), so
 			// this is the backstop for a compiler bug rather than the user-facing rejection.
@@ -828,21 +851,21 @@ type StdToArm64Lowering
 			// this lane rather than deferred. Two shapes: the three that are a bare libSystem call with nothing
 			// to outlive it lower INLINE, and the rest branch to a chunk in `Arm64DarwinRuntime`, for that
 			// file's structural reason (an out-param must survive a call that answers in a register).
-			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.open, argument: DarwinOpenReadOnly, opName: "osFileOpenRead", dstRef: dstRef)
+			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.open, darwinArgument: PosixOpenReadOnly, linuxFlags: LinuxOpenReadOnlyFlags, linuxMode: PosixOpenReadOnly as MachineWord, dstRef: dstRef)
 			osFileClose(handleId) then self.lowerOsFileClose(handleId, dstRef: dstRef)
-			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerDarwinChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: DarwinReadFileName, dstRef: dstRef)
-			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.creat, argument: DarwinCreateFileMode, opName: "osFileOpenWrite", dstRef: dstRef)
-			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerDarwinChunkValue(resultId, args: twoArgs(handleId, second: sizeOutPtrId), chunk: DarwinFileSizeName, dstRef: dstRef)
-			osFileDelete(resultId, pathPtrId) then self.lowerDarwinChunkValue(resultId, args: argsOf(pathPtrId), chunk: DarwinFileDeleteName, dstRef: dstRef)
-			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerDarwinChunkValue(resultId, args: twoArgs(oldPathPtrId, second: newPathPtrId), chunk: DarwinFileRenameName, dstRef: dstRef)
-			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerDarwinChunkValue(resultId, args: twoArgs(pathPtrId, second: findDataPtrId), chunk: DarwinDirFindFirstName, dstRef: dstRef)
-			osFileFindClose(handleId) then self.emitDarwinChunkCall(dstRef, chunk: DarwinDirFindCloseName, args: argsOf(handleId))
-			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerDarwinChunkValue(resultId, args: twoArgs(handleId, second: findDataPtrId), chunk: DarwinDirFindNextName, dstRef: dstRef)
-			osDirCreate(resultId, pathPtrId) then self.lowerDarwinChunkValue(resultId, args: argsOf(pathPtrId), chunk: DarwinDirCreateName, dstRef: dstRef)
+			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: HostReadFileName, dstRef: dstRef)
+			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.creat, darwinArgument: PosixCreateFileMode, linuxFlags: LinuxOpenCreateTruncateFlags, linuxMode: PosixCreateFileMode as MachineWord, dstRef: dstRef)
+			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(handleId, second: sizeOutPtrId), chunk: HostFileSizeName, dstRef: dstRef)
+			osFileDelete(resultId, pathPtrId) then self.lowerHostChunkValue(resultId, args: argsOf(pathPtrId), chunk: HostFileDeleteName, dstRef: dstRef)
+			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(oldPathPtrId, second: newPathPtrId), chunk: HostFileRenameName, dstRef: dstRef)
+			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(pathPtrId, second: findDataPtrId), chunk: HostDirFindFirstName, dstRef: dstRef)
+			osFileFindClose(handleId) then self.emitHostChunkCall(dstRef, chunk: HostDirFindCloseName, args: argsOf(handleId))
+			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(handleId, second: findDataPtrId), chunk: HostDirFindNextName, dstRef: dstRef)
+			osDirCreate(resultId, pathPtrId) then self.lowerHostChunkValue(resultId, args: argsOf(pathPtrId), chunk: HostDirCreateName, dstRef: dstRef)
 			// ⚠ **THE OP'S FIELD ORDER IS NOT THE C ONE**, exactly as `lowerOsExecutablePath` records for its
 			// twin: the op reads `(result, bufLen, bufPtr)` and `getcwd` takes the BUFFER first.
-			osDirCurrentPath(resultId, bufLenId, bufPtrId) then self.lowerDarwinChunkValue(resultId, args: twoArgs(bufPtrId, second: bufLenId), chunk: DarwinDirCurrentPathName, dstRef: dstRef)
-			osFileAttributes(resultId, pathPtrId) then self.lowerDarwinChunkValue(resultId, args: argsOf(pathPtrId), chunk: DarwinFileAttributesName, dstRef: dstRef)
+			osDirCurrentPath(resultId, bufLenId, bufPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(bufPtrId, second: bufLenId), chunk: HostDirCurrentPathName, dstRef: dstRef)
+			osFileAttributes(resultId, pathPtrId) then self.lowerHostChunkValue(resultId, args: argsOf(pathPtrId), chunk: HostFileAttributesName, dstRef: dstRef)
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstRef: dstRef)
 			// The command line is x64-windows only: `GetCommandLineA` is a Win32 import, and macOS hands argv to
 			// `mrt_start` in x0/x1 instead — a DIFFERENT SHAPE (a pre-split vector, not one string to split), so a
@@ -883,7 +906,7 @@ type StdToArm64Lowering
 			// MAC8: `GetTickCount64` — the same `CLOCK_UPTIME_RAW` the scheduler's own clock reads, in
 			// milliseconds. It sits in the DebugStream band by declaration order and belongs to the subprocess
 			// family, whose deadlines are the only thing that measures with it.
-			osTickCountMs(resultId) then self.lowerDarwinSchedulerChunkValue(resultId, args: ValueIdArray.create(), chunk: DarwinTickMsName, opName: "osTickCountMs", dstRef: dstRef)
+			osTickCountMs(resultId) then self.lowerHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostTickMsName, dstRef: dstRef)
 			// ⛔ The four attached-subprocess host primitives are x64-windows only on the same terms as the
 			// spawn/wait/pipe band above, and `SemanticCheck.calleeNeedsWin32Substrate` refuses a program that
 			// reaches one at its own source span (E3104) — so this is the backstop for a compiler bug that got
@@ -895,13 +918,13 @@ type StdToArm64Lowering
 			// make, and marking one would be marking it for a mechanism this lane does not use. It is a stated
 			// no-op rather than a silent one: an op whose whole meaning is discharged by another op's flag.
 			osHandleSetInherit then break 'lower'
-			osPipePeek(resultId, handleId, availPtrId) then self.lowerDarwinSchedulerChunkValue(resultId, args: twoArgs(handleId, second: availPtrId), chunk: DarwinPipePeekName, opName: "osPipePeek", dstRef: dstRef)
+			osPipePeek(resultId, handleId, availPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(handleId, second: availPtrId), chunk: HostPipePeekName, dstRef: dstRef)
 			// ⭐ MAC3: the ENVIRONMENT READ sits inside the attached-subprocess band by declaration order and is
 			// not a subprocess op at all — `__sched_init_procs` reads `MAXON_MAX_PROCS` through it on every
 			// green-thread program. `getenv` answers a POINTER where `GetEnvironmentVariableA` fills a buffer,
 			// so the copy is the chunk's work; see `buildArm64DarwinEnvReadChunk`.
 			osEnvRead(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsEnvRead(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstRef: dstRef)
-			osProcessTerminate(handleId, exitCodeId) then self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinProcTerminateName, args: twoArgs(handleId, second: exitCodeId), opName: "osProcessTerminate")
+			osProcessTerminate(handleId, exitCodeId) then self.emitHostChunkCall(dstRef, chunk: HostProcTerminateName, args: twoArgs(handleId, second: exitCodeId))
 			osSocketStartup to osSocketClose then panic("lowerStdToArm64: the socket host primitives are x64-windows only — `ws2_32` is a Win32 library, and SemanticCheck refuses such a program at its own source span (E3104), so reaching here is a compiler bug that got one past that gate rather than the user-facing rejection")
 			// ⭐ The MACHINE query: `GetActiveProcessorCount` on Windows, `sysconf(_SC_NPROCESSORS_ONLN)`
 			// here. Two APIs with two failure conventions and one question — see `lowerOsCpuCount`.
@@ -940,18 +963,19 @@ type StdToArm64Lowering
 			// MAC4: `openWriteExecutable` is `openWrite` with the execute bits — the same `creat`, a different
 			// mode. On Windows the two are one `CreateFileA`; here the mode is the whole difference, which is
 			// why they are two ops (`StdOp.osFileOpenWriteExecutable`).
-			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.creat, argument: DarwinCreateExecutableFileMode, opName: "osFileOpenWriteExecutable", dstRef: dstRef)
+			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.creat, darwinArgument: PosixCreateExecutableFileMode, linuxFlags: LinuxOpenCreateTruncateFlags, linuxMode: PosixCreateExecutableFileMode as MachineWord, dstRef: dstRef)
 			// ⭐ **`osEnvBlock` IS SERVED HERE, AND THE PANIC THAT USED TO STAND IN ITS PLACE RESTED ON A FALSE
 			// PREMISE.** It claimed the whole attached-subprocess substrate was refused on this lane; the
 			// facility table says `subprocess gives true` for arm64-macOS, so `buildSubpEnvEntry` was built,
 			// nothing dropped it, and every program that so much as named `runConfiguration` panicked the
 			// compiler — with the DEFAULT `Environment.inherit`, which reads no environment at all.
 			osEnvBlock(resultId) then self.lowerOsEnvBlock(resultId, dstRef: dstRef)
-			// ⛔ `osEnvBlockFree` HAS NO COUNTERPART HERE, AND ITS ABSENCE IS A FACT ABOUT `environ` RATHER THAN
-			// A GAP: this lane answers `EnvironmentSnapshotShape.pointerVector`, whose producer emits no free
-			// because the vector is the live table and not a copy. A no-op stub would be the same claim written
-			// where nothing can check it; this panic is the backstop for a producer that starts emitting one.
-			osEnvBlockFree then panic("lowerStdToArm64: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and this lane has none — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for macOS, whose `__gt_subp_env_entry` body indexes the live `environ` and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
+			// ⛔ `osEnvBlockFree` HAS NO COUNTERPART ON EITHER POSIX LANE, AND ITS ABSENCE IS A FACT ABOUT
+			// `environ` RATHER THAN A GAP: both answer `EnvironmentSnapshotShape.pointerVector`, whose producer
+			// emits no free because the vector is the live table and not a copy. A no-op stub would be the same
+			// claim written where nothing can check it; this panic is the backstop for a producer that starts
+			// emitting one.
+			osEnvBlockFree then panic("lowerStdToArm64: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1755,67 +1779,68 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsAllocPages'
 
-	// ⭐⭐ **`osCpuCount(result)` ⇒ `sysconf(_SC_NPROCESSORS_ONLN)`** — one immediate into x0, one GOT call,
-	// and the count read back out of x0. NO CHUNK, and that is the whole difference from the four host-surface
-	// lowerings below: those are out-param shaped, so the caller's pointer must survive a call that answers in
-	// a register; this op has no operands and no out-param (`StdOp.osCpuCount` explains why it takes no
-	// buffer), so the answer never has to outlive anything and an ordinary inline lowering suffices — exactly
-	// `lowerOsExit`'s shape with a result. The `_SC_` parameter number is `DarwinScNprocessorsOnln`, which
-	// carries why this lane's number is not the other lane's.
+	// ⭐⭐ **`osCpuCount(result)` — ONE CALL PER LANE, AND THE TWO LANES DISAGREE ABOUT WHETHER IT NEEDS A
+	// FRAME.** macOS asks `sysconf(_SC_NPROCESSORS_ONLN)`: one immediate into x0, one GOT call, the count out
+	// of x0, and no chunk — the op has no operands and no out-param (`StdOp.osCpuCount` explains why it takes
+	// no buffer), so nothing has to outlive the call. Linux has no `sysconf` to call at all (it is a libc
+	// FUNCTION there, and this lane links no libc), so its answer is `sched_getaffinity` into a 128-byte
+	// cpu-mask buffer and a POPCOUNT over it — a buffer and a loop, which is a chunk by the same structural
+	// rule the host-surface lowerings below follow (`Arm64LinuxRuntime.buildArm64LinuxCpuCountChunk`).
 	//
 	// ⭐ **THE ANSWER IS LEFT EXACTLY AS THE OS GAVE IT, INCLUDING `sysconf`'s `-1`.** The `< 1 ⇒ 1` clamp is
 	// builder-built Std's (`CpuParallelRuntime.buildCpuCount`), whose SIGNED test was written to cover both
 	// this lane's `-1` and Windows's `0` — so clamping here as well would be one contract in two places, and
-	// the x64 lowering deliberately does not clamp either.
+	// the x64 lowering deliberately does not clamp either. The Linux chunk answers `-1` for a failed
+	// `sched_getaffinity` for exactly that reason: it reports the failure in the vocabulary the clamp already
+	// reads rather than inventing a floor of its own.
 	//
-	// ⛔⛔ **IT ASKS THE ROUTE ORACLE EVEN THOUGH ONLY ONE ROUTE IS SERVED, BECAUSE THE OTHER ONE FAILS
-	// SILENTLY.** Every other `arm64ImportCall` in this file is emitted through `emitOsPrimitiveCall`, so the
-	// `syscall` lanes structurally cannot reach one; this primitive has no syscall route to give that door, and
-	// emitting the import call unconditionally would put one on a lane with no import table. That failure is
-	// NOT the loud kind the four host-surface lowerings below get: `ElfWriter` never reads the import
-	// relocations at all, so an unpatched `adrp x16, #0; ldr x16, [x16]; blr x16` would ship as a jump through
-	// the first word of its own `.text` page, while a `bl <chunk>` into a chunk that lane never built is a
-	// `CallFixup` and `arm64ResolveCallFixups` PANICS on it. ⇒ their "no `os` test here" argument does not
-	// transfer, and the gap is closed by asking `arm64OsCallKind` — the same ONE door `emitOsPrimitiveCall`
-	// consults, not a second copy of the facility table.
-	//
-	// ⚠ It is the BACKSTOP and never the user-facing rejection: `targetProvidesFacility` gives `cpuCount` to
-	// arm64-macOS alone, so a source-written `__Builtins.cpuCount()` is refused at its own span with E3104 on
-	// every Linux lane (MEASURED). What this arm catches is a COMPILER-INSERTED `osCpuCount` — builder-built
-	// Std emits one in `SchedRuntime.emitResolveMaxProcs`, which no callee-name gate can see, and which an
-	// ungated `async` program really does drag into this isel on a lane whose row admits nothing.
+	// ⛔⛔ **IT ASKS THE ROUTE ORACLE, AND WOULD HAVE TO EVEN IF BOTH ARMS WERE THE SAME SHAPE.** Every other
+	// `arm64ImportCall` in this file is emitted through `emitOsPrimitiveCall`, so the `syscall` lanes
+	// structurally cannot reach one; this primitive has no syscall route to give that door — its Linux arm is
+	// a `bl`, not a `svc` — and emitting the import call unconditionally would put one on a lane with no
+	// import table. That failure is NOT the loud kind the host-surface lowerings below get: `ElfWriter` never
+	// reads the import relocations at all, so an unpatched `adrp x16, #0; ldr x16, [x16]; blr x16` would ship
+	// as a jump through the first word of its own `.text` page, while a `bl <chunk>` into a chunk that lane
+	// never built is a `CallFixup` and `arm64ResolveCallFixups` PANICS on it.
 	function lowerOsCpuCount(resultId ValueId, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: DarwinScNprocessorsOnln))
-
 		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.sysconf)))
-			syscall then panic("lowerStdToArm64: `osCpuCount` has no syscall route — `sysconf` is a libc function rather than a syscall on Linux and the `_SC_NPROCESSORS_ONLN` parameter is numbered differently there, so `targetProvidesFacility` gives `cpuCount` to arm64-macOS alone and SemanticCheck refuses a program that names it at its own source span (E3104). Reaching here means a COMPILER-INSERTED `osCpuCount` (`SchedRuntime.emitResolveMaxProcs`) got past that name-keyed gate, which is a compiler bug rather than the user-facing rejection")
+			importCall then self.lowerOsCpuCountDarwin(dstRef)
+			syscall then self.emit(dstRef, op: TargetOp.arm64BranchLink(HostCpuCountName))
 		end 'route'
 
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsCpuCount'
 
-	// ⭐⭐ **THE `processInfo` BAND'S TWO INLINE LOWERINGS (MAC2).** Neither has an out-param and neither has
-	// anything that must outlive a call, so both take `lowerOsCpuCount`'s shape directly above rather than
-	// the chunk shape below: arguments as immediates, a GOT call, the answer out of x0. Their band-mate
-	// `osExecutablePath` IS a chunk, because it must still hold the caller's buffer pointer after a call
-	// that answers in a register — the split runs along that line and not along which family an op is in.
+	// The libSystem arm: the `_SC_` parameter into x0 and the import. Its own function rather than an inline
+	// arm because a `match` arm is one expression and this is two — `lowerOsFileOpenDarwin`'s split, for
+	// `lowerOsFileOpenDarwin`'s reason.
+	function lowerOsCpuCountDarwin(dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: DarwinScNprocessorsOnln))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.sysconf)))
+	end 'lowerOsCpuCountDarwin'
+
+	// ⭐⭐ **`osGetPid(result)` — THE SIMPLEST OS LOWERING IN THIS FILE, AND SINCE L3 IT NEEDS NO ROUTE ARM OF
+	// ITS OWN.** It has no operands, no out-param and nothing that must outlive the call, so it is
+	// `lowerOsExit`'s shape with a result — and both lanes now HAVE the primitive, libSystem's `getpid`
+	// through the GOT and AArch64's syscall 172, which is exactly the pair `emitOsPrimitiveCall` exists to
+	// choose between. Its band-mate `osExecutablePath` IS a chunk, because it must still hold the caller's
+	// buffer pointer after a call that answers in a register — the split runs along that line and not along
+	// which family an op is in.
 	//
-	// ⛔⛔ **BOTH ASK THE ROUTE ORACLE, AND `lowerOsCpuCount`'s PARAGRAPH ABOVE OWNS THE REASON IN FULL** —
-	// an unpatched import relocation ships SILENTLY on ELF, where a `bl` into an absent chunk is a loud
-	// `CallFixup` panic. `osGetPid` needs that guard most sharply of the three: builder-built Std emits one
-	// ITSELF, in `GtRuntime.emitGtPipeNameUniquifier`, where no callee-name gate can see it.
+	// ⚠ **THE ROUTE IS STILL ASKED, JUST NOT HERE.** `emitOsPrimitiveCall` asks it, which is strictly better
+	// than the `match` this used to carry: a lowering that names BOTH routes' identity cannot be wired to the
+	// right import slot and the wrong syscall number. That matters most for this op of the three, because
+	// builder-built Std emits one ITSELF in `GtRuntime.emitGtPipeNameUniquifier`, where no callee-name gate
+	// can see it.
 	//
 	// ⚠ **`getpid()` ANSWERS A 32-BIT `pid_t` AND THE UPPER HALF OF x0 IS UNSPECIFIED**, so the answer is
 	// widened here rather than captured raw. `specs-shv2/process-id.md:fits-in-a-dword` asserts the id lands
 	// under 2^32, which a stale high word would break — and on x64 that property is free (writing EAX zeroes
-	// the upper half architecturally), which is exactly why the arm64 lane has to buy it.
+	// the upper half architecturally), which is exactly why the arm64 lane has to buy it. The Linux syscall
+	// already answers a sign-extended `long`, so the widening is the identity there and stays for the lane
+	// that needs it.
 	function lowerOsGetPid(resultId ValueId, dstRef BlockRef)
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.getpid)))
-			syscall then panic("lowerStdToArm64: `osGetPid` has no syscall route on this lane — `targetProvidesFacility` gives `processInfo` to arm64-macOS alone and SemanticCheck refuses a program that names `__proc_pid` at its own source span (E3104). Reaching here means a COMPILER-INSERTED `osGetPid` (`GtRuntime.emitGtPipeNameUniquifier`) got past that name-keyed gate, which is a compiler bug rather than the user-facing rejection")
-		end 'route'
-
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.getpid, syscallNumber: Arm64LinuxSyscallGetPid)
 		self.emitWidenedCallResult(resultId, dstRef: dstRef)
 	end 'lowerOsGetPid'
 
@@ -1845,9 +1870,45 @@ type StdToArm64Lowering
 	function lowerOsEnterBackgroundPriority(resultId ValueId, dstRef BlockRef)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsEnterBackgroundPriorityDarwin(resultId, dstRef: dstRef)
-			syscall then panic("lowerStdToArm64: `osEnterBackgroundPriority` has no syscall route on this lane — POSIX scopes a nice value to the THREAD on Linux and to the PROCESS on Darwin, so a Linux lane owes the thread-inheritance work at `StdOp.osThreadCreate` as well as a call here. `targetProvidesFacility` gives `processInfo` to arm64-macOS alone and SemanticCheck refuses `__proc_bg_priority` at its own source span (E3104), so reaching here is a compiler bug rather than the user-facing rejection")
+			syscall then self.lowerOsEnterBackgroundPriorityLinux(resultId, dstRef: dstRef)
 		end 'route'
 	end 'lowerOsEnterBackgroundPriority'
+
+	// ⭐⭐ **THE SAME TWO CALLS AS RAW SYSCALLS, AND ONE ARITHMETIC DIFFERENCE THAT IS NOT OPTIONAL.**
+	// `getpriority`'s SYSCALL cannot answer a negative nice value directly — a negative return is how a
+	// syscall reports an error — so the kernel answers `20 - nice` and libc subtracts it back. This lowering
+	// is the libc: without the fold, `answers-the-posix-nice-value` would still pass by the coincidence that
+	// `20 - 10` is 10, and every other nice value would be silently wrong.
+	//
+	// ⚠ **NO `emitWidenedCallResult` HERE, AND THE DARWIN ARM NEEDS ONE.** That widening exists because
+	// AAPCS64 leaves the upper half of a register holding a C `int` UNSPECIFIED; a `svc` answers a full
+	// 64-bit word, so widening it would be a second opinion about a value the kernel has already settled —
+	// the same reason `mmap` and `write` are not widened three functions up.
+	//
+	// ⛔⛔ **THE SCOPE OBJECTION THIS ARM USED TO PANIC WITH IS ANSWERED BY INHERITANCE, AND THE ONE CASE
+	// INHERITANCE CANNOT REACH IS NAMED RATHER THAN CLAIMED AWAY.** It read: *"POSIX scopes a nice value to
+	// the THREAD on Linux and to the PROCESS on Darwin, so a Linux lane owes the thread-inheritance work at
+	// `StdOp.osThreadCreate` as well as a call here."* Its first answer was *"there are no other threads:
+	// `osThreadCreate` is a runtime abort here"*, and the worker-M `clone` falsified that. What still holds
+	// is the second: `clone` inherits its creator's nice value at birth, so every M started AFTER this call
+	// starts at background priority with nothing emitted for it.
+	//
+	// ⛔ **AN M THAT ALREADY EXISTED KEEPS THE DEFAULT NICE**, which is a real difference from the two lanes
+	// that lower a whole PROCESS in one call. Closing it needs each M's tid in its P and a walk in a chunk,
+	// where this is two inline `svc`s; no case reaches it, because every `processPriority` spec reads the
+	// value back on the calling thread. The `processPriority` row in `targetProvidesFacility` carries the
+	// same statement beside the `true` that rests on it.
+	function lowerOsEnterBackgroundPriorityLinux(resultId ValueId, dstRef BlockRef)
+		self.emitPriorityScopeArgs(dstRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: PosixBackgroundNiceValue))
+		self.emit(dstRef, op: TargetOp.arm64Syscall(Arm64LinuxSyscallSetPriority))
+
+		self.emitPriorityScopeArgs(dstRef)
+		self.emit(dstRef, op: TargetOp.arm64Syscall(Arm64LinuxSyscallGetPriority))
+
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: LinuxGetPriorityBias))
+		self.emit(dstRef, op: TargetOp.arm64Sub(TargetVReg.virtual(resultId), lhs: arm64PhysReg(Arm64Register.x1), rhs: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerOsEnterBackgroundPriorityLinux'
 
 	function lowerOsEnterBackgroundPriorityDarwin(resultId ValueId, dstRef BlockRef)
 		self.emitPriorityScopeArgs(dstRef)
@@ -1885,60 +1946,70 @@ type StdToArm64Lowering
 
 	// ⭐⭐ **THE HOST-SURFACE LOWERINGS: ARGUMENT MOVES AND A `bl` INTO A RUNTIME CHUNK.** Every one of the
 	// five below is out-param shaped — the OS answer must be STORED THROUGH A POINTER the caller supplied —
-	// and Darwin answers in a REGISTER, so the pointer has to outlive the call. An isel cannot arrange that:
-	// an operand that dies at its op is coloured caller-saved, which is correct for every other OS lowering
-	// in this file and fatal for these. `Arm64DarwinRuntime`'s header carries the full argument; the
-	// consequence here is that these lower like ORDINARY CALLS, which is also why they need no `emitOsPrimitiveCall`.
+	// and NEITHER POSIX lane answers through that pointer: Darwin returns nanoseconds in a register and Linux
+	// fills a `timespec` of its OWN, so on both the caller's pointer has to outlive the call. An isel cannot
+	// arrange that: an operand that dies at its op is coloured caller-saved, which is correct for every other
+	// OS lowering in this file and fatal for these. `Arm64DarwinRuntime`'s header carries the full argument;
+	// the consequence here is that these lower like ORDINARY CALLS, which is also why they need no
+	// `emitOsPrimitiveCall`.
 	//
-	// ⚠ **A `bl` TO A CHUNK IS A `CallFixup`, SO THE CHUNK MUST EXIST** — `appendArm64DarwinRuntimeChunks`
+	// ⚠ **A `bl` TO A CHUNK IS A `CallFixup`, SO THE CHUNK MUST EXIST** — each lane's `append…RuntimeChunks`
 	// emits it under the SAME `RuntimeUsage` bit that built the Std function calling into here, which is
 	// what makes "the symbol is missing" unreachable rather than merely unlikely.
 	//
-	// ⚠ **NO `os` TEST HERE, AND THAT IS THE FACILITY TABLE's JOB RATHER THAN AN OMISSION.** These ops reach
-	// this backend only on a target whose `targetProvidesFacility` row admits them, and arm64-linux's row
-	// admits none — so a `linux` program carrying one is refused at its own source span (E3104) long before
+	// ⚠ **NO `os` TEST HERE, AND THAT IS NOT AN OMISSION — IT IS WHAT THE SHARED `mrt_host_*` SYMBOLS BUY.**
+	// Both POSIX lanes build a chunk under each of these names (`Arm64DarwinRuntime` /
+	// `Arm64LinuxRuntime`, one or the other per image), so the `bl` is correct on either without asking.
+	// A target that provides NEITHER — a `linux` program is refused only for the families its
+	// `targetProvidesFacility` row still denies — is refused at its own source span (E3104) long before
 	// lowering, exactly as a wasm one is. A defensive `os` branch here would be a second copy of that table
 	// with no way to keep the two honest.
 	//
 	// ⭐⭐ **AND THAT ARGUMENT DOES NOT TRANSFER TO THE INLINE LOWERINGS ABOVE, WHICH IS WHY THEY ASK AND
 	// THESE DO NOT.** The difference is the FAILURE MODE of getting it wrong, not the confidence. A `bl` into
-	// a chunk arm64-linux never built is a `CallFixup` naming a symbol that was never laid out, and
+	// a chunk a lane never built is a `CallFixup` naming a symbol that was never laid out, and
 	// `arm64ResolveCallFixups` PANICS on it (`bl to unknown function '…'`) — loud, at build time, naming the
-	// symbol. An `arm64ImportCall` on that lane is silent: `ElfWriter` has no import-relocation consumer at
-	// all, so the unpatched `adrp x16 / ldr x16 / blr x16` SHIPS, jumping through the first word of its own
+	// symbol. An `arm64ImportCall` on the Linux lane is silent: `ElfWriter` has no import-relocation consumer
+	// at all, so the unpatched `adrp x16 / ldr x16 / blr x16` SHIPS, jumping through the first word of its own
 	// `.text` page. So the ops that emit an import call directly must ask the route themselves; the ops that
 	// branch to a chunk are already guarded by the linker step.
 	function lowerOsReadWallClock(ftPtrId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(ftPtrId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinWallClockName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostWallClockName))
 	end 'lowerOsReadWallClock'
 
 	// The monotonic counter and its frequency — two out-params, two argument registers, one chunk.
+	//
+	// ⚠ **IT IS THE ONE OF THE FIVE THAT STILL BRANCHES TO A LANE-PRIVATE SYMBOL**, because arm64-linux has
+	// no body for it: `monotonicClock` is reached only through `__gt_now_ns`, a SCHEDULER entry, so it lands
+	// with the green-thread floor rather than with the two clocks L3 brought over. The name changes to
+	// `mrt_host_monotonic_clock` on the day a second lane builds one, exactly as the three around it did.
 	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(ticksPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(freqPtrId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinMonotonicClockName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostMonotonicClockName))
 	end 'lowerOsReadClock'
 
 	function lowerOsThreadCpuTicks(outPtrId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(outPtrId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinThreadCpuName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostThreadCpuName))
 	end 'lowerOsThreadCpuTicks'
 
 	// ⭐⭐ **MAC2: the executable path, and THIS IS WHERE THE OP'S FIELD ORDER MEETS THE C ONE.** The op reads
 	// `(result, bufLen, bufPtr)` because that is `osDirCurrentPath`'s shape and one shape is better than two
 	// at the target-neutral tier; `_NSGetExecutablePath` takes the BUFFER first and the size second, exactly
-	// as `GetModuleFileNameA` does. `StdOp.osExecutablePath` states that the transposition belongs in the
-	// lowering — the only place that knows an ABI — and this is that place on this lane.
+	// as `GetModuleFileNameA` does, and `readlinkat` takes them third and fourth after a dirfd and a path.
+	// `StdOp.osExecutablePath` states that the transposition belongs in the lowering — the only place that
+	// knows an ABI — and this is that place on both arm64 lanes.
 	//
 	// It is a CHUNK and not an inline sequence for this band's structural reason: the caller's pointer must
-	// still be live after a call that answers in a register, twice over (the `realpath` canonicalization is a
-	// second such call), and only a frame can hold it. The answer needs no widening — the chunk computes a
-	// byte count and a capacity, both already 64-bit.
+	// still be live after a call that answers in a register, twice over on Darwin (the `realpath`
+	// canonicalization is a second such call), and only a frame can hold it. The answer needs no widening —
+	// each lane's chunk computes a byte count and a capacity, both already 64-bit.
 	function lowerOsExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufLenId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinExePathName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostExePathName))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsExecutablePath'
 
@@ -1946,67 +2017,83 @@ type StdToArm64Lowering
 	// filesystem ops take this shape and differ only in their arity, in whether there is an answer, and (for
 	// the working directory) in the ORDER the op names its operands versus the order C does. Written once,
 	// because thirteen hand-written argument sequences are thirteen chances to transpose a buffer and a
-	// length — which `Arm64DarwinRuntime`'s `emitArm64DarwinMillisToTimespec` makes the same argument about.
+	// length — which `Arm64DarwinRuntime`'s `arm64PosixMillisToTimespec` makes the same argument about.
+	//
+	// ⚠ The symbol it branches to is one of the SHARED `mrt_host_*` names (`Arm64PosixRuntime`), so this is
+	// not a Darwin lowering wearing a neutral name: the arm64-Linux surface builds a chunk under each of them
+	// too, and which body an image gets is decided once, by `buildArm64Backend`, from `target.os`.
 	//
 	// ⚠ The moves are emitted IN ORDER and that is what makes them sound: an operand coloured into an
 	// argument register the sequence has already written is prevented by the physical def of that register,
 	// exactly as `lowerCall`'s own argument moves are.
-	function emitDarwinChunkCall(dstRef BlockRef, chunk ByteArray, args ValueIdArray)
+	function emitHostChunkCall(dstRef BlockRef, chunk ByteArray, args ValueIdArray)
 		var index = 0 as ParamCount
 		for arg in args 'eachArg'
 			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(index)), srcReg: TargetVReg.virtual(arg)))
 			index = index + 1
 		end 'eachArg'
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(chunk))
-	end 'emitDarwinChunkCall'
+	end 'emitHostChunkCall'
 
 	// The same call with its answer captured. No widening: every chunk in this band computes its own answer
 	// as a full 64-bit value (a BOOL, a byte count, a handle, an attribute mask), so a second opinion about
 	// its upper half would be `emitWidenedCallResult`'s note in reverse.
-	function lowerDarwinChunkValue(resultId ValueId, args ValueIdArray, chunk ByteArray, dstRef BlockRef)
-		self.emitDarwinChunkCall(dstRef, chunk: chunk, args: args)
+	function lowerHostChunkValue(resultId ValueId, args ValueIdArray, chunk ByteArray, dstRef BlockRef)
+		self.emitHostChunkCall(dstRef, chunk: chunk, args: args)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
-	end 'lowerDarwinChunkValue'
+	end 'lowerHostChunkValue'
 
-	// ⭐ **THE THREE OPENS AND THE CLOSE ARE INLINE, NOT CHUNKS**, because each is one libSystem call with a
-	// path or a descriptor and nothing that must outlive it — `lowerOsCpuCount`'s shape, not
-	// `lowerOsExecutablePath`'s.
+	// ⭐⭐ **THE OPEN IS INLINE ON macOS AND A CHUNK ON LINUX, AND THE SPLIT IS NOT A STYLE CHOICE.**
 	//
-	// ⚠ **THE READ HALF IS `open` AND THE WRITE HALVES ARE `creat`, WHICH IS WHAT KEEPS THEM INLINE.**
+	// ⚠ **macOS: THE READ HALF IS `open` AND THE WRITE HALVES ARE `creat`, WHICH IS WHAT KEEPS THEM INLINE.**
 	// `open(path, oflag, ...)` takes its permission bits as a VARARG, and AAPCS64 passes a variadic argument
 	// on the STACK — which an isel has no frame to write to. `creat(path, mode)` is
 	// `O_CREAT|O_TRUNC|O_WRONLY` with a NAMED mode, i.e. exactly `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`,
 	// so the one argument that differs between the three rides x1 in every case.
 	//
-	// ⚠ **THE ANSWER IS WIDENED BECAUSE A DESCRIPTOR IS AN `int`.** AAPCS64 leaves the upper half of an
+	// ⚠ **THE macOS ANSWER IS WIDENED BECAUSE A DESCRIPTOR IS AN `int`.** AAPCS64 leaves the upper half of an
 	// `int` return unspecified, and the caller compares the answer against `InvalidHandleValue` (-1) — so a
 	// stale high word would make a failed open look like a live descriptor.
-	function lowerOsFileOpen(resultId ValueId, pathPtrId ValueId, importSlot OsImportSlot, argument MachineWord, opName String, dstRef BlockRef)
+	//
+	// ⭐ **LINUX HAS NO VARARG PROBLEM AND A DIFFERENT ONE INSTEAD.** `openat(AT_FDCWD, path, flags, mode)`
+	// takes its mode in a REGISTER, so all three opens are one syscall with two immediates — but a raw `svc`
+	// answers `-errno` where the Std tier tests for exactly `-1`, and there is no libc `errno` for
+	// `osLastError` to read afterwards. Both of those are the chunk's work (`mrt_host_file_open`), which is
+	// why this lane branches into one rather than emitting the syscall here.
+	function lowerOsFileOpen(resultId ValueId, pathPtrId ValueId, importSlot OsImportSlot, darwinArgument MachineWord, linuxFlags MachineWord, linuxMode MachineWord, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(pathPtrId)))
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: argument))
-		self.emitFilesystemImportCall(dstRef, importSlot: importSlot, opName: opName)
-		self.emitWidenedCallResult(resultId, dstRef: dstRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsFileOpenDarwin(resultId, importSlot: importSlot, argument: darwinArgument, dstRef: dstRef)
+			syscall then self.lowerOsFileOpenLinux(resultId, flags: linuxFlags, mode: linuxMode, dstRef: dstRef)
+		end 'route'
 	end 'lowerOsFileOpen'
 
-	// `CloseHandle` on a file ⇒ `close(fd)`. The `int` it answers is DISCARDED, which is the op's own
-	// contract rather than this lowering's laziness — `StdOp.osFileClose` defines no result, because a
-	// failed close leaves a caller nothing to do.
+	// The libSystem arm: the one differing argument into x1, the import, and the descriptor widened.
+	function lowerOsFileOpenDarwin(resultId ValueId, importSlot OsImportSlot, argument MachineWord, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: argument))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(importSlot)))
+		self.emitWidenedCallResult(resultId, dstRef: dstRef)
+	end 'lowerOsFileOpenDarwin'
+
+	// The syscall arm: the flag word and the permission mask into x1/x2, and the chunk that turns a `-errno`
+	// into the `-1`-plus-stashed-reason pair the Std tier reads. No widening — the chunk's answer is already
+	// a full 64-bit descriptor or a full 64-bit -1.
+	function lowerOsFileOpenLinux(resultId ValueId, flags MachineWord, mode MachineWord, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: flags))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: mode))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostFileOpenName))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerOsFileOpenLinux'
+
+	// `CloseHandle` on a file ⇒ `close(fd)` — libSystem's on macOS, `svc` on Linux, and NOTHING else differs:
+	// the descriptor is in x0 either way and the `int` both answer is DISCARDED, which is the op's own
+	// contract rather than this lowering's laziness (`StdOp.osFileClose` defines no result, because a failed
+	// close leaves a caller nothing to do). Since nothing is read back, the Linux arm needs no chunk and no
+	// errno stash — it is `lowerOsFreePages`'s shape exactly.
 	function lowerOsFileClose(handleId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(handleId)))
-		self.emitFilesystemImportCall(dstRef, importSlot: OsImportSlot.close, opName: "osFileClose")
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.close, syscallNumber: Arm64LinuxSyscallClose)
 	end 'lowerOsFileClose'
-
-	// ⭐⭐ **THE ROUTE GUARD EVERY *DIRECT* IMPORT CALL IN THIS BAND OWES.** `lowerOsCpuCount`'s paragraph
-	// owns the reason in full and it is the sharp one: an unpatched import relocation ships SILENTLY on ELF
-	// (`ElfWriter` has no import-relocation consumer at all), where a `bl` into an absent chunk is a loud
-	// `CallFixup` panic. So the ops that branch to a chunk are guarded by the linker and ask nothing; the
-	// ops that emit an import call themselves ask here.
-	function emitFilesystemImportCall(dstRef BlockRef, importSlot OsImportSlot, opName String)
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(importSlot)))
-			syscall then panic("lowerStdToArm64: `{opName}` has no syscall route on this lane — `targetProvidesFacility` gives `managedFile`, `managedDirectory`, `consoleStdin` and `commandLine` to arm64-macOS alone, and SemanticCheck refuses a program that names one of their entry points at its own source span (E3104). Reaching here means such a program got past that name-keyed gate on a Linux target, which is a compiler bug rather than the user-facing rejection")
-		end 'route'
-	end 'emitFilesystemImportCall'
 
 	// ⭐⭐ **MAC6: `GetStdHandle(which)` ⇒ THE DESCRIPTOR ITSELF, WITH NO CALL AT ALL.** Win32 numbers its
 	// three selectors DOWNWARDS from `(DWORD)-10` while POSIX numbers its three descriptors UPWARDS from 0,
@@ -2030,7 +2117,7 @@ type StdToArm64Lowering
 	// frame words to hand `nanosleep` a `struct timespec *`, and a frame is exactly what a chunk has.
 	function lowerOsSleepMs(msId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(msId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinSleepMsName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostSleepMsName))
 	end 'lowerOsSleepMs'
 
 	// Lower `osFreePages(addr, size)` to POSIX `munmap(addr, size)` — the free counterpart of `lowerOsAllocPages`
@@ -2159,42 +2246,49 @@ type StdToArm64Lowering
 	// MAC3 — the green-thread floor's host lowerings
 	// ==========================================================================
 
-	// ⭐⭐ **EVERY ONE OF THESE ASKS `arm64OsCallKind` FIRST, AND THE REASON IS `lowerOsCpuCount`'s IN FULL:**
-	// an unpatched import relocation SHIPS SILENTLY on ELF (`ElfWriter` has no import-relocation consumer at
-	// all), so a lowering that emitted one on a Linux lane would jump through the first word of its own
-	// `.text` page rather than failing to link. And unlike the Darwin CHUNK lowerings above — whose `bl` into
-	// an absent chunk is a loud `CallFixup` panic — these are the scheduler's, which no callee-name gate can
-	// see: `installGtRuntime` emits them from builder-built Std, so `targetProvidesFacility` refusing
-	// `greenThreads` on arm64-linux cannot stop one reaching here. The route test is the backstop for exactly
-	// that, and it names the gap rather than the file.
+	// ⭐⭐ **THIS BLOCK USED TO OPEN WITH ONE BLANKET REFUSAL FOR ELEVEN OPS, AND L4 DELETED IT.**
+	// `requireDarwinSchedulerRoute` said the scheduler's host objects "are libSystem objects … and a raw
+	// static Linux image links no libc to provide any of them". That was the whole of the gap and it is
+	// closed: `Arm64LinuxRuntime` builds a `futex`-based twin of every one, under the SAME `mrt_host_*`
+	// symbol, so nine of the eleven lowerings below are now unconditional — the isel branches to a name and
+	// exactly one lane's body is laid out beside it (`Arm64PosixRuntime`'s header).
 	//
-	// ⚠ **ONE REFUSAL, NOT ELEVEN.** The eleven ops below would otherwise each owe a Linux message that could
-	// only echo the others, so the route is asked through one door that carries the whole argument.
-	function requireDarwinSchedulerRoute(what String)
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then break 'route'
-			syscall then panic("lowerStdToArm64: `{what}` has no syscall route — the green-thread scheduler's per-OS-thread slot, its locks, its wake events and its worker threads are libSystem objects (pthread keys, mutexes, condition variables and threads), and a raw static Linux image links no libc to provide any of them. `targetProvidesFacility` denies `greenThreads` and `reschedule` on both Linux lanes, so a source-written `async`/`Runtime.yield()` is refused at its own source span (E3104). Reaching here means a COMPILER-INSERTED scheduler op — `installGtRuntime` builds the whole P/M tier from builder-built Std, which no callee-name gate can see — got past that gate, which is a compiler bug and not the user-facing rejection")
-		end 'route'
-	end 'requireDarwinSchedulerRoute'
+	// ⚠ **TWO ARE NOT, AND EACH SAYS WHY AT ITS OWN SITE**, because their difference is structural rather
+	// than a missing body: `osLockEnter`/`osLockLeave` are a bare import call on macOS and a chunk here, and
+	// `tlsSetValue` is one `pthread_setspecific` there and a guarded store through `TPIDR_EL0` here. A third,
+	// `osThreadCreate`, refuses on this lane for a reason that is not "unimplemented" at all — see its arm.
+	//
+	// ⚠ **THE STANDING HAZARD THE OLD DOOR EXISTED FOR IS UNCHANGED**: an unpatched import relocation SHIPS
+	// SILENTLY on ELF (`ElfWriter` has no import-relocation consumer at all), so a lowering that emits
+	// `arm64ImportCall` on a Linux lane jumps through the first word of its own `.text` page rather than
+	// failing to link. That is why every arm below that still emits one asks the route first.
 
 	// `tlsAlloc(result)` ⇒ `pthread_key_create(&key, NULL)`, through a chunk: the key is an OUT-PARAM and an
 	// isel has no frame to give the pointer. The chunk also carries the two assertions that keep a key of 0
 	// from becoming a scheduler that silently never runs.
 	function lowerTlsAlloc(resultId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("tlsAlloc")
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinTlsAllocName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostTlsAllocName))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerTlsAlloc'
 
-	// `tlsSetValue(index, value)` ⇒ `pthread_setspecific(key, value)`. Inline: two argument moves and a GOT
-	// call, `lowerOsCpuCount`'s shape with no result to capture. The `int` it answers is DISCARDED for
-	// `osEnterBackgroundPriority`'s reason — the only failure it can report is an invalid key, and the key
-	// came from the chunk above, which panics rather than handing one out.
+	// ⭐ `tlsSetValue(index, value)` — WRITE this OS thread's slot. The two arguments are marshalled once and
+	// only the DESTINATION differs: `pthread_setspecific` on macOS, `mrt_linux_tls_set` on Linux.
+	//
+	// ⚠ **IT IS AN IMPORT CALL THERE AND A CHUNK HERE, WHICH IS WHY THIS OP KEEPS A ROUTE SPLIT** while its
+	// eight neighbours lost theirs. `pthread_setspecific` works on any thread; the Linux store needs a slot
+	// BLOCK, and a thread that never called `mrt_host_tls_alloc` has `TPIDR_EL0` = 0 — an assertion that
+	// needs a branch, so it needs a body (`Arm64LinuxRuntime.buildArm64LinuxTlsSetChunk`).
+	//
+	// The `int` `pthread_setspecific` answers is DISCARDED for `osEnterBackgroundPriority`'s reason — the
+	// only failure it can report is an invalid key, and the key came from `mrt_host_tls_alloc`, which panics
+	// rather than handing one out.
 	function lowerTlsSetValue(indexId ValueId, valueId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("tlsSetValue")
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(indexId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(valueId)))
-		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.pthreadSetspecific)))
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.pthreadSetspecific)))
+			syscall then self.emit(dstRef, op: TargetOp.arm64BranchLink(LinuxTlsSetName))
+		end 'route'
 	end 'lowerTlsSetValue'
 
 	// ⭐⭐⭐ **`tlsSlotLoad(result, slotOffset)` — READ THIS OS THREAD'S SLOT WITH NO CALL AT ALL, WHICH IS
@@ -2207,7 +2301,7 @@ type StdToArm64Lowering
 	// which is why the op keeps its non-call metadata and the clobber model is unchanged.
 	//
 	// ⚠ **THIS TSD LAYOUT IS AN EMPIRICALLY-PROBED ABI, NOT A DOCUMENTED ONE**, and the failure mode of a
-	// wrong one is a WILD LOAD rather than a diagnostic. `mrt_darwin_tls_alloc` asserts the key it hands out
+	// wrong one is a WILD LOAD rather than a diagnostic. `mrt_host_tls_alloc` asserts the key it hands out
 	// at run time, which is where that risk is actually paid for.
 	//
 	// ⭐ **THE GATE, AND WHY IT IS AN ARITHMETIC SELECT.** A slot offset of ZERO means `__sched_init_procs`
@@ -2229,12 +2323,11 @@ type StdToArm64Lowering
 	// across the load, whose operands are both physical, so no reload can land inside it. x16 spans the whole
 	// sequence and is safe by the invariant.
 	function lowerTlsSlotLoad(resultId ValueId, tebOffsetId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("tlsSlotLoad")
 		let scratch = arm64PhysReg(Arm64Scratch)
 		let flag = arm64PhysReg(Arm64Register.x17)
 		let offset = TargetVReg.virtual(tebOffsetId)
 
-		self.emit(dstRef, op: TargetOp.arm64ThreadPointer(scratch))
+		self.emit(dstRef, op: TargetOp.arm64ThreadPointer(scratch, source: arm64ThreadPointerSource(self.target.os)))
 		self.emit(dstRef, op: TargetOp.arm64Add(scratch, lhs: scratch, rhs: offset))
 		self.emit(dstRef, op: TargetOp.arm64CmpImm(offset, imm: TlsUninitialisedSlotOffset))
 		self.emit(dstRef, op: TargetOp.arm64Cset(flag, cond: Arm64CondCode.ne))
@@ -2243,28 +2336,41 @@ type StdToArm64Lowering
 	end 'lowerTlsSlotLoad'
 
 	// `osEventCreate(result)` ⇒ a fresh auto-reset event object. `CreateEventA(NULL, FALSE, FALSE, NULL)`
-	// there, `mrt_darwin_wait_new(kind: event)` here.
+	// there, `mrt_host_wait_new(kind: event)` here.
 	function lowerOsEventCreate(resultId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osEventCreate")
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: DarwinWaitKindEvent))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinWaitNewName))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: PosixWaitKindEvent))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostWaitNewName))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsEventCreate'
 
 	// `osSetEvent(handle)` ⇒ signal it and wake one waiter.
 	function lowerOsSetEvent(handleId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osSetEvent")
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(handleId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinEventSetName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostEventSetName))
 	end 'lowerOsSetEvent'
 
-	// `osThreadCreate(result, entry, arg)` ⇒ `pthread_create`, answering a waitable handle. The chunk carries
-	// why the entry point needs no thunk.
+	// ⭐⭐ `osThreadCreate(result, entry, arg)` ⇒ `mrt_host_thread_create`, answering a waitable handle — and
+	// it is ONE lowering for both POSIX lanes, because both now have a chunk under that name. The bodies are
+	// as different as two host surfaces get (`pthread_create` plus a wait object there; a hand-built `clone`
+	// with its own stack, guard page, slot block and join word here), and neither difference is visible from
+	// this tier.
+	//
+	// ⭐ **THE ENTRY POINT NEEDS NO THUNK ON EITHER LANE, AND THAT IS AN ABI COINCIDENCE WORTH STATING.**
+	// `pthread_create`'s start routine is `void*(*)(void*)` — argument in x0, result in x0 — and shv2's own
+	// internal ABI on this backend passes an integer argument in x0 and returns in x0 too, so
+	// `__sched_worker_loop(p)` IS a valid start routine as compiled. The Linux chunk `blr`s it with the same
+	// pair of registers for the same reason. On Windows the identical op needs the `DWORD(*)(LPVOID)` shape
+	// and gets it the same way.
+	//
+	// ⛔ **THIS WAS A ROUTE WITH A RUNTIME ABORT ON THE LINUX ARM, AND THE ABORT DID ITS JOB.** L4 refused to
+	// write a `clone` nothing could reach — `ioCompletionShape(linux)` is `inlineCompletion`, so there is no
+	// completion-drain thread, and `SchedRuntime.emitSchedWakeOrSpawn`'s worker M had no producer. `spawn`
+	// plus a default processor count that is the machine's gave it one, and the panic named the gap by name
+	// on the first such program built for this lane rather than leaving it to a hang or a wrong answer.
 	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osThreadCreate")
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(entryPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(argId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinThreadCreateName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostThreadCreateName))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsThreadCreate'
 
@@ -2272,122 +2378,112 @@ type StdToArm64Lowering
 	// condvar wait for an event, a join for a thread. `Arm64DarwinRuntime`'s layout header carries why one
 	// object has to serve both.
 	function lowerOsWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osWaitHandle")
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(handleId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(timeoutMsId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinWaitOneName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostWaitOneName))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsWaitHandle'
 
 	// `osCloseHandle(handle)` ⇒ destroy a wait object's primitives and release it.
 	function lowerOsCloseHandle(handleId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osCloseHandle")
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(handleId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinWaitCloseName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostWaitCloseName))
 	end 'lowerOsCloseHandle'
 
-	// ⭐ A chunk call on the Darwin scheduler/host route: the route check, then the branch. Its own emitter
-	// because MAC8 added eight call sites that all owe the same `arm64OsCallKind` question — an unpatched
-	// import relocation ships SILENTLY on ELF, so the Linux arm must be refused at every one of them.
-	function lowerDarwinSchedulerChunk(dstRef BlockRef, chunk ByteArray, args ValueIdArray, opName String)
-		self.requireDarwinSubprocessRoute(opName)
-		self.emitDarwinChunkCall(dstRef, chunk: chunk, args: args)
-	end 'lowerDarwinSchedulerChunk'
-
-	// The same, with the chunk's answer captured.
-	function lowerDarwinSchedulerChunkValue(resultId ValueId, args ValueIdArray, chunk ByteArray, opName String, dstRef BlockRef)
-		self.requireDarwinSubprocessRoute(opName)
-		self.lowerDarwinChunkValue(resultId, args: args, chunk: chunk, dstRef: dstRef)
-	end 'lowerDarwinSchedulerChunkValue'
-
-	// ⛔⛔ **THE arm64-LINUX REFUSAL, AND IT IS NOT DECORATION.** `targetProvidesFacility` denies `subprocess`
-	// on both Linux lanes, but that gate is keyed on a CALLEE NAME and does not stop COMPILER-INSERTED Std:
-	// `installGtRuntime` builds the netpoll's `osWaitHandles` and the two handle ops into every green-thread
-	// program from builder-built Std, which no name-keyed gate can see. And an unresolved import relocation
-	// ships SILENTLY on ELF — `ElfWriter` has no import-relocation consumer — so a missing refusal here is a
-	// binary that links and then jumps to zero, not a diagnostic. `lowerOsCpuCount`'s paragraph owns this
-	// argument in full.
-	function requireDarwinSubprocessRoute(what String)
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then break 'route'
-			syscall then panic("lowerStdToArm64: `{what}` has no syscall route — the child-process substrate on this backend is libSystem (`pipe`, `poll`, `posix_spawnp` and its file-actions builder, `waitpid`, `kill`), and a raw static Linux image links no libc to provide any of it. `targetProvidesFacility` denies `subprocess` on both Linux lanes, so a source-written spawn is refused at its own source span (E3104). Reaching here means a COMPILER-INSERTED op — the netpoll's multi-wait and the two handle ops are built into every green-thread program — got past that name-keyed gate, which is a compiler bug and not the user-facing rejection")
-		end 'route'
-	end 'requireDarwinSubprocessRoute'
-
-	// ⭐⭐ `osEnvBlock(result)` ⇒ `*_NSGetEnviron()` — this process's `environ`, which is the POSIX shape of
-	// the question `GetEnvironmentStringsA` answers on Windows. `SubprocessRuntime.environmentSnapshotShape`
-	// is what tells the producer which of the two it is indexing, so nothing below the Std tier has to know.
+	// ⭐⭐ `osEnvBlock(result)` ⇒ this process's `environ`, the POSIX shape of the question
+	// `GetEnvironmentStringsA` answers on Windows. `SubprocessRuntime.environmentSnapshotShape` is what tells
+	// the producer which of the two it is indexing, so nothing below the Std tier has to know.
 	//
-	// ⚠ **THE ACCESSOR ANSWERS THE ADDRESS OF `environ`, NOT `environ` ITSELF**, so the load is part of the
-	// operation rather than a peephole waiting to be folded: a Mach-O main executable may not name the
-	// `environ` symbol directly, which is the entire reason `_NSGetEnviron` exists.
-	// `Arm64DarwinRuntime`'s spawn chunk reaches the same table by the same two steps.
+	// ⛔⛔ **BOTH LANES REACH THE VECTOR THROUGH A WORD THAT HOLDS IT, AND THE DEREFERENCE IS THEREFORE
+	// WRITTEN ONCE.** What differs is only how the ADDRESS OF that word is obtained. Darwin calls
+	// `_NSGetEnviron`, which answers the address of `environ` rather than `environ` itself — a Mach-O main
+	// executable may not name the symbol directly, which is the entire reason that accessor exists. A raw
+	// static Linux image has no accessor and no libc to hold `environ` at all: its envp is the vector the
+	// entry stub computed off the entry stack (`Arm64Runtime.emitArm64EnvpFromEntryStack` — it is
+	// ARITHMETIC on `sp`, not a word the kernel handed over), and `__mrt_envp` is where that vector's base
+	// was parked. So `arm64LeaGlobal` answers the address of the word exactly as the accessor's return value
+	// does, and ONE load past either is the vector.
+	//
+	// ⚠ **ONE INDIRECTION, NOT TWO, AND THE SYMMETRY IS THE PROOF.** The same load also feeds `execve` in
+	// `Arm64LinuxRuntime`'s spawn chunk and the walk in its `mrt_host_env_read` — both do
+	// `arm64LinuxEmitDataAddr` then exactly one `ldr`, which is the reading this isel has to agree with.
 	//
 	// ⚠ **THE ANSWER IS PARKED IN x16 ACROSS THE LOAD** for `lowerTlsSlotLoad`'s reason, stated in full at
 	// `Arm64Scratch`: nothing a post-isel pass splices in writes x16, so no reload can land between the
-	// dereference and the capture. x0 is captured in the op immediately after the call, which is the shape
-	// every import-call lowering in this file already relies on.
+	// dereference and the capture.
 	function lowerOsEnvBlock(resultId ValueId, dstRef BlockRef)
-		self.requireDarwinSubprocessRoute("osEnvBlock")
 		let scratch = arm64PhysReg(Arm64Scratch)
 
-		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.nsGetEnviron)))
-		self.emit(dstRef, op: TargetOp.movRegReg(scratch, srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerEnvironSlotAddrDarwin(scratch, dstRef: dstRef)
+			syscall then self.emit(dstRef, op: TargetOp.arm64LeaGlobal(scratch, label: LinuxEnvpLabel))
+		end 'route'
+
 		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(scratch, base: scratch, disp: 0, width: X64AccessWidth.word64))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: scratch))
 	end 'lowerOsEnvBlock'
 
+	// The Darwin half of the route above: `_NSGetEnviron()` answers the address of `environ` in the return
+	// register, which the caller's single load then dereferences. Its own function because a `match` arm is
+	// ONE statement and this half is two — the Linux half is a single `arm64LeaGlobal` and stays inline.
+	function lowerEnvironSlotAddrDarwin(scratch TargetVReg, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.nsGetEnviron)))
+		self.emit(dstRef, op: TargetOp.movRegReg(scratch, srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerEnvironSlotAddrDarwin'
+
 	// ⭐ `osProcessSpawn` / `osProcessSpawnInherit` ⇒ ONE chunk. See the two arms' own comments for why the
 	// inheritance flag that separates them on Windows has no POSIX twin to lower.
-	// ⚠ **`envPtr` IS PASSED ON AND THE CHUNK REFUSES A NON-NULL ONE**, which is a real refusal rather than a
-	// gap left open: `lpEnvironment` is a BLOCK on Windows and `envp` is a POINTER VECTOR under POSIX, so the
-	// conversion is code this lane does not have.
-	//
-	// ⛔ **AND IT IS REACHABLE FROM THE LANGUAGE, WHICH THIS NOTE USED TO DENY.** It said the attached
-	// `Subprocess` family was refused here at its own source span (E3104); the facility table answers
-	// `subprocess gives true` for arm64-macOS, so `Environment.inheritUpdating` and `Environment.custom` DO
-	// build a block and DO arrive here — and are answered with `ENOTSUP` and a zero `hProcess`, which the Std
-	// tier reads as `SubprocessError.spawnFailed`. `Environment.inherit`, the default, passes a constant 0 and
-	// is unaffected. ⇒ what this lane owes is a block→`envp` conversion (the bootstrap's arm64 emitter has one,
-	// `__subp_build_envp`); until it has one, a named spawn failure is the honest answer and a child quietly
-	// running with the wrong environment is not.
+	// ⚠ **`envPtr` IS PASSED ON AND EACH LANE'S CHUNK ANSWERS FOR IT.** `lpEnvironment` is a BLOCK on Windows
+	// and `envp` is a POINTER VECTOR under POSIX, so a non-null one needs a conversion neither POSIX lane has.
+	// BOTH refuse it with `ENOTSUP` and a zero `hProcess`, which the Std tier reads as
+	// `SubprocessError.spawnFailed` — a named spawn failure being the honest answer where a child quietly
+	// running with the wrong environment is not. `Environment.inherit`, the default, passes a constant 0 and is
+	// unaffected on both lanes.
 	function lowerOsProcessSpawn(commandId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId, dstRef BlockRef)
-		self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinSpawnName, args: sixArgs(commandId, second: cwdPtrId, third: creationFlagsId, fourth: startupPtrId, fifth: procInfoPtrId, sixth: envPtrId), opName: "osProcessSpawn")
+		self.emitHostChunkCall(dstRef, chunk: HostSpawnName, args: sixArgs(commandId, second: cwdPtrId, third: creationFlagsId, fourth: startupPtrId, fifth: procInfoPtrId, sixth: envPtrId))
 	end 'lowerOsProcessSpawn'
 
-	// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable — the shape
-	// `osWaitHandles` used to have on this lane, kept for `osCancelIo`, which now has it for the same reason
-	// one substrate over.
-	function lowerDarwinRuntimeAbort(dstRef BlockRef, message ByteArray)
-		self.requireDarwinSubprocessRoute("osCancelIo")
+	// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable — `osCancelIo`'s
+	// shape on BOTH POSIX lanes, and `osThreadCreate`'s on the Linux one.
+	//
+	// ⚠ **IT ASKS NO ROUTE, AND IT USED TO ASK ONE WITH A HARD-CODED OP NAME INSIDE IT.** The old
+	// `lowerDarwinRuntimeAbort` named `"osCancelIo"` inside itself, so a second caller would have been refused
+	// under the FIRST one's name. A route is the caller's question; this is only the abort.
+	function lowerRuntimeAbort(dstRef BlockRef, message ByteArray)
 		self.lowerPanic(registerStringBlob(self.globalData, bytes: message).toByteArray(), dstRef: dstRef)
-	end 'lowerDarwinRuntimeAbort'
+	end 'lowerRuntimeAbort'
 
 	// `osEnvRead(result, namePtr, bufPtr, bufLen)` ⇒ `getenv` plus the copy Windows's API does for itself.
 	function lowerOsEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osEnvRead")
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(namePtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(bufLenId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinEnvReadName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostEnvReadName))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsEnvRead'
 
-	// `osLockInit(region)` ⇒ `mrt_darwin_lock_init`, a chunk so the "does a Darwin mutex fit `OsLockBytes`?"
+	// `osLockInit(region)` ⇒ `mrt_host_lock_init`, a chunk so the "does a Darwin mutex fit `OsLockBytes`?"
 	// assertion has a build-time home on the path it protects.
 	function lowerOsLockInit(lockPtrId ValueId, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osLockInit")
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(lockPtrId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(DarwinLockInitName))
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostLockInitName))
 	end 'lowerOsLockInit'
 
-	// `osLockEnter`/`osLockLeave` ⇒ `pthread_mutex_lock`/`pthread_mutex_unlock` DIRECTLY: the region the Std
-	// tier allocated IS the mutex (offset 0), so there is no field address to compute and no chunk to go
-	// through. One emitter for both, because they differ only in which import they name.
-	function lowerOsLockImport(lockPtrId ValueId, importSlot OsImportSlot, dstRef BlockRef)
-		self.requireDarwinSchedulerRoute("osLockEnter/osLockLeave")
+	// ⭐ `osLockEnter`/`osLockLeave` — the region the Std tier allocated IS the lock (offset 0), so there is
+	// no field address to compute at either site. One emitter for both, because they differ only in which
+	// destination they name.
+	//
+	// ⚠ **macOS REACHES A LIBRARY CALL AND LINUX A CHUNK, WHICH IS WHY THIS PAIR KEEPS A ROUTE SPLIT.** There
+	// the region is a `pthread_mutex_t` and the op is one `bl` through the GOT; here it is three words and
+	// a `futex` protocol with a loop in it (`Arm64LinuxRuntime.buildArm64LinuxLockEnterChunk`), and a loop
+	// needs a body. Both are RECURSIVE by the owning thread, which is `InitializeCriticalSection`'s contract
+	// and was measured as a hang when it was not.
+	function lowerOsLockImport(lockPtrId ValueId, importSlot OsImportSlot, chunk ByteArray, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(lockPtrId)))
-		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(importSlot)))
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(importSlot)))
+			syscall then self.emit(dstRef, op: TargetOp.arm64BranchLink(chunk))
+		end 'route'
 	end 'lowerOsLockImport'
 
 	// Lower `currentThreadToken(result)` (F2) — the one member of this family with a genuine OS split on
@@ -2401,7 +2497,7 @@ type StdToArm64Lowering
 	// no libc to do so. `StdOp.currentThreadToken` carries that argument in full.
 	function lowerCurrentThreadToken(resultId ValueId, dstRef BlockRef)
 		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emit(dstRef, op: TargetOp.arm64ThreadPointer(TargetVReg.virtual(resultId)))
+			importCall then self.emit(dstRef, op: TargetOp.arm64ThreadPointer(TargetVReg.virtual(resultId), source: Arm64ThreadPointerSource.darwinMaskedReadOnly))
 			syscall then self.lowerCurrentThreadTokenLinux(resultId, dstRef: dstRef)
 		end 'route'
 	end 'lowerCurrentThreadToken'

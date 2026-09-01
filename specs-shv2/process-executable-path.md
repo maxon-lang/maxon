@@ -57,8 +57,9 @@ change.
 
 ### TWO lanes serve it, and the three platforms really do disagree about the API's shape
 
-`__Builtins.executablePath` lowers to `__proc_exe_path`, one of the three entries behind the
-`processInfo` host facility. Which targets provide it is
+`__Builtins.executablePath` lowers to `__proc_exe_path`, one of the two IDENTITY reads behind the
+`processInfo` host facility (the band's third entry, the background-priority WRITE, answers
+`processPriority` instead — see `process-id.md`). Which targets provide it is
 `TargetFacilities.targetProvidesFacility`'s to say and is not counted here; a program that reaches
 it on a target that does not is refused with `E3104` at the call's own span, by the `__proc_`
 PREFIX, so an entry added to the band later is gated by construction rather than by memory.
@@ -68,8 +69,11 @@ The three platforms genuinely differ (`GetModuleFileNameA`, `_NSGetExecutablePat
 argument `Runtime/CommandLineRuntime.maxon`'s header makes for argv. Windows FILLS the caller's
 buffer and answers a count; macOS takes an IN-OUT size, signals "too small" with `-1` plus a
 rewritten size, and leaves that size UNCHANGED on success, so the length comes from a `strlen` walk;
-Linux's is a SYMLINK that must be `readlink`'d and is not NUL-terminated. The Std tier above all
-three is one target-neutral doubling loop, and each backend supplies only the fill.
+Linux's is a SYMLINK that must be `readlink`'d and is not NUL-terminated — and reports truncation by
+answering exactly the buffer size rather than by failing, which is the one of the three that can go
+wrong SILENTLY. The Std tier above all three is one target-neutral doubling loop, and each backend
+supplies only the fill: the arm64-Linux chunk writes the terminator itself and hands the count back
+unchanged when the link did not fit, so the loop doubles and asks again.
 
 ⚠ **macOS answers *"a path"*, not *"the real path"*, so its lowering CANONICALIZES.** Darwin's own
 SDK warns that `_NSGetExecutablePath` returns whatever path the image was exec'd through and *"may
@@ -88,7 +92,7 @@ lowering there could only be a plausible wrong answer.
 ## Tests
 
 <!-- test: process-executable-path.is-not-empty -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The canonical property, in the canonical spec's own shape
 (`/specs/command-line-args.md:executable-path`): the call succeeds and answers something.
 ```maxon
@@ -105,7 +109,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.names-a-file-that-exists -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The strongest property available without a literal: hand the answer straight back to the OS. A
 truncated path, a path with the NUL still in it, or a length taken from the buffer's CAPACITY
 rather than from `GetModuleFileNameA`'s return would all name nothing.
@@ -147,7 +151,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.is-absolute-posix -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `is-absolute`'s property in the POSIX spelling: an absolute path begins with `/` and is longer than
 that one byte. A lowering that answered `argv[0]` verbatim could produce a relative path — and one
 that answered a canonicalization failure as the empty string would produce nothing at all — so both
@@ -174,7 +178,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.is-stable-across-calls -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Two independent calls agree. Each one allocates its own buffer, asks the OS again and copies the
 answer out, so this pins the whole retry-and-copy path rather than a single lucky first call — a
 buffer reused across calls, or a length left over from the previous one, shows up here as a
@@ -194,7 +198,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.builtin-answers-a-non-empty-buffer -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The intrinsic under the module, driven directly, so a failure attributes to the runtime entry
 rather than to `FilePath` parsing above it.
 ```maxon
@@ -211,7 +215,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.builtin-result-is-owned -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Each call answers a FRESH owned `__ManagedMemory`, dropped at the end of the statement that bound
 it. Fifty of them in a loop is the leak gate's shape: a missing drop is a non-zero mm balance at
 exit, which the runtime reports as exit 101 rather than as a wrong number. The lengths are summed

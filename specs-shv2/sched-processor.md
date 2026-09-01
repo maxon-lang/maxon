@@ -175,7 +175,7 @@ too.
 ## Tests
 
 <!-- test: sched-processor.spawn-carries-every-argument -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE FULL INLINE ARGUMENT REGION, AND THE SUBJECT OF THE PUBLISH-LAST ORDERING.** `MaxAsyncArgs` is
 six, so this is the widest spawn the language admits: every slot of the GT struct's inline region is
 written by the lowering and read back by the trampoline. A slot missed, mis-strided or read before it
@@ -198,7 +198,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: sched-processor.many-green-threads-through-one-processor -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Thirty-two green threads spawned before any is awaited, so all thirty-two are on the run queue at
 once and one P drives every one of them: the scheduler's `currentGt` is written and restored around
 each switch, and an M that lost track of which thread it was running would return one thread's result
@@ -237,7 +237,7 @@ end 'main'
 ```
 
 <!-- test: sched-processor.a-green-thread-kernel-call-round-trips-its-processor-stack -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE PER-M SYSCALL STACK, END TO END.** A green thread's `sleep` is a Win32 call, which the syscall
 shim runs on a scratch stack instead of the thread's own 2 KB one — and since the P landed, that
 scratch stack is reached through a struct field rather than a global: `P->systemStackSP` at first, and

@@ -1716,21 +1716,36 @@ let MaxProcsEnvBufBytes = 32 as ParsedInt
 function tlsSlotArrayBase(target Target) returns ParsedInt
 	return match target.os 'os'
 		windows gives WindowsTebTlsSlotsOffset
-		linux gives noTlsSlotArray(target.os)
+		linux gives LinuxThreadPointerBase
 		macos gives DarwinTsdArrayBase
 		wasi gives noTlsSlotArray(target.os)
 	end 'os'
 end 'tlsSlotArrayBase'
 
-// The refusal the two OSes without a per-OS-thread slot share. One function rather than two `panic` arms,
-// because `Os`'s declaration order puts `macos` BETWEEN them — so they cannot be one contiguous arm, and two
-// arms spelling the same sentence is the duplication this codebase keeps finding.
+// The refusal for the one target with no per-OS-thread slot at all. ⚠ **IT WAS SHARED WITH LINUX UNTIL L4**,
+// on the argument that *"the Linux images are raw static binaries with no libc to write a thread pointer"* —
+// which was true and was the reason arm64-linux could WRITE ONE FOR ITSELF: nothing else on that lane reads
+// or writes `TPIDR_EL0`, so `mrt_host_tls_alloc` claims it (`Arm64LinuxRuntime`). WASI is different in kind
+// and not in schedule: a component has no OS-thread concept for a slot to be per.
+//
+// ⚠ **x64-linux IS NOT SERVED BY THIS AND STILL PANICS**, one arm up — it reaches this function through the
+// same `linux` case and gets `LinuxThreadPointerBase`, which is honest only where a backend actually
+// publishes the pointer. `targetProvidesFacility` denies `greenThreads` there, and `StdToX64Conversion`'s
+// `lowerTlsAlloc` still refuses outright, so no such program reaches a layout at all.
 function noTlsSlotArray(os Os) returns ParsedInt
-	panic("tlsSlotArrayBase: {os.name} has no per-OS-thread slot this scheduler could publish a P in — the Linux images are raw static binaries with no libc to write a thread pointer, and a WASI component has no OS-thread concept at all. `targetProvidesFacility` denies `greenThreads` on both, so a source-written `async` is refused at its own span; reaching here means a COMPILER-INSERTED `__sched_init_procs` got past that name-keyed gate")
+	panic("tlsSlotArrayBase: {os.name} has no per-OS-thread slot this scheduler could publish a P in — a WASI component has no OS-thread concept at all. `targetProvidesFacility` denies `greenThreads` there, so a source-written `async` is refused at its own span; reaching here means a COMPILER-INSERTED `__sched_init_procs` got past that name-keyed gate")
 end 'noTlsSlotArray'
 
 let WindowsTebTlsSlotsOffset = 0x1480 as ParsedInt
 let DarwinTsdArrayBase = 0 as ParsedInt
+
+// **Linux — 0, for Darwin's reason arrived at from the opposite direction.** There the base is 0 because the
+// masked thread pointer IS the TSD array's base; here it is 0 because the backend CHOSE the thread pointer to
+// be its slot block's base, having found the register unclaimed. Both make offset 0 ambiguous in the way
+// Windows's 0x1480 is not — it would also be key 0's slot — and both answer it the same way, by refusing to
+// hand out key 0 at run time (`Arm64LinuxRuntime.buildArm64LinuxTlsAllocChunk`) rather than by trusting the
+// arithmetic.
+let LinuxThreadPointerBase = 0 as ParsedInt
 
 // ⭐ **THE PARK TIMEOUT, IN MILLISECONDS — v1's adaptive pair, and it is a MISSED-WAKEUP SAFETY NET rather
 // than a schedule.** A parked M is normally woken by `SetEvent`; the timeout bounds how long a wakeup that

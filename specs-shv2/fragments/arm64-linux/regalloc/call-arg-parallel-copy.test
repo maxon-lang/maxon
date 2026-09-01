@@ -1,0 +1,203 @@
+// Test: call-arg-parallel-copy
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function combine6(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	return ((a xor b) + (c xor d)) + ((e xor f) + 1)
+end 'combine6'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// Six values live across the helper call. Each comes from an opaque
+	// helper so the constant folder cannot fold them out. They are all
+	// used after the call (the final `total` consumes each), forcing
+	// them into long live ranges that cross the call boundary.
+	let v1 = opaque(seed + 11)
+	let v2 = opaque(seed + 22)
+	let v3 = opaque(seed + 33)
+	let v4 = opaque(seed + 44)
+	let v5 = opaque(seed + 55)
+	let v6 = opaque(seed + 66)
+
+	// Call with six args in a permuted order — combine6(v6, v5, v4,
+	// v3, v2, v1) forces a reverse mapping at the ABI boundary, which
+	// is exactly the shape that pre-sequentialization emitDirectCall
+	// could miscompile when the colorer aligned several of v1..v6 to
+	// ABI parameter registers. The args are also reused after the
+	// call so the colorer cannot collapse them into the ABI slots
+	// permanently.
+	let reversed = combine6(v6, b: v5, c: v4, d: v3, e: v2, f: v1)
+
+	// Second call in a different rotation. With two calls back-to-back
+	// the colorer's choices get exercised again under different live
+	// sets — catches a fix that happens to work for the first call
+	// but not when the post-call values land in different colorings.
+	let rotated = combine6(v3, b: v1, c: v2, d: v6, e: v4, f: v5)
+
+	let total = reversed + rotated + v1 + v2 + v3 + v4 + v5 + v6
+	let masked = total and 127
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 33
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl CommandLine.args
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#30
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#31
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#31:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#30:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_rec_1  ; "0"
+    arm64.b trycont#3
+  tryok#1:
+    arm64.b trycont#3
+  trycont#3:
+    arm64.bl __int_fromString
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.movImm x0, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.add x1, x0, 11
+    arm64.b __il_body#22
+  __il_body#22:
+    arm64.b __il_cont#21
+  __il_cont#21:
+    arm64.add x2, x0, 22
+    arm64.b __il_body#23
+  __il_body#23:
+    arm64.b __il_cont#20
+  __il_cont#20:
+    arm64.add x3, x0, 33
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.add x4, x0, 44
+    arm64.b __il_body#25
+  __il_body#25:
+    arm64.b __il_cont#18
+  __il_cont#18:
+    arm64.add x5, x0, 55
+    arm64.b __il_body#26
+  __il_body#26:
+    arm64.b __il_cont#17
+  __il_cont#17:
+    arm64.add x0, x0, 66
+    arm64.b __il_body#27
+  __il_body#27:
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.b __il_body#28
+  __il_body#28:
+    arm64.eor x6, x0, x5
+    arm64.eor x7, x4, x3
+    arm64.add x6, x6, x7
+    arm64.eor x7, x2, x1
+    arm64.add x7, x7, 1
+    arm64.add x6, x6, x7
+    arm64.b __il_cont#15
+  __il_cont#15:
+    arm64.b __il_body#29
+  __il_body#29:
+    arm64.eor x7, x3, x1
+    arm64.eor x8, x2, x0
+    arm64.add x7, x7, x8
+    arm64.eor x8, x4, x5
+    arm64.add x8, x8, 1
+    arm64.add x7, x7, x8
+    arm64.b __il_cont#14
+  __il_cont#14:
+    arm64.add x6, x6, x7
+    arm64.add x1, x6, x1
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x5
+    arm64.add x0, x1, x0
+    arm64.and x20, x0, 127
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at call-arg-parallel-copy.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

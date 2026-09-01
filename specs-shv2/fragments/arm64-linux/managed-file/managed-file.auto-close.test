@@ -1,0 +1,293 @@
+// Test: managed-file.auto-close
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openRead'
+end 'TestFile'
+
+function writeFile(path String)
+	let wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("write open failed")
+	try wf.file.write("auto".toByteArray().managed) otherwise panic("write failed")
+	// wf goes out of scope here, destructor closes handle
+end 'writeFile'
+
+function main() returns ExitCode
+	let path = "test_managed_autoclose.txt"
+	writeFile(path)
+
+	// Verify we can read it (file was properly closed by destructor)
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
+		print("read failed")
+		return 1
+	end 'readFail'
+	let size = try rf.file.size() otherwise 'sizeErr'
+		return 3
+	end 'sizeErr'
+	rf.file.close()
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise 'delErr'
+		return 2
+	end 'delErr'
+	if size == 4 'sizeOk'
+		return 42
+	end 'sizeOk'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @TestFile.openWrite {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mf_open_write
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_destruct
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @TestFile.openRead {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mf_open_read
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_destruct
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @writeFile {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl TestFile.openWrite
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at managed-file.auto-close.test:25: write open failed\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
+    arm64.leaRdata x0, __str_rec_3  ; "auto"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __mf_write
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at managed-file.auto-close.test:26: write failed\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TestFile
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_6  ; "test_managed_autoclose.txt"
+    arm64.movRegReg x0, x19
+    arm64.bl writeFile
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl TestFile.openRead
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_rec_7  ; "read failed"
+    arm64.bl print
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __mf_size
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movImm x19, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TestFile
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __mf_close
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mf_delete
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TestFile
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#5:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 4
+    arm64.cset x0, eq
+    arm64.cbnz x0, sizeOk
+    arm64.b ifcont
+  sizeOk:
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TestFile
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TestFile
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

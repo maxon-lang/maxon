@@ -318,20 +318,47 @@ end 'buildArm64GtTrampolineChunk'
 // array is at the masked thread pointer and `pthread_getspecific(key)` is `tsd[key]`; measured on this host,
 // `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`. `StdToArm64Conversion.lowerTlsSlotLoad` carries the measurement
 // and the assertion that keeps it honest — this is the same read, one tier down.
-function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Register, gtDest Arm64Register, scratch Arm64Register, bail BlockId)
-	emitArm64LoadCurrentMOrBail(asm, dest: mDest, scratch: scratch, bail: bail)
+function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Register, gtDest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
+	emitArm64LoadCurrentMOrBail(asm, dest: mDest, scratch: scratch, bail: bail, os: os)
 	arm64EmitLoadWord64At(asm, dest: gtDest, base: mDest, byteOffset: MOffCurrentGt)
 	arm64EmitCbzTo(asm, reg: gtDest, label: bail)
 end 'emitArm64LoadCurrentGtOrBail'
 
+// ⭐⭐ **A FOURTH NULL, AND IT EXISTS ON ONE LANE ONLY (L4).** On Darwin the thread pointer is written by the
+// kernel for every thread that has ever existed, so it cannot be zero and no test is emitted — which is why
+// this is not folded into the sequence above unconditionally: an extra `cbz` in the PROLOGUE GUARD is paid by
+// every guarded function on the hot path, and it would move every arm64-macOS golden for a test that can
+// never fire.
+//
+// On Linux `TPIDR_EL0` is what `mrt_host_tls_alloc` made it, and it is ZERO on any OS thread that never asked
+// the scheduler for a slot. The offset test above cannot cover that: the offset is a `.data` word shared by
+// the whole process, so it is non-zero the moment ONE thread has initialised the scheduler, while a second
+// thread's own pointer is still 0. Without this the indexed load below is `[0 + key*8]` — a wild load a page
+// into the null page rather than a diagnosable answer.
+//
+// ⚠ **SUCH A THREAD IS NOW REACHABLE, AND THIS TEST IS WHY THAT IS SAFE RATHER THAN WHY IT CANNOT HAPPEN.**
+// It used to read *"no such thread exists today, because `osThreadCreate` is a runtime abort on this lane"*;
+// `mrt_host_thread_create` is a real `clone` there now. A worker M gets its block through `CLONE_SETTLS`
+// before it runs an instruction, so it never takes this bail — but a thread that reached Maxon code without
+// one still would, and one instruction is what turns that from a wild load into a diagnosable answer.
+function arm64LinuxEmitBailOnNullThreadPointer(asm Arm64RuntimeAsm, reg Arm64Register, bail BlockId, os Os)
+	match os 'os'
+		macos then break 'os'
+		linux then arm64EmitCbzTo(asm, reg: reg, label: bail)
+		windows then panic("arm64LinuxEmitBailOnNullThreadPointer: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
+		wasi then panic("arm64LinuxEmitBailOnNullThreadPointer: wasm32-wasi is not an arm64 lane — a WASI component has no `.text` this fragment could be spliced into")
+	end 'os'
+end 'arm64LinuxEmitBailOnNullThreadPointer'
+
 // The M alone, with both of ITS nulls tested. Split from the function above because the shim needs the M
 // AFTER it has the GT (it reads the M's system stack out of it), so the two answers cannot share one
 // register — and because the guard's cold path wants the M and nothing else.
-function emitArm64LoadCurrentMOrBail(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register, bail BlockId)
+function emitArm64LoadCurrentMOrBail(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
 	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(scratch), label: SchedTlsTebOffsetLabel, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
 	arm64EmitLoadWord64At(asm, dest: scratch, base: scratch, byteOffset: 0)
 	arm64EmitCbzTo(asm, reg: scratch, label: bail)
-	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest))
+	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: arm64ThreadPointerSource(os))
+	arm64LinuxEmitBailOnNullThreadPointer(asm, reg: dest, bail: bail, os: os)
 	arm64EmitLoadRegOffset(asm.code, dest: arm64RuntimeReg(dest), base: arm64RuntimeReg(dest), index: arm64RuntimeReg(scratch))
 	arm64EmitCbzTo(asm, reg: dest, label: bail)
 end 'emitArm64LoadCurrentMOrBail'
@@ -657,11 +684,11 @@ let Arm64GuardScratchReg = Arm64Register.x13
 //
 // It emits into the function's own byte stream with a GUARD-LOCAL branch table, exactly as the x64 twin
 // does, so it is invisible to the Target-IR goldens and is verified by the RUN plus a disassembly instead.
-export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt)
+export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, os Os)
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 	let skip = asm.newLabel()
 
-	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64MorestackEntryGtReg, gtDest: Arm64MorestackEntryGtReg, scratch: Arm64GuardScratchReg, bail: skip)
+	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64MorestackEntryGtReg, gtDest: Arm64MorestackEntryGtReg, scratch: Arm64GuardScratchReg, bail: skip, os: os)
 
 	// projected = SP - (frameBytes + margin + the cold path's own cell); enough room (>= gt.stackGuard) → skip.
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MorestackEntrySysTopReg))
@@ -678,7 +705,7 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	// x12 = this M's system-stack top, which IS `__gt_morestack`'s entry contract. The M is re-read rather
 	// than kept from the test above, because that register now holds the current GT — the OTHER half of the
 	// contract — and the hot path must not spend a register to save a load on the cold one.
-	emitArm64LoadCurrentMOrBailless(asm, dest: Arm64MorestackEntrySysTopReg, scratch: Arm64GuardScratchReg)
+	emitArm64LoadCurrentMOrBailless(asm, dest: Arm64MorestackEntrySysTopReg, scratch: Arm64GuardScratchReg, os: os)
 	arm64EmitLoadWord64At(asm, dest: Arm64MorestackEntrySysTopReg, base: Arm64MorestackEntrySysTopReg, byteOffset: MOffSystemStackSP)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtMorestackName)
 	arm64GtLoadSp(asm, dest: Arm64Register.x30, byteOffset: 0)
@@ -694,10 +721,10 @@ end 'emitArm64GtStackGuard'
 // becomes an M once and never unbecomes one. ⭐ **That proof is STRICTLY STRONGER than the one it replaced at
 // W213-C1**, which had to argue that no P had been released in between — a claim a handoff would falsify.
 // A test here would need a branch target with no correct destination.
-function emitArm64LoadCurrentMOrBailless(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register)
+function emitArm64LoadCurrentMOrBailless(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register, os Os)
 	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(scratch), label: SchedTlsTebOffsetLabel, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
 	arm64EmitLoadWord64At(asm, dest: scratch, base: scratch, byteOffset: 0)
-	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest))
+	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: arm64ThreadPointerSource(os))
 	arm64EmitLoadRegOffset(asm.code, dest: arm64RuntimeReg(dest), base: arm64RuntimeReg(dest), index: arm64RuntimeReg(scratch))
 end 'emitArm64LoadCurrentMOrBailless'
 
@@ -738,7 +765,12 @@ export function emitArm64GtGatedImportCall(code ByteArray, rdataRelocs RdataRelo
 	let direct = asm.newLabel()
 	let done = asm.newLabel()
 
-	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64ShimMReg, gtDest: Arm64ShimGtReg, scratch: Arm64ShimSpReg, bail: direct)
+	// ⭐ **THE SHIM IS macOS-ONLY BY CONSTRUCTION, WHICH IS WHY IT NAMES A SOURCE RATHER THAN ASKING A
+	// TARGET.** It runs only for `TargetOp.arm64ImportCall`, and an import call is emitted only on the
+	// `importCall` route (`arm64OsCallKind`) — `ElfWriter` has no import-relocation consumer at all, so one on
+	// a Linux image would already be a binary that jumps into its own first `.text` page. Threading an `os`
+	// down here would be plumbing a question through the encoder, which deliberately takes no target.
+	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64ShimMReg, gtDest: Arm64ShimGtReg, scratch: Arm64ShimSpReg, bail: direct, os: Os.macos)
 	arm64EmitLoadWord64At(asm, dest: Arm64ShimGtReg, base: Arm64ShimGtReg, byteOffset: GtOffStackBase)
 	arm64EmitCbzTo(asm, reg: Arm64ShimGtReg, label: direct)
 

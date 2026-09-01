@@ -1,0 +1,89 @@
+// Test: builtins-clock.thread-cpu-ticks-advances-under-work
+function main() returns ExitCode
+	let before = __Builtins.threadCpuTicks()
+	var sum = 0
+	for i in 0 upto 2000000 'spin'
+		sum = sum + i
+	end 'spin'
+	let after = __Builtins.threadCpuTicks()
+	var score = 0
+	if sum > 0 'workHappened'
+		score = score + 1
+	end 'workHappened'
+	if after > before 'cpuAdvanced'
+		score = score + 3
+	end 'cpuAdvanced'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __thread_cpu_ticks
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movImm x0, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.movImm x16, 2000000
+    arm64.cmp x0, x16
+    arm64.cset x1, lt
+    arm64.cbnz x1, spin
+    arm64.b forexit
+  spin:
+    arm64.add x20, x20, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x0, x0, 1
+    arm64.b forhdr
+  forexit:
+    arm64.bl __thread_cpu_ticks
+    arm64.movImm x1, 0
+    arm64.cmp x20, 0
+    arm64.cset x2, gt
+    arm64.cbnz x2, workHappened
+    arm64.b critsplit#12
+  workHappened:
+    arm64.movImm x1, 1
+    arm64.b ifcont#6
+  critsplit#12:
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.cmp x0, x19
+    arm64.cset x0, gt
+    arm64.cbnz x0, cpuAdvanced
+    arm64.b critsplit#13
+  cpuAdvanced:
+    arm64.add x0, x1, 3
+    arm64.b ifcont#8
+  critsplit#13:
+    arm64.movRegReg x0, x1
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-clock.thread-cpu-ticks-advances-under-work.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

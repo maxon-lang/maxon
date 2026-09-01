@@ -1,0 +1,92 @@
+// Test: builtin-type-checking.subprocess-resolve-on-path-cstring
+function main() returns ExitCode
+	// Routing the path through `String.cstr()` satisfies the cstring type
+	// check for `subprocessResolveOnPath`; the call itself may or may not
+	// resolve a real binary depending on the host PATH, which is irrelevant
+	// to this test.
+	let s = "__nonexistent_binary_for_type_check__"
+	let result = __Builtins.subprocessResolveOnPath(s.cstr())
+	let isNull = __Builtins.managedIsNull(result)
+	// Convert isNull (0 or 1) into 0 regardless — the test just verifies the
+	// call compiles and runs once `.cstr()` is in the path.
+	if isNull == 0 'zero'
+		return 0
+	end 'zero'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_proc_wait_snapshot@88 = i64 0
+  __gt_proc_poller@96 = i64 0
+  __gt_live_count@104 = i64 0
+  __sched_progress@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_num_procs@160 = i64 0
+  __sched_shutdown_flag@168 = i64 0
+  __sched_lock@176 = i64 0
+  __mrt_errno@184 = i64 0
+  __mrt_envp@192 = i64 0
+  __mrt_tls_next_key@200 = i64 0
+  __io_iocp@208 = i64 0
+  __io_done_event@216 = i64 0
+  __io_init_done@224 = i64 0
+  __io_pending@232 = i64 0
+  __io_pipe_seq@240 = i64 0
+  __subp_table@248 = i64 0
+  __subp_last_error@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1  ; "__nonexistent_binary_for_type_check__"
+    arm64.bl String.cstr
+    arm64.bl __gt_subp_resolve_path
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_is_null
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, zero
+    arm64.b ifcont
+  zero:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

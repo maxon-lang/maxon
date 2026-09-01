@@ -206,7 +206,7 @@ kind=0 code=0 outLen=7 errLen=0 matches=true
 ```
 
 <!-- test: subprocess-builtins.posix-collect-echo -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `collect-echo`'s subject on the POSIX lane, and the case that proves the whole attached path runs here at
 all: build an argv blob, spawn `/bin/echo hello` with both streams collected, wait, and read the result
 struct back. ⚠ **The byte count is SIX, not the Windows sibling's seven, and that is the line terminator
@@ -255,7 +255,7 @@ kind=0 code=0 outLen=6 errLen=0 matches=true
 ```
 
 <!-- test: subprocess-builtins.posix-argv-reaches-the-child-verbatim -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 ⭐ **THE CASE THAT PROVES THERE IS NO SHELL ON THE ARGV PATH — `argv-quoting`'s subject, inverted.** The
 Windows sibling asserts that a token holding a space is QUOTED into one command line; this lane must
 assert the opposite property, because `posix_spawnp` takes a vector and quotes nothing. Three tokens are
@@ -486,7 +486,7 @@ outHasPayload=true errHasOops=true kind=0
 ```
 
 <!-- test: subprocess-builtins.posix-stdin-bytes -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `stdin-bytes-and-stderr`'s stdin half on this lane. `StdinKind.bytes` queues a payload the collect loop
 pushes into the child between drains and closes the pipe once it is spent — so `/bin/cat` echoes it back
 and EXITS rather than blocking on a pipe nobody ever closes. A runtime that queued the payload and never
@@ -530,7 +530,7 @@ kind=0 code=0 echoed=true outLen=7
 ```
 
 <!-- test: subprocess-builtins.posix-stdout-and-stderr-are-separate -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `stdin-bytes-and-stderr`'s other half: the two pipes are drained INDEPENDENTLY, not one after the other.
 The child writes four bytes to stdout and three to stderr with no trailing newline on either, so each
 buffer's exact contents are pinned and a runtime that concatenated the two — or that dropped one — cannot
@@ -577,7 +577,7 @@ out=true err=true outLen=4 errLen=3
 ```
 
 <!-- test: subprocess-builtins.posix-exit-code-is-propagated -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 The child's own exit status reaches `subprocessResultStatusCode` unchanged. ⚠ **On this lane that is a
 `waitpid` status word rather than `GetExitCodeProcess`'s plain integer**, so the runtime has to decode it —
 a body that handed the raw status back would answer `1792` (`7 << 8`) for this child, and one that lost the
@@ -665,7 +665,7 @@ kind=2
 ```
 
 <!-- test: subprocess-builtins.posix-timeout-kills-the-child -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `timeout-kills-the-child` on this lane. `/bin/sleep 5` would run for five seconds; the 300 ms deadline
 fires, the child is killed, and the result's status kind is `timedOut` (`2`). The DURATION is asserted
 beside the kind because the kind alone cannot tell a deadline that fired from one that was ignored and then
@@ -749,7 +749,7 @@ positive=true
 ```
 
 <!-- test: subprocess-builtins.posix-detach-answers-a-pid -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `detach-answers-a-pid` on this lane: the detach bit (bit 2 of `flags`) makes the runtime answer the child's
 OS process id rather than a table handle, and release the slot — so the parent holds no handle to a child it
 will never wait for. The pid is machine-specific, so the property asserted is that it is a real one. ⚠ On
@@ -844,7 +844,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: subprocess-builtins.posix-inherited-and-discarded-output -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `inherited-and-discarded-output` on this lane. `OutputKind.inherit` hands the child the PARENT's own
 descriptor, so its text lands in this program's stdout with nothing collected; `OutputKind.discard` opens
 `/dev/null`, so the second child's text goes nowhere at all. ⚠ An inherited descriptor belongs to the
@@ -992,7 +992,7 @@ kind=0 code=0 outLen=8400
 ```
 
 <!-- test: subprocess-builtins.posix-large-collect-grows-both-buffers -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 An UNCAPPED collect of far more than one buffer's worth, on BOTH pipes at once: 1200 lines of 49
 characters plus a LF on each stream is exactly 60000 bytes each, 117 KiB together. Each collect buffer
 starts at 4096 and doubles past what a pass needs, freeing the buffer it outgrew — so this is the case that
@@ -1291,21 +1291,27 @@ end 'main'
 error E3104: <fragment>:9:21: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_attached_spawn', which has no wasm32-wasi implementation
 ```
 
-<!-- test: subprocess-builtins.streaming-rejected-on-arm64 -->
-<!-- targets: arm64-linux -->
+<!-- test: subprocess-builtins.streaming-rejected-on-a-native-target -->
+<!-- targets: x64-linux -->
 The bare-name streaming builtin is gated by the same band and names its own entry. ⚠ It was outside
 the gate until this rung, and `SemanticCheck.calleeNeedsWin32Substrate`'s header recorded the
 consequence: *"on another target they still die as a BACKEND PANIC rather than a diagnostic —
 MEASURED"*.
 
-⚠ **THIS CASE NAMED arm64-macOS UNTIL THAT LANE GREW A CHILD-PROCESS SUBSTRATE, AND IT MOVED RATHER
-THAN BEING DELETED** — `async-sleep.rejected-on-arm64` did the same thing one facility earlier, for
-the same reason. The whole `__gt_subp_` band now COMPILES AND RUNS there (`posix_spawnp` plus a
-file-actions builder, anonymous pipes, and `waitpid` behind a handle object), so the refusal this
-case pins had to be re-pointed at a lane where it is still true. arm64-Linux is that lane and is the
-right one on the merits: the child-process substrate on this backend is libSystem end to end, and a
-raw static Linux image links no libc to provide any of it — the same *"there is no such primitive
-here"* the case was written to describe.
+⚠ **RE-POINTED TWICE NOW, EACH TIME BECAUSE THE LANE IT NAMED GREW A CHILD-PROCESS SUBSTRATE** —
+`async-sleep.rejected-on-a-native-target` did the same thing one facility earlier, for the same
+reason. arm64-macOS got the band at MAC8 (`posix_spawnp` plus a file-actions builder, anonymous
+pipes, `waitpid` behind a handle object); arm64-Linux got it at L5, by hand, because Linux has no
+`posix_spawn` syscall — `clone(SIGCHLD)`, `dup3`, `execve`, and a close-on-exec status pipe that
+reports a failed exec back to the parent. Both COMPILE AND RUN it, so the refusal was re-pointed
+again rather than deleted: the rule it pins is still true on a lane that still has no substrate.
+`x64-linux` is that lane.
+
+⇒ **THE NAME NO LONGER NAMES A TARGET.** `-on-arm64` made the target a third copy beside the
+`targets:` marker and the `maxoncstderr` text, and forced a rename at every re-point; the marker and
+the text are the pair the runner checks against each other, and the name was the copy nothing
+verified. MEASURED at this re-point: `--target=x64-linux` emits this E3104 on a macOS host, and the
+case needs no WSL because a `maxoncstderr` case is compiled and never run.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c echo hi")
@@ -1313,7 +1319,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_spawn', which has no arm64-linux implementation
+error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_spawn', which has no x64-linux implementation
 ```
 
 <!-- test: subprocess-builtins.the-stdlib-api-compiles-on-arm64 -->

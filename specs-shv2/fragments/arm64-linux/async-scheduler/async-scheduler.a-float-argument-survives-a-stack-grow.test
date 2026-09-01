@@ -1,0 +1,185 @@
+// Test: async-scheduler.a-float-argument-survives-a-stack-grow
+function scale(x Real, depth Integer) returns Integer
+	if depth == 0 'base'
+		return trunc(x)
+	end 'base'
+	return trunc(x) + scale(x * 2.0, depth: depth - 1)
+end 'scale'
+
+function sweep() returns Integer
+	Runtime.yield()
+	let d0 = scale(20.0, depth: 0)
+	if d0 != 20 'bad0'
+		return 1
+	end 'bad0'
+
+	let d1 = scale(20.0, depth: 1)
+	if d1 != 60 'bad1'
+		return 2
+	end 'bad1'
+
+	let d2 = scale(20.0, depth: 2)
+	if d2 != 140 'bad2'
+		return 3
+	end 'bad2'
+
+	let d3 = scale(20.0, depth: 3)
+	if d3 != 300 'bad3'
+		return 4
+	end 'bad3'
+
+	return 0
+end 'sweep'
+
+function main() returns ExitCode
+	let p = async sweep()
+	let r = await p
+	return r as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __mrt_envp@160 = i64 0
+  __mrt_tls_next_key@168 = i64 0
+  __slab_arena_list@176 = i64 0
+  __slab_arena_map_l1@184 = i64 0
+  __slab_state@192 = i64 0
+}
+
+func @scale {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, base
+    arm64.b ifcont
+  base:
+    arm64.fcvtzs x0, d0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.fcvtzs x19, d0
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fmul d0, d0, d1
+    arm64.sub x0, x0, 1
+    arm64.bl scale
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @sweep {
+  entry:
+    arm64.prologue 16
+    arm64.bl Runtime.yield
+    arm64.fpLoadRdata d0, [rdata + __fconst_20]
+    arm64.movImm x0, 0
+    arm64.bl scale
+    arm64.cmp x0, 20
+    arm64.cset x0, ne
+    arm64.cbnz x0, bad0
+    arm64.b ifcont#2
+  bad0:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.fpLoadRdata d0, [rdata + __fconst_20]
+    arm64.movImm x0, 1
+    arm64.bl scale
+    arm64.cmp x0, 60
+    arm64.cset x0, ne
+    arm64.cbnz x0, bad1
+    arm64.b ifcont#4
+  bad1:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.fpLoadRdata d0, [rdata + __fconst_20]
+    arm64.movImm x0, 2
+    arm64.bl scale
+    arm64.cmp x0, 140
+    arm64.cset x0, ne
+    arm64.cbnz x0, bad2
+    arm64.b ifcont#6
+  bad2:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.fpLoadRdata d0, [rdata + __fconst_20]
+    arm64.movImm x0, 3
+    arm64.bl scale
+    arm64.cmp x0, 300
+    arm64.cset x0, ne
+    arm64.cbnz x0, bad3
+    arm64.b ifcont#8
+  bad3:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x0, sweep
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at async-scheduler.a-float-argument-survives-a-stack-grow.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

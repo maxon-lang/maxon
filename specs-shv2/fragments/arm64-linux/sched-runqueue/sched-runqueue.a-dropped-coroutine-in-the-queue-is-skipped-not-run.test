@@ -1,0 +1,200 @@
+// Test: sched-runqueue.a-dropped-coroutine-in-the-queue-is-skipped-not-run
+var ran = 0
+
+function marker() returns Integer
+	__Builtins.parallelBoundary()
+	ran = ran + 1
+	return 1
+end 'marker'
+
+function ok(v Integer) returns Integer
+	__Builtins.parallelBoundary()
+	return v
+end 'ok'
+
+function main() returns ExitCode
+	let p1 = async ok(3)
+	_ = async marker()
+	let p2 = async ok(4)
+	let a = await p1
+	let b = await p2
+	print("ran={ran}")
+	return (a + b) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 7
+---
+data {
+  __data_ran@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_num_procs@144 = i64 0
+  __sched_shutdown_flag@152 = i64 0
+  __sched_lock@160 = i64 0
+  __mrt_envp@168 = i64 0
+  __mrt_tls_next_key@176 = i64 0
+  __slab_arena_list@184 = i64 0
+  __slab_arena_map_l1@192 = i64 0
+  __slab_state@200 = i64 0
+}
+
+func @marker {
+  entry:
+    arm64.prologue 16
+    arm64.bl __parallel_boundary
+    arm64.leaGlobal x0, __data_ran
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_ran
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @ok {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.bl __parallel_boundary
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 3
+    arm64.leaFuncAddr x0, ok
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.leaFuncAddr x0, marker
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_promise_drop
+    arm64.movImm x19, 4
+    arm64.leaFuncAddr x0, ok
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x19
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_await
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_1  ; "ran="
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.leaGlobal x0, __data_ran
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x23, x0
+    arm64.add x25, x22, x23
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x27, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x21, x23
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl print
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.add x0, x19, x20
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at sched-runqueue.a-dropped-coroutine-in-the-queue-is-skipped-not-run.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}

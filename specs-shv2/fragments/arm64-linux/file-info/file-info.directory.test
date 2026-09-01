@@ -1,0 +1,93 @@
+// Test: file-info.directory
+function main() returns ExitCode
+	let path = FilePath from "test_fi_dir"
+	// Create directory (may already exist from prior run — ignore result)
+	_ = Directory.create(path)
+	let fi = try File.info(path) otherwise 'e'
+		print("info failed")
+		return 2
+	end 'e'
+	if fi.isDirectory == false 'dc'
+		print("expected directory")
+		return 3
+	end 'dc'
+	print("is directory")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __mrt_errno@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_20  ; "test_fi_dir"
+    arm64.bl FilePath.init
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Directory.create
+    arm64.movRegReg x0, x19
+    arm64.bl File.info
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_21  ; "info failed"
+    arm64.bl print
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.byte x0, [x20 + 32]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, dc
+    arm64.b ifcont
+  dc:
+    arm64.leaRdata x0, __str_rec_22  ; "expected directory"
+    arm64.bl print
+    arm64.movImm x21, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __str_rec_23  ; "is directory"
+    arm64.bl print
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

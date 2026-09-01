@@ -175,7 +175,7 @@ Could not delete file
 
 ## Targets — the one statement of the FILESYSTEM gate
 
-⭐ **THIS SECTION IS THE HOME of the `<!-- targets: x64-windows, arm64-macos -->` marker every `File.*` case in
+⭐ **THIS SECTION IS THE HOME of the `<!-- targets: x64-windows, arm64-macos, arm64-linux -->` marker every `File.*` case in
 this file, in `file-info.md`, and the one filesystem case in `bytearray-element-size.md` carries.**
 Those cases point HERE rather than restating it, so the reason exists once and cannot drift into
 fourteen versions of itself. It is `async-scheduler.md`'s Targets section applied to a SECOND
@@ -186,11 +186,12 @@ reason would be worse than none.
 **IT IS A RUNTIME-SUBSTRATE GATE, AND THE COMPILER — NOT THE MARKER — IS WHAT DECIDES IT.**
 `File.readText` / `writeText` / `readBinary` / `writeBinary` / `exists` / `delete` / `rename` / `info`
 lower to the runtime entries `__mf_open_read`, `__mf_open_write`, `__mf_exists`, `__mf_delete`,
-`__mf_rename` and `__mf_stat`, which are implemented for **x64-windows and arm64-macOS** — the second
-lane landed at MAC4, over `open`/`creat`/`read`/`write`/`close`/`fstat`/`unlink`/`rename` with the
-errno→Win32 translation inside the Darwin runtime, so the errno classification above them is one graph
-for both. `SemanticCheck.requireTargetSupportsCallee` refuses every reachable one on the REMAINING
-lanes with **E3104**, naming the entry and the target:
+`__mf_rename` and `__mf_stat`, which are implemented for **x64-windows, arm64-macOS and arm64-Linux**.
+The second lane landed at MAC4, over `open`/`creat`/`read`/`write`/`close`/`fstat`/`unlink`/`rename`; the
+third took the same shape over `openat`/`read`/`write`/`close`/`fstat`/`unlinkat`/`renameat` raw
+syscalls. Both put the errno→Win32 translation inside their own runtime, so the errno classification
+above them is one graph for all three. `SemanticCheck.requireTargetSupportsCallee` refuses every
+reachable one on the REMAINING lanes with **E3104**, naming the entry and the target:
 
 ```
 error E3104: ...: this construct is x64-windows only at this rung: 'File.writeText' lowers to
@@ -223,7 +224,7 @@ each of the six is a syscall table rather than a re-spelling of the macOS work.
 ## Tests
 
 <!-- test: read-text-file -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	// Try to read a nonexistent file - this tests the error path
@@ -243,7 +244,7 @@ File not found
 ```
 
 <!-- test: read-nonexistent-file -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let content = try File.readText(FilePath from "nonexistent.txt") otherwise 'err'
@@ -262,7 +263,7 @@ File not found
 ```
 
 <!-- test: file-exists -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	// Test File.exists on a nonexistent file (returns false)
@@ -277,7 +278,7 @@ end 'main'
 ```
 
 <!-- test: read-binary-nonexistent -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
@@ -296,7 +297,7 @@ File not found
 ```
 
 <!-- test: write-and-read-text -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_readtext.txt"
@@ -334,7 +335,7 @@ Hello World
 ```
 
 <!-- test: write-and-read-binary -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ```maxon
 
 function main() returns ExitCode
@@ -398,7 +399,7 @@ exists. Backed by `MoveFileEx` (Windows), `rename(2)` (POSIX), and
 **Signature:** `static function rename(from FilePath, to FilePath) throws FileRenameError`
 
 <!-- test: write-rename-and-read -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ```maxon
 
 function main() returns ExitCode

@@ -1,0 +1,160 @@
+// Test: managed-directory.create-existing-is-create-failed
+function main() returns ExitCode
+	// The scratch root is shared with every other case here and with every parallel spec
+	// worker, so losing the create race is ordinary — see this file's Documentation. It is
+	// NOT the subject: the catch-all below is pinned on `dirPath`'s SECOND create.
+	let scratchRoot = "temp"
+	try __ManagedDirectory.create(scratchRoot.toByteArray().managed) otherwise 'anotherWorkerMadeIt'
+		if not __ManagedDirectory.exists(scratchRoot.toByteArray().managed) 'noScratchRoot'
+			return 1
+		end 'noScratchRoot'
+	end 'anotherWorkerMadeIt'
+
+	let dirPath = "temp/test_md_already_there"
+	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
+		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
+	end 'needCreate'
+	try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise (e) 'handler'
+		match e 'kind'
+			createFailed then return 42
+			default panic("expected createFailed")
+		end 'kind'
+	end 'handler'
+	return 2
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_2  ; "temp"
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_create
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __md_exists
+    arm64.eor x21, x0, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cbnz x21, noScratchRoot
+    arm64.b ifcont#4
+  noScratchRoot:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.b trycont
+  tryok#1:
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.leaRdata x19, __str_rec_3  ; "temp/test_md_already_there"
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_exists
+    arm64.eor x21, x0, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.cbnz x21, needCreate
+    arm64.b ifcont#9
+  needCreate:
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __md_create
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#7:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.b ifcont#9
+  ifcont#9:
+    arm64.movRegReg x0, x19
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __md_create
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#11
+    arm64.b tryok#10
+  tryerr#11:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 5
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.movImm x20, 42
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchdefault:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at managed-directory.create-existing-is-create-failed.test:20: expected createFailed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#10:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchcont:
+}

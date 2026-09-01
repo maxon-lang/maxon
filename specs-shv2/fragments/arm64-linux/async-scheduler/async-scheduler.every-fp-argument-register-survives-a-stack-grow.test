@@ -1,0 +1,129 @@
+// Test: async-scheduler.every-fp-argument-register-survives-a-stack-grow
+function six(a Real, b Real, c Real, d Real, e Real, f Real) returns Integer
+	let sum = trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
+	if a < 1.0 'base'
+		return sum
+	end 'base'
+	return sum + six(a - 1.0, b: b, c: c, d: d, e: e, f: f)
+end 'six'
+
+function fpArgs() returns Integer
+	Runtime.yield()
+	return six(6.0, b: 1.5, c: 2.5, d: 3.5, e: 4.5, f: 5.5)
+end 'fpArgs'
+
+function main() returns ExitCode
+	let p = async fpArgs()
+	let r = await p
+	if r == 105 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __mrt_envp@160 = i64 0
+  __mrt_tls_next_key@168 = i64 0
+  __slab_arena_list@176 = i64 0
+  __slab_arena_map_l1@184 = i64 0
+  __slab_state@192 = i64 0
+}
+
+func @six {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.fcvtzs x0, d1
+    arm64.fcvtzs x1, d2
+    arm64.add x0, x0, x1
+    arm64.fcvtzs x1, d3
+    arm64.add x0, x0, x1
+    arm64.fcvtzs x1, d4
+    arm64.add x0, x0, x1
+    arm64.fcvtzs x1, d5
+    arm64.add x19, x0, x1
+    arm64.fpLoadRdata d6, [rdata + __fconst_1]
+    arm64.fcmp d0, d6
+    arm64.cset x0, mi
+    arm64.cbnz x0, base
+    arm64.b ifcont
+  base:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.fpLoadRdata d6, [rdata + __fconst_1]
+    arm64.fsub d0, d0, d6
+    arm64.bl six
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @fpArgs {
+  entry:
+    arm64.prologue 16
+    arm64.bl Runtime.yield
+    arm64.fpLoadRdata d0, [rdata + __fconst_6]
+    arm64.fpLoadRdata d1, [rdata + __fconst_1.5]
+    arm64.fpLoadRdata d2, [rdata + __fconst_2.5]
+    arm64.fpLoadRdata d3, [rdata + __fconst_3.5]
+    arm64.fpLoadRdata d4, [rdata + __fconst_4.5]
+    arm64.fpLoadRdata d5, [rdata + __fconst_5.5]
+    arm64.bl six
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x0, fpArgs
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await
+    arm64.cmp x0, 105
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

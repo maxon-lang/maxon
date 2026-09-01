@@ -94,7 +94,7 @@ end 'main'
 ```
 
 <!-- test: streaming-subprocess.posix-echo-read -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `echo-read`'s subject on the POSIX lane, and the case that proves the seven bare-name `subp*` builtins run
 here at all. GT0 spawns `echo hello`, reads its one stdout line, waits, and releases; the line's byte
 length (`hello\n`, SIX — an LF where `cmd /c echo` writes CRLF) is returned.
@@ -159,7 +159,7 @@ end 'main'
 ```
 
 <!-- test: streaming-subprocess.posix-read-to-eof-latched -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 ⭐ **THE EOF EDGE, WHICH IS THE ONE MOST LIKELY TO HANG ON THIS LANE.** `poll` on a pipe whose writer has
 closed reports `POLLIN|POLLHUP` and SUCCEEDS, so the peek says "readable", the read answers 0, and the
 reader must latch EOF from that zero rather than from the poll. A reader that took the successful poll as
@@ -316,7 +316,7 @@ end 'main'
 ```
 
 <!-- test: streaming-subprocess.posix-write-echo -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `write-echo`'s round trip on this lane: the parent WRITES two lines into the child's stdin, closes the
 write end so the child sees EOF, and reads the sorted output back. `sort` orders `1` before `22`
 lexicographically, so the first line back is the SHORTER one. The three clauses — both writes succeeded, a
@@ -453,7 +453,7 @@ end 'main'
 ```
 
 <!-- test: streaming-subprocess.posix-spawn-release-loop -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `spawn-release-loop` on this lane: twelve spawn+read+release cycles reuse the same table slot (and its line
 buffer) each iteration, proving no descriptor leak and no per-iteration buffer leak across a many-iteration
 loop. ⚠ It is a sharper check here than on Windows, because every cycle also allocates the

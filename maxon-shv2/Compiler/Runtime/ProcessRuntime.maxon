@@ -22,9 +22,16 @@
 // would have pulled all of that into a program that allocates nothing — and the same now holds for
 // `__proc_bg_priority`, which is likewise a handful of instructions that touch no memory.
 //
-// ⭐ **THE `processInfo` HOST FACILITY, AND WHICH TARGETS HAVE IT IS `TargetFacilities`' TO SAY.** A target
-// that does not refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`, matched on the
-// `__proc_` PREFIX — so an entry point added later is gated by construction rather than by memory.
+// ⭐ **TWO HOST FACILITIES, AND WHICH TARGETS HAVE EACH IS `TargetFacilities`' TO SAY.** A target that has
+// neither refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`.
+//
+// ⚠⚠ **THE `__proc_` PREFIX NO LONGER ANSWERS FOR THE WHOLE BAND, AND L3 IS WHY.** The two IDENTITY reads
+// answer `processInfo` by that prefix; the PRIORITY write answers `processPriority`, which
+// `calleeHostFacility` tests for by NAME ahead of the band. The split is not bookkeeping — arm64-linux
+// lowers `getpid` and `readlinkat` and cannot yet lower `setpriority` honestly (its scope is the THREAD
+// there), so one answer for three entries would have forced the whole band to wait on the narrowest of
+// them. ⇒ **A fourth entry point is still covered by construction, and it will answer `processInfo`** —
+// which is right for another identity read and wrong for another write, so a write joins by name.
 //
 // ⚠⚠ **THE REASON THIS BAND WAS A RUNG AND NOT A LOWERING IS INTACT, AND MAC2 DISCHARGED IT RATHER THAN
 // DELETING IT: THERE ARE THREE DIFFERENT OS APIS AND THEY DO NOT AGREE ON THEIR OWN SHAPE.**
@@ -51,9 +58,9 @@ let ProcessRuntimePrefix = b"__proc_"
 export let ProcessExecutablePathName = b"__proc_exe_path"
 export let ProcessCurrentPidName = b"__proc_pid"
 
-// ⭐ **THE THIRD, AND THE PREFIX PROMISE COLLECTED A SECOND TIME.** It joins the `__proc_` band, so the E3104
-// gate covers it on every target whose `processInfo` row is `false`, with no edit there — exactly as
-// `__proc_pid` did when it arrived. See `isProcessRuntimeCallee`.
+// ⭐ **THE THIRD, AND THE ONE THE PREFIX STOPPED ANSWERING FOR (L3).** It is still refused by E3104 on a
+// target that cannot lower it, but through `processPriority` rather than `processInfo` — see the header for
+// why a WRITE whose scope differs per platform could not stay fused to the two identity reads.
 export let ProcessBackgroundPriorityName = b"__proc_bg_priority"
 
 // The first buffer the walk asks for is `ManagedDirectoryRuntime.MaxPathBytes` — the same `MAX_PATH` the
@@ -228,10 +235,10 @@ export function installProcessRuntime(module StdModule, usage RuntimeUsage)
 	end 'backgroundPriority'
 end 'installProcessRuntime'
 
-// Every callee this file installs — what the E3104 gate refuses on a target whose `processInfo` row is
-// `false`. A PREFIX test rather than an `equals` against a roster of names, for
-// `isCommandLineRuntimeCallee`'s reason: a second entry point here is then covered by construction instead
-// of having to be remembered at two sites.
+// Every callee this file installs — the band `calleeHostFacility` reads AFTER its by-name test for the
+// priority write, so what this answers for is the `processInfo` half. A PREFIX test rather than an `equals`
+// against a roster of names, for `isCommandLineRuntimeCallee`'s reason: a second entry point here is then
+// covered by construction instead of having to be remembered at two sites.
 //
 // ✅ **THAT PROMISE WAS TESTED AND HELD.** `__proc_pid` arrived after this predicate was written and needed
 // no edit here: `specs-shv2/process-id.md:rejected-on-wasm` pins the E3104 it earns by prefix alone.

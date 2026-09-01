@@ -122,9 +122,18 @@ let Arm64StlxrRsShift = 16
 
 // `MRS Xt, TPIDRRO_EL0` — the READ-ONLY thread ID register. On Darwin the kernel points it at the current
 // thread's TSD base and stores the CPU number in the low three bits, which is why the read is masked.
-// ⚠ NOT `TPIDR_EL0` (0xD53BD040): that is the writable one, and neither register is set at all on shv2's
-// raw-static Linux lane — see `StdOp.currentThreadToken` for what that lane does instead.
 let Arm64OpMrsTpidrro = 0xD53BD060
+
+// ⭐⭐ **`MRS Xt, TPIDR_EL0` / `MSR TPIDR_EL0, Xt` — THE WRITABLE THREAD POINTER, AND arm64-LINUX OWNS IT
+// OUTRIGHT (L4).** The three words differ from the pair above only in `op2` (2 rather than 3) and, for the
+// write, in the L bit (0xD53 ⇒ 0xD51). ⚠ **This block used to say the register "is not set at all on shv2's
+// raw-static Linux lane"; that was true and is the REASON it became this lane's, not an argument against it.**
+// A static image links no libc, so nothing else on Linux reads or writes TPIDR_EL0 — which makes it the one
+// per-OS-thread word the scheduler may define for itself, and `mrt_host_tls_alloc` does
+// (`Arm64LinuxRuntime`). `StdOp.currentThreadToken` still takes `gettid` there rather than this register: an
+// identity must be non-zero on EVERY thread, including one that never asked the scheduler for a slot.
+let Arm64OpMrsTpidr = 0xD53BD040
+let Arm64OpMsrTpidr = 0xD51BD040
 
 // `LDR Xt, [Xn, Xm, LSL #0]` — the register-offset 64-bit load (size=11, opc=01, option=011 LSL, S=0).
 // MAC3's Darwin TSD read is its only producer; every other access in this compiler has an immediate
@@ -1470,7 +1479,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// instruction sequence with locally patched branches — see `arm64EmitAtomicCas`.
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then arm64EmitAtomicCas(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), expectedReg: arm64GprField(expectedReg), replacementReg: arm64GprField(replacementReg))
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then arm64EmitAtomicRmw(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), operandReg: arm64GprField(operandReg), opcode: opcode)
-		arm64ThreadPointer(dest) then arm64EmitThreadPointer(code, dest: arm64GprField(dest))
+		arm64ThreadPointer(dest, source) then arm64EmitThreadPointer(code, dest: arm64GprField(dest), source: source)
 		// x64's atomics never reach the arm64 encoder, exactly as its fill ladder and jump table do not.
 		x64LockCmpxchg to x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
 		// EC16 — x64's scaled-index band. arm64 spells the same address as `arm64AddLsl` below, and has no
@@ -1726,7 +1735,7 @@ end 'arm64EmitStlxr'
 //
 // ⚠ **A RETRY RE-READS `Xexpected`, NOT x16.** The comparand must be the caller's value on every trip —
 // re-comparing against the last observation would make the loop succeed against whatever it just saw.
-function arm64EmitAtomicCas(code ByteArray, dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
+export function arm64EmitAtomicCas(code ByteArray, dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
 	let loopTop = code.count()
 	arm64EmitLdaxr(code, rn: addrReg)
 	arm64EmitCmpReg(code, rn: Arm64AtomicValue, rm: expectedReg)
@@ -1755,7 +1764,7 @@ end 'arm64EmitAtomicCas'
 // ⚠ The inverse is chosen by the opcode and MUST stay its true inverse — an appended `xchg` or `and` has
 // no inverse at all and needs a different sequence (keep the prior value in `Xd` and the new one in x16),
 // which is exactly what the exhaustive match here forces the next author to confront.
-function arm64EmitAtomicRmw(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord, opcode StdAtomicRmwOpcode)
+export function arm64EmitAtomicRmw(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord, opcode StdAtomicRmwOpcode)
 	let (applyOpcode, inverseOpcode) = match opcode 'op'
 		add gives (Arm64OpAdd, Arm64OpSub)
 	end 'op'
@@ -1767,20 +1776,43 @@ function arm64EmitAtomicRmw(code ByteArray, dest MachineWord, addrReg MachineWor
 	emitArm64Rrr(code, opcode: inverseOpcode, rd: dest, rn: Arm64AtomicValue, rm: operandReg)
 end 'arm64EmitAtomicRmw'
 
-// `MRS Xd, TPIDRRO_EL0` then `LSR Xd,#3` / `LSL Xd,#3` — v1's owner token (`arm64GtOwnerToken`), the
-// Darwin thread pointer with the CPU number masked out of its low three bits.
+// ⭐⭐ **THIS OS THREAD'S PER-THREAD BASE — AND WHICH REGISTER HOLDS IT IS A PER-OS FACT (L4).**
+// The two arms are not two spellings of one read; they name two different system registers, for two
+// reasons that do not generalise:
 //
-// It needs no scratch at all: all three instructions read and write `dest`, so there is no operand for a
-// premature write to destroy — the property the two loops above have to work for.
-// ⭐ EXPORTED for MAC3: the masked thread pointer IS the base of this thread's Darwin TSD array
-// (measured — `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`), so the hand-assembled green-thread chunks and the
-// `tlsSlotLoad` lowering read a thread's per-thread slots through the SAME sequence `currentThreadToken`
-// answers with. One register read, asked for two reasons; a second spelling could only drift.
-export function arm64EmitThreadPointer(code ByteArray, dest MachineWord)
+//   • **Darwin — `TPIDRRO_EL0`, MASKED.** v1's owner token (`arm64GtOwnerToken`): the kernel points the
+//     READ-ONLY register at the current thread's TSD base and packs the CPU number into its low three bits,
+//     so the read shifts them out. Measured on this host: `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`.
+//   • **Linux — `TPIDR_EL0`, UNMASKED.** The kernel writes NEITHER register for a static image with no libc,
+//     so the writable one is free and `mrt_host_tls_alloc` makes it this thread's TLS block base
+//     (`Arm64LinuxRuntime`). Nothing packs anything into it, so masking would clear three real address bits.
+//
+// It needs no scratch at all: every instruction reads and writes `dest`, so there is no operand for a
+// premature write to destroy — the property the two LL/SC loops above have to work for.
+//
+// ⭐ EXPORTED: the hand-assembled green-thread chunks and the `tlsSlotLoad` lowering read a thread's slots
+// through the SAME sequence, so a second spelling could only drift.
+export function arm64EmitThreadPointer(code ByteArray, dest MachineWord, source Arm64ThreadPointerSource)
+	match source 'source'
+		darwinMaskedReadOnly then arm64EmitDarwinThreadPointer(code, dest: dest)
+		linuxWritable then emitArm64Insn(code, insn: Arm64OpMrsTpidr or dest)
+	end 'source'
+end 'arm64EmitThreadPointer'
+
+// `MRS Xd, TPIDRRO_EL0` then `LSR Xd,#3` / `LSL Xd,#3` — its own function only because a `match` arm carries
+// ONE statement and this arm is three; the Linux arm is one instruction and stays inline above.
+function arm64EmitDarwinThreadPointer(code ByteArray, dest MachineWord)
 	emitArm64Insn(code, insn: Arm64OpMrsTpidrro or dest)
 	arm64EmitLsrImm(code, rd: dest, rn: dest, sh: Arm64ThreadPointerCpuBits)
 	arm64EmitLslImm(code, rd: dest, rn: dest, sh: Arm64ThreadPointerCpuBits)
-end 'arm64EmitThreadPointer'
+end 'arm64EmitDarwinThreadPointer'
+
+// `MSR TPIDR_EL0, Xn` — POINT this OS thread's writable thread pointer at `src`. Linux's alone, and it has
+// exactly one writer: `mrt_host_tls_alloc`, which maps this thread's slot block and publishes its base here.
+// There is deliberately no Darwin twin — `TPIDRRO_EL0` is read-only at EL0 and libSystem owns what it holds.
+export function arm64EmitSetThreadPointer(code ByteArray, src MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMsrTpidr or src)
+end 'arm64EmitSetThreadPointer'
 
 function arm64EmitLoadSlot(code ByteArray, destReg TargetVReg, slot SpillSlot)
 	let disp = arm64SlotDisplacement(slot)
@@ -2118,10 +2150,13 @@ end 'arm64EmitStackFree'
 // every `arm64ImportCall`. It is `RuntimeUsage.usesGt` — the bit `installGtRuntime` was gated on — read once
 // by the caller and never re-derived per function, so this stays O(1) per function.
 //
-// ⚠ **BOTH ARE macOS-ONLY, AND THE CALLER FOLDS THAT IN.** Each reads this OS thread's slot through Darwin's
-// TSD layout; an arm64-Linux image has no libc to have written a thread pointer, so the sequence would read
-// garbage rather than fail. `targetProvidesFacility` denies `greenThreads` on that lane, so a green-thread
-// program cannot be built for it — the fold is a belt, and `Arm64GtRuntime`'s lowerings carry the buckle.
+// ⚠ **THIS BLOCK USED TO SAY "BOTH ARE macOS-ONLY, AND THE CALLER FOLDS THAT IN", AND L4 REMOVED THE FOLD.**
+// Its argument was that each reads this OS thread's slot through Darwin's TSD layout and *"an arm64-Linux
+// image has no libc to have written a thread pointer, so the sequence would read garbage rather than fail"*.
+// The second half is what changed: `mrt_host_tls_alloc` writes `TPIDR_EL0` on that lane, and the read is
+// routed by `arm64ThreadPointerSource` rather than assuming Darwin's register. So `greenThreads` is now the
+// `usesGt` bit alone — the SHIM is still macOS-only, but by construction rather than by this fold, because
+// only the import-call route emits an `arm64ImportCall` for it to wrap.
 function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
@@ -2155,7 +2190,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 		// carries the measurement (a `__`-name test handed the guard to a user function declared in
 		// `stdlib/Builtins.maxon` and segfaulted a green thread) and the split from `isRuntimeFunction`.
 		if isFirstBlock and guarded 'guard'
-			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target))
+			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target), os: target.os)
 		end 'guard'
 		isFirstBlock = false
 
@@ -2212,8 +2247,8 @@ end 'arm64PrologueFrameBytes'
 // managed top-level `var`), and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, os Os)
-	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, os: os))
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, os Os)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, os: os))
 end 'appendArm64RuntimeChunks'
 
 // ==========================================================================
@@ -2460,21 +2495,25 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	//
 	// ⚠ It is no longer the WHOLE arm64 runtime: the panic runtime below is the rest of it, and this
 	// comment said "the scalar core needs no panic handler" until A3n landed one three lines away.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, os: target.os)
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: usage.usesGt and target.os == Os.linux, os: target.os)
 	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt and target.os == Os.macos, target: target))
+		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target))
 	end 'eachFunc'
 	// The panic runtime lays out ABOVE user code (x64's placement, and for x64's reason: only the entry
 	// stub has to lead `.text`). Its four chunks and the `__symtable` concat appends after them are what
 	// make a violated range guard — or a user `panic("…")` — print its message and a symbolized
 	// backtrace on arm64 instead of exiting bare.
 	appendArm64PanicRuntimeChunks(chunks, globalData: globalData, os: target.os)
-	// The arm64-macOS HOST SURFACE — the libSystem sequences behind the `os*` ops whose only implementation
-	// used to be x64-windows's. macOS ONLY: arm64-linux reaches the OS by raw `svc #0` and has no import
-	// table for a single one of these to resolve against (`Arm64DarwinRuntime`'s header).
-	if target.os == Os.macos 'darwinHostSurface'
-		appendArm64DarwinRuntimeChunks(chunks, usage: usage, globalData: globalData)
-	end 'darwinHostSurface'
+	// The HOST SURFACE — the sequences behind the `os*` ops whose only implementation used to be
+	// x64-windows's. EXACTLY ONE lane's chunks are appended, which is what lets both build under the shared
+	// `mrt_host_*` names (`Arm64PosixRuntime`'s header): macOS's are libSystem calls through a GOT, Linux's
+	// are raw `svc #0` against a table no import is needed for.
+	match target.os 'hostSurface'
+		macos then appendArm64DarwinRuntimeChunks(chunks, usage: usage, globalData: globalData)
+		linux then appendArm64LinuxRuntimeChunks(chunks, usage: usage, globalData: globalData)
+		windows then panic("buildArm64Backend: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes")
+		wasi then panic("buildArm64Backend: `wasm32-wasi` is not an arm64 lane — a WASI component has no arm64 `.text` at all, so an `Os.wasi` reaching this backend is a target-construction bug")
+	end 'hostSurface'
 	// MAC3: the three hand-assembled green-thread chunks, on the same `usesGt` bit `installGtRuntime` was
 	// gated on rather than a probe of the module — the reason `BackendDispatch` gives for the x64 twin.
 	if usage.usesGt 'gtChunks'

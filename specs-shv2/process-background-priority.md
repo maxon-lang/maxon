@@ -170,7 +170,7 @@ end 'main'
 ```
 
 <!-- test: process-background-priority.answers-the-posix-nice-value -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 `answers-the-below-normal-class`'s postcondition in the POSIX unit: after the call the process sits
 at the background NICE value (10), and the answer is a live reading rather than the 0 a normal-priority
 process reports or the `-1` `getpriority` answers when it is asked about a process that is not there.
@@ -197,7 +197,7 @@ end 'main'
 ```
 
 <!-- test: process-background-priority.posix-value-is-stable-across-calls -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 ⭐ **THE CASE THAT CATCHES `nice`.** Asking twice re-applies the same absolute value and reads back the
 same answer. A lowering built on `nice(10)` instead of `setpriority(PRIO_PROCESS, 0, 10)` sinks one
 step per call — 10 then 20 — so it fails here while still passing the case above, which is exactly

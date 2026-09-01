@@ -1,0 +1,25 @@
+// Test: error.use-after-await-of-a-reply
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let a = try await p otherwise 0
+	let b = p
+	let done = __Builtins.gtIsComplete(b)
+	return (a + done) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3142: <fragment>:18:10: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again

@@ -1,0 +1,220 @@
+// Test: async-await.promise-array-throwing-assoc-value
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with (Integer, WorkError)
+typealias IntPromiseArray = Array with IntPromise
+
+union WorkError implements Error
+		failed(reason String)
+end 'WorkError'
+
+function work(n Integer) returns Integer throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("negative input")
+		end 'neg'
+		return n
+end 'work'
+
+function main() returns ExitCode
+		var arr = IntPromiseArray.create()
+		arr.push(async work(10))
+		arr.push(async work(20))
+		arr.push(async work(-1))
+		var sum = 0
+		for p in arr 'each'
+				sum = sum + try await p otherwise 0
+		end 'each'
+		return sum
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_num_procs@144 = i64 0
+  __sched_shutdown_flag@152 = i64 0
+  __sched_lock@160 = i64 0
+  __mrt_errno@168 = i64 0
+  __mrt_envp@176 = i64 0
+  __mrt_tls_next_key@184 = i64 0
+  __slab_arena_list@192 = i64 0
+  __slab_arena_map_l1@200 = i64 0
+  __slab_state@208 = i64 0
+}
+
+func @work {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_18  ; "noyield.txt"
+    arm64.bl FilePath.init
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl File.exists
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_FilePath
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, neg
+    arm64.b ifcont
+  neg:
+    arm64.leaRdata x19, __str_rec_19  ; "negative input"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __gt_promise_drop
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 10
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.leaFuncAddr x0, __gt_release_work
+    arm64.storeBaseDispReg.word64 [x21 + 176], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_push
+    arm64.movImm x20, 20
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.leaFuncAddr x0, __gt_release_work
+    arm64.storeBaseDispReg.word64 [x21 + 176], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_push
+    arm64.movImm x20, 18446744073709551615
+    arm64.leaFuncAddr x0, work
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.leaFuncAddr x0, __gt_release_work
+    arm64.storeBaseDispReg.word64 [x21 + 176], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_push
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x21, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, each
+    arm64.b forexit
+  each:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x21, lsl #3
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_vacate
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_WorkError
+    arm64.movRegReg x0, x22
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.add x20, x20, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_88  ; "panic at async-await.promise-array-throwing-assoc-value.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

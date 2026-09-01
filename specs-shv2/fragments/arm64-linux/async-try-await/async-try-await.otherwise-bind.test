@@ -1,0 +1,177 @@
+// Test: async-try-await.otherwise-bind
+enum TaskError implements Error
+	timedOut
+	crashed
+end 'TaskError'
+
+function mayFail(mode Integer) returns Integer throws TaskError
+	Runtime.yield()
+	if mode == 0 'ok'
+		return 1
+	end 'ok'
+	if mode == 1 'slow'
+		throw TaskError.timedOut
+	end 'slow'
+	throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+	let p = async mayFail(2)
+	let r = try await p otherwise (e) 'failed'
+		return match e 'why'
+			timedOut gives 7
+			crashed gives 9
+		end 'why'
+	end 'failed'
+	return r as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 9
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __mrt_envp@160 = i64 0
+  __mrt_tls_next_key@168 = i64 0
+  __slab_arena_list@176 = i64 0
+  __slab_arena_map_l1@184 = i64 0
+  __slab_state@192 = i64 0
+}
+
+func @mayFail {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.bl Runtime.yield
+    arm64.cmp x19, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont#2
+  ok:
+    arm64.movImm x0, 1
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.cmp x19, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, slow
+    arm64.b ifcont#4
+  slow:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x9, 2
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 2
+    arm64.leaFuncAddr x0, mayFail
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#3
+    arm64.b matchnext
+  matcharm#3:
+    arm64.movImm x0, 7
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#4
+    arm64.b matchdead
+  matcharm#4:
+    arm64.movImm x0, 9
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#12
+    arm64.b __rc_chk#13
+  __rc_chk#13:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#12
+    arm64.b __rc_ok#11
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at async-try-await.otherwise-bind.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#11:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  tryok:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#9
+    arm64.b __rc_chk#10
+  __rc_chk#10:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#9
+    arm64.b __rc_ok#8
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at async-try-await.otherwise-bind.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#8:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

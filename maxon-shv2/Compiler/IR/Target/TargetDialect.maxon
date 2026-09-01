@@ -1624,18 +1624,24 @@ export union TargetOp
 	// x18 is never touched. This is a real LL/SC loop, and it is why the port is of the LESSON and not the
 	// code.
 	arm64AtomicRmw(dest TargetVReg, addrReg TargetVReg, operandReg TargetVReg, opcode StdAtomicRmwOpcode) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
-	// `MRS dest, TPIDRRO_EL0` then `LSR dest,#3` / `LSL dest,#3` — the Darwin thread pointer with its low
-	// three bits (which hold the current CPU number) masked off. v1's owner token verbatim
-	// (`Arm64MacosGreenThread.arm64GtOwnerToken`): per-OS-thread-stable, unique, non-zero, and reachable
-	// with no pthread key, no TSD dereference and no NULL-owner edge case, before the scheduler exists.
+	// **THIS OS THREAD'S PER-THREAD BASE, read out of the system register `source` names.** Darwin's arm is
+	// `MRS dest, TPIDRRO_EL0` + `LSR dest,#3` / `LSL dest,#3` — v1's owner token verbatim
+	// (`Arm64MacosGreenThread.arm64GtOwnerToken`), the READ-ONLY thread ID register with the current CPU
+	// number masked out of its low three bits. Linux's is a bare `MRS dest, TPIDR_EL0`.
 	//
-	// ⚠ **arm64-macOS ONLY.** `TPIDRRO_EL0` is the READ-ONLY thread ID register, and Linux leaves it at
-	// zero unless something sets it — see `StdOp.currentThreadToken` for why shv2's raw-static Linux lanes
-	// cannot use a thread-pointer register at all, and what they use instead.
+	// ⚠ **THE OPERAND IS NOT DECORATION AND THIS BLOCK USED TO SAY "arm64-macOS ONLY".** That was true while
+	// the Linux lane had nobody to write a thread pointer; L4 gave it one — a static image links no libc, so
+	// `TPIDR_EL0` is free and `mrt_host_tls_alloc` publishes this thread's slot block in it. The two arms name
+	// DIFFERENT REGISTERS with different masking rules, so which one an op means has to travel WITH the op:
+	// the encoder has no target to ask (`emitArm64TargetOp` takes none, deliberately).
 	//
-	// One plain def and no use; it needs no scratch, because the three instructions read and write `dest`
+	// ⚠ **`currentThreadToken` STILL DOES NOT USE THIS OP ON LINUX.** A thread identity must be non-zero on
+	// every thread, and `TPIDR_EL0` is zero on one that never asked the scheduler for a slot — that lane takes
+	// `gettid` instead, which `StdOp.currentThreadToken` carries in full.
+	//
+	// One plain def and no use; it needs no scratch, because every instruction reads and writes `dest`
 	// alone. `isMemory: false` — a system-register read touches no memory.
-	arm64ThreadPointer(dest TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64ThreadPointer(dest TargetVReg, source Arm64ThreadPointerSource) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// --- EC16: the SCALED-INDEX addressing band (docs/emitted-code-roadmap.md) ---
 	//
 	// APPENDED AT THE END OF THE UNION, past `arm64ThreadPointer`, per the band-append invariant the BIT

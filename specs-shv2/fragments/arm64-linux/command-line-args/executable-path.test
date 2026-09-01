@@ -1,0 +1,76 @@
+// Test: executable-path
+function main() returns ExitCode
+	let exe = try Process.executablePath() otherwise return 2
+	// Just verify it returns something (the actual path varies)
+	if exe.path.byteLength() > 0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Process.executablePath
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow
+    arm64.b __rc_ok
+  __il_slow:
+    arm64.bl String.byteLength
+    arm64.b __il_cont
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, gt
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

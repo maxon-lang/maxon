@@ -34,7 +34,7 @@ the seed capacity and checks that every one of them comes back with its own valu
 ## Tests
 
 <!-- test: async-timer-growth.beyond-seed-capacity -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Five thousand green threads park on a timer simultaneously — five doublings past the 256-entry seed — and each
 returns its own index. Summing the results checks every entry individually: a copy that dropped an entry
 strands that thread and the program hangs, and one that duplicated an entry double-counts and the sum is

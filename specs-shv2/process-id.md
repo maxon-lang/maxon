@@ -48,11 +48,16 @@ could otherwise hide in.
 
 ### It is the SIMPLEST member of the `processInfo` band, and its gate was never `executablePath`'s
 
-`__Builtins.currentProcessId` lowers to `__proc_pid`, one of the three entries behind the
+`__Builtins.currentProcessId` lowers to `__proc_pid`, one of the two IDENTITY reads behind the
 `processInfo` host facility — gated by the `__proc_` PREFIX, so it is covered by construction rather
 than by memory, and a program that reaches it on a target that does not provide the facility is
 refused with `E3104` at the call's own span. Which targets provide it is
 `TargetFacilities.targetProvidesFacility`'s to say and is not counted here.
+
+⚠ The band's third entry, `__proc_bg_priority`, answers a DIFFERENT facility (`processPriority`) and
+is named individually ahead of the prefix. It is a WRITE whose POSIX scope disagrees — the process on
+Darwin, the calling thread on Linux — so a lane can serve the two reads long before it can serve it,
+and one facility for all three would have made the whole band wait on the narrowest member.
 
 ⚠ `process-executable-path.md` argues that its own intrinsic was host-only because the three
 platforms genuinely DISAGREE about the API's shape (a fill-and-count, an in-out size, a symlink).
@@ -71,7 +76,7 @@ high word passing as a plausible id.
 ## Tests
 
 <!-- test: process-id.is-positive -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The weakest property, and the one a missing lowering fails first: the call answers a number above
 zero rather than whatever the result register happened to hold.
 ```maxon
@@ -88,7 +93,7 @@ end 'main'
 ```
 
 <!-- test: process-id.fits-in-a-dword -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 `GetCurrentProcessId` answers a 32-bit `DWORD` and `getpid()` a 32-bit `pid_t`. The id must therefore
 land in `[1, 2^32)` — which is what a plain 32-bit write to `EAX` gives for free and what a stale
 high half, on either lane, would break. A wrong answer of that shape is still positive and still
@@ -113,7 +118,7 @@ end 'main'
 ```
 
 <!-- test: process-id.is-stable-across-calls -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Three independent calls in one process agree. This is the property `TreeLock` actually leans on — a
 token written at `takeLock` and re-read at the release has to name the same process — and it is what
 a lowering that read a THREAD id, or that answered a fresh counter, would fail.

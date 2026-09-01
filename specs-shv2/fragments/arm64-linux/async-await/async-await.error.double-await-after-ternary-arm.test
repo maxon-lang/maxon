@@ -1,0 +1,18 @@
+// Test: async-await.error.double-await-after-ternary-arm
+typealias Integer = int(i64.min to i64.max)
+
+function makeValue() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 21
+end 'makeValue'
+
+function main() returns ExitCode
+		let p = async makeValue()
+		let flag = File.exists(FilePath from "definitely-not-here.txt")
+		let v = (await p) if flag else 0
+		let w = await p
+		return (v + w) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3142: <fragment>:13:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again

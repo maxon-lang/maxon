@@ -691,7 +691,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// compiler-emitted symbol or a `stdlib/Builtins.maxon` DECLARATION (`recordFunctionRefUsage`). Its KEY SET
 	// is final here: `mergeArtifact` filled it during the module build and `TypeResolution` only `upsert`s keys
 	// it already holds, so no pass can change the answer this walk reads.
-	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures)
+	// ⭐ **ONE COMPUTATION, TWO CONSUMERS.** Whether a blocking kernel call yields is a TARGET fact, and it is
+	// asked here so that `RuntimeUsage.parksOnIo` (which decides whether the scheduler is installed) and
+	// `IrModule.parksOnIo` (which decides whether the park is emitted) cannot answer it differently. Both
+	// fields carry what a disagreement produces.
+	let parksOnIo = targetProvidesFacility(project.target, facility: HostFacility.greenThreads)
+	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
 	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
 	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
 	// `scanRuntimeUsage` to walk. Declared here for the same reason the streaming-subprocess family declares
@@ -808,6 +813,19 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// program fetches its command line by a call and lays out nothing — and that pair of conditions is asked
 	// where it is stated (`commandLineRuntimeGlobals`) rather than being copied here.
 	for entry in commandLineRuntimeGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The arm64-Linux host surface's one `.data` word — the errno a raw `svc` reports and nothing stores
+	// (`Arm64LinuxRuntime.LinuxErrnoLabel`). ⚠ **NO OUTER BIT TEST**, for `commandLineRuntimeGlobals`'
+	// reason: the answer depends on the TARGET as well as on the bits, and that pair of conditions is asked
+	// where it is stated rather than being copied here.
+	for entry in arm64LinuxRuntimeGlobals(usage, target: project.target) 'each'
+		declaredGlobals.push(entry)
+	end 'each'
+	// The arm64-Linux GREEN-THREAD floor's two words — the captured environment vector and the per-OS-thread
+	// slot counter (L4). Its own producer beside the one above for the reason that one is separate from the
+	// scheduler's: the two ride different bits, and asking both conditions here would copy them.
+	for entry in arm64LinuxGreenThreadGlobals(usage, target: project.target) 'each'
 		declaredGlobals.push(entry)
 	end 'each'
 	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
@@ -952,6 +970,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `CompilePhase.foldEmittedConstOperands` below folds over. Read BEFORE the first install for the
 	// obvious reason and stated here rather than recomputed there, so the two cannot disagree.
 	let firstEmittedFuncIndex = pipeline.stdModule.functions.count()
+
+	// The park's half of the one computation above. It is set HERE rather than beside it because
+	// `pipeline.run` REPLACES `stdModule` (`lowerMaxonToStd` builds a new one), exactly as `usesGt`'s own
+	// note two fields over records — so a value written before the pipeline would be on the module that gets
+	// thrown away. Every reader of it is an installer below.
+	pipeline.stdModule.parksOnIo = parksOnIo
 
 	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
 

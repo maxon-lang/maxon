@@ -294,3 +294,16 @@ export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	chunks.push(buildArm64PrintFrameChunk(globalData))
 	chunks.push(buildArm64WriteStderrChunk(os))
 end 'appendArm64PanicRuntimeChunks'
+
+// `x0 = <a NUL-terminated constant>; bl mrt_panic` — a runtime abort naming its own reason. The message
+// rides the SAME immortal, byte-deduped `.rdata` blob channel a String literal's payload takes, exactly as
+// `Arm64PanicRuntime.arm64EmitPrintConstant` does; the difference is the callee, and it is why this lives
+// this runtime rather than with a host surface — `mrt_panic` prints, backtraces and EXITS, so nothing
+// after it is reachable.
+//
+// ⭐ EXPORTED: BOTH arm64 host surfaces call it (`Arm64DarwinRuntime`, `Arm64LinuxRuntime`), each for a
+// bring-up failure it cannot continue past. It lived in the Darwin file while that was the only caller.
+export function arm64EmitPanicConstant(asm Arm64RuntimeAsm, globalData GlobalDataTable, bytes ByteArray)
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: bytes)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PanicName)
+end 'arm64EmitPanicConstant'

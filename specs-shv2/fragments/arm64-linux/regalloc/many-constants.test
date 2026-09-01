@@ -1,0 +1,200 @@
+// Test: many-constants
+typealias Integer = int(i64.min to i64.max)
+
+function ident(x Integer) returns Integer
+	return x
+end 'ident'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// 4 working values that live across the body — opaque w.r.t. the
+	// constant folder thanks to the runtime seed. The body below uses
+	// each one with many distinct constants; pre-Phase-1 each constant
+	// would compete with the working values for a register slot,
+	// inflating pressure. Post-Phase-1 each constant rematerializes at
+	// its use site, so v1..v4 + a couple of scratch reg are enough.
+	let v1 = ident(seed + 11)
+	let v2 = ident(seed + 22)
+	let v3 = ident(seed + 33)
+	let v4 = ident(seed + 44)
+
+	// Many distinct constants combined with the working values.
+	var total = 0
+	total = total + (v1 and 255)
+	total = total + (v2 and 61680)
+	total = total + (v3 and 1193046)
+	total = total + (v4 and 286265908)
+	total = total + (v1 or 256)
+	total = total + (v2 or 8192)
+	total = total + (v3 or 196608)
+	total = total + (v4 or 4194304)
+	total = total + (v1 xor 21930)
+	total = total + (v2 xor 2147483647)
+	total = total + (v3 + 65536)
+	total = total + (v4 + 131072)
+	total = total + (v1 + 1234567)
+	total = total + (v2 + 7654321)
+	total = total + (v3 - 1048576)
+	total = total + (v4 - 2097152)
+
+	let masked = total and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 4
+ExitCode: 102
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl CommandLine.args
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#22
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#23
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#23:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#22:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_rec_1  ; "0"
+    arm64.b trycont#3
+  tryok#1:
+    arm64.b trycont#3
+  trycont#3:
+    arm64.bl __int_fromString
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.movImm x0, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.add x1, x0, 11
+    arm64.b __il_body#18
+  __il_body#18:
+    arm64.b __il_cont#17
+  __il_cont#17:
+    arm64.add x2, x0, 22
+    arm64.b __il_body#19
+  __il_body#19:
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.add x3, x0, 33
+    arm64.b __il_body#20
+  __il_body#20:
+    arm64.b __il_cont#15
+  __il_cont#15:
+    arm64.add x0, x0, 44
+    arm64.b __il_body#21
+  __il_body#21:
+    arm64.b __il_cont#14
+  __il_cont#14:
+    arm64.and x4, x1, 255
+    arm64.movImm x16, 61680
+    arm64.and x5, x2, x16
+    arm64.add x4, x4, x5
+    arm64.movImm x16, 1193046
+    arm64.and x5, x3, x16
+    arm64.add x4, x4, x5
+    arm64.movImm x16, 286265908
+    arm64.and x5, x0, x16
+    arm64.add x4, x4, x5
+    arm64.orr x5, x1, 256
+    arm64.add x4, x4, x5
+    arm64.orr x5, x2, 8192
+    arm64.add x4, x4, x5
+    arm64.orr x5, x3, 196608
+    arm64.add x4, x4, x5
+    arm64.orr x5, x0, 4194304
+    arm64.add x4, x4, x5
+    arm64.movImm x16, 21930
+    arm64.eor x5, x1, x16
+    arm64.add x4, x4, x5
+    arm64.eor x5, x2, 2147483647
+    arm64.add x4, x4, x5
+    arm64.add x5, x3, 65536
+    arm64.add x4, x4, x5
+    arm64.add x5, x0, 131072
+    arm64.add x4, x4, x5
+    arm64.add x1, x1, 1234567
+    arm64.add x1, x4, x1
+    arm64.add x2, x2, 7654321
+    arm64.add x1, x1, x2
+    arm64.sub x2, x3, 1048576
+    arm64.add x1, x1, x2
+    arm64.sub x0, x0, 2097152
+    arm64.add x0, x1, x0
+    arm64.and x20, x0, 255
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at many-constants.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

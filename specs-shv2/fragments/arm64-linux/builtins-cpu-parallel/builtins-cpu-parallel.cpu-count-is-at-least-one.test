@@ -1,0 +1,28 @@
+// Test: builtins-cpu-parallel.cpu-count-is-at-least-one
+function main() returns ExitCode
+	let cpus = __Builtins.cpuCount()
+	if cpus >= 1 'atLeastOne'
+		return 3
+	end 'atLeastOne'
+	return 1
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl __cpu_count
+    arm64.cmp x0, 1
+    arm64.cset x0, ge
+    arm64.cbnz x0, atLeastOne
+    arm64.b ifcont
+  atLeastOne:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

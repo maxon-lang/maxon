@@ -1,0 +1,132 @@
+// Test: stdlib-user-shadows.a-field-of-a-value-of-the-moved-declaration
+type FileInfo
+	export var tag as Integer
+
+	static function make() returns FileInfo
+		return FileInfo{tag: 5}
+	end 'make'
+end 'FileInfo'
+
+function main() returns ExitCode
+	let info = try File.info(Directory.currentPath()) otherwise 'missing'
+		return 90 as ExitCode
+	end 'missing'
+	return (FileInfo.make().tag + (1 if info.isDirectory else 0)) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 6
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_num_procs@168 = i64 0
+  __sched_shutdown_flag@176 = i64 0
+  __sched_lock@184 = i64 0
+  __mrt_errno@192 = i64 0
+  __mrt_envp@200 = i64 0
+  __mrt_tls_next_key@208 = i64 0
+  __slab_arena_list@216 = i64 0
+  __slab_arena_map_l1@224 = i64 0
+  __slab_state@232 = i64 0
+}
+
+func @FileInfo.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 5
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Directory.currentPath
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl File.info
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 90
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.bl FileInfo.make
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.byte x2, [x20 + 32]
+    arm64.cbnz x2, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x2, 1
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x2, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.add x19, x1, x2
+    arm64.cmp x19, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_86  ; "panic at stdlib-user-shadows.a-field-of-a-value-of-the-moved-declaration.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

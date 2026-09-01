@@ -1,0 +1,219 @@
+// Test: eviction-required
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function combine(a Integer, b Integer, c Integer) returns Integer
+	return (a xor b) + c
+end 'combine'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// 6 cold values defined early via opaque calls — the constant folder
+	// cannot see through `opaque` so each lives as a real working scalar.
+	// Each is used once at the end of the function, so its spill weight
+	// is low and its live range is long (spans the entire body).
+	let c1 = opaque(seed + 100)
+	let c2 = opaque(seed + 200)
+	let c3 = opaque(seed + 300)
+	let c4 = opaque(seed + 400)
+	let c5 = opaque(seed + 500)
+	let c6 = opaque(seed + 600)
+
+	// Hot inner loop: 4 high-weight values that benefit from being in
+	// callee-saved registers (they survive the inner `combine` call).
+	// In total the loop body keeps 4 hot scalars live across each call.
+	var sum = 0
+	var i = 0
+	while i < 10 'hot'
+		let h1 = combine(seed, b: i, c: 1)
+		let h2 = combine(seed, b: i, c: 2)
+		let h3 = combine(seed, b: i, c: 3)
+		let h4 = combine(seed, b: i, c: 4)
+		sum = sum + h1 + h2 + h3 + h4
+		i = i + 1
+	end 'hot'
+
+	let cold = c1 + c2 + c3 + c4 + c5 + c6
+	let total = sum + cold
+	let masked = total and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 76
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl CommandLine.args
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#37
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#38
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#38:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#37:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_rec_1  ; "0"
+    arm64.b trycont#3
+  tryok#1:
+    arm64.b trycont#3
+  trycont#3:
+    arm64.bl __int_fromString
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.movImm x0, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.add x1, x0, 100
+    arm64.b __il_body#23
+  __il_body#23:
+    arm64.b __il_cont#22
+  __il_cont#22:
+    arm64.add x2, x0, 200
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.b __il_cont#21
+  __il_cont#21:
+    arm64.add x3, x0, 300
+    arm64.b __il_body#25
+  __il_body#25:
+    arm64.b __il_cont#20
+  __il_cont#20:
+    arm64.add x4, x0, 400
+    arm64.b __il_body#26
+  __il_body#26:
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.add x5, x0, 500
+    arm64.b __il_body#27
+  __il_body#27:
+    arm64.b __il_cont#18
+  __il_cont#18:
+    arm64.add x6, x0, 600
+    arm64.b __il_body#28
+  __il_body#28:
+    arm64.b __il_cont#17
+  __il_cont#17:
+    arm64.movImm x7, 0
+    arm64.movImm x8, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x8, 10
+    arm64.cset x9, lt
+    arm64.cbnz x9, hot
+    arm64.b whileexit
+  hot:
+    arm64.b __il_body#33
+  __il_body#33:
+    arm64.eor x9, x0, x8
+    arm64.add x10, x9, 1
+    arm64.b __il_cont#32
+  __il_cont#32:
+    arm64.b __il_body#34
+  __il_body#34:
+    arm64.add x11, x9, 2
+    arm64.b __il_cont#31
+  __il_cont#31:
+    arm64.b __il_body#35
+  __il_body#35:
+    arm64.add x12, x9, 3
+    arm64.b __il_cont#30
+  __il_cont#30:
+    arm64.b __il_body#36
+  __il_body#36:
+    arm64.add x9, x9, 4
+    arm64.b __il_cont#29
+  __il_cont#29:
+    arm64.add x7, x7, x10
+    arm64.add x7, x7, x11
+    arm64.add x7, x7, x12
+    arm64.add x7, x7, x9
+    arm64.add x8, x8, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x0, x1, x2
+    arm64.add x0, x0, x3
+    arm64.add x0, x0, x4
+    arm64.add x0, x0, x5
+    arm64.add x0, x0, x6
+    arm64.add x0, x7, x0
+    arm64.and x20, x0, 255
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at eviction-required.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

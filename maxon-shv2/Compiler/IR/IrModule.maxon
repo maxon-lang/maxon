@@ -150,6 +150,25 @@ export type IrModule uses Op
 	// which is the price of one generic container that `debugStream` already records.
 	export var asyncTraceTags as GtTraceTags = GtTraceTags.none()
 
+	// ⭐⭐ **DOES A BLOCKING KERNEL CALL YIELD ON THIS TARGET?** True wherever `targetProvidesFacility` grants
+	// `greenThreads`; false on a lane that has no scheduler at all. `emitIoPark`'s nineteen call sites —
+	// runtime builders in three other files — ask it here for `asyncTraceTags`' reason one field up: none of
+	// them is handed the target, and threading it would make a builder that forgot to pass it emit a park
+	// into a program with nothing to park on.
+	//
+	// ⚠ **A FALSE HERE IS NOT AN OPTIMIZATION, IT IS THE ONLY CORRECT ANSWER ON SUCH A LANE.** The park exists
+	// to let OTHER green threads run while this one waits; where there is exactly one thread of execution
+	// there is nothing to yield to, and the call would be a `bl` into a scheduler nothing installed.
+	//
+	// ⛔ **IT MUST AGREE WITH `RuntimeUsage.parksOnIo`, AND BOTH COME FROM ONE COMPUTATION IN
+	// `Compiler.compileToCodeResult`.** The usage bit decides whether the SCHEDULER IS INSTALLED and this
+	// field decides whether the park IS EMITTED; a disagreement is either a scheduler nothing calls or a call
+	// to a function nothing built.
+	//
+	// ⚠ It defaults to TRUE, which is every complete target's answer, so every `IrModule.create()` site is
+	// unchanged and an ordinary build is byte-identical.
+	export var parksOnIo as bool = true
+
 	// ⭐⭐ **CAN THIS MODULE'S TARGET RESERVE ADDRESS SPACE WITHOUT PAYING FOR IT?** True on the three
 	// native lanes, where a reservation takes a range and backs none of it — Windows does not charge a
 	// `MEM_RESERVE`, and Linux does not fault in a `PROT_NONE` mapping. FALSE on wasm32-wasi, where linear

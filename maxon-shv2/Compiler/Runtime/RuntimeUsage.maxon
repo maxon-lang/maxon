@@ -451,8 +451,20 @@ export type RuntimeUsage
 	// what keeps the two `.data` slots and the whole page layer out of a program that reaches neither.
 	export var usesSlabArena as bool
 
+	// ⭐⭐ **DOES A FILESYSTEM OR SOCKET ENTRY POINT PARK BEFORE ITS KERNEL CALL ON THIS TARGET?** It is an
+	// INPUT to the scan rather than one of its findings — the target decides it, not the program — and it is
+	// carried on this record because the arms that read it are three levels down inside `recordCallUsage`,
+	// where nothing else knows what is being compiled for.
+	//
+	// ⛔ **IT MUST AGREE WITH `IrModule.parksOnIo`**, which decides whether the park is EMITTED where this
+	// decides whether the scheduler is INSTALLED; both come from one computation in
+	// `Compiler.compileToCodeResult`. See that field for what a disagreement produces.
+	//
+	// ⚠ It seeds TRUE, which is every complete target's answer.
+	export var parksOnIo as bool
+
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -462,8 +474,9 @@ end 'RuntimeUsage'
 // contain: a `Clock` nothing calls must not install the green-thread scheduler and the wall-clock
 // `.data` slot. It never contains a USER function — an unreached user body still speaks for the
 // program — so the answer for every stdlib-free program is unchanged.
-export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet, funcSignatures FuncSignatureMap) returns RuntimeUsage
+export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet, funcSignatures FuncSignatureMap, parksOnIo bool) returns RuntimeUsage
 	var usage = RuntimeUsage.create()
+	usage.parksOnIo = parksOnIo
 	for func in module.functions 'eachFunc'
 		if unreachableStdlib.contains(func.name) 'notInTheProgram'
 			continue
@@ -539,6 +552,22 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		serviceSpawn to serviceReplyCell then recordGtUsage(usage)
 	end 'op'
 end 'classifyRuntimeCall'
+
+// ⭐ **THE PARK A FILESYSTEM OR SOCKET ENTRY MAKES BEFORE ITS KERNEL CALL — the scheduler, but ONLY where the
+// target has one.** `emitIoPark` asks the same question of the MODULE and emits nothing when the answer is
+// no, so a lane with no green threads carries neither the park nor the machinery behind it. The two readings
+// come from one computation (see `RuntimeUsage.parksOnIo`).
+//
+// ⚠ It is deliberately NOT the `async`/`await` recorder below: a source-written `async` on such a lane is
+// REFUSED at its own span (E3104), so there is no case where a park is dropped and a real green thread is
+// left without a scheduler.
+function recordIoParkUsage(usage RuntimeUsage)
+	if not usage.parksOnIo 'noScheduler'
+		return
+	end 'noScheduler'
+
+	recordGtUsage(usage)
+end 'recordIoParkUsage'
 
 // An `async`/`await` op turns on both scheduler and heap: the scheduler runs the green threads, and the
 // heap floor supplies the `__slab_alloc` that `__gt_spawn` and the async arg-buffer spill need.
@@ -658,7 +687,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isManagedFileRuntimeCallee(callee) 'managedFile'
 		usage.usesManagedFile = true
 		usage.usesHeap = true
-		recordGtUsage(usage)
+		recordIoParkUsage(usage)
 	end 'managedFile'
 	// R4.3: a `__md_*` call. It carries `usesHeap` (the find block, the box and the path scratch) AND
 	// `usesManagedMemory`, which the file family does not need: `__md_filename`/`__md_current_path` answer with an
@@ -668,7 +697,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesManagedDirectory = true
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
-		recordGtUsage(usage)
+		recordIoParkUsage(usage)
 	end 'managedDirectory'
 	// A `__ms_*` call. It carries `usesHeap` (six raw allocations pass through `__ms_tcp_connect` alone) and
 	// the whole scheduler, for the filesystem families' reason: every socket entry that makes a kernel call
@@ -678,7 +707,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isManagedSocketRuntimeCallee(callee) 'managedSocket'
 		usage.usesManagedSocket = true
 		usage.usesHeap = true
-		recordGtUsage(usage)
+		recordIoParkUsage(usage)
 	end 'managedSocket'
 	// A `__cl_*` call. Same two transitive bits as the directory family and for the same reasons: the scratch
 	// buffer is a raw alloc, and `__cl_arg` answers with an `Array` record it builds one tier down.

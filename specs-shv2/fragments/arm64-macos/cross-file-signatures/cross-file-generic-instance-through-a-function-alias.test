@@ -1,0 +1,236 @@
+// Test: cross-file-generic-instance-through-a-function-alias
+// --- file: thief.maxon
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+export function smallCount() returns Small
+	var s = SmallArray.create()
+	s.push(3)
+	return s.count()
+end 'smallCount'
+
+// --- file: types.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+export typealias FieldArray = Array with Field
+
+// --- file: srv.maxon
+typealias Count = int(i64.min to i64.max)
+typealias FieldsBuilder = function(Count) returns FieldArray
+
+function buildFields(n Count) returns FieldArray
+	var out = FieldArray.create()
+	out.push(Field.create(n))
+	return out
+end 'buildFields'
+
+function apply(f FieldsBuilder) returns Count
+	let produced = f(7)
+	let first = try produced.get(0) otherwise panic("apply: empty array")
+	return first.v
+end 'apply'
+
+export function runBuilder() returns Count
+	return apply(buildFields)
+end 'runBuilder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return (runBuilder() + smallCount()) as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @smallCount {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 18446744073709551612
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 10
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at thief.maxon:7: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Field.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @buildFields {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Field.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @apply {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 7
+    arm64.blr x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#7
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#8
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#8:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#7:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at srv.maxon:12: apply: empty array\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @runBuilder {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_buildFields
+    arm64.movImm x1, 0
+    arm64.bl apply
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl runBuilder
+    arm64.movRegReg x19, x0
+    arm64.bl smallCount
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

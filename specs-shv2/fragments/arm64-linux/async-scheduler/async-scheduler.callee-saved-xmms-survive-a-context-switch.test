@@ -1,0 +1,167 @@
+// Test: async-scheduler.callee-saved-xmms-survive-a-context-switch
+function threadA() returns Integer
+	let a0 = 1.5
+	let a1 = 2.5
+	let a2 = 3.5
+	let a3 = 4.5
+	let a4 = 5.5
+	let a5 = 6.5
+	let a6 = 7.5
+	let a7 = 8.5
+	let a8 = 9.5
+	let a9 = 10.5
+	sleep(4)
+	let s1 = trunc(a0) + trunc(a1) + trunc(a2) + trunc(a3) + trunc(a4)
+	let s2 = trunc(a5) + trunc(a6) + trunc(a7) + trunc(a8) + trunc(a9)
+	sleep(4)
+	let s3 = trunc(a0 * 2.0) + trunc(a9 * 2.0)
+	return s1 + s2 + s3
+end 'threadA'
+
+function threadB() returns Integer
+	let b0 = 100.5
+	let b1 = 200.5
+	let b2 = 300.5
+	let b3 = 400.5
+	let b4 = 500.5
+	let b5 = 600.5
+	let b6 = 700.5
+	let b7 = 800.5
+	let b8 = 900.5
+	let b9 = 1000.5
+	sleep(2)
+	let t1 = trunc(b0) + trunc(b1) + trunc(b2) + trunc(b3) + trunc(b4)
+	let t2 = trunc(b5) + trunc(b6) + trunc(b7) + trunc(b8) + trunc(b9)
+	sleep(2)
+	let t3 = trunc(b0 * 2.0) + trunc(b9 * 2.0)
+	return t1 + t2 + t3
+end 'threadB'
+
+function main() returns ExitCode
+	let m0 = 11.5
+	let m1 = 22.5
+	let pa = async threadA()
+	let pb = async threadB()
+	let ra = await pa
+	let rb = await pb
+	let mine = trunc(m0) + trunc(m1)
+	if ra == 79 and rb == 7702 and mine == 33 'ok'
+		return 0
+	end 'ok'
+	return 9
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_live_count@88 = i64 0
+  __sched_active_workers@96 = i64 1
+  __sched_max_active_workers@104 = i64 1
+  __sched_tls_index@112 = i64 0
+  __sched_tls_teb_offset@120 = i64 0
+  __sched_procs@128 = i64 0
+  __sched_num_procs@136 = i64 0
+  __sched_shutdown_flag@144 = i64 0
+  __sched_lock@152 = i64 0
+  __mrt_envp@160 = i64 0
+  __mrt_tls_next_key@168 = i64 0
+  __slab_arena_list@176 = i64 0
+  __slab_arena_map_l1@184 = i64 0
+  __slab_state@192 = i64 0
+}
+
+func @threadA {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4
+    arm64.bl sleep
+    arm64.movImm x0, 4
+    arm64.bl sleep
+    arm64.movImm x0, 79
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @threadB {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.bl sleep
+    arm64.movImm x0, 2
+    arm64.bl sleep
+    arm64.movImm x0, 7702
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x0, threadA
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.leaFuncAddr x0, threadB
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_await
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.cmp x19, 79
+    arm64.cset x1, eq
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs#1
+    arm64.b critsplit#7
+  andrhs#1:
+    arm64.movImm x16, 7702
+    arm64.cmp x0, x16
+    arm64.cset x0, eq
+    arm64.b scmerge#2
+  critsplit#7:
+    arm64.movRegReg x0, x2
+    arm64.b scmerge#2
+  scmerge#2:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs#3
+    arm64.b critsplit#8
+  andrhs#3:
+    arm64.movImm x0, 1
+    arm64.b scmerge#4
+  critsplit#8:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge#4
+  scmerge#4:
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 9
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

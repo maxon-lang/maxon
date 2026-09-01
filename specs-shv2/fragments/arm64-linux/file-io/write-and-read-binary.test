@@ -1,0 +1,360 @@
+// Test: write-and-read-binary
+
+function main() returns ExitCode
+	let path = FilePath from "test_binary.bin"
+	// Create a byte array with known values
+	var data = ByteArray.create()
+	data.push(65 as Byte)
+	data.push(66 as Byte)
+	data.push(67 as Byte)
+
+	// Write binary file
+	try File.writeBinary(path, content: data) otherwise 'write_err'
+		print("Write failed")
+		return 1
+	end 'write_err'
+
+	// Read it back
+	let readData = try File.readBinary(path) otherwise 'read_err'
+		print("Read failed")
+		return 2
+	end 'read_err'
+
+	// Clean up the temp file
+	try File.delete(path) otherwise 'del_err'
+		print("Delete failed")
+	end 'del_err'
+
+	// Verify count
+	if readData.count() != 3 'count_check'
+		print("Wrong count: {readData.count()}")
+		return 3
+	end 'count_check'
+
+	// Verify first value
+	let b0 = try readData.get(0) otherwise 'e0'
+		return 10
+	end 'e0'
+
+	if b0 != 65 as Byte 'check0'
+		print("Wrong value")
+		return 20
+	end 'check0'
+
+	print("Binary read/write OK")
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __mrt_errno@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot9, x28
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_23  ; "test_binary.bin"
+    arm64.bl FilePath.init
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 65
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x1, 66
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x1, 67
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x2, 0
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl File.writeBinary
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_rec_24  ; "Write failed"
+    arm64.bl print
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl File.readBinary
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_rec_25  ; "Read failed"
+    arm64.bl print
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl File.delete
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_rec_26  ; "Delete failed"
+    arm64.bl print
+    arm64.b trycont
+  tryok#5:
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x0, 3
+    arm64.cset x0, ne
+    arm64.cbnz x0, count_check
+    arm64.b ifcont#9
+  count_check:
+    arm64.leaRdata x0, __str_rec_27  ; "Wrong count: "
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x24, [x21 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x25
+    arm64.bl __int_to_string
+    arm64.movRegReg x24, x0
+    arm64.add x26, x23, x24
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x22, x28, x23
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x22, x24
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x22, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  ifcont#9:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#20
+  __im_load#20:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#21
+  __im_load#21:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#25
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#26
+  critsplit#26:
+    arm64.b __im_cont
+  critsplit#25:
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x2, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#11
+    arm64.b tryok#10
+  tryerr#11:
+    arm64.movImm x22, 10
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryok#10:
+    arm64.cmp x0, 65
+    arm64.cset x0, ne
+    arm64.cbnz x0, check0
+    arm64.b ifcont#13
+  check0:
+    arm64.leaRdata x0, __str_rec_28  ; "Wrong value"
+    arm64.bl print
+    arm64.movImm x22, 20
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  ifcont#13:
+    arm64.leaRdata x0, __str_rec_29  ; "Binary read/write OK"
+    arm64.bl print
+    arm64.movImm x22, 42
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+}
