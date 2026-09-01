@@ -190,22 +190,125 @@ end 'builtinTypeNameTag'
 // `FunctionTypeAlias` keeps for its parameters and its return (see there for why it travels by name rather
 // than by id). The stored TAG already answers for every type whose spelling `parseTypeReference` settled
 // syntactically; a `named` tag is the only one that still carries a NAME, so it is the only one asked
-// whether that name is a builtin whose own tag carries a width. `nameId` is the caller's interner's id for
-// the same name, which is what keeps the two interners' rebuilds one function rather than two.
+// whether that name is a builtin whose own tag carries a width. `typeNames` is the caller's OWN interner —
+// the parser's file-local one during a parse, the project's merged one at resolution — and supplying it is
+// the whole of what a caller does, which is what keeps the two tiers' rebuilds one function rather than two.
+// It interns rather than taking an id because the empty-name rule below belongs to the storage convention.
 //
-// ⭐ **A `typeParameter` SLOT IS THE ONE THE INTERNER CANNOT ANSWER FOR, AND IT IS ANSWERED HERE RATHER
-// THAN BY EITHER CALLER (F3).** Its id column is the W14 DIGEST of `(declaring type, parameter name)` —
-// not an interner id at all — so it is carried beside the name (`FunctionAliasParam.typeParamToken`) and
-// substituted for `nameId` here. Doing it in this one place is what keeps the property the header above
-// claims: the two interners' rebuilds stay one function, and neither caller has to know that one arm of
-// the union is not about interning.
-export function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, nameId TypeNameId, typeParamToken TypeParamId) returns MaxonType
+// ⭐⭐ **WHICH IDENTITY A STORED ALIAS SLOT CARRIES BESIDE ITS NAME — the ONE classification, and it is a
+// UNION so that adding a fourth kind STOPS THE BUILD at every reader (F3g review, D2).**
+//
+// Two readers dispatch on this and they live in different files: the REBUILD (`maxonTypeOfStoredTypeName`,
+// which turns the slot back into a `MaxonType`) and the HASH (`ProgramSignatures.mixAliasReturnSlot`, which
+// folds it into the parse-memo key). They cannot share a body — the reviewer measured why: routing the hash
+// through the rebuild would make hashing INTERN into the index's own interner as a side effect, and
+// `mixType`'s `named` arm skips `builtinTypeNameTag`, so `ExitCode` would hash differently by path.
+//
+// ⛔⛔ **SO THE DUPLICATION IS JUSTIFIED AND THE ENFORCEMENT WAS WHAT WAS MISSING.** Both were three-armed
+// tag tests ending in a bare tag+name fallthrough, in two files, with nothing but a header promising they
+// agreed. Add a fourth identity column to the rebuild alone and the hash falls silently through to
+// `(tag, name)` for it: two different return types, one hash, no compile error anywhere — which is F3g's own
+// defect reproduced against the next column. A union match must be EXHAUSTIVE, so a fourth case makes BOTH
+// matches stop compiling and the reader has to answer for it in both places.
+export union AliasSlotIdentity
+	// The W14 DIGEST of `(declaring type, parameter name)` — not an interner id at all, which is why it needs
+	// a column of its own rather than the name slot.
+	typeParamToken(token TypeParamId)
+	// The whole-program `GenericInstanceId` keying `GenericInstanceRegistry`. Validated by the classifier, so
+	// no reader has to know that `NoGenericInstance` exists.
+	genericInstance(id GenericInstanceId)
+	// The tag and the name are the whole of the slot — every primitive, every `named`/`structRef`/`function`/
+	// `interfaceRef`, and `void`.
+	nameOnly
+end 'AliasSlotIdentity'
+
+// ⭐ **THE CLASSIFIER, AND THE ONE PLACE A MISSING IDENTITY IS REFUSED.** The `genericInstance` check lives
+// here rather than at either reader because this is where the slot's CLAIM to be an instance is read: a slot
+// that claims it and carries no id would otherwise rebuild as instance 0 at one reader and mix a raw
+// `u64.max` at the other, which is two wrong answers from one bad record. See `NoGenericInstance`.
+export function aliasSlotIdentity(tag ValueTypeTag, typeParamToken TypeParamId, genericInstanceId GenericInstanceId, slotName ByteArray) returns AliasSlotIdentity
 	if tag == ValueTypeTag.typeParameter 'anOpaqueParameterOfTheDeclaringType'
-		return MaxonType.typeParameter(typeParamToken)
+		return AliasSlotIdentity.typeParamToken(typeParamToken)
 	end 'anOpaqueParameterOfTheDeclaringType'
 
+	if tag == ValueTypeTag.genericInstance 'anInstantiationOfAGenericBase'
+		if genericInstanceId == NoGenericInstance 'theIdentityWasNeverCarried'
+			panic("aliasSlotIdentity: a function alias slot tagged `genericInstance` (declared as '{String.from(slotName)}') carries no GenericInstanceId — the identity is minted beside the tag by `functionAliasInstanceId`, so a record reaching here without one was built by a route that did not fill the column, and reading it would silently name instance 0")
+		end 'theIdentityWasNeverCarried'
+
+		return AliasSlotIdentity.genericInstance(genericInstanceId)
+	end 'anInstantiationOfAGenericBase'
+
+	return AliasSlotIdentity.nameOnly
+end 'aliasSlotIdentity'
+
+// ⭐ **TWO SLOTS ARE THE ONES THE INTERNER CANNOT ANSWER FOR, AND NEITHER IS ANSWERED BY A CALLER
+// (F3, F3g).** A `typeParameter`'s id column is the W14 digest; a `genericInstance`'s is its whole-program
+// `GenericInstanceId`. Neither is an interner id, so each is carried beside the name in its own column
+// (`FunctionAliasParam.typeParamToken`, `.genericInstanceId`) and substituted for the name's id here. Doing
+// it in this one place is what keeps the property the header above claims: the two interners' rebuilds stay
+// one function, and neither caller has to know that two arms of the union are not about interning.
+//
+// ⛔ The `genericInstance` arm's absence was a WRONG ANSWER rather than a refusal: without it a
+// `genericInstance` fell through to `maxonTypeOfTag` carrying the NAME column's "no name" id —
+// `UnnamedTypeId`, which is 0, which is a live instance. See `FunctionAliasParam.genericInstanceId`.
+//
+// ⚠ **FILE-PRIVATE SINCE F1 CONSOLIDATED THE TWO TIERS, AND THAT IS A CONSEQUENCE OF THE CONSOLIDATION
+// RATHER THAN AN ENCAPSULATION CHOICE.** It was `export` while `Parser` had its own rebuild body calling it;
+// now the only callers are the two slot doors below, so an `export` here would be `E3092: never referenced
+// outside its declaring file` — which only a self-compile can see, because `checkUnusedExports` runs when
+// shv2 compiles a PROGRAM and the bootstrap builds shv2 without it. The narrowing is also right on its
+// merits: a caller holding a stored alias should reach the RETURN or PARAM door, which know that record's
+// column list, rather than spell the columns itself.
+function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, typeNames TypeNameInterner, typeParamToken TypeParamId, genericInstanceId GenericInstanceId) returns MaxonType
+	match aliasSlotIdentity(tag, typeParamToken: typeParamToken, genericInstanceId: genericInstanceId, slotName: name) 'identity'
+		typeParamToken(token) then return MaxonType.typeParameter(token)
+		genericInstance(id) then return MaxonType.genericInstance(id)
+		nameOnly then break 'identity'
+	end 'identity'
+
+	// ⭐ **THE EMPTY-NAME RULE, AND IT LIVES HERE BECAUSE IT IS PART OF THE STORAGE CONVENTION RATHER THAN
+	// PART OF ANY CALLER (F1 review).** A primitive carries no name (`Parser.functionAliasTypeName`), and
+	// `UnnamedTypeId` is what the name column means by that. It was spelled twice — inlined at the parser
+	// tier, as a `functionAliasNameId` helper at the resolution tier — which is one rule with two homes and
+	// the exact shape the two tiers' rebuild bodies were already in.
+	let nameId = UnnamedTypeId if name.isEmpty() else typeNames.intern(name)
 	return maxonTypeOfTag(tag if tag != ValueTypeTag.named else builtinTypeNameTag(name), nameId: nameId)
 end 'maxonTypeOfStoredTypeName'
+
+// ⭐⭐ **THE WHOLE STORED RETURN SLOT OF A FUNCTION ALIAS, REBUILT — THE ONE HOME OF THE VOID TEST AND OF THE
+// COLUMN LIST (F1 review).** Both tiers rebuild the same stored alias and differ ONLY in which interner the
+// names go into: the parser's file-local one during a parse, the project's merged one at resolution. That
+// difference is the `typeNames` parameter and it is the whole of the difference.
+//
+// ⛔⛔ **IT WAS TWO BODIES, AND THE PROOF THAT THEY MUST MOVE IN LOCKSTEP IS THAT ADDING
+// `returnGenericInstanceId` HAD TO EDIT BOTH.** Nothing but their headers made that happen. A sixth column
+// added to one and not the other would have the two tiers rebuild ONE stored alias into two different
+// `MaxonType`s — a wrong answer with no compile error anywhere, which is precisely the defect the
+// `genericInstance` column above exists to have closed.
+export function maxonTypeOfStoredAliasReturn(alias FunctionTypeAlias, typeNames TypeNameInterner) returns MaxonReturnType
+	if alias.returnTag == ValueTypeTag.void 'returnsNothing'
+		return MaxonReturnType.void
+	end 'returnsNothing'
+
+	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, typeNames: typeNames, typeParamToken: alias.returnTypeParamToken, genericInstanceId: alias.returnGenericInstanceId))
+end 'maxonTypeOfStoredAliasReturn'
+
+// ⭐ **THE PARAMETER TWIN OF THE RETURN DOOR ABOVE, AND THE PAIR IS THE POINT.** By CLAUDE.md's letter this
+// is a thin wrapper — one delegation, one caller — and an inline call would name the same columns in the
+// same one place, so "it holds the column mapping" is not what earns it. What earns it is that **the param
+// and return halves of this record drifting apart is precisely this change's own defect class**: the return
+// half is what decayed to instance 0, the param half decayed identically and had to be pinned by its own
+// spec case because a fix to one would not have reached the other. A symmetric pair of doors is worth one
+// line for a record whose two halves have already been shown to drift.
+//
+// ⚠ **FILE-PRIVATE where its twin is `export`, and the asymmetry is correct rather than an oversight.**
+// `export` means "expected to be used outside this file" — the return door has real cross-file readers
+// (`Parser.functionValueReturn`), this one is reached only from `resolveFunctionAliasShapes` below, and an
+// `export` with no outside reader is `E3092`, which only the self-compile can see.
+function maxonTypeOfStoredAliasParam(param FunctionAliasParam, typeNames TypeNameInterner) returns MaxonType
+	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, typeNames: typeNames, typeParamToken: param.typeParamToken, genericInstanceId: param.genericInstanceId)
+end 'maxonTypeOfStoredAliasParam'
 
 // ⭐ **THE W14 TOKEN ONE SLOT OF A FUNCTION ALIAS'S SIGNATURE STORES — the mint that pairs with the rebuild
 // above (F3).** `NoTypeParamId` for every tag but `typeParameter`, whose payload IS the token
@@ -222,6 +325,21 @@ export function functionAliasTypeParamToken(declared MaxonType) returns TypePara
 
 	return typeNameIdOf(declared)
 end 'functionAliasTypeParamToken'
+
+// ⭐ **THE `GenericInstanceId` ONE SLOT OF A FUNCTION ALIAS'S SIGNATURE STORES — `functionAliasTypeParamToken`'s
+// twin, one tag over (F3g).** `NoGenericInstance` for every tag but `genericInstance`, whose payload IS the id
+// `Parser.parseTypeReference` already interned against the whole-program registry, so this reads an identity
+// rather than deriving a second one.
+//
+// ⚠ It takes the whole `MaxonType` for its twin's reason: reading the id column of a non-instance arm would
+// file that arm's interner id as a gid, which is the shape this column exists to have removed.
+export function functionAliasInstanceId(declared MaxonType) returns GenericInstanceId
+	if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'notAnInstantiation'
+		return NoGenericInstance
+	end 'notAnInstantiation'
+
+	return typeNameIdOf(declared)
+end 'functionAliasInstanceId'
 
 // `denotedNamedType`'s "this name is in none of the sources" answer. Payload-free — the caller
 // already holds the name it asked about — so it is a scalar and the throw allocates nothing on a
@@ -388,7 +506,7 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 		for param in alias.paramTypes 'eachParam'
 			// The reader is the alias's OWN declaring file — a function alias's signature is written there
 			// and nowhere else, so a name it spells means what that file means by it.
-			resolvedParams.push(resolveType(project, signatures: signatures, t: functionAliasParamType(project, param: param), readerFilePath: alias.declFilePath))
+			resolvedParams.push(resolveType(project, signatures: signatures, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), readerFilePath: alias.declFilePath))
 			// ⚠ **READ, NOT DERIVED — and it used to be derived, differently.** This tier once asked
 			// `signatures.containsEnumInAnyFile(param.typeName)` while the declared-function tier asked
 			// `Parser.aggregateNameOf`, so one parameter got two classifications: a per-instance ranged alias
@@ -397,32 +515,9 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 			// comparison over two different classifications would only have made the disagreement a refusal.
 			preErasedNames.push(param.aggregateName)
 		end 'eachParam'
-		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias), readerFilePath: alias.declFilePath), paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
+		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames), readerFilePath: alias.declFilePath), paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
 	end 'eachAlias'
 end 'resolveFunctionAliasShapes'
-
-// Rebuild one stored parameter's `MaxonType` from its interner-free `(tag, name)` pair, re-interning the
-// name into the project's merged interner. The twin of `functionAliasReturnType` below and of the parser's
-// own `functionAliasReturnType`, which does the identical rebuild against the FILE's interner — the storage
-// convention is one, so the rebuild is `maxonTypeOfStoredTypeName` and these two only supply the interner.
-function functionAliasParamType(project Project, param FunctionAliasParam) returns MaxonType
-	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, nameId: functionAliasNameId(project, typeName: param.typeName), typeParamToken: param.typeParamToken)
-end 'functionAliasParamType'
-
-// Rebuild a function alias's declared RETURN type from its interner-free storage. `void` means the function
-// type returns nothing.
-function functionAliasReturnType(project Project, alias FunctionTypeAlias) returns MaxonReturnType
-	if alias.returnTag == ValueTypeTag.void 'voidReturn'
-		return MaxonReturnType.void
-	end 'voidReturn'
-	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: functionAliasNameId(project, typeName: alias.returnTypeName), typeParamToken: alias.returnTypeParamToken))
-end 'functionAliasReturnType'
-
-// The project-interner id behind one stored type NAME — `UnnamedTypeId` for a primitive, which carries none
-// (the convention `FunctionTypeAlias.returnTypeName` and `FunctionAliasParam.typeName` share).
-function functionAliasNameId(project Project, typeName ByteArray) returns TypeNameId
-	return UnnamedTypeId if typeName.isEmpty() else project.typeNames.intern(typeName)
-end 'functionAliasNameId'
 
 // ⭐ **THE RESOLVED SHAPE OF THE FUNCTION TYPE A GOVERNING NAME DENOTES — THE ONE LOOKUP.** A function value
 // carries its type as `MaxonType.function(id)`, whose id names either the FUNCTION it refers to (a
@@ -530,7 +625,7 @@ end 'shapesAgreeUnder'
 // check compares by name), and a second loop here would be a second spelling that could drift from it. So the
 // only local work is putting each erased position's identity back as the `named` type it was before
 // resolution, which is precisely what the shared renderer already knows how to print.
-export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner) returns String
+export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	var unerasedParams = MaxonTypeArray.create()
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
 		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i), typeNames: typeNames))
@@ -540,7 +635,7 @@ export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNa
 		void gives MaxonReturnType.void
 		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames))
 	end 'r'
-	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, typeNames: typeNames)
+	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, typeNames: typeNames, signatures: signatures)
 end 'formatFunctionShapeDisplay'
 
 // One position, with its pre-erasure identity put back. A position that carries none is already the type it

@@ -3350,8 +3350,9 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 		return
 	end 'agree'
 
-	let expected = formatFunctionShapeDisplay(declared, typeNames: project.typeNames)
-	let actual = formatFunctionShapeDisplay(got, typeNames: project.typeNames)
+	var signatures = programSignaturesIn(project, asker: "checkOneFunctionTypeDoor")
+	let expected = formatFunctionShapeDisplay(declared, typeNames: project.typeNames, signatures: signatures)
+	let actual = formatFunctionShapeDisplay(got, typeNames: project.typeNames, signatures: signatures)
 	// A cast is a CAST rejection and takes E3009, the sibling of the cross-kind refusal
 	// `castHasNoLegalConversion` makes; every other door is a type mismatch and takes E3005, the sibling of
 	// what a bool meeting a declared int earns there. ONE sentence for every door, because one RULE decides
@@ -5847,7 +5848,8 @@ function checkFunctionArgShape(project Project, func IrFunction, declaredShape F
 		return false
 	end 'agree'
 
-	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames), got: formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames)), line: callRange.line, column: callRange.column, filePath: filePath)
+	var signatures = programSignaturesIn(project, asker: "checkFunctionArgShape")
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames, signatures: signatures), got: formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames, signatures: signatures)), line: callRange.line, column: callRange.column, filePath: filePath)
 	return true
 end 'checkFunctionArgShape'
 

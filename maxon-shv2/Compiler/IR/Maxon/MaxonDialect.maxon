@@ -435,6 +435,24 @@ export let UnnamedTypeId = 0 as TypeNameId
 // slot, and a shared spelling would invite a reader to test the wrong one.
 export let NoTypeParamId = 0 as TypeParamId
 
+// ⭐⭐ **THE FILLER A STORED GENERIC-INSTANCE COLUMN CARRIES FOR A SLOT THAT IS NOT ONE** —
+// `FunctionAliasParam.genericInstanceId` and `FunctionTypeAlias.returnGenericInstanceId`.
+//
+// ⛔⛔ **IT IS A SENTINEL AND NOT A FILLER, WHICH IS THE OPPOSITE OF `NoTypeParamId` ONE LINE UP, AND THE
+// ASYMMETRY IS THE MEASURED DEFECT THIS COLUMN EXISTS TO CLOSE.** Until F3g a function alias stored a
+// `genericInstance` slot as the NAME column's "no name" filler — the empty string — and the rebuild passed
+// that through `functionAliasNameId`, which answers `UnnamedTypeId` for an empty name. `UnnamedTypeId` is
+// **0**, and 0 is a perfectly valid `GenericInstanceId` (`GenericInstanceRegistry.intern` numbers densely
+// from zero), so the declared side of every comparison silently became *"whichever instantiation the
+// declaration sweep interned FIRST"*. MEASURED: a legal program refused `expected 'fn(int) returns struct',
+// got 'fn(int) returns struct'`, and — the other polarity — a `fn returns Array with Small` ACCEPTED where
+// `Array with Field` was required, which dereferenced the integer 3 as a struct pointer and SIGSEGV'd.
+//
+// ⇒ The absent value must lie OUTSIDE the id space, so that a `genericInstance` slot whose identity was
+// never filled panics instead of naming instance 0. `u64.max` is that value: the registry is dense and
+// append-only, so reaching it would mean interning 2^64 instances.
+export let NoGenericInstance = u64.max as GenericInstanceId
+
 // ⭐⭐ **HOW MANY OF THESE DECLARED PARAMETERS CARRY `tag` — THE RESERVE/SUPPLY COUNT, AND IT HAS EXACTLY
 // ONE HOME (P1.7a-existentials slice 1 review).**
 //

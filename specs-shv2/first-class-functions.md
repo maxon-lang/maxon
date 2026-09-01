@@ -4251,3 +4251,313 @@ end 'main'
 ```exitcode
 9
 ```
+
+<!-- test: first-class-function.generic-instance-returned-through-alias-is-identified-by-type-not-by-intern-order -->
+⭐⭐ **THE MIRROR OF THE FOUR DOORS ABOVE: a generic INSTANCE as the alias's OWN return type, and it is
+the one spelling whose identity the stored `(tag, name)` pair could not carry.** A `genericInstance`'s
+identity is a `GenericInstanceId`, not an interned name, so `functionAliasTypeName` had nothing to put in
+the name slot and the rebuild substituted `UnnamedTypeId` — which is **0**, a perfectly valid instance
+id. The declared side of every comparison therefore read as *"generic instance #0"*: whichever
+instantiation the declaration sweep happened to intern FIRST.
+
+⚠ **`SmallArray` IS THE TEST, AND IT IS DECLARED FIRST ON PURPOSE.** With `FieldArray` alone this program
+passes on the broken compiler, because `Array with Field` is then instance 0 and the wrong answer
+coincides with the right one. Declaring an unrelated instantiation ahead of it moves `Array with Field`
+to id 1 and the legal program is refused `E3005 … expected 'fn(int) returns struct', got 'fn(int)
+returns struct'` — a diagnostic saying a type does not match itself, because the renderer had no
+`genericInstance` arm either. Nothing about this is cross-file: the ORDINAL is the defect, and a
+declaration two lines up is enough to move it.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+typealias FieldsBuilder = function(Integer) returns FieldArray
+
+function buildFields(n Integer) returns FieldArray
+	var out = FieldArray.create()
+	out.push(Field.create(n))
+	return out
+end 'buildFields'
+
+function apply(f FieldsBuilder) returns Integer
+	let produced = f(7)
+	let first = try produced.get(0) otherwise panic("apply: empty array")
+	return first.v
+end 'apply'
+
+function main() returns ExitCode
+	var s = SmallArray.create()
+	s.push(3)
+	return (apply(buildFields) + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: first-class-function.generic-instance-parameter-through-alias-is-identified-by-type-not-by-intern-order -->
+The PARAMETER half of the same loss. `FunctionAliasParam` stores its type the same interner-free way the
+return does — one extractor fills both — so a generic instance is dropped at either door and the halves
+must be pinned separately: a fix that carries the return's identity and forgets the parameter's leaves
+this program refused. On the broken compiler it fails TWICE, and the first failure is the mechanism in
+plain sight: `expected 'SmallArray', got 'FieldArray'` at the indirect call, naming a type this program
+never writes in that position, because the alias's parameter type had genuinely BECOME instance 0's.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+typealias FieldConsumer = function(FieldArray) returns Integer
+
+function countFields(fields FieldArray) returns Integer
+	return fields.count()
+end 'countFields'
+
+function apply(f FieldConsumer) returns Integer
+	var fields = FieldArray.create()
+	fields.push(Field.create(5))
+	return f(fields)
+end 'apply'
+
+function main() returns ExitCode
+	var s = SmallArray.create()
+	s.push(3)
+	return (apply(countFields) + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: first-class-function.error.generic-instance-returned-through-alias-refuses-a-different-instance -->
+⛔⛔ **THE WRONG ANSWER, AND IT IS A SEGFAULT.** The two cases above are false REFUSALS — a legal program
+turned away. This is the other polarity, and it is what makes the lost identity a memory-safety defect
+rather than an inconvenience: `buildSmalls` returns `Array with Small`, a **ranged-integer** array, where
+`FieldsBuilder` promises `Array with Field`, an array of **structs**. Because the declared side had
+decayed to *"instance #0"* and `Array with Small` — declared first — genuinely IS instance 0, the
+comparison was `0 == 0` and the call was **accepted**. `first.v` then reads the integer `3` as a `Field`
+pointer and dereferences it. MEASURED on the broken compiler: compiles clean, exit 0 from the compiler,
+**SIGSEGV** from the program.
+
+⚠ **The refusal must name the two instances.** `maxonTypeName` spelled only `named`/`structRef`/
+`function`/`interfaceRef` through the interner and dropped a `genericInstance` to `typeTagName`'s bare
+word `struct`, so even the correctly-refused twin below said a type did not match itself.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+typealias FieldsBuilder = function(Integer) returns FieldArray
+
+function buildSmalls(_ Integer) returns SmallArray
+	var out = SmallArray.create()
+	out.push(3)
+	return out
+end 'buildSmalls'
+
+function apply(f FieldsBuilder) returns Integer
+	let produced = f(7)
+	let first = try produced.get(0) otherwise panic("apply: empty array")
+	return first.v
+end 'apply'
+
+function main() returns ExitCode
+	return apply(buildSmalls) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'
+```
+
+<!-- test: first-class-function.error.generic-instance-returned-through-alias-refuses-a-different-instance-either-order -->
+⭐ **THE ORDER TWIN, AND IT IS THE ONE THAT ISOLATES THE RENDERER.** The identical program with the two
+generic aliases declared the other way round, so `Array with Field` is instance 0 and the decayed
+declared side coincides with the truth. The broken compiler therefore reaches the **right verdict here**
+— it refuses — while accepting the twin above; that asymmetry is the whole defect, and a pair is what
+makes *"the answer does not depend on which instance was interned first"* a claim a test can fail.
+
+⚠ **It was still RED, on the MESSAGE alone**, which is why this half is not decoration: the refusal read
+`expected 'fn(int) returns struct', got 'fn(int) returns struct'`. A diagnostic that renders both sides
+of a mismatch identically names nothing, and a reader who trusts it concludes the compiler is broken in
+some way it is not — here it was right about the program and wrong only about how to say so.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+typealias FieldsBuilder = function(Integer) returns FieldArray
+
+function buildSmalls(_ Integer) returns SmallArray
+	var out = SmallArray.create()
+	out.push(3)
+	return out
+end 'buildSmalls'
+
+function apply(f FieldsBuilder) returns Integer
+	let produced = f(7)
+	let first = try produced.get(0) otherwise panic("apply: empty array")
+	return first.v
+end 'apply'
+
+function main() returns ExitCode
+	return apply(buildSmalls) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'
+```
+
+<!-- test: first-class-function.generic-instance-returned-through-an-extension-body-alias-is-identified-by-type-not-by-intern-order -->
+⭐⭐ **THE SAME LOSS AT THE ONE POPULATION WHOSE STORED ID IS ALREADY LIVE WHEN THE WHOLE-PROGRAM INDEX
+RECORDS IT — an `extension` body's nested function typealias.** The four cases above declare their alias at
+FILE SCOPE, and a file-scope alias is folded into the index by the declaration sweep, which runs ABOVE
+`signatures.allFilesFolded`: `parseTypeReference`'s alias registries sit behind that gate, so the swept copy
+carries a bare `named` and no instance id at all. `foldExtensionDeclarations` runs BELOW the flag, so an
+alias declared inside an `extension` body is the one that reaches the index already tagged `genericInstance`
+carrying a real, dense `GenericInstanceId`.
+
+⚠ **THIS CASE *REACHES* THE CACHE-KEY ARM; IT DOES NOT DISCRIMINATE IT, AND THE DIFFERENCE IS THE WHOLE
+REASON THE CLAUSE IS WORDED THIS WAY.** MEASURED with a temporary panic on this program: `Builder` arrives
+at `ProgramSignatures.recordFunctionTypeAlias` tagged `genericInstance` with **gid 1** — 1 and not 0
+precisely because `SmallArray` is declared first, which is the same theft the file-scope cases pin — and
+none of the four cases above reaches that arm at all. But a spec case observes stdout, stderr and an exit
+code, and **nothing here observes `ProgramSignatures.hash`**: revert the hash's `genericInstance` arm to mix
+that raw gid and this case and its twin below both still PASS. What this case pins is the TYPE half, which
+it does discriminate — the alias's stored identity, checked by `functionShapesAgree`.
+
+⇒ **The hash half's evidence is not in the suite and cannot be put there.** It is an isolated-contribution
+probe recorded in the landing commit: the same alias's hash contribution measured across four programs, one
+per polarity — an unrelated declaration removed so the gid moves 1 → 0 with the type unchanged (contribution
+must not move), the return retyped (must move), a parameter retyped (must move), and the file reformatted
+(must not move). A warm rebuild across a source edit — the situation the key exists for — is not
+constructible in-process at all, because the query cache is in-memory only.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+
+extension Field
+	typealias Builder = function(Integer) returns FieldArray
+
+	export function runIt(f Builder) returns Integer
+		let produced = f(7)
+		let first = try produced.get(0) otherwise panic("runIt: empty array")
+		return first.v
+	end 'runIt'
+end 'Field'
+
+function buildFields(n Integer) returns FieldArray
+	var out = FieldArray.create()
+	out.push(Field.create(n))
+	return out
+end 'buildFields'
+
+function main() returns ExitCode
+	var s = SmallArray.create()
+	s.push(3)
+	let f = Field.create(1)
+	return (f.runIt(buildFields) + s.count()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: first-class-function.error.generic-instance-through-an-extension-body-alias-refuses-a-different-instance -->
+⛔ **THE NEGATIVE TWIN OF THE CASE ABOVE, so the extension-body population is pinned in BOTH polarities
+exactly as the file-scope one is.** `buildSmalls` returns `Array with Small` where `Builder` promises
+`Array with Field`; the identity carried in `FunctionAliasParam.genericInstanceId` is what makes that a
+refusal rather than a `0 == 0` acceptance, and the instance display name is what makes the sentence name two
+types rather than saying `struct` twice.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+typealias FieldArray = Array with Field
+
+extension Field
+	typealias Builder = function(Integer) returns FieldArray
+
+	export function runIt(f Builder) returns Integer
+		let produced = f(7)
+		let first = try produced.get(0) otherwise panic("runIt: empty array")
+		return first.v
+	end 'runIt'
+end 'Field'
+
+function buildSmalls(_ Integer) returns SmallArray
+	var out = SmallArray.create()
+	out.push(3)
+	return out
+end 'buildSmalls'
+
+function main() returns ExitCode
+	let f = Field.create(1)
+	return f.runIt(buildSmalls) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:35:11: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'
+```

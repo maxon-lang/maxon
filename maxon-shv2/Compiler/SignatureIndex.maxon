@@ -3034,21 +3034,44 @@ export function maxonTypeName(t MaxonType, typeNames TypeNameInterner) returns S
 	return typeTagName(tag)
 end 'maxonTypeName'
 
+// ⭐⭐ **HOW ONE POSITION OF A FUNCTION-TYPE DISPLAY IS SPELLED — `maxonTypeName` for every tag whose name
+// the INTERNER holds, and the whole-program instance name for the one it does not.**
+//
+// ⛔ **A `genericInstance` HAS NO INTERNED NAME, SO IT FELL THROUGH TO `typeTagName`'S BARE WORD `struct`**
+// — and every instance of every base printed that same word. A refusal between two different
+// instantiations therefore read `expected 'fn(int) returns struct', got 'fn(int) returns struct'`: a
+// diagnostic saying a type does not match itself, on the one refusal that most needs to be readable. It is
+// the identical defect `maxonTypeName`'s own ⚠ paragraph records having been fixed once for a nested
+// `function` type, one tag over.
+//
+// ⚠ **THE SITE-FREE `instanceDisplayName`, NEVER `instanceDisplayNameIn`, AND THE STRING'S SECOND JOB IS
+// WHY.** `formatFnTypeDisplay`'s output is a COMPARISON KEY as well as a caption (see there), so it must be
+// a pure function of the type: a reader-scoped spelling would let one function type render two ways in two
+// files and make a merge disagree about a type it agrees about. The site-free door is exactly that pure
+// function of the gid — and it is still the author's `typealias`, which is what a caption owes.
+function fnTypeSlotName(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
+	if maxonTypeTag(t) == ValueTypeTag.genericInstance 'anInstantiationOfAGenericBase'
+		return String.from(signatures.instanceDisplayName(typeNameIdOf(t)))
+	end 'anInstantiationOfAGenericBase'
+
+	return maxonTypeName(t, typeNames: typeNames)
+end 'fnTypeSlotName'
+
 // Render a function type as `fn(P1, P2, …) returns R` from its parameter and return types (P1.5 #81). A void
 // return carries no `returns` clause. The canonical signature STRING the merge check compares by name — the
 // reference oracle's `MergeTernaryArmFnTypes` model, where two functions agree iff this string is equal.
-export function formatFnTypeDisplay(paramTypes MaxonTypeArray, returnType MaxonReturnType, typeNames TypeNameInterner) returns String
+export function formatFnTypeDisplay(paramTypes MaxonTypeArray, returnType MaxonReturnType, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	var rendered = "fn("
 	for i in 0 upto paramTypes.count() 'eachParam'
 		if i > 0 'separator'
 			rendered = "{rendered}, "
 		end 'separator'
-		rendered = "{rendered}{maxonTypeName(try paramTypes.get(i) otherwise panic("formatFnTypeDisplay: paramTypes.get OOB at {i}"), typeNames: typeNames)}"
+		rendered = "{rendered}{fnTypeSlotName(try paramTypes.get(i) otherwise panic("formatFnTypeDisplay: paramTypes.get OOB at {i}"), typeNames: typeNames, signatures: signatures)}"
 	end 'eachParam'
 	rendered = "{rendered})"
 
 	match returnType 'return'
-		value(returnValue) then rendered = "{rendered} returns {maxonTypeName(returnValue, typeNames: typeNames)}"
+		value(returnValue) then rendered = "{rendered} returns {fnTypeSlotName(returnValue, typeNames: typeNames, signatures: signatures)}"
 		void then break 'return'
 	end 'return'
 	return rendered
@@ -13972,14 +13995,68 @@ export type ProgramSignatures
 	end 'recordNamespaceQualifiedFunction'
 
 	// Add one FUNCTION typealias to the index AND fold it into the hash — the one write, for
-	// `recordAlias`'s reason. The RETURN type rides the hash (its tag, then its name): a caller that
-	// binds a function value of this alias and calls it recovers the result type FROM this return type,
-	// so a change to it changes what that caller compiles to and its parse memo must move with it.
+	// `recordAlias`'s reason. The RETURN type rides the hash: a caller that binds a function value of this
+	// alias and calls it recovers the result type FROM this return type, so a change to it changes what that
+	// caller compiles to and its parse memo must move with it.
+	//
+	// ⭐⭐ **AND SO DOES THE PARAMETER LIST, WHICH RODE NOTHING AT ALL UNTIL F3g's REVIEW** — the sentence
+	// above applies to it verbatim: `SemanticCheck.checkIndirectCallArgs` type-checks a call's arguments
+	// against these types and `LowerMaxonToStd` derives the `callIndirect` FLOAT MASK from them, so changing
+	// `typealias Cb = function(Integer)` to `function(Real)` changes the code another file emits.
+	//
+	// ⛔⛔ **IT RIDES AS THE `paramSpelling` DIGEST AND NOT AS `alias.paramTypes`, AND THAT IS A MEASUREMENT
+	// RATHER THAN A PREFERENCE.** Every route into `foldFile` reads its aliases with `recordSignature: false`
+	// (the file sweep, the extension fold, all three nested readers), so the copy THIS function receives has
+	// an EMPTY `paramTypes` — always. MEASURED with a temporary panic on `paramTypes.count() > 0`: zero hits
+	// across `generic`, `function`, `first-class-functions/` and `cross-file-signatures/`, ~950 cases, each
+	// carrying the whole stdlib. Hashing that array would therefore have hashed nothing while reading like a
+	// fix. The digest is folded at PARSE time from the parameter TOKENS, unconditionally in both passes
+	// (`Parser.readFunctionTypeAlias`), which is why it is here to be read.
 	function recordFunctionTypeAlias(alias FunctionTypeAlias)
 		self.functionTypeAliases.upsert(alias.name, value: alias)
 		let named = mixBytes(mix(self.hash, value: DeclShapeFunctionAlias), bytes: alias.name)
-		self.hash = mixBytes(mix(named, value: alias.returnTag.rawValue as ContentHash), bytes: alias.returnTypeName)
+		self.hash = mix(self.mixAliasReturnSlot(named, alias: alias), value: alias.paramSpelling)
 	end 'recordFunctionTypeAlias'
+
+	// ⭐⭐ **ONE STORED SIGNATURE SLOT FOLDED INTO THE HASH, AND ITS ARMS ARE `maxonTypeOfStoredTypeName`'s ARMS
+	// OVER THE SAME COLUMNS — WHICH IS NOW A BUILD FAILURE TO GET WRONG RATHER THAN A HEADER PROMISE (D2).**
+	// The two dispatches genuinely cannot share a body (see `AliasSlotIdentity` for the measurement that killed
+	// the obvious unification), so they share the CLASSIFIER instead: both match `aliasSlotIdentity`
+	// exhaustively, and a fourth identity column stops BOTH from compiling.
+	//
+	// The tag and the name are not the whole type: a `typeParameter`'s W14 digest and a `genericInstance`'s
+	// `GenericInstanceId` are exactly the identities the name slot cannot hold (`FunctionTypeAlias`), so
+	// tag-plus-name alone gives two DIFFERENT return types one hash — two instantiations of one base are both
+	// `(genericInstance, "")`.
+	//
+	// ⚠ **AND THAT STATE ARISES FOR EXACTLY ONE POPULATION, WHICH IS NARROWER THAN THE SENTENCE ABOVE READS
+	// ON ITS OWN.** Only the `extension`-body nested alias reaches here `genericInstance`-tagged at all; every
+	// FILE-SCOPE function alias arrives `named` + `NoGenericInstance`, because its fold runs ABOVE
+	// `signatures.allFilesFolded` and `parseTypeReference`'s alias registries sit behind that gate. So the
+	// hole was real and was one population wide — recorded here so a later reader does not conclude it was
+	// broader, and does not conclude from a file-scope program's green run that the arm is dead.
+	//
+	// ⛔⛔ **THE INSTANCE GOES THROUGH `mixGenericInstance`, NEVER RAW, AND MIXING IT RAW IS THE DEFECT F3g's
+	// REVIEW CAUGHT IN F3g's OWN FIX.** `mixDeclaration`'s rule is names-never-ids *because an INTERN-ORDER id
+	// shifts when an unrelated file declares something* — which is the very failure mode this whole change
+	// exists to have removed from the TYPE system, reintroduced one layer up in the CACHE KEY. `mixType`'s
+	// `genericInstance` arm already states the cure and implements it: the base NAME plus each argument's
+	// shape, which moves when and only when the instance's MEANING moves.
+	// ⚠ **AND IT IS REACHABLE, NOT THEORETICAL.** MEASURED with a temporary panic: an `extension`-body nested
+	// function typealias returning a generic alias arrives here tagged `genericInstance` carrying a live dense
+	// **gid 1** — because `foldExtensionDeclarations` runs BELOW `signatures.allFilesFolded` (`Queries.maxon`),
+	// unlike the file sweep, which is above it and therefore hands every file-scope alias a bare `named`.
+	//
+	// ⚠ **THE `typeParameter` HALF IS CORRECT RAW AND STAYS RAW**, for `mixType`'s own stated reason: a W14
+	// token is a digest of two source NAMES, not an intern-order id, so mixing it IS mixing those names.
+	function mixAliasReturnSlot(state ContentHash, alias FunctionTypeAlias) returns ContentHash
+		let tagged = mixBytes(mix(state, value: alias.returnTag.rawValue as ContentHash), bytes: alias.returnTypeName)
+		match aliasSlotIdentity(alias.returnTag, typeParamToken: alias.returnTypeParamToken, genericInstanceId: alias.returnGenericInstanceId, slotName: alias.returnTypeName) 'identity'
+			typeParamToken(token) then return mix(tagged, value: token)
+			genericInstance(id) then return self.mixGenericInstance(tagged, id: id)
+			nameOnly then return tagged
+		end 'identity'
+	end 'mixAliasReturnSlot'
 
 	// Add one top-level DECLARATION (a `let` or a `var`) to the arena. No value yet:
 	// `evaluateInitializers` supplies that once every file has been folded in.

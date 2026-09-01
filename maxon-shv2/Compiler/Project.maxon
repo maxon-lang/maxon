@@ -3343,6 +3343,18 @@ export type FunctionTypeAlias
 	// token is a PURE digest of two source names (W14), which is exactly the property that lets the sweep
 	// and the real parse mint it identically without a registry.
 	export let returnTypeParamToken as TypeParamId
+	// The RETURN slot's half of `FunctionAliasParam.genericInstanceId` — see there. `NoGenericInstance` for
+	// every tag but `genericInstance`, minted on the same line the TAG is (`Parser.readFunctionTypeAlias`)
+	// so that whichever pass tags a slot `genericInstance` carries its identity too — that pairing is what
+	// makes the rebuild's panic an assertion about the COMPILER rather than a case it has to handle.
+	//
+	// ⚠ **UNLIKE `returnTypeParamToken` IT IS NOT THE SAME NUMBER IN EVERY PASS, AND IT DOES NOT NEED TO BE.**
+	// A W14 token is a pure digest of two source spellings; a gid is an index into the ONE whole-program
+	// `GenericInstanceRegistry`, which is shared but is still being FILLED during the sweep. What makes that
+	// safe is the same gate that makes the parameter list safe: the sweep resolves a generic alias to a bare
+	// `named` (`parseTypeReference`'s `allFilesFolded` argument), so the sweep's copy holds no gid to
+	// disagree with, and every shape reads the real parse's copy in `project.functionTypeAliases`.
+	export let returnGenericInstanceId as GenericInstanceId
 	// The RETURN slot's half of `FunctionAliasParam.aggregateName` — see there. EMPTY for a `void` return and
 	// for every type whose identity survives resolution, and EMPTY on the SWEEP's copy of an alias, which
 	// cannot classify a name the registry it is still building has not reached (`Parser.readFunctionTypeAlias`
@@ -3356,6 +3368,29 @@ export type FunctionTypeAlias
 	// identically — and nothing else, and every consumer of a parameter type reads
 	// `project.functionTypeAliases`, the real parse's. See `Parser.readFunctionTypeAlias`.
 	export let paramTypes as FunctionAliasParamArray
+	// ⭐⭐ **THE PARAMETER LIST AS THE AUTHOR SPELLED IT, DIGESTED — the ONE thing about the parameters that
+	// survives into the SWEEP's copy, and the only reason the parameter list can key a parse memo at all
+	// (F3g review).** `paramTypes` above is empty on every copy `ProgramSignatures.recordFunctionTypeAlias`
+	// ever sees, because every route into `foldFile` reads its aliases with `recordSignature: false` — so the
+	// hash had nothing to fold and a `function(Integer)` edited to `function(Real)` moved no reader's memo
+	// while changing the code those readers emit.
+	//
+	// ⛔⛔ **IT CARRIES AN EXPLICIT PER-PARAMETER BOUNDARY, AND WITHOUT ONE IT COLLIDED ON ARITY.** A flat fold
+	// of token texts loses the GROUPING, which is the only thing a separator means: `function(A, B)` (two
+	// parameters) and `function(A B)` (ONE parameter NAMED `A` of type `B`) fold the identical sequence —
+	// MEASURED at the identical value both ways — and they are different types, refused one comma apart with
+	// `E3036 'Cb' expects 1 argument(s) but 2 were provided`. Widening the range over the comma does not help:
+	// a punctuator's `Token.value` is empty. See `Parser.FunctionAliasParamBoundary`.
+	//
+	// ⭐ **IT IS A DIGEST OF TOKENS, WHICH IS WHY BOTH PASSES CAN MINT IT.** `parseTypeReference` answers a
+	// spelling differently in the sweep and the real parse (`readFunctionTypeAlias` states the rule), so no
+	// RESOLVED fact about a parameter is mintable in both — but the tokens the author wrote are the same
+	// tokens either way. That is `ProgramSignatures.typeParamTokenFor`'s property, applied one level up.
+	//
+	// ⛔ **HASH ONLY. It is NOT a type and nothing may rebuild one from it** — a digest is not invertible and
+	// the two passes' readings of the same tokens genuinely differ. It is deliberately absent from
+	// `maxonTypeOfStoredAliasReturn`'s column list for that reason.
+	export let paramSpelling as ContentHash
 	// ⭐ **THE `fn(P1, P2) returns R` DISPLAY STRING (P1.5 #81).** The full canonical signature — parameter
 	// types included — computed at parse (where the param types are still in hand, with THIS file's
 	// interner, so a `named` alias reads as `Integer`) and stored as a plain ByteArray. It is what lets a
@@ -3377,8 +3412,8 @@ export type FunctionTypeAlias
 	export let declFilePath as FilePath
 	export let visibility as Visibility
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnTypeParamToken TypeParamId, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray, declFilePath FilePath, visibility Visibility) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes, declFilePath: declFilePath, visibility: visibility}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnTypeParamToken TypeParamId, returnGenericInstanceId GenericInstanceId, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray, paramSpelling ContentHash, declFilePath FilePath, visibility Visibility) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnGenericInstanceId: returnGenericInstanceId, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes, paramSpelling: paramSpelling, declFilePath: declFilePath, visibility: visibility}
 	end 'create'
 
 	// ⭐⭐ **THE SAME DECLARATION UNDER A SECOND KEY.** Two callers mint one, and they are two SCOPES rather
@@ -3392,7 +3427,7 @@ export type FunctionTypeAlias
 	// between the two copies of ONE fold. A rebuild through `create` with anything defaulted would make the
 	// qualified copy answer a different shape from the bare one for the same written declaration.
 	export function underName(qualifiedName ByteArray) returns FunctionTypeAlias
-		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnTypeParamToken: self.returnTypeParamToken, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes, declFilePath: self.declFilePath, visibility: self.visibility}
+		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnTypeParamToken: self.returnTypeParamToken, returnGenericInstanceId: self.returnGenericInstanceId, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility}
 	end 'underName'
 end 'FunctionTypeAlias'
 
@@ -3439,9 +3474,30 @@ export type FunctionAliasParam
 	// source spellings is the same number in every file that computes it, which is precisely the property
 	// W14 chose it for.
 	export let typeParamToken as TypeParamId
+	// ⭐⭐ **THE IDENTITY OF A GENERIC-INSTANCE PARAMETER — `FieldArray` in `typealias FieldsConsumer =
+	// function(FieldArray) returns Integer`, where `typealias FieldArray = Array with Field` (F3g).** Its
+	// `typeParamToken` twin, one tag over, and `NoGenericInstance` for every other tag.
+	//
+	// ⭐ **IT IS A COLUMN FOR `typeParamToken`'s REASON: `typeName` means "the name a reader's interner must
+	// re-intern to rebuild the type", and a generic instance has none.** Its identity is a whole-program
+	// `GenericInstanceId` keying `GenericInstanceRegistry`, not a spelling — `Parser.functionAliasTypeName`
+	// therefore had nothing to put in the name slot and yielded the EMPTY STRING, exactly as it does for a
+	// type parameter.
+	//
+	// ⛔⛔ **AND UNLIKE THE TYPE-PARAMETER CASE, THE MISSING COLUMN WAS NOT A REFUSAL BUT A WRONG ANSWER
+	// — SEE `NoGenericInstance` FOR THE MEASURED SEGFAULT.** An empty name rebuilds as `UnnamedTypeId`, which
+	// is 0, which is instance 0: the declared side of every function-type comparison silently became
+	// whichever instantiation was interned first, so the verdict on a legal program depended on the order two
+	// unrelated `typealias` lines were swept in.
+	//
+	// ⚠ **A gid NEEDS NO REMAP for a different reason from the digest beside it**, and both reasons are real:
+	// a W14 token is a pure function of two source spellings, while a gid is an index into the ONE
+	// `ProgramSignatures.genericInstances` every file interns into. Neither is a per-file interner id, which
+	// is what the alias fold requires.
+	export let genericInstanceId as GenericInstanceId
 
-	export static function create(tag ValueTypeTag, typeName ByteArray, typeParamToken TypeParamId, aggregateName ByteArray) returns FunctionAliasParam
-		return Self{tag: tag, typeName: typeName, typeParamToken: typeParamToken, aggregateName: aggregateName}
+	export static function create(tag ValueTypeTag, typeName ByteArray, typeParamToken TypeParamId, genericInstanceId GenericInstanceId, aggregateName ByteArray) returns FunctionAliasParam
+		return Self{tag: tag, typeName: typeName, typeParamToken: typeParamToken, genericInstanceId: genericInstanceId, aggregateName: aggregateName}
 	end 'create'
 end 'FunctionAliasParam'
 

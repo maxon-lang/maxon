@@ -387,3 +387,130 @@ export typealias UnaryOp = function(Int) returns Int
 ```exitcode
 42
 ```
+
+<!-- test: cross-file-generic-instance-through-a-function-alias -->
+⭐⭐ **THE SWEPT FUNCTION ALIAS AGAIN, BUT OVER A GENERIC INSTANCE — AND HERE THE ORDER DECIDED THE ANSWER
+RATHER THAN THE SPELLING.** The pair above pins a function alias whose types are RANGED, which round-trip
+through the stored `(tag, name)` pair because they have a name. A `genericInstance` does not: its identity
+is a `GenericInstanceId`, the name slot took the empty string, and the rebuild substituted `UnnamedTypeId`
+— **0**, the id of whichever instantiation the sweep interned first. `thief.maxon` is walked first here
+purely so that `Array with Small` takes id 0, which moves `Array with Field` to 1 and refuses this legal
+program `E3005 … expected 'fn(int) returns struct', got 'fn(int) returns struct'`.
+
+⚠ **THE FILE SPLIT IS THE REPORTED SHAPE, NOT AN EMBELLISHMENT.** This is `maxon-dev-mcp/mcp` reduced: the
+generic alias lives in one file (`Schema.maxon`'s `SchemaFieldArray`), the function alias and its call site
+in another (`Server.maxon`'s `SchemaFieldsBuilder`), and a dozen files that mention neither decide the
+verdict by deciding who interns first. Renaming `Schema.maxon` so it sorted ahead of them made nine E3005s
+disappear, which is what a bug reported as *"identity depends on file order"* looks like from outside.
+```maxon
+// --- file: thief.maxon
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+export function smallCount() returns Small
+	var s = SmallArray.create()
+	s.push(3)
+	return s.count()
+end 'smallCount'
+
+// --- file: types.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+export typealias FieldArray = Array with Field
+
+// --- file: srv.maxon
+typealias Count = int(i64.min to i64.max)
+typealias FieldsBuilder = function(Count) returns FieldArray
+
+function buildFields(n Count) returns FieldArray
+	var out = FieldArray.create()
+	out.push(Field.create(n))
+	return out
+end 'buildFields'
+
+function apply(f FieldsBuilder) returns Count
+	let produced = f(7)
+	let first = try produced.get(0) otherwise panic("apply: empty array")
+	return first.v
+end 'apply'
+
+export function runBuilder() returns Count
+	return apply(buildFields)
+end 'runBuilder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return (runBuilder() + smallCount()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: cross-file-generic-instance-through-a-function-alias-either-order -->
+⭐ **THE SAME FOUR FILES WITH THE THIEF MOVED AFTER THE DECLARATION IT WAS STEALING FROM**, so
+`Array with Field` interns first and holds id 0. **MEASURED: this half PASSES on the broken compiler and
+its twin above does not** — same program, same files, different declared order, opposite verdicts. Since
+A3m the compiler compiles the order the case declares, so the pair is a two-order test rather than one
+program written twice, and neither half is decoration: the failing half proves the defect and this one
+proves the fix did not simply refuse everything.
+```maxon
+// --- file: types.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Field
+	export var v as Integer
+
+	export static function create(v Integer) returns Field
+		return Self{v: v}
+	end 'create'
+end 'Field'
+
+export typealias FieldArray = Array with Field
+
+// --- file: srv.maxon
+typealias Count = int(i64.min to i64.max)
+typealias FieldsBuilder = function(Count) returns FieldArray
+
+function buildFields(n Count) returns FieldArray
+	var out = FieldArray.create()
+	out.push(Field.create(n))
+	return out
+end 'buildFields'
+
+function apply(f FieldsBuilder) returns Count
+	let produced = f(7)
+	let first = try produced.get(0) otherwise panic("apply: empty array")
+	return first.v
+end 'apply'
+
+export function runBuilder() returns Count
+	return apply(buildFields)
+end 'runBuilder'
+
+// --- file: thief.maxon
+typealias Small = int(0 to 10)
+typealias SmallArray = Array with Small
+
+export function smallCount() returns Small
+	var s = SmallArray.create()
+	s.push(3)
+	return s.count()
+end 'smallCount'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return (runBuilder() + smallCount()) as ExitCode
+end 'main'
+```
+```exitcode
+8
+```

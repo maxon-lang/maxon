@@ -3419,6 +3419,18 @@ export let U32MaxBound = u32.max as ParsedInt
 // in the one place a divergence would be silent (both spellings compile; only one matches).
 export let U64MaxBound = u64.max as ParsedInt
 
+// ⭐⭐ **THE SEPARATOR `FunctionTypeAlias.paramSpelling` FOLDS BETWEEN PARAMETERS, because the tokens alone do
+// not carry one.** `mixWrittenTokens` folds a VARIABLE number of token texts and a punctuator's text is
+// empty, so without an explicit mark the digest cannot tell `function(A, B)` from `function(A B)` — two
+// arities, one hash. Its VALUE is arbitrary and its identity is not: it must simply be a byte pattern the
+// fold cannot otherwise produce at that position, and naming it is what keeps it from being re-spelled as a
+// bare literal at a second folding site.
+//
+// ⚠ It is NOT one of `SignatureIndex`'s `DeclShape`/`TypeShape` discriminators and must not be given a number
+// out of that space: those tag WHAT KIND of declaration is being folded into the whole-program hash, and this
+// marks a position INSIDE one declaration's own sub-digest, which is built before any of them is reached.
+let FunctionAliasParamBoundary = 1 as ContentHash
+
 // Every unsigned type's lower bound. One constant, not four: `u8.min` and `u64.min`
 // are the same zero, and a per-type spelling would only invite them to drift apart.
 let UnsignedMinBound = 0 as ParsedInt
@@ -21995,10 +22007,26 @@ export type Parser
 		// first `push`, which a sweep never makes.
 		var paramTypes = MaxonTypeArray.create()
 		var declaredParams = FunctionAliasParamArray.create()
+		// ⭐⭐ **THE ONE PARAMETER FACT BOTH PASSES CAN MINT — see `FunctionTypeAlias.paramSpelling`.** Folded
+		// UNCONDITIONALLY, outside every `recordSignature` gate below, because the SWEEP's copy is the only one
+		// the whole-program index ever receives and the hash is the only thing this is for.
+		var paramSpelling = fnvOffsetBasis()
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
 				let paramAnchor = self.tokenAt(self.pos)
+				let paramStart = self.pos
 				let paramType = try self.readFunctionTypeParam()
+				// ⛔⛔ **THE BOUNDARY IS FOLDED HERE AND IT IS THE WHOLE ARITY.** Without it the digest is a flat
+				// fold of token texts in which the GROUPING — the only thing the separator means — is absent:
+				// `function(A, B)` (two parameters) and `function(A B)` (ONE parameter NAMED `A` of type `B`)
+				// fold the identical sequence and MEASURED the identical value, `-5381244596860584822` both ways,
+				// with the alias name and the return slot unchanged — so the alias's whole hash contribution
+				// collided across an edit that changes ARITY, which is what `checkIndirectCallArgs` refuses on and
+				// what `paramFloatMask` builds its register classes from. Widening the range over the comma does
+				// NOT fix it: a punctuator's text is empty (see `mixWrittenTokens`). It is folded AFTER each
+				// parameter rather than between them so the count of boundaries IS the count of parameters, which
+				// the tolerant sweep can supply without a counter it does not keep.
+				paramSpelling = mix(self.mixWrittenTokens(paramSpelling, from: paramStart, to: self.pos), value: FunctionAliasParamBoundary)
 				if recordSignature 'collectParam'
 					// ⭐ REFUSED HERE, and `recordSignature` is what keeps the tolerant declaration sweep out of it: the
 					// sweep passes `false` and must never veto, exactly as it must not for the six sibling positions.
@@ -22006,7 +22034,7 @@ export type Parser
 					// parameter position is E2010 — so one call site covers the position.
 					try self.requireStorableDeclaredType(paramType, position: DeclaredStoragePosition.functionTypeParameter, line: paramAnchor.line, column: paramAnchor.column)
 					paramTypes.push(paramType)
-					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), typeParamToken: functionAliasTypeParamToken(paramType), aggregateName: self.erasedAggregateNameOf(paramType)))
+					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), typeParamToken: functionAliasTypeParamToken(paramType), genericInstanceId: functionAliasInstanceId(paramType), aggregateName: self.erasedAggregateNameOf(paramType)))
 				end 'collectParam'
 				if not self.at(TokenKind.comma) 'endParams'
 					break
@@ -22020,6 +22048,7 @@ export type Parser
 		var returnTag = ValueTypeTag.void
 		var returnTypeName = EmptySourceText
 		var returnTypeParamToken = NoTypeParamId
+		var returnGenericInstanceId = NoGenericInstance
 		var returnAggregateName = EmptySourceText
 		var returnForDisplay = MaxonReturnType.void
 		if self.at(TokenKind.returns) 'hasReturn'
@@ -22043,15 +22072,54 @@ export type Parser
 			// token is a pure function of two SOURCE SPELLINGS (`ProgramSignatures.typeParamTokenFor`), so the
 			// tolerant sweep mints the identical one without consulting the registry it is still building.
 			returnTypeParamToken = functionAliasTypeParamToken(returnType)
+			// ⭐ **UNCONDITIONAL, AND IT MUST SIT EXACTLY WHERE `returnTag` DOES — beside it, never inside the
+			// `recordSignature` gate.** The tag is what says this column means anything, so a pass that mints
+			// the tag and skips the column would hand `maxonTypeOfStoredTypeName` a `genericInstance` with no
+			// identity, which is the panic. One line, one act: whoever tags, carries.
+			//
+			// ⚠ **THE SWEEP AND THE REAL PARSE DO NOT HAVE TO AGREE ABOUT THE TAG HERE, AND FOR A GENERIC
+			// ALIAS THEY DELIBERATELY DO NOT** — `parseTypeReference`'s alias registries sit behind
+			// `allFilesFolded`, so a swept `returns FieldArray` keeps its bare `named` in every file order (see
+			// that gate's own argument) and the sweep's copy carries no gid at all. That asymmetry is
+			// pre-existing and is exactly what `FunctionTypeAlias.paramTypes` already documents for the
+			// parameter half; this column inherits it rather than adding to it.
+			returnGenericInstanceId = functionAliasInstanceId(returnType)
 			returnForDisplay = MaxonReturnType.value(returnType)
 		end 'hasReturn'
 
 		var display = EmptySourceText
 		if recordSignature 'display'
-			display = formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames).toByteArray()
+			display = formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames, signatures: self.signatures).toByteArray()
 		end 'display'
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams, declFilePath: self.filePath, visibility: self.typeAliasVisibility(visibility))
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnGenericInstanceId: returnGenericInstanceId, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams, paramSpelling: paramSpelling, declFilePath: self.filePath, visibility: self.typeAliasVisibility(visibility))
 	end 'readFunctionTypeAlias'
+
+	// ⭐ **THE TOKENS BETWEEN TWO CURSOR POSITIONS, FOLDED INTO A DIGEST — a fact about the SOURCE and about
+	// nothing else.** It reads token TEXT and consults no registry (`parseTypeReference`'s answer is never
+	// asked), which is what lets the declaration sweep and the real parse mint the identical value for one
+	// written declaration — the property `FunctionTypeAlias.paramSpelling` needs and that no RESOLVED fact
+	// about a parameter has.
+	//
+	// ⚠ **IT IS BLIND TO LAYOUT, AND THE REASON IS NOT "THOSE ARE NOT TOKENS".** Comments genuinely are not
+	// (`scanComment`/`scanBlockComment` skip without emitting one), but `TokenKind.newline` very much IS a
+	// token. It cannot fall inside a range this is asked about for a different reason: a function typealias's
+	// parameter list may not span lines — a newline there is `E2010 Expected 'a type' but got 'newline'` — so
+	// reformatting cannot reach the range at all. Whitespace and indentation are not tokens either way.
+	//
+	// ⛔⛔ **IT FOLDS TOKEN TEXT AND PUNCTUATORS CARRY NONE, SO A CALLER MUST SUPPLY EVERY SEPARATOR ITSELF.**
+	// `Token.value` is `EmptySourceText` for every punctuator (`Lexer.maxon`: a token whose text is implied by
+	// its KIND carries the one shared empty slice), so a `,` or a `.` inside a range contributes NOTHING and
+	// widening a range to include one buys nothing at all. **`dottedChainText` is the one other walk over a
+	// token range in this file and it re-inserts the `.` explicitly for exactly this reason** — the codebase
+	// had already learned this, and the first version of this walk was the one that did not compensate. See
+	// `FunctionAliasParamBoundary` for the collision that cost.
+	function mixWrittenTokens(state ContentHash, from TokenIndex, to TokenIndex) returns ContentHash
+		var out = state
+		for i in from upto to 'eachToken'
+			out = mixBytes(out, bytes: self.tokenAt(i).value)
+		end 'eachToken'
+		return out
+	end 'mixWrittenTokens'
 
 	// One parameter of a function-type signature — an optional NAME followed by its type, or a bare type,
 	// returning the parameter's TYPE (the #81 display needs it; the NAME is documentation only, discarded).
@@ -22087,10 +22155,13 @@ export type Parser
 			string gives EmptySourceText
 			// A type parameter / generic instance carries no re-internable NAME (its id is a W14 TOKEN — a
 			// digest of `(declaring type, parameter)` — / a GenericInstanceId, P1.6-A), so like a primitive
-			// it yields the empty string. ⭐ For a TYPE PARAMETER that is not the end of the story and used to
-			// be: the identity travels in its own column instead (`FunctionAliasParam.typeParamToken`, filled by
-			// `TypeResolution.functionAliasTypeParamToken`), because a digest needs no interner — so it belongs
-			// in neither the name slot nor, as it did until F3, a refusal of the whole declaration.
+			// it yields the empty string. ⭐ For NEITHER is that the end of the story, and for both it used to
+			// be: each identity travels in its OWN column instead (`FunctionAliasParam.typeParamToken` filled by
+			// `TypeResolution.functionAliasTypeParamToken`, `.genericInstanceId` filled by
+			// `functionAliasInstanceId`), because neither needs an interner — so neither belongs in the name
+			// slot, where an empty string is indistinguishable from a primitive's and rebuilds as id 0.
+			// ⛔ That indistinguishability was a REFUSAL of the whole declaration for a type parameter until F3
+			// and a silent WRONG ANSWER for an instance until F3g; see `NoGenericInstance`.
 			typeParameter gives EmptySourceText
 			genericInstance gives EmptySourceText
 			// A Character is a builtin with no interned name, exactly like `string` above.
@@ -77627,7 +77698,11 @@ export type Parser
 		end 'closure'
 
 		match self.signatures.functionAliasInAnyFile(name) 'alias'
-			declared(alias) then return FunctionValueReturn.create(self.functionAliasReturnType(alias), scopeFilePath: alias.declFilePath)
+			// ⭐ The rebuild is `maxonTypeOfStoredAliasReturn`, shared with the resolution tier's caller, which
+			// does the same job against the PROJECT's merged interner — this site supplies only the interner.
+			// That is what recovers `ExitCode`'s u32 width from the stored NAME rather than dropping it to a
+			// `named` i64; see `builtinTypeNameTag` for the wasm trap the third spelling of that rule cost (W1).
+			declared(alias) then return FunctionValueReturn.create(maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath)
 			undeclared then break 'alias'
 		end 'alias'
 
@@ -77636,24 +77711,6 @@ export type Parser
 			undeclared then panic("functionValueReturn: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, nor a declared function — every function value is minted from one of the three (parseClosureExpression / parseTypeReference / emitFunctionRef)")
 		end 'fn'
 	end 'functionValueReturn'
-
-	// Reconstruct a function alias's declared return type from its interner-free (tag, name) storage (see
-	// FunctionTypeAlias), re-interning the name into THIS file's interner. `void` means the function
-	// returns nothing; a primitive return carries no name; a `named`/`structRef`/function return carries
-	// the name it re-interns from.
-	//
-	// ⭐ The rebuild itself is `maxonTypeOfStoredTypeName` — shared with `TypeResolution`'s twin, which does
-	// the same job against the PROJECT's merged interner — so this function supplies only the interner. That
-	// is what recovers `ExitCode`'s u32 width from the stored NAME rather than dropping it to a `named` i64;
-	// see `builtinTypeNameTag` for the wasm trap the third spelling of that rule used to cost (W1).
-	function functionAliasReturnType(alias FunctionTypeAlias) returns MaxonReturnType
-		if alias.returnTag == ValueTypeTag.void 'voidReturn'
-			return MaxonReturnType.void
-		end 'voidReturn'
-
-		let nameId = UnnamedTypeId if alias.returnTypeName.isEmpty() else self.artifact.typeNames.intern(alias.returnTypeName)
-		return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, nameId: nameId, typeParamToken: alias.returnTypeParamToken))
-	end 'functionAliasReturnType'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal
