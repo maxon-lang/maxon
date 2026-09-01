@@ -12,21 +12,24 @@
 #   x64-windows   C# + shv2         natively                          YES (this IS the host)
 #   x64-linux     shv2              WSL2 (static ELF, raw syscalls)   YES, if WSL is installed
 #   wasm32-wasi   shv2              vendored wasmtime                 YES, if vendor/wasmtime is present
-#   arm64-macos   C# + shv2         ssh -> the Mac, natively          NO — opt in with --mac
-#   arm64-linux   shv2              ssh -> the Mac -> OrbStack VM     NO — opt in with --mac
+#   arm64-macos   —                 NO RUNNER IN THIS TREE             NEVER — see below
+#   arm64-linux   —                 NO RUNNER IN THIS TREE             NEVER — see below
 #
-# ⭐ THE REMOTE LANES ARE OPT-IN, BECAUSE A REMOTE MACHINE IS NOT A GATE (user, 2026-07-27).
+# ⛔ THE TWO arm64 LANES HAVE NO RUNNER. `scripts/remote-mac.sh` WAS DELETED 2026-09-01 (user
+# ruling: we are not going to use that process), and it was the only thing that could reach the Mac.
 #
-# The two arm64 lanes go over `ssh` to a Mac, and everything that makes them slow is the REMOTE part,
-# not the arm64 part: a bundle transport, a second checkout's build, an OrbStack guest, and a machine
-# that can be asleep, wedged, or on the other side of flaky mDNS. Measured, they cost the rung more
-# than they were catching — one wedged `orb run` preflight alone burned ~95 minutes and produced no
-# verdict at all. So they are no longer part of the per-rung gate. **They are SYNCED PERIODICALLY, BY
-# HAND** — `scripts/cross-target-gate.sh --mac` (or `remote-mac.sh` directly) — and when they run,
-# they run under exactly the same rules as before: ran-and-failed is RED.
+# They had already been demoted from the per-rung gate to a periodic manual sync, for a measured
+# reason: everything expensive about them was the REMOTE part, not the arm64 part — a bundle
+# transport, a second checkout's build, an OrbStack guest, and a machine that could be asleep,
+# wedged, or behind flaky mDNS. One wedged `orb run` preflight alone burned ~95 minutes and produced
+# no verdict at all. Retiring the transport retires the lanes with it.
 #
-# ⚠ That is a deliberate COVERAGE TRADE, not a claim the arm64 targets are fine. Their rows still
-# print, as SKIP with the reason, so a run of this gate can never be mistaken for full coverage.
+# ⚠ THIS IS A COVERAGE LOSS, AND IT IS STATED RATHER THAN ABSORBED. arm64 is now UNTESTED by this
+# gate — not "fine". Both rows still print, as SKIP with that reason, because the one failure this
+# script exists to prevent is a green matrix being read as coverage it never had. **Do not describe
+# any change as cross-target verified on arm64.** `--mac`, `--mac-host=` and `--require-mac` are
+# gone; passing one is now a hard `unknown argument` exit rather than a flag that quietly does
+# nothing, so a stale invocation FAILS instead of reporting a lane it did not run.
 #
 # ⭐ BEST EFFORT MEANS UNREACHABLE IS NOT FAILURE — AND IS NOT SUCCESS EITHER.
 #
@@ -73,12 +76,6 @@
 # Usage:
 #   scripts/cross-target-gate.sh [--filter=PAT] [--csharp]
 #                                [--skip-build] [--skip-host]
-#                                [--mac] [--mac-host=user@host] [--require-mac]
-#
-# --mac turns the two remote arm64 lanes back on — that is the periodic manual sync. --mac-host= and
-# --require-mac each imply it, since naming a host or demanding it is already asking for the run.
-# --require-mac additionally makes an UNREACHABLE Mac a FAILURE rather than a skip, which is what you
-# want on a sync run: the whole point of the invocation was to reach it.
 #
 # --csharp additionally runs the (slow, ~3100-case) C# bootstrap suite on every host that can. Turn
 # it on when the rung touched `maxon-sharp/`; the rung's own gate battery already says to.
@@ -92,14 +89,6 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 FILTER=""
-# Same fallback `remote-mac.sh` carries: once you have asked for the remote lanes, the host should
-# not ALSO have to be spelled out. $MAXON_MAC_HOST and --mac-host= both override it. (It no longer
-# decides WHETHER the lanes run — --mac does. A default host used to be the thing standing between
-# the arm64 lanes and a silent skip; now the skip is the documented default and the flag is the ask.)
-MAC_HOST="${MAXON_MAC_HOST:-estern@Joyces-Macbook-Pro.local}"
-REQUIRE_MAC=0
-# OFF by default: the remote lanes are the periodic manual sync, not a per-rung gate. See the header.
-RUN_MAC=0
 RUN_CSHARP=0
 # Both OFF by default: run straight, this script is self-contained and assumes nothing was built or
 # run before it. The rung path turns them on because step 8 did both. See the header.
@@ -109,9 +98,6 @@ SKIP_HOST=0
 for arg in "$@"; do
 	case "$arg" in
 		--filter=*)   FILTER="${arg#*=}" ;;
-		--mac)        RUN_MAC=1 ;;
-		--mac-host=*) MAC_HOST="${arg#*=}"; RUN_MAC=1 ;;
-		--require-mac) REQUIRE_MAC=1; RUN_MAC=1 ;;
 		--csharp)     RUN_CSHARP=1 ;;
 		--skip-build) SKIP_BUILD=1 ;;
 		--skip-host)  SKIP_HOST=1 ;;
@@ -278,51 +264,18 @@ else
 	skip_row "wasm32-wasi" "vendor/wasmtime missing"
 fi
 
-# --- arm64-macos + arm64-linux, via ssh to the Mac ---
+# --- arm64-macos + arm64-linux: NO RUNNER ---
 #
-# Delegated wholesale to remote-mac.sh, which owns everything about reaching that machine: the
-# availability split, the bundle transport, the OrbStack preflight, the restore-what-we-touched
-# contract. This script only needs its VERDICT — which is why that one prints a RESULT line, since
-# its exit code deliberately cannot distinguish "asleep" (0) from "green" (0).
-banner "arm64-macos + arm64-linux (ssh -> Mac)"
-if [ "$RUN_MAC" = 0 ]; then
-	echo "Remote lanes are opt-in and were not requested — skipping both arm64 targets."
-	echo "They are synced periodically by hand: scripts/cross-target-gate.sh --mac"
-	skip_row "arm64-macos" "remote, not requested (--mac)"
-	skip_row "arm64-linux" "remote, not requested (--mac)"
-elif [ -z "$MAC_HOST" ]; then
-	echo "No Mac host configured (--mac-host= or \$MAXON_MAC_HOST) — skipping both arm64 targets."
-	skip_row "arm64-macos" "no host configured"
-	skip_row "arm64-linux" "no host configured"
-else
-	MAC_ARGS=(--host="$MAC_HOST" --shv2 --linux)
-	[ -n "$FILTER" ] && MAC_ARGS+=("--filter=$FILTER")
-	[ "$REQUIRE_MAC" = 1 ] && MAC_ARGS+=(--require-host)
-
-	MAC_LOG="${TMPDIR:-/tmp}/maxon-remote-mac/gate-mac.log"
-	mkdir -p "$(dirname "$MAC_LOG")"
-
-	bash scripts/remote-mac.sh "${MAC_ARGS[@]}" 2>&1 | tee "$MAC_LOG"
-
-	# The LAST RESULT line, so a literal "RESULT=" inside earlier suite output cannot be mistaken
-	# for the verdict. Absent entirely = the script died before its own EXIT trap could speak, which
-	# is a failure however it happened.
-	MAC_RESULT="$(grep -o 'remote-mac: RESULT=[A-Z]*' "$MAC_LOG" | tail -1 | cut -d= -f2)"
-	case "${MAC_RESULT:-}" in
-		PASS)
-			row "arm64-macos" "PASS" "C# + shv2 on the Mac"
-			row "arm64-linux" "PASS" "shv2 via OrbStack"
-			;;
-		SKIP)
-			skip_row "arm64-macos" "Mac unreachable"
-			skip_row "arm64-linux" "Mac unreachable"
-			;;
-		*)
-			fail_row "arm64-macos" "remote run: ${MAC_RESULT:-no verdict}"
-			fail_row "arm64-linux" "remote run: ${MAC_RESULT:-no verdict}"
-			;;
-	esac
-fi
+# `scripts/remote-mac.sh` owned everything about reaching the Mac — the availability split, the
+# bundle transport, the OrbStack preflight, the restore-what-we-touched contract — and it is gone.
+# The rows are kept, and kept SKIP, on purpose: dropping them would shrink the matrix to the targets
+# that happen to be testable here, and a matrix that only lists what it can do is one nobody can
+# read a gap out of.
+banner "arm64-macos + arm64-linux"
+echo "No runner in this tree — scripts/remote-mac.sh was deleted 2026-09-01."
+echo "arm64 is UNVERIFIED, not verified-good. Do not report a change as arm64-clean."
+skip_row "arm64-macos" "no runner (remote-mac.sh deleted)"
+skip_row "arm64-linux" "no runner (remote-mac.sh deleted)"
 
 # --- The matrix ---
 banner "CROSS-TARGET MATRIX"

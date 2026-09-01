@@ -103,14 +103,16 @@ checkout's build, an OrbStack guest, and a machine that can be asleep, wedged, o
 **They cost the rung more than they caught** — one wedged `orb run` preflight alone burned ~95 minutes
 and produced *no verdict at all*.
 
-- **The gate skips them by default and SAYS SO** — two SKIP rows with the reason, so a green run can
-  never be read as full cross-target coverage.
-- **The sync is a separate, periodic, manual run:** `scripts/cross-target-gate.sh --mac --require-mac`
-  (or `bash scripts/remote-mac.sh --host=<user@mac> --shv2` for the native macOS lane alone).
-  **Not your call to schedule as part of a rung.**
-- ⚠ **This is a deliberate COVERAGE TRADE, not a claim arm64 is fine.** **Do not describe a rung as
-  cross-target verified on arm64.** The trade is only honest if the SKIP is stated — an unreported skip
-  converts *"we chose not to check"* into *"we checked"*, which is the one failure this section guards.
+⛔ **AS OF 2026-09-01 THERE IS NO WAY TO RUN THEM AT ALL.** `scripts/remote-mac.sh` — the only thing
+that could reach the Mac — was deleted by user ruling, and the gate's `--mac`, `--mac-host=` and
+`--require-mac` flags went with it. There is no periodic sync to schedule and nothing to ask for.
+
+- **The gate prints them as SKIP with that reason**, so a green run can never be read as full
+  cross-target coverage.
+- ⚠ **This is a COVERAGE LOSS, not a claim arm64 is fine.** **Never describe a rung as cross-target
+  verified on arm64.** The trade is only honest if the SKIP is stated — an unreported skip converts
+  *"we could not check"* into *"we checked"*, which is the one failure this section guards.
+- ⚠ **A stale invocation now FAILS rather than lying**: `--mac` is an unknown argument and exits 2.
 
 | | |
 |---|---|

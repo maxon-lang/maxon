@@ -2961,15 +2961,18 @@ end 'FragmentCheck'
 // `--update-required` regenerates instead of comparing. That is still the door a change enters
 // through, and it is deliberately a door you have to open: the diff is the review.
 //
-// ⭐⭐ **A GOLDEN IS INDEPENDENT OF WHICH OTHER TESTS RAN, AND `scripts/remote-mac.sh` RELIES ON IT.**
-// The content compared (or written) here comes from ONE compile of ONE test: `runOneSpec` walks its
-// selected tests one at a time, `stageTest` puts that test's source on disk alone, and one
-// `compileToProduct` compiles it. So `--filter` cannot move a byte of any fragment it does not
-// exclude, and a FILTERED `--update-required` regenerates exactly what an unfiltered one would. That
-// is what lets the remote-golden script carry an arm64 run's `specs-shv2/fragments` home from a
-// filtered run; the C# suite, which batches a spec's tests into one module, is excluded there for
-// exactly the reason this runner does not need to be. ⚠ If shv2 ever compiles several tests together,
-// that script's exclusion list is the OTHER end of this invariant and must change with it.
+// ⭐⭐ **A GOLDEN IS INDEPENDENT OF WHICH OTHER TESTS RAN.** The content compared (or written) here
+// comes from ONE compile of ONE test: `runOneSpec` walks its selected tests one at a time,
+// `stageTest` puts that test's source on disk alone, and one `compileToProduct` compiles it. So
+// `--filter` cannot move a byte of any fragment it does not exclude, and a FILTERED
+// `--update-required` regenerates exactly what an unfiltered one would.
+//
+// ⚠ This paragraph used to name `scripts/remote-mac.sh` as the invariant's consumer — it carried an
+// arm64 run's `specs-shv2/fragments` home from a filtered run, and could only do so because of this.
+// That script was deleted 2026-09-01 and the arm64 lanes have no runner. **The invariant is
+// unchanged and still load-bearing** (every filtered `--update-required` in the tree depends on it);
+// what is gone is the one caller that made it visible. Contrast the C# suite, which batches a spec's
+// tests into one module and therefore does NOT have this property.
 //
 // ⚠⚠ **SINCE G20 THAT INDEPENDENCE IS A PROPERTY OF THE COMPILER'S PER-COMPILE STATE, NOT OF PROCESS
 // ISOLATION, AND THE CHANGE IS WORTH STATING RATHER THAN ASSUMING.** Every test used to be compiled by

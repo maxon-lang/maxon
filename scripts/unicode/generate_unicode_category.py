@@ -5,10 +5,10 @@ Generate binary Unicode category lookup tables and a compact Maxon source file.
 Produces:
   - stdlib/helpers/string/ucd_bmp.bin   (65536 bytes, flat BMP table)
   - stdlib/helpers/string/ucd_supp.bin  (N*8 bytes, sorted supplementary ranges)
-  - stdlib/helpers/string/_unicode_category.maxon (~65 lines)
+  - stdlib/helpers/string/unicodeCategory.maxon (~65 lines)
 
 Usage:
-    python3 tools/unicode/generate_unicode_category.py
+    python3 scripts/unicode/generate_unicode_category.py
 """
 
 import re
@@ -28,16 +28,16 @@ CATEGORY_CODES = {
 
 # Bitmask definitions: name -> list of category names
 MASK_DEFS = {
-    "_GC_MASK_LETTERS":       ["Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me"],
-    "_GC_MASK_LOWERCASE":     ["Ll"],
-    "_GC_MASK_UPPERCASE":     ["Lu", "Lt"],
-    "_GC_MASK_DIGITS":        ["Nd"],
-    "_GC_MASK_ALPHANUMERICS": ["Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me", "Nd", "Nl", "No"],
-    "_GC_MASK_PUNCTUATION":   ["Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps"],
-    "_GC_MASK_SYMBOLS":       ["Sc", "Sk", "Sm", "So"],
-    "_GC_MASK_CONTROL":       ["Cc", "Cf"],
-    "_GC_MASK_WHITESPACE_ZS": ["Zs"],
-    "_GC_MASK_LINE_PARA_SEP": ["Zl", "Zp"],
+    "GC_MASK_LETTERS":       ["Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me"],
+    "GC_MASK_LOWERCASE":     ["Ll"],
+    "GC_MASK_UPPERCASE":     ["Lu", "Lt"],
+    "GC_MASK_DIGITS":        ["Nd"],
+    "GC_MASK_ALPHANUMERICS": ["Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me", "Nd", "Nl", "No"],
+    "GC_MASK_PUNCTUATION":   ["Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps"],
+    "GC_MASK_SYMBOLS":       ["Sc", "Sk", "Sm", "So"],
+    "GC_MASK_CONTROL":       ["Cc", "Cf"],
+    "GC_MASK_WHITESPACE_ZS": ["Zs"],
+    "GC_MASK_LINE_PARA_SEP": ["Zl", "Zp"],
 }
 
 
@@ -131,7 +131,7 @@ def generate_maxon(supp_count, output_path):
     lines.append("// Auto-generated Unicode General Category lookup table")
     lines.append("// Source: DerivedGeneralCategory-16.0.0.txt")
     lines.append(f"// Binary data: ucd_bmp.bin (65536 bytes), ucd_supp.bin ({supp_count} entries)")
-    lines.append("// Do not edit manually - regenerate with tools/unicode/generate_unicode_category.py")
+    lines.append("// Do not edit manually - regenerate with scripts/unicode/generate_unicode_category.py")
     lines.append("")
     lines.append("typealias GeneralCategory = int(0 to 29)")
     lines.append("")
@@ -139,7 +139,7 @@ def generate_maxon(supp_count, output_path):
     # Category constants
     lines.append("// Category constants")
     for cat, code in sorted(CATEGORY_CODES.items(), key=lambda x: x[1]):
-        lines.append(f"let _GC_{cat} = {code}")
+        lines.append(f"let GC_{cat} = {code}")
     lines.append("")
 
     # Bitmask constants
@@ -149,32 +149,42 @@ def generate_maxon(supp_count, output_path):
         lines.append(f"let {mask_name} = {val}")
     lines.append("")
 
-    lines.append(f"let _UCD_SUPP_COUNT = {supp_count}")
+    lines.append(f"let UCD_SUPP_COUNT = {supp_count}")
     lines.append("")
 
-    # Main function with binary-search lookup
-    lines.append("export function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory")
-    lines.append("  if cp < 65536 'bmp'")
-    lines.append('    return __Builtins.ucdByteAt("__ucd_bmp", cp)')
-    lines.append("  end 'bmp'")
-    lines.append("  var lo = 0")
-    lines.append("  var hi = _UCD_SUPP_COUNT - 1")
-    lines.append("  while lo <= hi 'bsearch'")
-    lines.append("    var mid = (lo + hi) shr 1")
-    lines.append('    var entry = __Builtins.ucdI64At("__ucd_supp", mid)')
-    lines.append("    var rangeStart = entry and 2097151")
-    lines.append("    var rangeEnd = (entry shr 21) and 2097151")
-    lines.append("    if cp < rangeStart 'left'")
-    lines.append("      hi = mid - 1")
-    lines.append("    end 'left' else 'not_left'")
-    lines.append("      if cp > rangeEnd 'right'")
-    lines.append("        lo = mid + 1")
-    lines.append("      end 'right' else 'found'")
-    lines.append("        return (entry shr 42) and 31")
-    lines.append("      end 'found'")
-    lines.append("    end 'not_left'")
-    lines.append("  end 'bsearch'")
-    lines.append("  return 0")
+    # Main function with binary-search lookup.
+    #
+    # ⚠ THIS BODY HAD DRIFTED PAST COMPILING, and nothing noticed because nobody re-ran the
+    # generator: it emitted `export` (now `public` -- export is visibility, public is API surface),
+    # TWO-SPACE indentation (the language is tab-indented and `maxon fmt` enforces it), unlabelled
+    # builtin arguments (`ucdByteAt(.., cp)` -- the labels `offset:`/`index:` are required), and
+    # `var` for four bindings that are never reassigned (which is now the E3012 family's error, not
+    # a style note). Four independent language changes, each of which alone would have made the
+    # output reject. Re-running it is now a BYTE-IDENTICAL no-op against
+    # stdlib/helpers/string/unicodeCategory.maxon -- that identity is this file's only real test,
+    # so check it after any edit here.
+    lines.append("public function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory")
+    lines.append("	if cp < 65536 'bmp'")
+    lines.append('		return __Builtins.ucdByteAt("__ucd_bmp", offset: cp)')
+    lines.append("	end 'bmp'")
+    lines.append("	var lo = 0")
+    lines.append("	var hi = UCD_SUPP_COUNT - 1")
+    lines.append("	while lo <= hi 'bsearch'")
+    lines.append("		let mid = (lo + hi) shr 1")
+    lines.append('		let entry = __Builtins.ucdI64At("__ucd_supp", index: mid)')
+    lines.append("		let rangeStart = entry and 2097151")
+    lines.append("		let rangeEnd = (entry shr 21) and 2097151")
+    lines.append("		if cp < rangeStart 'left'")
+    lines.append("			hi = mid - 1")
+    lines.append("		end 'left' else 'not_left'")
+    lines.append("			if cp > rangeEnd 'right'")
+    lines.append("				lo = mid + 1")
+    lines.append("			end 'right' else 'found'")
+    lines.append("				return (entry shr 42) and 31")
+    lines.append("			end 'found'")
+    lines.append("		end 'not_left'")
+    lines.append("	end 'bsearch'")
+    lines.append("	return 0")
     lines.append("end 'unicodeGeneralCategory'")
     lines.append("")
 
@@ -192,7 +202,7 @@ def main():
     output_dir = os.path.join(repo_root, "stdlib", "helpers", "string")
     bmp_path = os.path.join(output_dir, "ucd_bmp.bin")
     supp_path = os.path.join(output_dir, "ucd_supp.bin")
-    maxon_path = os.path.join(output_dir, "_unicode_category.maxon")
+    maxon_path = os.path.join(output_dir, "unicodeCategory.maxon")
 
     if not os.path.exists(input_path):
         print(f"Error: {input_path} not found")

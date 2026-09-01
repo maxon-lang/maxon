@@ -20,8 +20,7 @@ must exist, comment *why the two cannot be one* — otherwise the reviewer will 
   inside an O(n) walk is the classic, and this project has shipped it more than once.
 - **Linear lookups that want a hash/index** — `findFirst` over an array in a loop.
 - **Repeated rebuilds** — recomputing a fixpoint, liveness, or a dominator tree per element instead of
-  once. (The register allocator's splitter recomputes liveness after every split; that one is *known*
-  and budgeted, `ARCHITECTURE.md:1336-1345`. Do not "discover" it again.)
+  once. (The register allocator's splitter recomputes liveness after every split.)
 - **Iterating a dense index space when you should walk set BITS** — `0 upto valueCount` instead of the
   live-set's set bits. Making exactly this change is what turned shv2's allocator linear.
 - **Allocation in a hot path**, especially anything that allocates into the very `mm` stream being

@@ -319,7 +319,7 @@ coverage.**
 |---|---|
 | **The optimizer SWEEP** | One `maxon-rung-optimizer` over everything the phase landed — it sees cross-rung interactions a per-rung pass structurally cannot |
 | **The PLAN.md index table** | Regenerated in one pass from the detail rows (§9) |
-| **The REMOTE arm64/Mac sync** | `scripts/cross-target-gate.sh --mac --require-mac`. **A red lane here is a real defect, fixed, not filed as "the sync was red"** |
+| ~~**The REMOTE arm64/Mac sync**~~ | ⛔ **GONE 2026-09-01, and it is a COVERAGE LOSS rather than a batching decision.** `scripts/remote-mac.sh` was deleted by user ruling and the gate's `--mac` flags with it, so **arm64-macos and arm64-linux now have no runner at all** — the gate prints them SKIP with that reason. There is nothing to schedule. ⚠ **Never call a rung arm64-verified**, and do not re-add the old command: `--mac` is now an unknown argument and exits 2 |
 | **The stale-golden sweep** | The measured rot: 288 stale + ~489 *absent* x64-linux goldens, and 317 stale arm64 C#-suite goldens. ⚠ **A MISSING golden never fails** — absence is invisible to every gate, so it can only be found by going to look. Half of that is now machine-checked (a golden the suite MINTED is caught by the run that minted it) and half is not: a golden absent because **nobody ran that lane** has nothing to be untracked. **This sweep is what covers those two** |
 
 ⚠ **Nothing that catches a DEFECT batches.** The reviewer, the leak/probe gate, the RED spec baseline,

@@ -6,7 +6,7 @@ worth nothing without a test that **fails before it and passes after it** — an
 ## Run it
 
 ```
-bash tools/debugstream-stress/validate.sh
+bash scripts/debugstream-stress/validate.sh
 ```
 
 Exits `0` iff every check passes. Takes ~1 minute. Override the compiler with
