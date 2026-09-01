@@ -47,6 +47,21 @@ Each sub-pass handles both alias shapes:
 
 ## Whole-compiler baseline (2026-04-21)
 
+> ⚠ **THE CAPTURE RECIPE BELOW NO LONGER RUNS, AND THE NUMBERS UNDER IT ARE A
+> DATED SNAPSHOT, NOT A REPRODUCIBLE READING.** Both measurements drive
+> `maxon build maxon-selfhosted`, and the self-hosted compiler has not built
+> since `e4146cf8e` (verified 2026-07-13) — it is deprecated as a product and
+> is kept as a *source* to read, not a binary to run. `scripts/bench_build.sh`,
+> which timed the cold self-hosted build, was **deleted 2026-09-01** along with
+> the rest of the selfhosted-driving scripts; the emitted-code question it
+> approximated is answered better by **`scripts/self-host-ab.sh`**, which times
+> stage-2 against stage-1, `cmp`s them, and prints the per-phase allocation /
+> byte / CPU ratio table. The `--mm-trace` half is still meaningful as a
+> *technique* — `scripts/analyze_mm_trace.py` is live and is what the
+> `mcp__maxon-dev__mm_trace_analyze` tool drives — but it needs a workload that
+> builds. Treat everything below as the record of a measurement that WAS taken,
+> not as instructions.
+
 The scoreboard in [specs/optimizer-refcount.md](../specs/optimizer-refcount.md) is a
 small synthetic program. It's the right regression harness but a bad
 *workload* sample — it doesn't hit the lexer, parser, or register allocator
@@ -71,9 +86,6 @@ measurements against the self-hosted compiler:
   2> .mm-trace/basic.trace
 python scripts/analyze_mm_trace.py .mm-trace/basic.trace --top=25 \
   > .mm-trace/analysis.txt
-
-# (2) build time + exe size (cold, 3 runs)
-./scripts/bench_build.sh --runs=3
 ```
 
 `examples/basic.maxon` is three lines (`return 42`) — the workload is the
