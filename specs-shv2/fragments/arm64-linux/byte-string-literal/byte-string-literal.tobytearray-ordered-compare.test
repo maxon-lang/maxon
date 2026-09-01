@@ -1,0 +1,219 @@
+// Test: byte-string-literal.tobytearray-ordered-compare
+function main() returns ExitCode
+		let fromString = "9223372036854775807".toByteArray()
+		let fromLiteral = b"9223372036854775807"
+		let a = try fromString.get(0) otherwise panic("oob")
+		let b = try fromLiteral.get(0) otherwise panic("oob")
+		if a > b or a < b 'differ'
+				return 1
+		end 'differ'
+		return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_2  ; "9223372036854775807"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __barr_blob_1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 19
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_word#11
+    arm64.b __im_stride#13
+  __im_word#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#10
+    arm64.b __im_load#15
+  __im_load#15:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded#14
+  __im_stride#13:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte#12
+    arm64.b __im_slow#10
+  __im_byte#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#10
+    arm64.b __im_load#16
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded#14
+  __im_loaded#14:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#17
+    arm64.b critsplit#28
+  __im_empty#17:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#10
+    arm64.b critsplit#29
+  critsplit#29:
+    arm64.movRegReg x21, x0
+    arm64.b __im_cont#9
+  critsplit#28:
+    arm64.movRegReg x21, x0
+    arm64.b __im_cont#9
+  __im_slow#10:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x2, x9
+    arm64.b __im_cont#9
+  __im_cont#9:
+    arm64.cmp x2, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at byte-string-literal.tobytearray-ordered-compare.test:5: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_word#20
+    arm64.b __im_stride#22
+  __im_word#20:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#19
+    arm64.b __im_load#24
+  __im_load#24:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded#23
+  __im_stride#22:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte#21
+    arm64.b __im_slow#19
+  __im_byte#21:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#19
+    arm64.b __im_load#25
+  __im_load#25:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded#23
+  __im_loaded#23:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#26
+    arm64.b critsplit#30
+  __im_empty#26:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#19
+    arm64.b critsplit#31
+  critsplit#31:
+    arm64.b __im_cont#18
+  critsplit#30:
+    arm64.b __im_cont#18
+  __im_slow#19:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x9
+    arm64.b __im_cont#18
+  __im_cont#18:
+    arm64.cmp x2, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at byte-string-literal.tobytearray-ordered-compare.test:6: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.cmp x21, x0
+    arm64.cset x1, gt
+    arm64.movImm x2, 1
+    arm64.cbnz x1, critsplit#27
+    arm64.b orrhs
+  critsplit#27:
+    arm64.b scmerge
+  orrhs:
+    arm64.cmp x21, x0
+    arm64.cset x0, lt
+    arm64.movRegReg x2, x0
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x2, differ
+    arm64.b ifcont
+  differ:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

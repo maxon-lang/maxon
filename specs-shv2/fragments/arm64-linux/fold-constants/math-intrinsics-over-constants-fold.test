@@ -1,0 +1,268 @@
+// Test: math-intrinsics-over-constants-fold
+typealias Real = float(f64.min to f64.max)
+
+function sqrtF(a Real) returns Real
+	return sqrt(a)
+end 'sqrtF'
+
+function floorF(a Real) returns Real
+	return floor(a)
+end 'floorF'
+
+function ceilF(a Real) returns Real
+	return ceil(a)
+end 'ceilF'
+
+function roundF(a Real) returns Real
+	return round(a)
+end 'roundF'
+
+function absF(a Real) returns Real
+	return abs(a)
+end 'absF'
+
+function negF(a Real) returns Real
+	return -a
+end 'negF'
+
+function main() returns ExitCode
+	if sqrtF(2.25) != 1.5 'squareRoot'
+		return 1
+	end 'squareRoot'
+	if floorF(-2.5) != -3.0 'floorGoesDown'
+		return 2
+	end 'floorGoesDown'
+	if ceilF(-2.5) != -2.0 'ceilingGoesUp'
+		return 3
+	end 'ceilingGoesUp'
+	if roundF(2.5) != 2.0 'tiesGoToEven'
+		return 4
+	end 'tiesGoToEven'
+	if roundF(3.5) != 4.0 'andEvenIsNotAlwaysDown'
+		return 5
+	end 'andEvenIsNotAlwaysDown'
+	if "{absF(-0.0)}" != "0.0" 'absClearsTheSignBit'
+		return 6
+	end 'absClearsTheSignBit'
+	if "{negF(2.5)}" != "-2.5" 'negFlipsIt'
+		return 7
+	end 'negFlipsIt'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.b __il_body#16
+  __il_body#16:
+    arm64.fpLoadRdata d0, [rdata + __fconst_1.5]
+    arm64.b __il_cont#15
+  __il_cont#15:
+    arm64.fpLoadRdata d1, [rdata + __fconst_1.5]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, squareRoot
+    arm64.b ifcont#2
+  squareRoot:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#2:
+    arm64.b __il_body#18
+  __il_body#18:
+    arm64.fpLoadRdata d0, [rdata + __fconst_-3]
+    arm64.b __il_cont#17
+  __il_cont#17:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-3]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, floorGoesDown
+    arm64.b ifcont#4
+  floorGoesDown:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#4:
+    arm64.b __il_body#20
+  __il_body#20:
+    arm64.fpLoadRdata d0, [rdata + __fconst_-2]
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-2]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, ceilingGoesUp
+    arm64.b ifcont#6
+  ceilingGoesUp:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#6:
+    arm64.b __il_body#22
+  __il_body#22:
+    arm64.fpLoadRdata d0, [rdata + __fconst_2]
+    arm64.b __il_cont#21
+  __il_cont#21:
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, tiesGoToEven
+    arm64.b ifcont#8
+  tiesGoToEven:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#8:
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.b __il_cont#23
+  __il_cont#23:
+    arm64.fpLoadRdata d1, [rdata + __fconst_4]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, andEvenIsNotAlwaysDown
+    arm64.b ifcont#10
+  andEvenIsNotAlwaysDown:
+    arm64.movImm x0, 5
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#10:
+    arm64.b __il_body#26
+  __il_body#26:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.b __il_cont#25
+  __il_cont#25:
+    arm64.bl __float_toString
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x1, __str_rec_95  ; "0.0"
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.eor x20, x0, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.cbnz x20, absClearsTheSignBit
+    arm64.b ifcont#12
+  absClearsTheSignBit:
+    arm64.movImm x0, 6
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#12:
+    arm64.b __il_body#28
+  __il_body#28:
+    arm64.fpLoadRdata d0, [rdata + __fconst_-2.5]
+    arm64.b __il_cont#27
+  __il_cont#27:
+    arm64.bl __float_toString
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x1, __str_rec_96  ; "-2.5"
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.eor x20, x0, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.cbnz x20, negFlipsIt
+    arm64.b ifcont#14
+  negFlipsIt:
+    arm64.movImm x0, 7
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#14:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

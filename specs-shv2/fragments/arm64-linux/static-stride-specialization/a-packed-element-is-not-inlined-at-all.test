@@ -1,0 +1,186 @@
+// Test: a-packed-element-is-not-inlined-at-all
+typealias Q = int(0 to 3)
+typealias QArray = Array with Q
+
+function main() returns ExitCode
+	var a = QArray.create()
+	a.push(0)
+	a.push(1)
+	a.push(2)
+	a.push(3)
+	a.push(2)
+	if a.managed.elementSize() != -2 'stamp'
+		return 1
+	end 'stamp'
+	try a.set(4, value: 1) otherwise panic("set: index out of range")
+	var seen = 0
+	for i in 0 upto 5 'read'
+		seen = seen + (try a.get(i) otherwise panic("get: index out of range"))
+	end 'read'
+	if seen != 7 'sum'
+		return 2
+	end 'sum'
+	if (try a.get(3) otherwise panic("get: index out of range")) != 3 'acrossTheByte'
+		return 3
+	end 'acrossTheByte'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 18446744073709551614
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_element_size
+    arm64.cmp x0, -2
+    arm64.cset x0, ne
+    arm64.cbnz x0, stamp
+    arm64.b ifcont#2
+  stamp:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x1, 4
+    arm64.movImm x2, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-packed-element-is-not-inlined-at-all.test:15: set: index out of range\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x21, 5
+    arm64.cset x0, lt
+    arm64.cbnz x0, read
+    arm64.b forexit
+  read:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#10
+    arm64.b tryok#9
+  tryerr#10:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-packed-element-is-not-inlined-at-all.test:18: get: index out of range\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#9:
+    arm64.add x20, x20, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x20, 7
+    arm64.cset x0, ne
+    arm64.cbnz x0, sum
+    arm64.b ifcont#12
+  sum:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#14
+    arm64.b tryok#13
+  tryerr#14:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-packed-element-is-not-inlined-at-all.test:23: get: index out of range\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#13:
+    arm64.cmp x0, 3
+    arm64.cset x0, ne
+    arm64.cbnz x0, acrossTheByte
+    arm64.b ifcont#16
+  acrossTheByte:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#16:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

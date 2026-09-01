@@ -1,0 +1,142 @@
+// Test: a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function launder(n Int) returns Int
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(10)
+	a.push(20)
+	a.push(30)
+
+	// The BUFFER surface: caught, and the program keeps running.
+	if (try a.managed.get(launder(-1)) otherwise -5) != -5 'bufferThrows'
+		return 1
+	end 'bufferThrows'
+	if a.count() != 3 'countUnchanged'
+		return 2
+	end 'countUnchanged'
+
+	// The ARRAY surface: the `otherwise` is unreachable — the door panics first.
+	return try a.get(launder(-1)) otherwise 99
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 30
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 18446744073709551615
+    arm64.b __il_body#25
+  __il_body#25:
+    arm64.b __il_cont#24
+  __il_cont#24:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, -1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, -8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#28
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#29
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#29:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#28:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 18446744073709551611
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, -5
+    arm64.cset x0, ne
+    arm64.cbnz x0, bufferThrows
+    arm64.b ifcont#5
+  bufferThrows:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#5:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 3
+    arm64.cset x0, ne
+    arm64.cbnz x0, countUnchanged
+    arm64.b ifcont#7
+  countUnchanged:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#7:
+    arm64.b __il_body#27
+  __il_body#27:
+    arm64.b __il_cont#26
+  __il_cont#26:
+    arm64.b __rc_panic
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers.test:24: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

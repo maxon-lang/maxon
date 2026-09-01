@@ -1,0 +1,229 @@
+// Test: string-conformance.hash-values
+type Box uses T where T is Hashable
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemHash() returns HashValue
+		return self.item.hash()
+	end 'itemHash'
+end 'Box'
+
+typealias StringBox = Box with String
+
+function main() returns ExitCode
+	let e = StringBox.create("")
+	if e.itemHash() != 5381 'p1'
+		return 1
+	end 'p1'
+	let a = StringBox.create("abc")
+	if a.itemHash() != 193485963 'p2'
+		return 2
+	end 'p2'
+	let h = StringBox.create("hi")
+	if h.itemHash() != 5863446 'p3'
+		return 3
+	end 'p3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Box.itemHash {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_3  ; ""
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x22, x20
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.movRegReg x0, x21
+    arm64.bl Box.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.movRegReg x0, x19
+    arm64.bl Box.itemHash
+    arm64.movImm x16, 5381
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, p1
+    arm64.b ifcont#2
+  p1:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#2:
+    arm64.leaRdata x0, __str_rec_4  ; "abc"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.movRegReg x0, x22
+    arm64.bl Box.create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.movRegReg x0, x20
+    arm64.bl Box.itemHash
+    arm64.movImm x16, 193485963
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, p2
+    arm64.b ifcont#4
+  p2:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#4:
+    arm64.leaRdata x0, __str_rec_5  ; "hi"
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.movRegReg x0, x23
+    arm64.bl Box.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.movRegReg x0, x21
+    arm64.bl Box.itemHash
+    arm64.movImm x16, 5863446
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, p3
+    arm64.b ifcont#6
+  p3:
+    arm64.movImm x22, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

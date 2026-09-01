@@ -1,0 +1,82 @@
+// Test: character-ordering-le-ge
+function main() returns ExitCode
+	let a = 'é'
+	let b = 'ü'
+	if a <= b 'le'
+		print("le\n")
+	end 'le'
+	if b >= a 'ge'
+		print("ge\n")
+	end 'ge'
+	if b > a 'gt'
+		print("gt\n")
+	end 'gt'
+	if a >= b 'notGe'
+		print("NOTGE\n")
+	end 'notGe'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_6  ; "\xc3\xa9"
+    arm64.leaRdata x20, __str_rec_7  ; "\xc3\xbc"
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __char_cmp
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+    arm64.cbnz x0, le
+    arm64.b ifcont#2
+  le:
+    arm64.leaRdata x0, __str_rec_8  ; "le\x0a"
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, ge
+    arm64.b ifcont#4
+  ge:
+    arm64.leaRdata x0, __str_rec_9  ; "ge\x0a"
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __char_cmp
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, gt
+    arm64.b ifcont#6
+  gt:
+    arm64.leaRdata x0, __str_rec_10  ; "gt\x0a"
+    arm64.bl print
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, notGe
+    arm64.b ifcont#8
+  notGe:
+    arm64.leaRdata x0, __str_rec_11  ; "NOTGE\x0a"
+    arm64.bl print
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,152 @@
+// Test: rdata-global-var-array-cow-preserves-original
+typealias Integer = int(i64.min to i64.max)
+
+var globalArr = [10, 20, 30]
+
+function readFirst() returns Integer
+	return try globalArr.get(0) otherwise 0
+end 'readFirst'
+
+function main() returns ExitCode
+	try globalArr.set(0, value: 99) otherwise panic("test invariant: set OOB")
+	return readFirst()
+end 'main'
+---
+ExitCode: 99
+---
+data {
+  __data_globalArr@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @readFirst {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_globalArr
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.cset x2, ls
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_empty
+    arm64.b critsplit#8
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_slow
+    arm64.b critsplit#9
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#9:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont
+  critsplit#8:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_globalArr
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 99
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_owned
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, lt
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_bounds
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.cmp x3, 0
+    arm64.cset x3, ls
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_buffer
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.cmp x3, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_slow
+    arm64.b __im_viewed
+  __im_viewed:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_slow
+    arm64.b __im_store
+  __im_slow:
+    arm64.bl __managed_set
+    arm64.b __im_cont
+  __im_store:
+    arm64.storeBaseDispReg.word64 [x3 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-global-var-array-cow-preserves-original.test:11: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.bl readFirst
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-global-var-array-cow-preserves-original.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

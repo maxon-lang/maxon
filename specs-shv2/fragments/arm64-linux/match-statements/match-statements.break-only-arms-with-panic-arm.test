@@ -1,0 +1,195 @@
+// Test: match-statements.break-only-arms-with-panic-arm
+typealias Payload = int(0 to u64.max)
+
+union Slot
+	vacant
+	reserved
+	filled(value Payload)
+end 'Slot'
+
+type Holder
+	export var slot as Slot
+
+	export static function create() returns Holder
+		return Self{slot: Slot.reserved}
+	end 'create'
+
+	export function assertUsable()
+		match self.slot 'check'
+			vacant then panic("slot is vacant")
+			reserved then break 'check'
+			filled then break 'check'
+		end 'check'
+	end 'assertUsable'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.assertUsable()
+	h.slot = Slot.filled(7)
+	h.assertUsable()
+	print("usable\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.assertUsable {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#1
+    arm64.b matchnext#7
+  matcharm#1:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at match-statements.break-only-arms-with-panic-arm.test:19: slot is vacant\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 16
+    arm64.ret
+  matchnext#7:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchnext#8
+  matcharm#2:
+    arm64.b matchcont
+  matchnext#8:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#4
+    arm64.b matchdead
+  matcharm#4:
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  afterbreak#3:
+  afterbreak#5:
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Holder.create
+    arm64.movRegReg x19, x0
+    arm64.b __il_body#3
+  __il_body#3:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __il_slow#12
+    arm64.b matchnext#9
+  __il_slow#12:
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.assertUsable
+    arm64.b __il_cont#2
+  matchnext#9:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#4
+    arm64.b matchnext#10
+  matcharm#4:
+    arm64.b matchcont#11
+  matchnext#10:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#6
+    arm64.b matchdead#8
+  matcharm#6:
+    arm64.b matchcont#11
+  matchcont#11:
+    arm64.b __il_cont#2
+  __il_cont#2:
+    arm64.movImm x20, 7
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x21
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __il_slow#22
+    arm64.b matchnext#19
+  __il_slow#22:
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.assertUsable
+    arm64.b __il_cont#1
+  matchnext#19:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#14
+    arm64.b matchnext#20
+  matcharm#14:
+    arm64.b matchcont#21
+  matchnext#20:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#16
+    arm64.b matchdead#18
+  matcharm#16:
+    arm64.b matchcont#21
+  matchcont#21:
+    arm64.b __il_cont#1
+  __il_cont#1:
+    arm64.leaRdata x0, __str_rec_2  ; "usable\x0a"
+    arm64.bl print
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchdead#18:
+  matchdead#8:
+  afterbreak#5:
+  afterbreak#7:
+  afterbreak#15:
+  afterbreak#17:
+}

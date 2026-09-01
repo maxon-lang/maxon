@@ -1,0 +1,216 @@
+// Test: nested-struct-enum-array-grow
+typealias Integer = int(i64.min to i64.max)
+
+export union CfOp
+		br(target Integer)
+		condBr(cond Integer)
+end 'CfOp'
+
+export union IrOp
+		cf(op CfOp)
+		arith(value Integer)
+end 'IrOp'
+
+typealias IrOpArray = Array with IrOp
+
+export type IrBlock
+		export var id as Integer
+		export var ops as IrOpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
+
+		static function create(id Integer, ops IrOpArray, terminator IrOp, hasTerminator bool) returns Self
+			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'IrBlock'
+
+typealias DepArray = Array with Integer
+
+export type Database
+		export var block as IrBlock
+		export var deps as DepArray
+
+		static function create(block IrBlock, deps DepArray) returns Self
+			return Self{block: block, deps: deps}
+		end 'create'
+end 'Database'
+
+function main() returns ExitCode
+		let block = IrBlock.create(0, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		var db = Database.create(block, deps: DepArray.create())
+		db.deps.push(1)
+		db.deps.push(2)
+		db.deps.push(3)
+		db.deps.push(4)
+		db.deps.push(5)
+		return db.deps.count()
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @IrBlock.create {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.movRegReg x22, x3
+    arm64.movImm x0, 32
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x23 + 8], x20
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x23 + 16], x21
+    arm64.storeBaseDispReg.byte [x23 + 24], x22
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_IrOp
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @Database.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_IrBlock
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_IrOp
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x2, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.storeBaseDispReg.word64 [x2 + 8], x22
+    arm64.movImm x3, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl IrBlock.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Database.create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 1
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 2
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 3
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 4
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 5
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Database
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_IrBlock
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at nested-struct-enum-array-grow.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

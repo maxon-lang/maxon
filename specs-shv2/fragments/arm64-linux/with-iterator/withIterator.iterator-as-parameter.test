@@ -1,0 +1,206 @@
+// Test: withIterator.iterator-as-parameter
+typealias TokenIter = ArrayIterator with String
+
+function printRest(iter TokenIter)
+	for t in iter 'rest'
+		print("{t}\n")
+	end 'rest'
+end 'printRest'
+
+function main() returns ExitCode
+	let toks = ["a", "b", "c", "d"]
+	var iter = try toks.createIterator() otherwise return 9
+	try iter.advance() otherwise return 9
+	try iter.advance() otherwise return 9
+	printRest(iter)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @printRest {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, rest
+    arm64.b forexit
+  rest:
+    arm64.leaRdata x1, __layout_ArrayIterator_String
+    arm64.movRegReg x0, x19
+    arm64.bl ArrayIterator.current
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+    arm64.leaRdata x0, __str_rec_5  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x25, x22, x24
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x27, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x21, x24
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.movRegReg x0, x26
+    arm64.bl print
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.b forstep
+  forstep:
+    arm64.movRegReg x0, x19
+    arm64.bl ArrayIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  forexit:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_6  ; "a"
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_7  ; "b"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_8  ; "c"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_9  ; "d"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.bl Array.createIterator
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x19, 9
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl ArrayIterator.advance
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.movImm x21, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_ArrayIterator_String
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl ArrayIterator.advance
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.movImm x21, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_ArrayIterator_String
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok#5:
+    arm64.movRegReg x0, x19
+    arm64.bl printRest
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_ArrayIterator_String
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -1,0 +1,208 @@
+// Test: the-same-collision-over-a-managed-element
+typealias Int = int(i64.min to i64.max)
+
+type BagIter uses Element implements Iterator with Element
+	var item as Element
+
+	export static function create(v Element) returns Self
+		return Self{item: v}
+	end 'create'
+
+	export function current() returns Element
+		return item
+	end 'current'
+
+	export function advance() throws IterationError
+		throw IterationError.exhausted
+	end 'advance'
+end 'BagIter'
+
+type Bag uses Element implements Iterable with (Element, BagIter)
+	var item as Element
+	var result as Int
+
+	export static function create(v Element) returns Self
+		return Self{item: v, result: 0}
+	end 'create'
+
+	export function createIterator() returns BagIter throws IterationError
+		return BagIter.create(item)
+	end 'createIterator'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function isLong(s String) returns bool
+	return s.byteLength() > 5
+end 'isLong'
+
+function main() returns ExitCode
+	var b = StrBag.create("a string long enough to be heap allocated")
+	if b.contains(isLong) 'long'
+		print("long\n")
+		return 1
+	end 'long'
+	print("short\n")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @BagIter.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @BagIter.current {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @BagIter.advance {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.createIterator {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.bl BagIter.create
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @isLong {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow
+    arm64.b __rc_ok
+  __il_slow:
+    arm64.bl String.byteLength
+    arm64.b __il_cont
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 5
+    arm64.cset x0, gt
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_3  ; "a string long enough to be heap allocated"
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x22, x20
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x1, __fnref_isLong
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Bag_String
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.contains
+    arm64.cbnz x0, long
+    arm64.b ifcont
+  long:
+    arm64.leaRdata x0, __str_rec_4  ; "long\x0a"
+    arm64.bl print
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __str_rec_5  ; "short\x0a"
+    arm64.bl print
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

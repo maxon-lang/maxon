@@ -1,0 +1,113 @@
+// Test: enum-struct-field-match-direct
+typealias SmallInt = int(0 to u8.max)
+
+union Shape
+		circle(radius SmallInt)
+		square(side SmallInt)
+end 'Shape'
+
+type Drawing
+		export var shape as Shape
+
+		static function create(shape Shape) returns Self
+			return Self{shape: shape}
+		end 'create'
+end 'Drawing'
+
+function isCircle(d Drawing) returns bool
+		match d.shape 'ms'
+				circle then return true
+				square then return false
+		end 'ms'
+end 'isCircle'
+
+function main() returns ExitCode
+		let d = Drawing.create(Shape.circle(10))
+		if isCircle(d) 'ok'
+				return 1
+		end 'ok'
+		return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Drawing.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 10
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.bl Drawing.create
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#5
+    arm64.b matchnext
+  matcharm#5:
+    arm64.movImm x1, 1
+    arm64.b __il_cont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#6
+    arm64.b matchdead
+  matcharm#6:
+    arm64.movImm x1, 0
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cbnz x1, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x19, 1
+    arm64.bl __destruct_Drawing
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 0
+    arm64.bl __destruct_Drawing
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  matchcont:
+}

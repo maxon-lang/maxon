@@ -1,0 +1,158 @@
+// Test: plain-type-member-generic-alias-at-file-scope
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder
+	typealias Bag = Array with Num
+
+	export var v as Num
+
+	export static function create(v Num) returns Holder
+		return Holder{v: v}
+	end 'create'
+
+	export function fill() returns Bag
+		var b = Bag.create()
+		b.push(self.v)
+		return b
+	end 'fill'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var b = Bag.create()
+	b.push(20)
+	b.push(22)
+	let h = Holder.create(1)
+	let ownBag = h.fill()
+	if b.count() == 2 and ownBag.count() == 1 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 200
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a.maxon:8: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.fill {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 22
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 1
+    arm64.bl Holder.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl Holder.fill
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.cmp x1, 2
+    arm64.cset x1, eq
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x1, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x1, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x21, 0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x21, 1
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

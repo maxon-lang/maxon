@@ -1,0 +1,135 @@
+// Test: interface-return-into-a-reassigned-var
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	let value as Integer
+
+	function produce() returns Integer
+		return value
+	end 'produce'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+function make(seed Integer) returns Producer
+	return Widget.create(seed)
+end 'make'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	var p = make(10)
+	p = make(42)
+	return consume(p) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Widget.produce {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Widget.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @make {
+  entry:
+    arm64.prologue 16
+    arm64.bl Widget.create
+    arm64.leaRdata x9, __witness_Widget.Producer
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @consume {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 10
+    arm64.bl make
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x9
+    arm64.movImm x0, 42
+    arm64.bl make
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x22, x9
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl consume
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at interface-return-into-a-reassigned-var.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x21
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

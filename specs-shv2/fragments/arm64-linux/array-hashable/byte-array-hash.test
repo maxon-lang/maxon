@@ -1,0 +1,70 @@
+// Test: byte-array-hash
+typealias ByteVal = int(0 to u8.max)
+typealias ByteArr = Array with ByteVal
+
+function main() returns ExitCode
+	var arr = ByteArr.create()
+	arr.push(65)
+	arr.push(66)
+	arr.push(67)
+	let h = arr.hash()
+	if h != 0 'nonzero'
+		return 1
+	end 'nonzero'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 65
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 66
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 67
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Array.hash
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, nonzero
+    arm64.b ifcont
+  nonzero:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

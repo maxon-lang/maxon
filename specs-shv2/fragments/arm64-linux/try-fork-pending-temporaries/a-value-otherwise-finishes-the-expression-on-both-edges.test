@@ -1,0 +1,182 @@
+// Test: a-value-otherwise-finishes-the-expression-on-both-edges
+typealias StrArray = Array with String
+typealias Integer = int(i64.min to i64.max)
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+function mayFail(n Integer) returns Integer throws Boom
+	if n > 100 'big'
+		throw Boom.bad
+	end 'big'
+	return n
+end 'mayFail'
+
+type Conf
+	export var argv as StrArray
+	export var n as Integer
+
+	export static function create(n Integer) returns Conf
+		return Conf{argv: StrArray.create(), n: try mayFail(n) otherwise 7}
+	end 'create'
+end 'Conf'
+
+function main() returns ExitCode
+	var ok = Conf.create(3)
+	ok.argv.push("a")
+	var failed = Conf.create(900)
+	failed.argv.push("b")
+	failed.argv.push("c")
+	return ok.argv.count() + ok.n + failed.argv.count() + failed.n as ExitCode
+end 'main'
+---
+ExitCode: 13
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @mayFail {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 100
+    arm64.cset x1, gt
+    arm64.cbnz x1, big
+    arm64.b ifcont
+  big:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Conf.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl mayFail
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x19, 7
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+    arm64.bl Conf.create
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.leaRdata x0, __str_rec_3  ; "a"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x0, 900
+    arm64.bl Conf.create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.leaRdata x0, __str_rec_4  ; "b"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.leaRdata x0, __str_rec_5  ; "c"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at a-value-otherwise-finishes-the-expression-on-both-edges.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#1:
+    arm64.add x21, x0, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Conf
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Conf
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#5
+    arm64.b __rc_chk#6
+  __rc_chk#6:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at a-value-otherwise-finishes-the-expression-on-both-edges.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#4:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

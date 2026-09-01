@@ -1,0 +1,114 @@
+// Test: and-hands-its-operands-ranged-alias-down
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function andThenShift(a Wide, b Wide) returns Wide
+	let m = a and b
+	return m shr 60
+end 'andThenShift'
+
+function andThenDivide(a Wide, b Wide) returns Wide
+	let m = a and b
+	return m / 3
+end 'andThenDivide'
+
+function orThenShift(a Wide, b Wide) returns Num
+	let m = a or b
+	return m shr 60
+end 'orThenShift'
+
+function xorThenShift(a Wide, b Wide) returns Num
+	let m = a xor b
+	return m shr 60
+end 'xorThenShift'
+
+function main() returns ExitCode
+	if andThenShift(u64.max, b: u64.max) != 15 'andKeepsUnsigned'
+		return 1
+	end 'andKeepsUnsigned'
+	if andThenDivide(u64.max, b: u64.max) != 6148914691236517205 'andDividesUnsigned'
+		return 2
+	end 'andDividesUnsigned'
+	if orThenShift(u64.max, b: 0) != -1 'orCarriesNothing'
+		return 3
+	end 'orCarriesNothing'
+	if xorThenShift(u64.max, b: 0) != -1 'xorCarriesNothing'
+		return 4
+	end 'xorCarriesNothing'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @andThenDivide {
+  entry:
+    arm64.prologue 16
+    arm64.and x0, x0, x1
+    arm64.movImm x1, 3
+    arm64.udiv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x0, 15
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.cmp x0, 15
+    arm64.cset x0, ne
+    arm64.cbnz x0, andKeepsUnsigned
+    arm64.b ifcont#2
+  andKeepsUnsigned:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 18446744073709551615
+    arm64.movImm x1, 18446744073709551615
+    arm64.bl andThenDivide
+    arm64.movImm x1, 6148914691236517205
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, andDividesUnsigned
+    arm64.b ifcont#4
+  andDividesUnsigned:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_cont#11
+  __il_cont#11:
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, orCarriesNothing
+    arm64.b ifcont#6
+  orCarriesNothing:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.b __il_body#14
+  __il_body#14:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_cont#13
+  __il_cont#13:
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, xorCarriesNothing
+    arm64.b ifcont#8
+  xorCarriesNothing:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

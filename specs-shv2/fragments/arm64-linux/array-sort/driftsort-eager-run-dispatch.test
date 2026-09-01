@@ -1,0 +1,317 @@
+// Test: driftsort-eager-run-dispatch
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var base = 0
+	var blk = 0
+	while blk < 10 'blocks'
+		a.push(base + 4)
+		a.push(base + 3)
+		a.push(base + 2)
+		a.push(base + 1)
+		base = base + 10
+		blk = blk + 1
+	end 'blocks'
+	Log.startCapture()
+	a.sort(ascending)
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "driftsort.eagerRun") 'er'
+		print("eagerRun ")
+	end 'er'
+	if not Log.fired(keys, key: "driftsort.logicalRun") 'nl'
+		print("no-logical ")
+	end 'nl'
+	var ok = true
+	for i in 1 upto 40 'c'
+		let p = try a.get(i - 1) otherwise return 90
+		let cv = try a.get(i) otherwise return 91
+		if p > cv 'bad'
+			ok = false
+		end 'bad'
+	end 'c'
+	if ok 'o'
+		print("sorted")
+	end 'o'
+	print("\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @ascending {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cbnz x2, lt
+    arm64.b ifcont#4
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#4:
+    arm64.cmp x0, x1
+    arm64.cset x0, gt
+    arm64.cbnz x0, gt
+    arm64.b ifcont#6
+  gt:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  ifcont#6:
+    arm64.movImm x0, 1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x21, 10
+    arm64.cset x0, lt
+    arm64.cbnz x0, blocks
+    arm64.b whileexit
+  blocks:
+    arm64.add x1, x20, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.add x1, x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.add x1, x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.add x1, x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.add x20, x20, 10
+    arm64.add x21, x21, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.bl Log.startCapture
+    arm64.leaFuncAddr x1, __fnref_ascending
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Array_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl Array.sort#Array.SortComparator
+    arm64.bl Log.stopCapture
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_21  ; "driftsort.eagerRun"
+    arm64.movRegReg x0, x20
+    arm64.bl Log.fired
+    arm64.cbnz x0, er
+    arm64.b ifcont#5
+  er:
+    arm64.leaRdata x0, __str_rec_22  ; "eagerRun "
+    arm64.bl print
+    arm64.b ifcont#5
+  ifcont#5:
+    arm64.leaRdata x1, __str_rec_23  ; "driftsort.logicalRun"
+    arm64.movRegReg x0, x20
+    arm64.bl Log.fired
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, nl
+    arm64.b ifcont#7
+  nl:
+    arm64.leaRdata x0, __str_rec_24  ; "no-logical "
+    arm64.bl print
+    arm64.b ifcont#7
+  ifcont#7:
+    arm64.movImm x21, 1
+    arm64.movImm x22, 1
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x22, 40
+    arm64.cset x0, lt
+    arm64.cbnz x0, c
+    arm64.b forexit
+  c:
+    arm64.sub x1, x22, 1
+    arm64.cmp x1, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_109  ; "panic at driftsort-eager-run-dispatch.test:32: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x1, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow#27
+    arm64.b __im_load#28
+  __im_load#28:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty#29
+    arm64.b critsplit#33
+  __im_empty#29:
+    arm64.cmp x23, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow#27
+    arm64.b critsplit#34
+  __im_slow#27:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x23, x0
+    arm64.b __im_cont#26
+  critsplit#34:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#26
+  critsplit#33:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#26
+  __im_cont#26:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#13
+    arm64.b tryok#12
+  tryerr#13:
+    arm64.movImm x21, 90
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x22, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow#23
+    arm64.b __im_load#24
+  __im_load#24:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x22, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty#25
+    arm64.b critsplit#31
+  __im_empty#25:
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow#23
+    arm64.b critsplit#32
+  __im_slow#23:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_get
+    arm64.b __im_cont#22
+  critsplit#32:
+    arm64.movRegReg x9, x1
+    arm64.b __im_cont#22
+  critsplit#31:
+    arm64.movRegReg x9, x1
+    arm64.b __im_cont#22
+  __im_cont#22:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#15
+    arm64.b tryok#14
+  tryerr#15:
+    arm64.movImm x21, 91
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#14:
+    arm64.cmp x23, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, bad
+    arm64.b critsplit#30
+  bad:
+    arm64.movImm x0, 0
+    arm64.b ifcont#17
+  critsplit#30:
+    arm64.movRegReg x0, x21
+    arm64.b ifcont#17
+  ifcont#17:
+    arm64.b forstep
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.movRegReg x21, x0
+    arm64.b forhdr
+  forexit:
+    arm64.cbnz x21, o
+    arm64.b ifcont#19
+  o:
+    arm64.leaRdata x0, __str_rec_25  ; "sorted"
+    arm64.bl print
+    arm64.b ifcont#19
+  ifcont#19:
+    arm64.leaRdata x0, __str_rec_26  ; "\x0a"
+    arm64.bl print
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

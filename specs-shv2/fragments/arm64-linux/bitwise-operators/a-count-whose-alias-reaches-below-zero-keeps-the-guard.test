@@ -1,0 +1,304 @@
+// Test: a-count-whose-alias-reaches-below-zero-keeps-the-guard
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Small = int(-1 to 5)
+
+function shlBy(value Num, n Small) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n Small) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n Small) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function below(step Num) returns Small
+	return (-step) as Small
+end 'below'
+
+function main() returns ExitCode
+	let negative = below(1)
+
+	if shlBy(1, n: negative) != 0 'shl'
+		return 1
+	end 'shl'
+	if shrBy(-4, n: negative) != -1 'shrSign'
+		return 2
+	end 'shrSign'
+	if shrWordBy(u64.max, n: negative) != 0 'shrZeroFill'
+		return 3
+	end 'shrZeroFill'
+
+	// The in-range end of the same alias, so the case cannot pass by refusing the whole type.
+	if shlBy(1, n: below(-5)) != 32 'shlInRange'
+		return 4
+	end 'shlInRange'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shlBy {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, -1
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 5
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-count-whose-alias-reaches-below-zero-keeps-the-guard.test:6: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.and x2, x1, -64
+    arm64.neg x3, x2
+    arm64.orr x2, x2, x3
+    arm64.asr x2, x2, 63
+    arm64.lslv x0, x0, x1
+    arm64.mvn x1, x2
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shrBy {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, -1
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 5
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-count-whose-alias-reaches-below-zero-keeps-the-guard.test:10: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.and x2, x1, -64
+    arm64.neg x3, x2
+    arm64.orr x2, x2, x3
+    arm64.asr x2, x2, 63
+    arm64.orr x1, x1, x2
+    arm64.asrv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shrWordBy {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, -1
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 5
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-count-whose-alias-reaches-below-zero-keeps-the-guard.test:14: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.and x2, x1, -64
+    arm64.neg x3, x2
+    arm64.orr x2, x2, x3
+    arm64.asr x2, x2, 63
+    arm64.lsrv x0, x0, x1
+    arm64.mvn x1, x2
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.b __il_body#11
+  __il_body#11:
+    arm64.movImm x19, 18446744073709551615
+    arm64.b __rc_chk#13
+  __rc_chk#13:
+    arm64.b __rc_ok#12
+  __rc_ok#12:
+    arm64.b __il_cont#10
+  __il_cont#10:
+    arm64.movImm x0, 1
+    arm64.b __il_body#15
+  __il_body#15:
+    arm64.cmp x19, -1
+    arm64.cset x20, lt
+    arm64.cbnz x20, __il_slow#18
+    arm64.b __rc_chk#17
+  __rc_chk#17:
+    arm64.cmp x19, 5
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#18
+    arm64.b __rc_ok#16
+  __il_slow#18:
+    arm64.movRegReg x1, x19
+    arm64.bl shlBy
+    arm64.b __il_cont#9
+  __rc_ok#16:
+    arm64.and x1, x19, -64
+    arm64.neg x2, x1
+    arm64.orr x1, x1, x2
+    arm64.asr x1, x1, 63
+    arm64.lslv x0, x0, x19
+    arm64.mvn x1, x1
+    arm64.and x0, x0, x1
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, shl
+    arm64.b ifcont#2
+  shl:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 18446744073709551612
+    arm64.b __il_body#20
+  __il_body#20:
+    arm64.cbnz x20, __il_slow#23
+    arm64.b __rc_chk#22
+  __rc_chk#22:
+    arm64.cmp x19, 5
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#23
+    arm64.b __rc_ok#21
+  __il_slow#23:
+    arm64.movRegReg x1, x19
+    arm64.bl shrBy
+    arm64.b __il_cont#19
+  __rc_ok#21:
+    arm64.and x1, x19, -64
+    arm64.neg x2, x1
+    arm64.orr x1, x1, x2
+    arm64.asr x1, x1, 63
+    arm64.orr x1, x19, x1
+    arm64.asrv x0, x0, x1
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrSign
+    arm64.b ifcont#4
+  shrSign:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_body#25
+  __il_body#25:
+    arm64.cbnz x20, __il_slow#28
+    arm64.b __rc_chk#27
+  __rc_chk#27:
+    arm64.cmp x19, 5
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#28
+    arm64.b __rc_ok#26
+  __il_slow#28:
+    arm64.movRegReg x1, x19
+    arm64.bl shrWordBy
+    arm64.b __il_cont#24
+  __rc_ok#26:
+    arm64.and x1, x19, -64
+    arm64.neg x2, x1
+    arm64.orr x1, x1, x2
+    arm64.asr x1, x1, 63
+    arm64.lsrv x0, x0, x19
+    arm64.mvn x1, x1
+    arm64.and x0, x0, x1
+    arm64.b __il_cont#24
+  __il_cont#24:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrZeroFill
+    arm64.b ifcont#6
+  shrZeroFill:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 1
+    arm64.b __il_body#31
+  __il_body#31:
+    arm64.movImm x1, 5
+    arm64.b __rc_chk#33
+  __rc_chk#33:
+    arm64.b __rc_ok#32
+  __rc_ok#32:
+    arm64.b __il_cont#30
+  __il_cont#30:
+    arm64.b __il_body#35
+  __il_body#35:
+    arm64.cmp x1, -1
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#38
+    arm64.b __rc_chk#37
+  __rc_chk#37:
+    arm64.cmp x1, 5
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#38
+    arm64.b __rc_ok#36
+  __il_slow#38:
+    arm64.bl shlBy
+    arm64.b __il_cont#29
+  __rc_ok#36:
+    arm64.and x2, x1, -64
+    arm64.neg x3, x2
+    arm64.orr x2, x2, x3
+    arm64.asr x2, x2, 63
+    arm64.lslv x0, x0, x1
+    arm64.mvn x1, x2
+    arm64.and x0, x0, x1
+    arm64.b __il_cont#29
+  __il_cont#29:
+    arm64.cmp x0, 32
+    arm64.cset x0, ne
+    arm64.cbnz x0, shlInRange
+    arm64.b ifcont#8
+  shlInRange:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

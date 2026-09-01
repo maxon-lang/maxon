@@ -1,0 +1,118 @@
+// Test: index-equality-and-ordering-read-the-grapheme-index
+function main() returns ExitCode
+	let s = "abcdefghijklm"
+	let start = s.startIndex()
+	let g = try s.findFirst("ghij") otherwise s.endIndex()
+	if start < g 'ordered'
+		print("lt\n")
+	end 'ordered' else 'notOrdered'
+		print("NOT lt\n")
+	end 'notOrdered'
+	if start == s.startIndex() 'same'
+		print("eq\n")
+	end 'same' else 'different'
+		print("NOT eq\n")
+	end 'different'
+	if g == start 'wrong'
+		print("BAD eq\n")
+	end 'wrong' else 'right'
+		print("ne\n")
+	end 'right'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_8  ; "abcdefghijklm"
+    arm64.movRegReg x0, x19
+    arm64.bl String.startIndex
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_9  ; "ghij"
+    arm64.movRegReg x0, x19
+    arm64.bl String.findFirst
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x19
+    arm64.bl String.endIndex
+    arm64.movRegReg x21, x0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x21, x0
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.cmp x0, x1
+    arm64.cset x0, lt
+    arm64.cbnz x0, ordered
+    arm64.b ifelse#5
+  ordered:
+    arm64.leaRdata x0, __str_rec_10  ; "lt\x0a"
+    arm64.bl print
+    arm64.b ifcont#6
+  ifelse#5:
+    arm64.leaRdata x0, __str_rec_11  ; "NOT lt\x0a"
+    arm64.bl print
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.movRegReg x0, x19
+    arm64.bl String.startIndex
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.cmp x1, x2
+    arm64.cset x19, eq
+    arm64.bl __mm_decref
+    arm64.cbnz x19, same
+    arm64.b ifelse#8
+  same:
+    arm64.leaRdata x0, __str_rec_12  ; "eq\x0a"
+    arm64.bl print
+    arm64.b ifcont#9
+  ifelse#8:
+    arm64.leaRdata x0, __str_rec_13  ; "NOT eq\x0a"
+    arm64.bl print
+    arm64.b ifcont#9
+  ifcont#9:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.cbnz x0, wrong
+    arm64.b ifelse#11
+  wrong:
+    arm64.leaRdata x0, __str_rec_14  ; "BAD eq\x0a"
+    arm64.bl print
+    arm64.b ifcont#12
+  ifelse#11:
+    arm64.leaRdata x0, __str_rec_15  ; "ne\x0a"
+    arm64.bl print
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

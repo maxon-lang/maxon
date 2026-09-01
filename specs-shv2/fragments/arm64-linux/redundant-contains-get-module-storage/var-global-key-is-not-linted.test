@@ -1,0 +1,112 @@
+// Test: var-global-key-is-not-linted
+typealias StrMap = Map with (String, String)
+
+var key = "a"
+
+function probe(t StrMap) returns ExitCode
+	if t.contains(key) 'has'
+		print(try t.get(key) otherwise "?")
+	end 'has'
+	return 0
+end 'probe'
+
+function main() returns ExitCode
+	let m = StrMap.create()
+	return probe(m)
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_key@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @probe {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __data_key
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x2, __layout_Map_String_String
+    arm64.leaRdata x3, __witness_String.Hashable
+    arm64.leaRdata x4, __witness_String.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Map.contains
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.cbnz x20, has
+    arm64.b ifcont
+  has:
+    arm64.leaGlobal x0, __data_key
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x2, __layout_Map_String_String
+    arm64.leaRdata x3, __witness_String.Hashable
+    arm64.leaRdata x4, __witness_String.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Map.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_2  ; "?"
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Map_String_String
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.leaRdata x2, __witness_String.Equatable
+    arm64.bl Map.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl probe
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Map_String_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

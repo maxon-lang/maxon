@@ -1,0 +1,38 @@
+// Test: struct-backing-enum-field
+typealias Cost = int(0 to 100)
+
+enum Priority
+	low
+	medium
+	high
+end 'Priority'
+
+type TaskInfo
+	export let priority as Priority
+	export let cost as Cost
+end 'TaskInfo'
+
+enum Task
+	quick = TaskInfo{priority: Priority.low, cost: 1}
+	normal = TaskInfo{priority: Priority.medium, cost: 5}
+	heavy = TaskInfo{priority: Priority.high, cost: 10}
+end 'Task'
+
+function main() returns ExitCode
+	let t = Task.heavy
+	return t.rawValue.priority.ordinal
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

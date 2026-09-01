@@ -1,0 +1,161 @@
+// Test: three-declarations-across-two-files-are-one-set
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export interface Counted
+	function base() returns Integer
+end 'Counted'
+
+export extension Counted
+	export function score(n Integer) returns Integer
+		return base() + n
+	end 'score'
+
+	export function score(flag bool) returns Integer
+		return base() + (10 if flag else 0)
+	end 'score'
+end 'Counted'
+
+export type Unit implements Counted
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+
+	export function base() returns Integer
+		return 1
+	end 'base'
+end 'Unit'
+
+// --- file: b.maxon
+typealias Amount = int(i64.min to i64.max)
+
+public type Weight
+	export var w as Amount
+
+	export static function of(w Amount) returns Self
+		return Self{w: w}
+	end 'of'
+end 'Weight'
+
+export extension Counted
+	export function score(x Weight) returns Amount
+		return base() * x.w
+	end 'score'
+end 'Counted'
+
+function main() returns ExitCode
+	let u = Unit.make()
+	return u.score(4) + u.score(true) + u.score(Weight.of(7))
+end 'main'
+---
+ExitCode: 23
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Unit.score#Integer {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x0, x1, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Unit.score#bool {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cbnz x1, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Unit.make {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Unit.score#Weight {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.bl Unit.make
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl Unit.score#Integer
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl Unit.score#bool
+    arm64.add x20, x20, x0
+    arm64.movImm x0, 7
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl Unit.score#Weight
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at b.maxon:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

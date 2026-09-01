@@ -1,0 +1,188 @@
+// Test: match-break.otherwise-break-boxed-error
+typealias Count = int(0 to 1000)
+
+union Err
+	bad(s String)
+end 'Err'
+
+function risky(k Count) returns Count throws Err
+	if k == 1 'fail'
+		throw Err.bad("boom")
+	end 'fail'
+	return 10
+end 'risky'
+
+function pick(k Count) returns Count
+	var r = 0
+	match k 'check'
+		1 then r = try risky(k) otherwise break
+		default then r = 50
+	end 'check'
+	return r + 1
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1) + pick(2)
+end 'main'
+---
+ExitCode: 52
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @risky {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at match-break.otherwise-break-boxed-error.test:8: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, fail
+    arm64.b ifcont
+  fail:
+    arm64.leaRdata x19, __str_rec_1  ; "boom"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 10
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @pick {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#8
+    arm64.b __rc_chk#9
+  __rc_chk#9:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#8
+    arm64.b __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at match-break.otherwise-break-boxed-error.test:15: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#7:
+    arm64.movImm x19, 0
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.bl risky
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_Err
+    arm64.movRegReg x0, x19
+    arm64.b matchcont
+  tryok:
+    arm64.b matchcont
+  matchdefault:
+    arm64.movImm x0, 50
+    arm64.b matchcont
+  matchcont:
+    arm64.add x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#11
+    arm64.b __rc_chk#12
+  __rc_chk#12:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#11
+    arm64.b __rc_ok#10
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at match-break.otherwise-break-boxed-error.test:21: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#10:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  afterbreak:
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl pick
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 2
+    arm64.bl pick
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at match-break.otherwise-break-boxed-error.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

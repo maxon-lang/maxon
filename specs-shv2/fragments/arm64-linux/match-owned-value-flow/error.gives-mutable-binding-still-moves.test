@@ -1,0 +1,26 @@
+// Test: error.gives-mutable-binding-still-moves
+typealias Integer = int(i64.min to i64.max)
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+function build(x Integer) returns String
+	return "v{x} padded out long enough to be a real heap allocation"
+end 'build'
+
+function main() returns ExitCode
+	var t = build(1)
+	let p = Pick.first
+	let u = match p 'k'
+		first gives t
+		second gives build(2)
+	end 'k'
+	print(u)
+	print(t)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:21:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment

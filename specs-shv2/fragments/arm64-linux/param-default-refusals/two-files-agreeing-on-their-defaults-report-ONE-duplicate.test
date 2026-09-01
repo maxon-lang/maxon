@@ -1,0 +1,22 @@
+// Test: two-files-agreeing-on-their-defaults-report-ONE-duplicate
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function f(a Integer = 1) returns Integer
+	return a
+end 'f'
+
+// --- file: b.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function f(a Integer = 1) returns Integer
+	return a + 1
+end 'f'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return f() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:12:17: duplicate definition of function 'f#Integer' — 'f' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names

@@ -1,0 +1,39 @@
+// Test: float.hash.nonzero
+function main() returns ExitCode
+	let f = 3.14
+	let h = f.hash()
+	if h != 0 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.movImm x0, 1374389535
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, check
+    arm64.b ifcont#2
+  check:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

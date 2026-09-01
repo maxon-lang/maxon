@@ -1,0 +1,207 @@
+// Test: function-valued.dispatch
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+typealias HandlerMap = Map with String, UnaryOp
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function triple(x Integer) returns Integer
+	return x * 3
+end 'triple'
+
+function main() returns ExitCode
+	var m = HandlerMap.create()
+	m.upsert("d", value: double)
+	m.upsert("t", value: triple)
+	let f = try m.get("d") otherwise panic("missing 'd'")
+	let g = try m.get("t") otherwise panic("missing 't'")
+	return f(7) + g(7)
+end 'main'
+---
+ExitCode: 35
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @double {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @triple {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 3
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Map_String_UnaryOp
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.leaRdata x2, __witness_String.Equatable
+    arm64.bl Map.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_2  ; "d"
+    arm64.leaFuncAddr x20, __fnref_double
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.leaRdata x3, __layout_Map_String_UnaryOp
+    arm64.leaRdata x4, __witness_String.Hashable
+    arm64.leaRdata x5, __witness_String.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x20
+    arm64.bl Map.upsert
+    arm64.leaRdata x0, __str_rec_3  ; "t"
+    arm64.leaFuncAddr x20, __fnref_triple
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.leaRdata x3, __layout_Map_String_UnaryOp
+    arm64.leaRdata x4, __witness_String.Hashable
+    arm64.leaRdata x5, __witness_String.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x20
+    arm64.bl Map.upsert
+    arm64.leaRdata x1, __str_rec_2  ; "d"
+    arm64.leaRdata x2, __layout_Map_String_UnaryOp
+    arm64.leaRdata x3, __witness_String.Hashable
+    arm64.leaRdata x4, __witness_String.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Map.get
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at function-valued.dispatch.test:18: missing 'd'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.leaRdata x1, __str_rec_3  ; "t"
+    arm64.leaRdata x2, __layout_Map_String_UnaryOp
+    arm64.leaRdata x3, __witness_String.Hashable
+    arm64.leaRdata x4, __witness_String.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Map.get
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at function-valued.dispatch.test:19: missing 't'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#3:
+    arm64.movImm x0, 7
+    arm64.movImm x1, 0
+    arm64.blr x20
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 7
+    arm64.movImm x1, 0
+    arm64.blr x21
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Map_String_UnaryOp
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_28  ; "panic at function-valued.dispatch.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

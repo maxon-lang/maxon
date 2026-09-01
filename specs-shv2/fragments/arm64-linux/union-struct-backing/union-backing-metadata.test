@@ -1,0 +1,38 @@
+// Test: union-backing-metadata
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type OpMeta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+union TestOp
+	add(dest ID, src ID) = OpMeta.create(1)
+	mul(dest ID, src ID) = OpMeta.create(3)
+	nop = OpMeta.create(0)
+end 'TestOp'
+
+function main() returns ExitCode
+	return TestOp.mul.latency
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}

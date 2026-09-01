@@ -1,0 +1,164 @@
+// Test: write-back-through-a-loop-carried-string-payload-is-the-same-answer
+union Expr
+	direct(s String)
+	unresolved
+end 'Expr'
+
+function main() returns ExitCode
+	var e = Expr.direct("the first payload, long enough to be a real heap allocation")
+	var total = 0
+
+	for i in 1 to 2 'round'
+		total = total + i
+		match e 'write'
+			direct(s) then s = "a replacement, also a real heap allocation"
+			unresolved then total = total + 1
+		end 'write'
+		e = Expr.direct("the next round's payload, a real heap allocation too")
+	end 'round'
+
+	return total
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_3  ; "the first payload, long enough to be a real heap allocation"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x19, 0
+    arm64.movImm x21, 1
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x21, 2
+    arm64.cset x0, le
+    arm64.cbnz x0, round
+    arm64.b forexit
+  round:
+    arm64.add x19, x19, x21
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#5
+    arm64.b matchnext
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.leaRdata x0, __str_rec_4  ; "a replacement, also a real heap allocation"
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x26, x24
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x25
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 8], x25
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#6
+    arm64.b matchdead
+  matcharm#6:
+    arm64.add x19, x19, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.leaRdata x22, __str_rec_5  ; "the next round's payload, a real heap allocation too"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x23 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Expr
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x23
+    arm64.b forhdr
+  matchdead:
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Expr
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at write-back-through-a-loop-carried-string-payload-is-the-same-answer.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+}

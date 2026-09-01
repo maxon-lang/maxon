@@ -1,0 +1,30 @@
+// Test: stdlib-call-exp
+function main() returns ExitCode
+	let result = Math.exp(0.0)
+	if result == 1.0 'check'
+		return 42
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.bl Math.exp
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

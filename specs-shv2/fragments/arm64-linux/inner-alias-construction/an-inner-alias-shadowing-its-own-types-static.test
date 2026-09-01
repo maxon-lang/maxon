@@ -1,0 +1,53 @@
+// Test: an-inner-alias-shadowing-its-own-types-static
+typealias ExitCode = int(0 to 125)
+
+type Pair uses T
+	export var a as T
+
+	export static function create(a T) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Pair'
+
+type Holder
+	typealias Holder = Pair with ExitCode
+
+	export var seed as ExitCode
+
+	export static function create() returns Holder
+		return Self{seed: 4}
+	end 'create'
+
+	export function seedValue() returns ExitCode
+		return self.seed
+	end 'seedValue'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.seedValue()
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.leaRegSlot x0, slot0
+    arm64.movImm x1, 4
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.epilogue 32
+    arm64.ret
+}

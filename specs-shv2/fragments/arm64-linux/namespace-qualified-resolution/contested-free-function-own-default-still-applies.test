@@ -1,0 +1,69 @@
+// Test: contested-free-function-own-default-still-applies
+// --- file: alpha/a.maxon
+typealias Ms = int(0 to 125)
+
+export function pick(ms Ms = 5) returns Ms
+	return ms
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Slot = int(0 to 125)
+
+export function pick(slot Slot) returns Slot
+	return slot
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick() * 10 + beta.pick(3)) as ExitCode
+end 'main'
+---
+ExitCode: 53
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.movImm x0, 5
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.b __rc_chk#10
+  __rc_chk#10:
+    arm64.b __rc_ok#9
+  __rc_ok#9:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.movImm x1, 3
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.b __rc_chk#14
+  __rc_chk#14:
+    arm64.b __rc_ok#13
+  __rc_ok#13:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,71 @@
+// Test: closer-case-member-in-else-if-chain
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Integer
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.end) == 1 'first'
+		return 1
+	end 'first' else if tagOf(Kw.end) == 2 'second'
+		return 42
+	end 'second' else 'rest'
+		return 3
+	end 'rest'
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.b matchnext#13
+  matchnext#13:
+    arm64.b matcharm#10
+  matcharm#10:
+    arm64.movImm x0, 2
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, first
+    arm64.b ifelse#2
+  first:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifelse#2:
+    arm64.b __il_body#17
+  __il_body#17:
+    arm64.b matchnext#22
+  matchnext#22:
+    arm64.b matcharm#19
+  matcharm#19:
+    arm64.movImm x0, 2
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, second
+    arm64.b ifelse#4
+  second:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+  ifelse#4:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}

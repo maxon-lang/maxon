@@ -1,0 +1,182 @@
+// Test: bytearray-slice-roundtrip
+function main() returns ExitCode
+	let src = "Environment.inherit"
+	let bytes = src.toByteArray()
+	var out = ByteArray.create()
+	var i = 12
+	while i < bytes.count() 'copy'
+		let b = try bytes.get(i) otherwise 0
+		out.push(b)
+		i = i + 1
+	end 'copy'
+	let sliced = String.from(out)
+	return 0 if sliced == "inherit" else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_2  ; "Environment.inherit"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 12
+    arm64.b whilehdr
+  whilehdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x21, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, copy
+    arm64.b whileexit
+  copy:
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#11
+    arm64.b __rc_ok#10
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at bytearray-slice-roundtrip.test:8: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#10:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x21, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#21
+  __im_load#21:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x21, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x21, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#22
+  __im_load#22:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, x21
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty
+    arm64.b critsplit#24
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b critsplit#25
+  critsplit#25:
+    arm64.b __im_cont
+  critsplit#24:
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x1, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x1, x0
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.add x21, x21, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x20
+    arm64.bl String.from
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x1, __str_rec_3  ; "inherit"
+    arm64.movRegReg x0, x21
+    arm64.bl __str_eq
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x22, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x22, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x22, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#13
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x22, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#13
+    arm64.b __rc_ok#12
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at bytearray-slice-roundtrip.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#12:
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

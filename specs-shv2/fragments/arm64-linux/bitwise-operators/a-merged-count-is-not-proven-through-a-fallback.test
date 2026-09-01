@@ -1,0 +1,122 @@
+// Test: a-merged-count-is-not-proven-through-a-fallback
+typealias Num = int(i64.min to i64.max)
+typealias Bits = int(0 to 63)
+
+union Missing implements Error
+	nothing
+end 'Missing'
+
+function firstBit(ok bool) returns Bits throws Missing
+	if not ok 'absent'
+		throw Missing.nothing
+	end 'absent'
+
+	return 3
+end 'firstBit'
+
+function main() returns ExitCode
+	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
+	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
+	var wide = 90 as Num
+	wide = wide + 10
+
+	let n = try firstBit(false) otherwise wide
+
+	if n != 100 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = -4
+	if negative shr n != -1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @firstBit {
+  entry:
+    arm64.prologue 16
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, absent
+    arm64.b ifcont
+  absent:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 3
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 100
+    arm64.movImm x0, 0
+    arm64.bl firstBit
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x19
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 100
+    arm64.cset x1, ne
+    arm64.cbnz x1, reached
+    arm64.b ifcont#5
+  reached:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#5:
+    arm64.movImm x1, 1
+    arm64.and x2, x0, -64
+    arm64.neg x3, x2
+    arm64.orr x2, x2, x3
+    arm64.asr x2, x2, 63
+    arm64.lslv x1, x1, x0
+    arm64.mvn x3, x2
+    arm64.and x1, x1, x3
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, shl
+    arm64.b ifcont#7
+  shl:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#7:
+    arm64.movImm x1, 18446744073709551612
+    arm64.orr x0, x0, x2
+    arm64.asrv x0, x1, x0
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrSign
+    arm64.b ifcont#9
+  shrSign:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#9:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

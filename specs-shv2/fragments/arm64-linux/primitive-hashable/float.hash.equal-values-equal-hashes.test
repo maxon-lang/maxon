@@ -1,0 +1,50 @@
+// Test: float.hash.equal-values-equal-hashes
+function main() returns ExitCode
+	let a = 1.5
+	let b = 3.0 / 2.0
+	if a.hash() != b.hash() 'differ'
+		return 1
+	end 'differ'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.b ifcont#7
+  ifcont#7:
+    arm64.movImm x0, 0
+    arm64.b __rc_chk#9
+  __rc_chk#9:
+    arm64.b __rc_ok#8
+  __rc_ok#8:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.b __il_body#11
+  __il_body#11:
+    arm64.b ifcont#13
+  ifcont#13:
+    arm64.movImm x1, 0
+    arm64.b __rc_chk#15
+  __rc_chk#15:
+    arm64.b __rc_ok#14
+  __rc_ok#14:
+    arm64.b __il_cont#3
+  __il_cont#3:
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, differ
+    arm64.b ifcont#2
+  differ:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

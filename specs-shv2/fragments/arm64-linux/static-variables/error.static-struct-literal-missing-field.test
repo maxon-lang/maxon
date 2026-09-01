@@ -1,0 +1,22 @@
+// Test: error.static-struct-literal-missing-field
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3086: <fragment>:8:22: field 'b' of 'Pair' is not initialized by this literal, and it has no default value

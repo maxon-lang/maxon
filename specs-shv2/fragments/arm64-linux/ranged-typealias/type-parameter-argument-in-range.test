@@ -1,0 +1,81 @@
+// Test: type-parameter-argument-in-range
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	export function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function grow(n Wide) returns Wide
+	return n * 11
+end 'grow'
+
+function main() returns ExitCode
+	var b = PB.create(1)
+	b.put(grow(5))
+	return b.v
+end 'main'
+---
+ExitCode: 55
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 1
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.b __rc_chk#7
+  __rc_chk#7:
+    arm64.b __rc_ok#6
+  __rc_ok#6:
+    arm64.movImm x0, 55
+    arm64.b __rc_chk#9
+  __rc_chk#9:
+    arm64.b __rc_ok#8
+  __rc_ok#8:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.cmp x0, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 100
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at type-parameter-argument-in-range.test:25: Range check failed: value outside typealias 'Percent'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.b __il_cont#11
+  __il_cont#11:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.epilogue 32
+    arm64.ret
+}

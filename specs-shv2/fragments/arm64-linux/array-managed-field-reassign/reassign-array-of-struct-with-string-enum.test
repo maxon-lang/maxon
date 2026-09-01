@@ -1,0 +1,340 @@
+// Test: reassign-array-of-struct-with-string-enum
+export union QueryKey
+		sourceFile(path String)
+		tokens(path String)
+		allModule
+		codeResult
+end 'QueryKey'
+
+export type Dependency
+		export var dependent as QueryKey
+		export var dependency as QueryKey
+
+		static function create(dependent QueryKey, dependency QueryKey) returns Self
+			return Self{dependent: dependent, dependency: dependency}
+		end 'create'
+end 'Dependency'
+
+typealias DependencyArray = Array with Dependency
+
+export type Database
+		export var dependencies as DependencyArray
+
+		static function create(dependencies DependencyArray) returns Self
+			return Self{dependencies: dependencies}
+		end 'create'
+end 'Database'
+
+function clearDepsFor(db Database)
+		var newDeps = DependencyArray.create()
+		for dep in db.dependencies 'scan'
+				match dep.dependent 'check'
+						sourceFile then newDeps.push(dep)
+						tokens then newDeps.push(dep)
+						allModule then continue
+						codeResult then newDeps.push(dep)
+				end 'check'
+		end 'scan'
+		db.dependencies = newDeps
+end 'clearDepsFor'
+
+function main() returns ExitCode
+		var deps = DependencyArray.create()
+		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")))
+		deps.push(Dependency.create(QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")))
+		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")))
+		deps.push(Dependency.create(QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")))
+		let db = Database.create(deps)
+		clearDepsFor(db)
+		return db.dependencies.count()
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Dependency.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_QueryKey
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_QueryKey
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Database.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @clearDepsFor {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_Dependency
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.movImm x22, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x22, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, scan
+    arm64.b forexit
+  scan:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.arm64AddLsl x0, x0, x22, lsl #3
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=matcharm#7, [3]=matcharm#8] @__jumptable_7
+  matchdead:
+  matcharm#5:
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_push
+    arm64.b matchcont
+  matcharm#6:
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_push
+    arm64.b matchcont
+  matcharm#7:
+    arm64.b forstep
+  matcharm#8:
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_push
+    arm64.b matchcont
+  matchcont:
+    arm64.b forstep
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.b forhdr
+  forexit:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_Dependency
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.leaRdata x21, __str_rec_3  ; "test.maxon"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl Dependency.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 3
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.leaRdata x21, __str_rec_3  ; "test.maxon"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl Dependency.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.leaRdata x21, __str_rec_4  ; "other.maxon"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl Dependency.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaRdata x20, __str_rec_5  ; "a.maxon"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.leaRdata x20, __str_rec_5  ; "a.maxon"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl Dependency.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.bl Database.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl clearDepsFor
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Database
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at reassign-array-of-struct-with-string-enum.test:49: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

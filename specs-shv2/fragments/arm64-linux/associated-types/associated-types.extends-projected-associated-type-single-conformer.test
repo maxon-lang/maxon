@@ -1,0 +1,150 @@
+// Test: associated-types.extends-projected-associated-type-single-conformer
+typealias Integer = int(i64.min to i64.max)
+
+interface Base uses Element
+	function take(e Element) returns Integer
+end 'Base'
+
+interface Derived extends Base uses Element
+	function extra() returns Integer
+end 'Derived'
+
+type FloatRunner implements Derived with float
+	let base as Integer
+
+	function take(e Real) returns Integer
+		return self.base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	function extra() returns Integer
+		return 11
+	end 'extra'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'FloatRunner'
+
+function useIt(t Derived) returns Integer
+	return t.take(20.0) + t.extra()
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(FloatRunner.create(0)) as ExitCode
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 31
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @FloatRunner.take {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.fpLoadRdata d1, [rdata + __fconst_19]
+    arm64.fcmp d0, d1
+    arm64.cset x1, gt
+    arm64.cbnz x1, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x1, 20
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x1, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @FloatRunner.extra {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 11
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @FloatRunner.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @useIt {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.fpLoadRdata d0, [rdata + __fconst_20]
+    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 32]
+    arm64.blr x16
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.add x0, x21, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl FloatRunner.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __witness_FloatRunner.Derived
+    arm64.movRegReg x0, x19
+    arm64.bl useIt
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at associated-types.extends-projected-associated-type-single-conformer.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

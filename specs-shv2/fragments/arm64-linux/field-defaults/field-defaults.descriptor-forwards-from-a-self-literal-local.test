@@ -1,0 +1,150 @@
+// Test: field-defaults.descriptor-forwards-from-a-self-literal-local
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+type Basket uses Element
+	typealias ElementArray = Array with Element
+	var items as ElementArray = ElementArray.create()
+	var seen = 0
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export static function of(first Element, second Element) returns Self
+		var result = Self{}
+		result.add(first)
+		result.add(second)
+		return result
+	end 'of'
+
+	export function add(item Element)
+		items.push(item)
+		seen = seen + 1
+	end 'add'
+
+	export function size() returns Count
+		return seen
+	end 'size'
+end 'Basket'
+
+typealias IntBasket = Basket with Integer
+
+function main() returns ExitCode
+	let b = IntBasket.of(11, second: 22)
+	return b.size()
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Basket.of {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.movRegReg x0, x21
+    arm64.bl __fieldDefault#Basket#items
+    arm64.movRegReg x22, x0
+    arm64.movImm x23, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.storeBaseDispReg.word64 [x24 + 0], x22
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.bl Basket.add
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Basket.add
+    arm64.movRegReg x0, x24
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @Basket.add {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 11
+    arm64.movImm x1, 22
+    arm64.leaRdata x2, __layout_Basket_Integer
+    arm64.bl Basket.of
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.bl __destruct_Basket_Integer
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at field-defaults.descriptor-forwards-from-a-self-literal-local.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @__fieldDefault#Basket#items {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.epilogue 16
+    arm64.ret
+}

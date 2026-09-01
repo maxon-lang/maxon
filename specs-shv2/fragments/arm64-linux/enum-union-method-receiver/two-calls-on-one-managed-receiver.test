@@ -1,0 +1,121 @@
+// Test: two-calls-on-one-managed-receiver
+union Outcome
+	pass
+	fail(reason String)
+
+	export function isPass() returns bool
+		return match self 'p'
+			pass gives true
+			fail gives false
+		end 'p'
+	end 'isPass'
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = Outcome.fail("another long heap allocated failure reason string here")
+	let a = o.isPass()
+	let b = o.isPass()
+	if a or b 'y'
+		return 1
+	end 'y'
+	return 7
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_1  ; "another long heap allocated failure reason string here"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#8
+    arm64.b matchnext#11
+  matcharm#8:
+    arm64.movImm x0, 1
+    arm64.b matchcont#12
+  matchnext#11:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#9
+    arm64.b matchdead#10
+  matcharm#9:
+    arm64.movImm x0, 0
+    arm64.b matchcont#12
+  matchcont#12:
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#14
+    arm64.b matchnext#17
+  matcharm#14:
+    arm64.movImm x1, 1
+    arm64.b matchcont#18
+  matchnext#17:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#15
+    arm64.b matchdead#16
+  matcharm#15:
+    arm64.movImm x1, 0
+    arm64.b matchcont#18
+  matchcont#18:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.movImm x2, 1
+    arm64.cbnz x0, critsplit
+    arm64.b orrhs
+  critsplit:
+    arm64.b scmerge
+  orrhs:
+    arm64.movRegReg x2, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x2, y
+    arm64.b ifcont
+  y:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Outcome
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 7
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Outcome
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead#16:
+  matchdead#10:
+}

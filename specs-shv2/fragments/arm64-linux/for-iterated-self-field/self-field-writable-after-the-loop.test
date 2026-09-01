@@ -1,0 +1,144 @@
+// Test: self-field-writable-after-the-loop
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type Bag
+	export var items as IntArray
+
+	static function create() returns Self
+		var a = IntArray.create()
+		a.push(5)
+		a.push(7)
+		return Self{items: a}
+	end 'create'
+
+	function sumThenClear() returns Int
+		var total = 0
+		for it in items 'scan'
+			total = total + it
+		end 'scan'
+		items.clear()
+		return total + items.count()
+	end 'sumThenClear'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create()
+	return b.sumThenClear() as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.sumThenClear {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cbnz x3, scan
+    arm64.b forexit
+  scan:
+    arm64.arm64AddLsl x3, x0, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.add x20, x20, x3
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl Array.clear
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.add x0, x20, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.sumThenClear
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at self-field-writable-after-the-loop.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

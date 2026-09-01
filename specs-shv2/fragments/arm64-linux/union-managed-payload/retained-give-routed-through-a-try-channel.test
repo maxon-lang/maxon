@@ -1,0 +1,113 @@
+// Test: retained-give-routed-through-a-try-channel
+union Fail implements Error
+	because(why String)
+end 'Fail'
+
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String throws Fail
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("a payload string routed through a try channel, heap-long")
+	let out = try grab(m) otherwise "an otherwise literal long enough to be a heap string"
+	print(out)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @grab {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#1
+    arm64.b matchnext
+  matcharm#1:
+    arm64.leaRdata x0, __str_rec_3  ; "a fallback literal long enough to be a real heap string"
+    arm64.bl __str_retain
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_4  ; "a payload string routed through a try channel, heap-long"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl grab
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x19, __str_rec_5  ; "an otherwise literal long enough to be a heap string"
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_Fail
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_M
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

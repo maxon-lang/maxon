@@ -1,0 +1,91 @@
+// Test: associated-types.conformers-disagree-but-nothing-dispatches
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type FloatRunner implements Taker with float
+	let base as Integer
+
+	function take(e Real) returns Integer
+		return base + (20 if e > 19.0 else 0)
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'FloatRunner'
+
+type IntRunner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'IntRunner'
+
+function main() returns ExitCode
+	return (FloatRunner.create(0).take(20.0) + IntRunner.create(11).take(20)) as ExitCode
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 51
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 0
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.b ternarytrue
+  ternarytrue:
+    arm64.movImm x1, 20
+    arm64.b matchcont
+  matchcont:
+    arm64.add x0, x0, x1
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.movImm x1, 11
+    arm64.leaRegSlot x2, slot1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
+    arm64.add x1, x1, 20
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at associated-types.conformers-disagree-but-nothing-dispatches.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,29 @@
+// Test: discard-single-parameter
+
+typealias Integer = int(i64.min to i64.max)
+
+function useSecond(_ Integer, b Integer) returns Integer
+	return b
+end 'useSecond'
+
+function main() returns ExitCode
+	return useSecond(10, b: 42)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

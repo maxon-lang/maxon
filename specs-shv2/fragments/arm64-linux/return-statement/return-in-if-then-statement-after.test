@@ -1,0 +1,56 @@
+// Test: return-in-if-then-statement-after
+function pick(x ExitCode) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	let fallback = 4
+	return fallback
+end 'pick'
+
+function main() returns ExitCode
+	if pick(9) != 1 'tookFalsePath'
+		return 2
+	end 'tookFalsePath'
+
+	return pick(0)
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#4
+  __il_body#4:
+    arm64.b __rc_chk#8
+  __rc_chk#8:
+    arm64.b __rc_ok#7
+  __rc_ok#7:
+    arm64.b positive
+  positive:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#3
+  __il_cont#3:
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, tookFalsePath
+    arm64.b ifcont#2
+  tookFalsePath:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.b __il_body#11
+  __il_body#11:
+    arm64.b __rc_chk#15
+  __rc_chk#15:
+    arm64.b __rc_ok#14
+  __rc_ok#14:
+    arm64.b ifcont#13
+  ifcont#13:
+    arm64.movImm x0, 4
+    arm64.b __il_cont#10
+  __il_cont#10:
+    arm64.epilogue 16
+    arm64.ret
+}

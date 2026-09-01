@@ -1,0 +1,133 @@
+// Test: large-array
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	var i = 0
+	while i < 100 'push'
+		arr.push(i < 50)
+		i = i + 1
+	end 'push'
+	var count = 0
+	var j = 0
+	while j < 100 'count'
+		let v = try arr.get(j) otherwise false
+		if v 'inc'
+			count = count + 1
+		end 'inc'
+		j = j + 1
+	end 'count'
+	return count
+end 'main'
+---
+ExitCode: 50
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 18446744073709551615
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b whilehdr#1
+  whilehdr#1:
+    arm64.cmp x20, 100
+    arm64.cset x0, lt
+    arm64.cbnz x0, push
+    arm64.b whileexit#3
+  push:
+    arm64.cmp x20, 50
+    arm64.cset x1, lt
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.add x20, x20, 1
+    arm64.b whilehdr#1
+  whileexit#3:
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b whilehdr#4
+  whilehdr#4:
+    arm64.cmp x21, 100
+    arm64.cset x0, lt
+    arm64.cbnz x0, count
+    arm64.b whileexit#6
+  count:
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#13
+    arm64.b __rc_ok#12
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at large-array.test:14: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#12:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cbnz x0, inc
+    arm64.b critsplit
+  inc:
+    arm64.add x0, x20, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont
+  ifcont:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x0
+    arm64.b whilehdr#4
+  whileexit#6:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#15
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#15
+    arm64.b __rc_ok#14
+  __rc_panic#15:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at large-array.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#14:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

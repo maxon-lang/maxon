@@ -1,0 +1,59 @@
+// Test: a-recursive-tiny-function-is-not-inlined
+typealias Integer = int(i64.min to i64.max)
+
+function countDown(n Integer) returns Integer
+	if n <= 0 'done'
+		return 0
+	end 'done'
+	return countDown(n - 1) + 1
+end 'countDown'
+
+function main() returns ExitCode
+	return countDown(42) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @countDown {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, le
+    arm64.cbnz x1, done
+    arm64.b ifcont
+  done:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x0, x0, 1
+    arm64.bl countDown
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.bl countDown
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-recursive-tiny-function-is-not-inlined.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,174 @@
+// Test: interface-field-pass-as-arg
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n as Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+// Holder stores an interface-typed field. main() constructs a Holder
+// over a Marker, then reads the field (h.t) and passes it to a
+// function expecting the same interface type. The construction and
+// the field-read happen in the same function so monomorphization can
+// propagate the concrete type (`Marker`) through the Holder instance
+// and rewrite the indirect dispatch in `callTag` to `Marker.tag`.
+//
+// Regression guard for two parser bugs around interface-typed fields,
+// both diagnosed via the FunctionRegAllocator interface-field
+// workaround in the self-hosted register allocator:
+//   1. Field-access op produced a MaxonStruct with empty TypeName,
+//      crashing FillDefaultArgs with NullReferenceException at the
+//      call site (Dictionary.TryGetValue, key=null).
+//   2. After fixing the empty TypeName, the call-site type-check
+//      rejected the value with E3005 "type '' does not implement
+//      interface 'Tagged'" because the value registered in the
+//      variables table for the field still carried no struct-type
+//      name, so the resolved MaxonStruct came back with an empty
+//      TypeName at the next use.
+type Holder
+	export let t as Tagged
+
+	static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Holder'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+function main() returns ExitCode
+	let m = Marker.create(42)
+	let h = Holder.create(m)
+	return callTag(h.t)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Marker.tag {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Marker.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __retain_existential
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @callTag {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 42
+    arm64.bl Marker.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Marker.Tagged
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
+    arm64.bl callTag
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at interface-field-pass-as-arg.test:55: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

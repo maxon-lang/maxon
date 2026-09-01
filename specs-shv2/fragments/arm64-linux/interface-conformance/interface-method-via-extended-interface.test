@@ -1,0 +1,117 @@
+// Test: interface-method-via-extended-interface
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base
+	function ping(payload Integer) returns Integer
+end 'Base'
+
+interface Extended extends Base
+	function other() returns Integer
+end 'Extended'
+
+type Impl implements Extended
+	let n as Integer
+
+	function ping(payload Integer) returns Integer
+		return n
+	end 'ping'
+
+	function other() returns Integer
+		return n + 1
+	end 'other'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Impl'
+
+function callPing(b Base) returns Integer
+	return b.ping(7)
+end 'callPing'
+
+function main() returns ExitCode
+	let i = Impl.create(5)
+	return callPing(i)
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Impl.ping {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Impl.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @callPing {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x1
+    arm64.movImm x1, 7
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 5
+    arm64.bl Impl.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __witness_Impl.Base
+    arm64.movRegReg x0, x19
+    arm64.bl callPing
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at interface-method-via-extended-interface.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

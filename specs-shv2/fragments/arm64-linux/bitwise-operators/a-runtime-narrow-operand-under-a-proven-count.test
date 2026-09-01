@@ -1,0 +1,289 @@
+// Test: a-runtime-narrow-operand-under-a-proven-count
+typealias Num = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bits = int(0 to 63)
+
+function shlByteByBits(b Byte, n Bits) returns Num
+	return b shl n
+end 'shlByteByBits'
+
+function shrByteByBits(b Byte, n Bits) returns Num
+	return b shr n
+end 'shrByteByBits'
+
+function byteOf(step Num) returns Byte
+	return (step * 100) as Byte
+end 'byteOf'
+
+function bitsOf(step Num) returns Bits
+	return (step * 5) as Bits
+end 'bitsOf'
+
+function main() returns ExitCode
+	if shlByteByBits(byteOf(2), n: bitsOf(2)) != 204800 'shl'
+		return 1
+	end 'shl'
+	if shrByteByBits(byteOf(2), n: bitsOf(0)) != 200 'shrZero'
+		return 2
+	end 'shrZero'
+	if shrByteByBits(byteOf(2), n: bitsOf(1)) != 6 'shr'
+		return 3
+	end 'shr'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shlByteByBits {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-runtime-narrow-operand-under-a-proven-count.test:6: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic#5
+    arm64.b __rc_chk#6
+  __rc_chk#6:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-runtime-narrow-operand-under-a-proven-count.test:6: Range check failed: value outside typealias 'Bits'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.lslv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shrByteByBits {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-runtime-narrow-operand-under-a-proven-count.test:10: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic#5
+    arm64.b __rc_chk#6
+  __rc_chk#6:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-runtime-narrow-operand-under-a-proven-count.test:10: Range check failed: value outside typealias 'Bits'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.lsrv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x0, 200
+    arm64.b __rc_chk#12
+  __rc_chk#12:
+    arm64.b __rc_ok#11
+  __rc_ok#11:
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.b __il_body#14
+  __il_body#14:
+    arm64.movImm x1, 10
+    arm64.b __rc_chk#16
+  __rc_chk#16:
+    arm64.b __rc_ok#15
+  __rc_ok#15:
+    arm64.b __il_cont#8
+  __il_cont#8:
+    arm64.b __il_body#18
+  __il_body#18:
+    arm64.cmp x0, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#23
+    arm64.b __rc_chk#20
+  __rc_chk#20:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#23
+    arm64.b __rc_ok#19
+  __rc_ok#19:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#23
+    arm64.b __rc_chk#22
+  __rc_chk#22:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#23
+    arm64.b __rc_ok#21
+  __il_slow#23:
+    arm64.bl shlByteByBits
+    arm64.b __il_cont#7
+  __rc_ok#21:
+    arm64.lslv x0, x0, x1
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.cmp x0, 204800
+    arm64.cset x0, ne
+    arm64.cbnz x0, shl
+    arm64.b ifcont#2
+  shl:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.b __il_body#27
+  __il_body#27:
+    arm64.movImm x0, 200
+    arm64.b __rc_chk#29
+  __rc_chk#29:
+    arm64.b __rc_ok#28
+  __rc_ok#28:
+    arm64.b __il_cont#26
+  __il_cont#26:
+    arm64.b __il_body#31
+  __il_body#31:
+    arm64.movImm x1, 0
+    arm64.b __rc_chk#33
+  __rc_chk#33:
+    arm64.b __rc_ok#32
+  __rc_ok#32:
+    arm64.b __il_cont#25
+  __il_cont#25:
+    arm64.b __il_body#35
+  __il_body#35:
+    arm64.cmp x0, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#40
+    arm64.b __rc_chk#37
+  __rc_chk#37:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#40
+    arm64.b __rc_ok#36
+  __rc_ok#36:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#40
+    arm64.b __rc_chk#39
+  __rc_chk#39:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#40
+    arm64.b __rc_ok#38
+  __il_slow#40:
+    arm64.bl shrByteByBits
+    arm64.b __il_cont#24
+  __rc_ok#38:
+    arm64.lsrv x0, x0, x1
+    arm64.b __il_cont#24
+  __il_cont#24:
+    arm64.cmp x0, 200
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrZero
+    arm64.b ifcont#4
+  shrZero:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.b __il_body#44
+  __il_body#44:
+    arm64.movImm x0, 200
+    arm64.b __rc_chk#46
+  __rc_chk#46:
+    arm64.b __rc_ok#45
+  __rc_ok#45:
+    arm64.b __il_cont#43
+  __il_cont#43:
+    arm64.b __il_body#48
+  __il_body#48:
+    arm64.movImm x1, 5
+    arm64.b __rc_chk#50
+  __rc_chk#50:
+    arm64.b __rc_ok#49
+  __rc_ok#49:
+    arm64.b __il_cont#42
+  __il_cont#42:
+    arm64.b __il_body#52
+  __il_body#52:
+    arm64.cmp x0, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#57
+    arm64.b __rc_chk#54
+  __rc_chk#54:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#57
+    arm64.b __rc_ok#53
+  __rc_ok#53:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#57
+    arm64.b __rc_chk#56
+  __rc_chk#56:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#57
+    arm64.b __rc_ok#55
+  __il_slow#57:
+    arm64.bl shrByteByBits
+    arm64.b __il_cont#41
+  __rc_ok#55:
+    arm64.lsrv x0, x0, x1
+    arm64.b __il_cont#41
+  __il_cont#41:
+    arm64.cmp x0, 6
+    arm64.cset x0, ne
+    arm64.cbnz x0, shr
+    arm64.b ifcont#6
+  shr:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

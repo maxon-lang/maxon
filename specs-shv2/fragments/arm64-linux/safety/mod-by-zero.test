@@ -1,0 +1,50 @@
+// Test: mod-by-zero
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let zero = opaque(0)
+	let result = try (5 mod zero) otherwise 7
+	return result as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movImm x0, 5
+    arm64.movImm x1, 1
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.b tryerr
+  tryerr:
+    arm64.movImm x0, 7
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at mod-by-zero.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,174 @@
+// Test: the-adopted-array-drops-on-the-throw-edge
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+function adoptThenThrow(fail bool) returns Integer throws Boom
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	try mm.setLength(2) otherwise panic("setLength failed")
+	let a = ByteArray.init(mm)
+	if fail 'boom'
+		throw Boom.bad
+	end 'boom'
+	return a.count()
+end 'adoptThenThrow'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 8 'spin'
+		total = total + (try adoptThenThrow(true) otherwise 1)
+		total = total + (try adoptThenThrow(false) otherwise 9)
+		i = i + 1
+	end 'spin'
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 24
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @adoptThenThrow {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 4
+    arm64.movImm x1, 1
+    arm64.bl __managed_mem_create
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:10: create failed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_length
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:11: setLength failed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_retain
+    arm64.cbnz x19, boom
+    arm64.b ifcont
+  boom:
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 8
+    arm64.cset x0, lt
+    arm64.cbnz x0, spin
+    arm64.b whileexit
+  spin:
+    arm64.movImm x0, 1
+    arm64.bl adoptThenThrow
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.movImm x0, 1
+    arm64.b trycont#6
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 0
+    arm64.bl adoptThenThrow
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.movImm x0, 9
+    arm64.b trycont#9
+  tryok#7:
+    arm64.b trycont#9
+  trycont#9:
+    arm64.add x19, x19, x0
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

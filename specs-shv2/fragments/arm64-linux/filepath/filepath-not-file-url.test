@@ -1,0 +1,40 @@
+// Test: filepath-not-file-url
+function main() returns ExitCode
+	try FilePath.from("https://example.com/path") otherwise 'err'
+		print("caught notFileURL\n")
+		return 0
+	end 'err'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_18  ; "https://example.com/path"
+    arm64.bl FilePath.from
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_19  ; "caught notFileURL\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.bl __destruct_FilePath
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

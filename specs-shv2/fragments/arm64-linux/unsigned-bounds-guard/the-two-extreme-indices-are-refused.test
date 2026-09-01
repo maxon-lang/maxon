@@ -1,0 +1,214 @@
+// Test: the-two-extreme-indices-are-refused
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	a.push(2)
+
+	let top = 9223372036854775807
+	let bottom = (-9223372036854775807) - 1
+
+	if (try a.managed.get(top) otherwise -5) != -5 'topGet'
+		return 1
+	end 'topGet'
+	if (try a.managed.get(bottom) otherwise -5) != -5 'bottomGet'
+		return 2
+	end 'bottomGet'
+	if (try a.managed.remove(bottom) otherwise -5) != -5 'bottomRemove'
+		return 3
+	end 'bottomRemove'
+	if a.count() != 2 'countUnchanged'
+		return 4
+	end 'countUnchanged'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 9223372036854775807
+    arm64.movImm x20, 9223372036854775808
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x1, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow#19
+    arm64.b __im_load#20
+  __im_load#20:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, -8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#21
+    arm64.b critsplit#26
+  __im_empty#21:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#19
+    arm64.b critsplit#27
+  __im_slow#19:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#18
+  critsplit#27:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#18
+  critsplit#26:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#18
+  __im_cont#18:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x0, 18446744073709551611
+    arm64.b trycont#3
+  tryok#1:
+    arm64.b trycont#3
+  trycont#3:
+    arm64.cmp x0, -5
+    arm64.cset x0, ne
+    arm64.cbnz x0, topGet
+    arm64.b ifcont#5
+  topGet:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#5:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x20, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow#23
+    arm64.b __im_load#24
+  __im_load#24:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty#25
+    arm64.b critsplit#28
+  __im_empty#25:
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow#23
+    arm64.b critsplit#29
+  __im_slow#23:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_get
+    arm64.b __im_cont#22
+  critsplit#29:
+    arm64.movRegReg x9, x1
+    arm64.b __im_cont#22
+  critsplit#28:
+    arm64.movRegReg x9, x1
+    arm64.b __im_cont#22
+  __im_cont#22:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#7
+    arm64.b tryok#6
+  tryerr#7:
+    arm64.movImm x0, 18446744073709551611
+    arm64.b trycont#8
+  tryok#6:
+    arm64.b trycont#8
+  trycont#8:
+    arm64.cmp x0, -5
+    arm64.cset x0, ne
+    arm64.cbnz x0, bottomGet
+    arm64.b ifcont#10
+  bottomGet:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#10:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_remove
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#12
+    arm64.b tryok#11
+  tryerr#12:
+    arm64.movImm x0, 18446744073709551611
+    arm64.b trycont#13
+  tryok#11:
+    arm64.b trycont#13
+  trycont#13:
+    arm64.cmp x0, -5
+    arm64.cset x0, ne
+    arm64.cbnz x0, bottomRemove
+    arm64.b ifcont#15
+  bottomRemove:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#15:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+    arm64.cbnz x0, countUnchanged
+    arm64.b ifcont#17
+  countUnchanged:
+    arm64.movImm x20, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#17:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

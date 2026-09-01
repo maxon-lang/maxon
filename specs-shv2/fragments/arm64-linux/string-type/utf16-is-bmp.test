@@ -1,0 +1,106 @@
+// Test: utf16-is-bmp
+function main() returns ExitCode
+	if utf16IsBmp(65) 'c10'
+		print("1\n")       // ASCII
+	end 'c10'
+	if utf16IsBmp(945) 'c11'
+		print("2\n")      // Greek α
+	end 'c11'
+	if utf16IsBmp(65535) 'c12'
+		print("3\n")    // U+FFFF (last BMP)
+	end 'c12'
+	if utf16IsBmp(128512) 'c13'
+		print("0\n")   // 😀 (not BMP)
+	end 'c13'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.b __rc_chk#14
+  __rc_chk#14:
+    arm64.b __rc_ok#13
+  __rc_ok#13:
+    arm64.b andrhs#11
+  andrhs#11:
+    arm64.movImm x0, 1
+    arm64.b scmerge#12
+  scmerge#12:
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.cbnz x0, c10
+    arm64.b ifcont#2
+  c10:
+    arm64.leaRdata x0, __str_rec_4  ; "1\x0a"
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b __il_body#17
+  __il_body#17:
+    arm64.b __rc_chk#21
+  __rc_chk#21:
+    arm64.b __rc_ok#20
+  __rc_ok#20:
+    arm64.b andrhs#18
+  andrhs#18:
+    arm64.movImm x0, 1
+    arm64.b scmerge#19
+  scmerge#19:
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.cbnz x0, c11
+    arm64.b ifcont#4
+  c11:
+    arm64.leaRdata x0, __str_rec_5  ; "2\x0a"
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.b __rc_chk#28
+  __rc_chk#28:
+    arm64.b __rc_ok#27
+  __rc_ok#27:
+    arm64.b andrhs#25
+  andrhs#25:
+    arm64.movImm x0, 1
+    arm64.b scmerge#26
+  scmerge#26:
+    arm64.b __il_cont#23
+  __il_cont#23:
+    arm64.cbnz x0, c12
+    arm64.b ifcont#6
+  c12:
+    arm64.leaRdata x0, __str_rec_6  ; "3\x0a"
+    arm64.bl print
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.b __il_body#31
+  __il_body#31:
+    arm64.b __rc_chk#35
+  __rc_chk#35:
+    arm64.b __rc_ok#34
+  __rc_ok#34:
+    arm64.b andrhs#32
+  andrhs#32:
+    arm64.movImm x0, 0
+    arm64.b scmerge#33
+  scmerge#33:
+    arm64.b __il_cont#30
+  __il_cont#30:
+    arm64.cbnz x0, c13
+    arm64.b ifcont#8
+  c13:
+    arm64.leaRdata x0, __str_rec_7  ; "0\x0a"
+    arm64.bl print
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

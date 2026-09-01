@@ -1,0 +1,262 @@
+// Test: where-clauses.shared-equatable-through-two-constraints
+typealias Code = int(0 to u32.max)
+
+interface EqL extends Equatable
+	function l() returns Code
+end 'EqL'
+
+interface EqR extends Equatable
+	function r() returns Code
+end 'EqR'
+
+type Widget implements EqL, EqR
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function l() returns Code
+		return 1
+	end 'l'
+
+	export function r() returns Code
+		return 2
+	end 'r'
+
+	export function equals(other Self) returns bool
+		return self.seed == other.seed
+	end 'equals'
+end 'Widget'
+
+type Pair uses T where T is EqL and EqR
+	export var a as T
+	export var b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+
+	export function go() returns Code
+		return (1 if self.a == self.b else 0) * 100 + self.a.l() * 10 + self.b.r()
+	end 'go'
+end 'Pair'
+
+typealias WidgetPair = Pair with Widget
+
+function main() returns ExitCode
+	return WidgetPair.create(Widget.create(3), b: Widget.create(3)).go()
+end 'main'
+---
+ExitCode: 112
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Widget.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x19, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at where-clauses.shared-equatable-through-two-constraints.test:15: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Widget.l {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Widget.r {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Widget.equals {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Pair.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Pair.go {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 32]
+    arm64.blr x16
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x16, 100
+    arm64.mul x22, x0, x16
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.add x20, x22, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x16, [x21 + 24]
+    arm64.blr x16
+    arm64.add x0, x20, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at where-clauses.shared-equatable-through-two-constraints.test:41: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+    arm64.bl Widget.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 3
+    arm64.bl Widget.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.leaRdata x2, __witness_Widget.EqL
+    arm64.leaRdata x3, __witness_Widget.EqR
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Pair.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x1, __witness_Widget.EqL
+    arm64.leaRdata x2, __witness_Widget.EqR
+    arm64.movRegReg x0, x21
+    arm64.bl Pair.go
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Pair_Widget
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.cmp x22, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x22, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at where-clauses.shared-equatable-through-two-constraints.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

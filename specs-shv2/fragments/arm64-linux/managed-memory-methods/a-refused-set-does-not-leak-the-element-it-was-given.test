@@ -1,0 +1,123 @@
+// Test: a-refused-set-does-not-leak-the-element-it-was-given
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	var refused = 0
+	var xs = StrArray.create()
+	xs.push("a published string, long enough to require an allocation")
+	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
+		refused = refused + 1
+	end 'arraySurface'
+	if refused == 1 'refusedOnce'
+		return 42
+	end 'refusedOnce'
+	return 5
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_2  ; "a published string, long enough to require an allocation"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x21, 99
+    arm64.leaRdata x0, __str_rec_3  ; "a string the array setter refuses, long enough to allocate"
+    arm64.bl __str_retain
+    arm64.movRegReg x2, x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_owned
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_bounds
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 99
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_buffer
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_slow
+    arm64.b __im_viewed
+  __im_viewed:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, __im_slow
+    arm64.b __im_store
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_set
+    arm64.b __im_cont
+  __im_store:
+    arm64.add x0, x0, 792
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 1
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, refusedOnce
+    arm64.b ifcont
+  refusedOnce:
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 5
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

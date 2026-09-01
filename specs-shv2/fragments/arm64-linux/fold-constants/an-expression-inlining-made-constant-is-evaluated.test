@@ -1,0 +1,71 @@
+// Test: an-expression-inlining-made-constant-is-evaluated
+typealias Word = int(i64.min to i64.max)
+
+function scale(a Word, b Word) returns Word
+	return a * 31 + b
+end 'scale'
+
+function main() returns ExitCode
+	if scale(3, b: 4) != 97 'value'
+		return 1
+	end 'value'
+	if scale(0, b: 0) != 0 'zero'
+		return 2
+	end 'zero'
+	if scale(-2, b: 5) != -57 'negative'
+		return 3
+	end 'negative'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.movImm x0, 97
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.cmp x0, 97
+    arm64.cset x0, ne
+    arm64.cbnz x0, value
+    arm64.b ifcont#2
+  value:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, zero
+    arm64.b ifcont#4
+  zero:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.movImm x0, 18446744073709551559
+    arm64.b __il_cont#11
+  __il_cont#11:
+    arm64.cmp x0, -57
+    arm64.cset x0, ne
+    arm64.cbnz x0, negative
+    arm64.b ifcont#6
+  negative:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

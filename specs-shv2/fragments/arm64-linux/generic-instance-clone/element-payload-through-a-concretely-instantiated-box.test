@@ -1,0 +1,55 @@
+// Test: element-payload-through-a-concretely-instantiated-box
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	export static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let b = IntBox.create(91, tag: 4)
+	return 4 as ExitCode if b.v.equals(91) else 70 as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 91
+    arm64.movImm x1, 4
+    arm64.leaRegSlot x2, slot0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.storeBaseDispReg.word64 [x2 + 8], x1
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 0]
+    arm64.b __il_body
+  __il_body:
+    arm64.cmp x0, 91
+    arm64.cset x0, eq
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 70
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 32
+    arm64.ret
+}

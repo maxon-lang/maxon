@@ -1,0 +1,63 @@
+// Test: first-class-function.exitcode-return-through-alias
+typealias Thunk = function() returns ExitCode
+
+function nine() returns ExitCode
+	return 9
+end 'nine'
+
+function callThunk(t Thunk) returns ExitCode
+	return t()
+end 'callThunk'
+
+function main() returns ExitCode
+	return callThunk(nine)
+end 'main'
+---
+ExitCode: 9
+---
+func @nine {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 9
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @callThunk {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.blr x19
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.exitcode-return-through-alias.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_nine
+    arm64.movImm x1, 0
+    arm64.bl callThunk
+    arm64.epilogue 16
+    arm64.ret
+}

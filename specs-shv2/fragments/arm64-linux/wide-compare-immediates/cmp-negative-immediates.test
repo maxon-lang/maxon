@@ -1,0 +1,80 @@
+// Test: cmp-negative-immediates
+typealias Val = int(i64.min to i64.max)
+
+function base(p Val) returns Val
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(-4096)
+	if x == -1 'eqMinusOne'
+		return 41
+	end 'eqMinusOne'
+	if not (x < -1) 'ltMinusOne'
+		return 42
+	end 'ltMinusOne'
+	if not (x < -4095) 'ltPlainField'
+		return 43
+	end 'ltPlainField'
+	if not (x == -4096) 'eqShifted'
+		return 44
+	end 'eqShifted'
+	if not (x > -16773120) 'gtShiftedTop'
+		return 45
+	end 'gtShiftedTop'
+	if not (x > -65535) 'gtNoForm'
+		return 46
+	end 'gtNoForm'
+	if x == -65535 'eqNoForm'
+		return 47
+	end 'eqNoForm'
+	if not (x > -2147483648) 'gtMin'
+		return 48
+	end 'gtMin'
+	let y = base(-16773120)
+	if not (y == -16773120) 'eqShiftedTop'
+		return 49
+	end 'eqShiftedTop'
+	if not (y < -4096) 'ltShifted'
+		return 50
+	end 'ltShifted'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#22
+  __il_body#22:
+    arm64.b __il_cont#21
+  __il_cont#21:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.b ifcont#10
+  ifcont#10:
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.b ifcont#14
+  ifcont#14:
+    arm64.b ifcont#16
+  ifcont#16:
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.b __il_cont#23
+  __il_cont#23:
+    arm64.b ifcont#18
+  ifcont#18:
+    arm64.b ifcont#20
+  ifcont#20:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

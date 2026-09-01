@@ -1,0 +1,186 @@
+// Test: the-same-field-store-on-a-non-generic-type
+typealias Num = int(i64.min to i64.max)
+typealias NumArray = Array with Num
+
+type HoldConcrete
+	export var items as NumArray
+	export static function create(seed Num) returns Self
+		var arr = NumArray.create()
+		arr.resize(1)
+		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
+		return Self{items: arr}
+	end 'create'
+	export function adopt(other NumArray)
+		self.items = other
+	end 'adopt'
+	export function isSingle() returns bool
+		return self.items.count() == 1
+	end 'isSingle'
+end 'HoldConcrete'
+
+function main() returns ExitCode
+	let b = HoldConcrete.create(7)
+	var a = HoldConcrete.create(1)
+	a.adopt(b.items)
+	if a.isSingle() 'ok'
+		print("ok\n")
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @HoldConcrete.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_resize
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_owned
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_bounds
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_buffer
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_viewed
+  __im_viewed:
+    arm64.sub x2, x0, 24
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_store
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __managed_set
+    arm64.b __im_cont
+  __im_store:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at the-same-field-store-on-a-non-generic-type.test:10: seeded slot 0 must exist after resize(1)\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @HoldConcrete.adopt {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl HoldConcrete.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.bl HoldConcrete.create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl HoldConcrete.adopt
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.leaRdata x0, __str_rec_2  ; "ok\x0a"
+    arm64.bl print
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_HoldConcrete
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HoldConcrete
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

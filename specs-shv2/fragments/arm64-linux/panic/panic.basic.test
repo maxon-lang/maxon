@@ -1,0 +1,21 @@
+// Test: panic.basic
+function main() returns ExitCode
+		if true 'check'
+				panic("something went wrong")
+		end 'check'
+		return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b check
+  check:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at panic.basic.test:4: something went wrong\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

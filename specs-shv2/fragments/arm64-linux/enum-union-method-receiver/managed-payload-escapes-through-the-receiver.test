@@ -1,0 +1,104 @@
+// Test: managed-payload-escapes-through-the-receiver
+union Record
+	pass(specName String, testName String)
+	fail(specName String, testName String, reason String)
+
+	export function spec() returns String
+		return match self 's'
+			pass(s, _) gives s
+			fail(s, _, _) gives s
+		end 's'
+	end 'spec'
+end 'Record'
+
+function main() returns ExitCode
+	let r = Record.fail("the spec name, long enough to force a real heap allocation", testName: "the test name, also long enough to be heap allocated", reason: "the failure reason, likewise long enough for the heap")
+	print(r.spec())
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Record.spec {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#1
+    arm64.b matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.b matchcont
+  matchcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_3  ; "the spec name, long enough to force a real heap allocation"
+    arm64.leaRdata x20, __str_rec_4  ; "the test name, also long enough to be heap allocated"
+    arm64.leaRdata x21, __str_rec_5  ; "the failure reason, likewise long enough for the heap"
+    arm64.movImm x0, 32
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl Record.spec
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Record
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

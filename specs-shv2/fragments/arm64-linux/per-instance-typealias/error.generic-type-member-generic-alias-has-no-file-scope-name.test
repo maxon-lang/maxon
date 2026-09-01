@@ -1,0 +1,34 @@
+// Test: error.generic-type-member-generic-alias-has-no-file-scope-name
+// --- file: a.maxon
+typealias Num = int(0 to 200)
+
+export type Holder uses T
+	typealias Bag = Array with T
+
+	export var v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function fill() returns Bag
+		var b = Bag.create()
+		b.push(self.v)
+		return b
+	end 'fill'
+end 'Holder'
+
+export typealias NumHolder = Holder with Num
+
+// --- file: main.maxon
+function firstOf(b Bag) returns Num
+	return try b.get(0) otherwise 0
+end 'firstOf'
+
+function main() returns ExitCode
+	let h = NumHolder.create(3)
+	return firstOf(h.fill()) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3011: <fragment>:25:15: Unknown type 'Bag'

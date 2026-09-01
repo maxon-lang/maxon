@@ -1,0 +1,129 @@
+// Test: instance-alias-satisfies-through-its-base
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns String
+end 'Named'
+
+type Wrapper uses T implements Named
+	export var v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function label() returns String
+		return "wrapped"
+	end 'label'
+end 'Wrapper'
+
+type Holder uses N where N is Named
+	export var item as N
+
+	export static function create(item N) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function show() returns String
+		return item.label()
+	end 'show'
+end 'Holder'
+
+typealias IntWrapper = Wrapper with Integer
+typealias WrapHolder = Holder with IntWrapper
+
+function main() returns ExitCode
+	let h = WrapHolder.create(IntWrapper.create(5))
+	print(h.show())
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Wrapper.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Wrapper.label {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_1  ; "wrapped"
+    arm64.bl __str_retain
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.show {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 5
+    arm64.bl Wrapper.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Wrapper.Named
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.leaRdata x1, __witness_Wrapper.Named
+    arm64.movRegReg x0, x20
+    arm64.bl Holder.show
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Holder_IntWrapper
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

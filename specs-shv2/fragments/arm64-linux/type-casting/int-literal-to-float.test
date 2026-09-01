@@ -1,0 +1,22 @@
+// Test: int-literal-to-float
+
+typealias Float = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	let f = 99 as Float
+	return trunc(f)
+end 'main'
+---
+ExitCode: 99
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 99
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,75 @@
+// Test: remove.nonexistent
+function main() returns ExitCode
+	var s = Set from [1, 2, 3]
+	let removed = s.remove(99)
+	if removed 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.leaRdata x0, __layout_Set_int
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.bl Set.create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl Set.insert
+    arm64.movImm x1, 2
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl Set.insert
+    arm64.movImm x1, 3
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl Set.insert
+    arm64.movImm x1, 99
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl Set.remove
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Set_int
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Set_int
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

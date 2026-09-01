@@ -1,0 +1,100 @@
+// Test: a-vector-in-an-extension-body-over-an-associated-type
+typealias Int = int(i64.min to i64.max)
+
+interface Sized uses Element
+	typealias Slot = Vector with 4 Element
+	function tally() returns Int
+end 'Sized'
+
+extension Sized
+	export function tallyTwice() returns Int
+		var v = Slot.create()
+		return v.count() + tally()
+	end 'tallyTwice'
+end 'Sized'
+
+type Bag uses Element implements Sized with Element
+	typealias Slot = Vector with 4 Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function tally() returns Int
+		return n
+	end 'tally'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	return b.tallyTwice()
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Bag.tallyTwice {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x2, 4
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl Vector.create
+    arm64.movImm x1, 4
+    arm64.b __il_body#3
+  __il_body#3:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.b __il_cont#2
+  __il_cont#2:
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.b __il_cont#1
+  __il_cont#1:
+    arm64.add x19, x1, x2
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.leaRegSlot x0, slot0
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.leaRdata x1, __layout_Bag_Int
+    arm64.bl Bag.tallyTwice
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-vector-in-an-extension-body-over-an-associated-type.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

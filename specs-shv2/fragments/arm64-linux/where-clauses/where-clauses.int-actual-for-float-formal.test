@@ -1,0 +1,184 @@
+// Test: where-clauses.int-actual-for-float-formal
+typealias Coord = int(0 to 1000)
+
+interface Scaled
+	function scale(k Real) returns Real
+end 'Scaled'
+
+type Point implements Scaled
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function scale(k Real) returns Real
+		return k * 2.0
+	end 'scale'
+end 'Point'
+
+type Box uses T where T is Scaled
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function fromInt() returns Real
+		return self.item.scale(2)
+	end 'fromInt'
+	export function fromFloat() returns Real
+		return self.item.scale(1.5)
+	end 'fromFloat'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(7))
+	if b.fromInt() == 4.0 and b.fromFloat() == 3.0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Point.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 1000
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at where-clauses.int-actual-for-float-formal.test:10: Range check failed: value outside typealias 'Coord'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Point.scale {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fmul d0, d0, d1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Box.fromInt {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.fpLoadRdata d0, [rdata + __fconst_2]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box.fromFloat {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.fpLoadRdata d0, [rdata + __fconst_1.5]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl Point.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Point.Scaled
+    arm64.movRegReg x0, x19
+    arm64.bl Box.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.leaRdata x1, __witness_Point.Scaled
+    arm64.movRegReg x0, x20
+    arm64.bl Box.fromInt
+    arm64.fpLoadRdata d1, [rdata + __fconst_4]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.leaRdata x1, __witness_Point.Scaled
+    arm64.movRegReg x0, x20
+    arm64.bl Box.fromFloat
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_Point
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_Point
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

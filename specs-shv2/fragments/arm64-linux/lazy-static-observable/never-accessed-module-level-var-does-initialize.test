@@ -1,0 +1,106 @@
+// Test: never-accessed-module-level-var-does-initialize
+typealias Count = int(0 to u64.max)
+
+type Counter
+	static var initCount = 0
+	export var id as Count
+
+	static function createInstance() returns Counter
+		Counter.initCount = Counter.initCount + 1
+		return Counter{id: Counter.initCount}
+	end 'createInstance'
+
+	export static function getInitCount() returns Count
+		return Counter.initCount
+	end 'getInitCount'
+end 'Counter'
+
+var cached = Counter.createInstance()
+
+function main() returns ExitCode
+	print("{Counter.getInitCount()}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_Counter.initCount@0 = i64 0
+  __data_cached@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @Counter.createInstance {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_Counter.initCount
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_Counter.initCount
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_Counter.initCount
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.b __il_body
+  __il_body:
+    arm64.leaGlobal x0, __data_Counter.initCount
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __uint_to_string
+    arm64.movRegReg x19, x0
+    arm64.add x0, x19, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x0, x22, x19
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl print
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

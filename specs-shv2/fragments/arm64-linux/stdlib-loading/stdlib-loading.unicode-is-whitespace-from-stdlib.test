@@ -1,0 +1,50 @@
+// Test: stdlib-loading.unicode-is-whitespace-from-stdlib
+function main() returns ExitCode
+	if Unicode.isWhitespace(32) 'space'
+		print("space\n")
+	end 'space'
+	if Unicode.isWhitespace(12288) 'ideographic'
+		print("ideographic\n")
+	end 'ideographic'
+	if Unicode.isWhitespace(65) 'letter'
+		print("letter\n")
+	end 'letter'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 32
+    arm64.bl Unicode.isWhitespace
+    arm64.cbnz x0, space
+    arm64.b ifcont#2
+  space:
+    arm64.leaRdata x0, __str_rec_3  ; "space\x0a"
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.movImm x0, 12288
+    arm64.bl Unicode.isWhitespace
+    arm64.cbnz x0, ideographic
+    arm64.b ifcont#4
+  ideographic:
+    arm64.leaRdata x0, __str_rec_4  ; "ideographic\x0a"
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.movImm x0, 65
+    arm64.bl Unicode.isWhitespace
+    arm64.cbnz x0, letter
+    arm64.b ifcont#6
+  letter:
+    arm64.leaRdata x0, __str_rec_5  ; "letter\x0a"
+    arm64.bl print
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

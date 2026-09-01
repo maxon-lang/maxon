@@ -1,0 +1,43 @@
+// Test: error.a-container-of-opaque-element-containers-is-refused
+typealias Idx = int(0 to u64.max)
+
+type Bag uses Element
+	typealias Inner = Array with Element
+	typealias Outer = Array with Inner
+	var rows as Outer
+
+	export function addRow(r Inner)
+		rows.push(r)
+	end 'addRow'
+
+	export function copyRows() returns Outer
+		return rows.clone()
+	end 'copyRows'
+
+	export function count() returns Idx
+		return rows.count()
+	end 'count'
+
+	static function create() returns Self
+		return Self{rows: Outer{}}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+typealias Strs = Array with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	var r = Strs.create()
+	var sb = StringBuilder.create()
+	sb.append("a heap row element long enough to allocate")
+	r.push(sb.build())
+	b.addRow(r)
+	let c = b.copyRows()
+	print("{c.count()}\n")
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:6:12: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+note: stdlib/Array.maxon:165:32: raised inside the library, on behalf of the construct above

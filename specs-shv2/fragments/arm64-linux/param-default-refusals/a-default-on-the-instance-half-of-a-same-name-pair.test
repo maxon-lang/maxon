@@ -1,0 +1,73 @@
+// Test: a-default-on-the-instance-half-of-a-same-name-pair
+typealias Num = int(i64.min to i64.max)
+
+type T
+	export var v as Num
+
+	export static function make(v Num) returns T
+		return Self{v: v}
+	end 'make'
+
+	export static function m(a Num) returns Num
+		return a
+	end 'm'
+
+	export function m(b Num = 4) returns Num
+		return self.v + b
+	end 'm'
+end 'T'
+
+function main() returns ExitCode
+	let t = T.make(1)
+	return (T.m(2) + t.m()) as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 1
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.b __il_body#9
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.add x0, x0, 4
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x0, x0, 2
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-default-on-the-instance-half-of-a-same-name-pair.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

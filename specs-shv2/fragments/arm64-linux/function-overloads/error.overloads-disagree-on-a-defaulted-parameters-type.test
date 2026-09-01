@@ -1,0 +1,24 @@
+// Test: error.overloads-disagree-on-a-defaulted-parameters-type
+typealias Num = int(-1000 to 1000)
+typealias Real = float(f64.min to f64.max)
+
+function f(a bool, x Real = 2.5) returns Num
+	if a 'yes'
+		if x > 1.0 'big'
+			return 7
+		end 'big'
+		return 3
+	end 'yes'
+	return 0
+end 'f'
+
+function f(a Num, x Num = 1) returns Num
+	return a + x
+end 'f'
+
+function main() returns ExitCode
+	return f(true) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:20:9: the overloads of 'f' do not agree on the TYPE of parameter 1, which this call omitted and the compiler supplied from that parameter's default ('int' and 'float'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and the overload is resolved a whole pass later — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload

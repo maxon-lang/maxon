@@ -1,0 +1,68 @@
+// Test: conditional-extensions.type-extension
+type Box uses Item
+	export var item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+extension Box where Item is Equatable
+	function matches(other Item) returns bool
+		return item == other
+	end 'matches'
+end 'Box'
+
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+function main() returns ExitCode
+	let b = IntBox.create(42)
+	if b.matches(42) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.matches {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 42
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x2, 42
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.bl Box.matches
+    arm64.cbnz x0, yes
+    arm64.b ifcont
+  yes:
+    arm64.movImm x0, 1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+}

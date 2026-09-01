@@ -1,0 +1,25 @@
+// Test: public-may-name-an-enum-case
+enum Access
+	public
+	private
+end 'Access'
+
+function main() returns ExitCode
+	let a = Access.public
+	match a 'which'
+		public then return 3
+		private then return 0
+	end 'which'
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}

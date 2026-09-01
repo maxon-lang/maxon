@@ -1,0 +1,59 @@
+// Test: static-var-multiple-types
+type TypeA
+	static var value = 10
+end 'TypeA'
+
+type TypeB
+	static var value = 20
+end 'TypeB'
+
+function main() returns ExitCode
+	TypeA.value = TypeA.value + 2
+	TypeB.value = TypeB.value + 10
+	return TypeA.value + TypeB.value
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_TypeA.value@0 = i64 10
+  __data_TypeB.value@8 = i64 20
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_TypeA.value
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 2
+    arm64.leaGlobal x1, __data_TypeA.value
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_TypeB.value
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 10
+    arm64.leaGlobal x1, __data_TypeB.value
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_TypeA.value
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __data_TypeB.value
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at static-var-multiple-types.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

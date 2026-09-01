@@ -1,0 +1,154 @@
+// Test: parsable.multiple-error-conditions
+
+typealias Integer = int(i64.min to i64.max)
+
+// Parsable can throw different errors for different conditions
+enum MoneyParseError implements Error
+	InvalidFormat = 1
+	NegativeValue = 2
+end 'MoneyParseError'
+
+type Money implements Parsable
+	export var cents as Integer
+
+	static function fromString(input String) returns Self throws MoneyParseError
+		if input.byteLength() == 0 'empty'
+			throw MoneyParseError.InvalidFormat
+		end 'empty'
+
+		if input.startsWith("-") 'negative'
+			throw MoneyParseError.NegativeValue
+		end 'negative'
+
+		return Money{cents: input.byteLength()}
+	end 'fromString'
+end 'Money'
+
+function main() returns ExitCode
+	let price = try Money.fromString("-50") otherwise 'err'
+		return 99
+	end 'err'
+	return price.cents
+end 'main'
+---
+ExitCode: 99
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Money.fromString {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __il_slow#8
+    arm64.b __rc_ok#7
+  __il_slow#8:
+    arm64.movRegReg x0, x19
+    arm64.bl String.byteLength
+    arm64.b __il_cont#5
+  __rc_ok#7:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, empty
+    arm64.b ifcont#2
+  empty:
+    arm64.movImm x9, 2
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.leaRdata x1, __str_rec_2  ; "-"
+    arm64.movRegReg x0, x19
+    arm64.bl String.startsWith
+    arm64.cbnz x0, negative
+    arm64.b ifcont#4
+  negative:
+    arm64.movImm x9, 3
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __il_slow#12
+    arm64.b __rc_ok#11
+  __il_slow#12:
+    arm64.movRegReg x0, x19
+    arm64.bl String.byteLength
+    arm64.movRegReg x19, x0
+    arm64.b __il_cont#9
+  __rc_ok#11:
+    arm64.movRegReg x19, x20
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_3  ; "-50"
+    arm64.bl Money.fromString
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at parsable.multiple-error-conditions.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,64 @@
+// Test: a-float-multiply-keeps-its-copy
+typealias Wide = float(f64.min to f64.max)
+
+function scale(x Wide, k Wide) returns Wide
+	let p = x * k
+	return p + x
+end 'scale'
+
+function main() returns ExitCode
+	var seen = 0.0
+	for i in 0 upto 4 'feed'
+		seen = seen + scale(i + 1.0, k: 2.0)
+	end 'feed'
+	// p = 2,4,6,8; p+x = 3,6,9,12 -> 30
+	if seen != 30.0 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.movImm x0, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 4
+    arm64.cset x1, lt
+    arm64.cbnz x1, feed
+    arm64.b forexit
+  feed:
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.scvtf d2, x0
+    arm64.fadd d1, d2, d1
+    arm64.fpLoadRdata d2, [rdata + __fconst_2]
+    arm64.b __il_body
+  __il_body:
+    arm64.fmul d2, d1, d2
+    arm64.fadd d1, d2, d1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.fadd d0, d0, d1
+    arm64.b forstep
+  forstep:
+    arm64.add x0, x0, 1
+    arm64.b forhdr
+  forexit:
+    arm64.fpLoadRdata d1, [rdata + __fconst_30]
+    arm64.fcmp d0, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, sum
+    arm64.b ifcont
+  sum:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

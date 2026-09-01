@@ -1,0 +1,80 @@
+// Test: a-division-is-never-reused
+typealias Word = int(i64.min to i64.max)
+// A divisor whose type EXCLUDES ZERO, so the divisions do not throw and the case can be about CSE
+// rather than about `try`. The op is still `StdOp.div`/`StdOp.mod` and still `isPure: false`.
+typealias NonZeroWord = int(1 to i64.max)
+
+function halves(a Word, b NonZeroWord) returns Word
+	return (a / b) + (a / b) + (a mod b) + (a mod b)
+end 'halves'
+
+function main() returns ExitCode
+	if halves(17, b: 5) != 10 'quotientAndRemainder'
+		return 1
+	end 'quotientAndRemainder'
+	if halves(-17, b: 5) != -10 'negativeTruncatesTowardZero'
+		return 2
+	end 'negativeTruncatesTowardZero'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @halves {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 1
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-division-is-never-reused.test:7: Range check failed: value outside typealias 'NonZeroWord'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.sdiv x2, x0, x1
+    arm64.sdiv x3, x0, x1
+    arm64.add x2, x2, x3
+    arm64.sdiv x16, x0, x1
+    arm64.msub x3, x16, x1, x0
+    arm64.add x2, x2, x3
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.add x0, x2, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 17
+    arm64.movImm x1, 5
+    arm64.bl halves
+    arm64.cmp x0, 10
+    arm64.cset x0, ne
+    arm64.cbnz x0, quotientAndRemainder
+    arm64.b ifcont#2
+  quotientAndRemainder:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 18446744073709551599
+    arm64.movImm x1, 5
+    arm64.bl halves
+    arm64.cmp x0, -10
+    arm64.cset x0, ne
+    arm64.cbnz x0, negativeTruncatesTowardZero
+    arm64.b ifcont#4
+  negativeTruncatesTowardZero:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

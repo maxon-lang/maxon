@@ -1,0 +1,46 @@
+// Test: duplicate-block-identifiers.else-nested
+function main() returns ExitCode
+	var x = 0
+	if false 'check'
+		x = 1
+	end 'check' else 'else_check'
+		if true 'nested'
+			x = 2
+		end 'nested'
+	end 'else_check'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b ifelse
+  ifelse:
+    arm64.b nested
+  nested:
+    arm64.movImm x0, 2
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b ifcont#5
+  ifcont#5:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at duplicate-block-identifiers.else-nested.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

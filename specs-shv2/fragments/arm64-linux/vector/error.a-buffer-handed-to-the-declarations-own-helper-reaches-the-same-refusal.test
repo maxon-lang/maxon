@@ -1,0 +1,22 @@
+// Test: error.a-buffer-handed-to-the-declarations-own-helper-reaches-the-same-refusal
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function bust()
+		wipe(managed)
+	end 'bust'
+
+	function wipe(m ElementMemory)
+		m.clear()
+	end 'wipe'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.bust()
+	return v.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:8: Unsupported: a `Vector`'s own record may not be passed to a call — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length

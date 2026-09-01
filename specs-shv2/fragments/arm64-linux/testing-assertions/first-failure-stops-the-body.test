@@ -1,0 +1,90 @@
+// Test: first-failure-stops-the-body
+// --- file: main.maxon
+function runChecks() throws TestFailure
+	print("before\n")
+	try Expect.equal(1, expected: 2)
+	print("after\n")
+end 'runChecks'
+
+function main() returns ExitCode
+	try runChecks() otherwise ignore
+
+	print("resumed\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @runChecks {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_18  ; "before\x0a"
+    arm64.bl print
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.bl __paramDefault#Expect.equal#2
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x3, __str_rec_19  ; "main.maxon"
+    arm64.movImm x4, 3
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Expect.equal
+    arm64.movRegReg x19, x9
+    arm64.cmp x19, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_20  ; "after\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl runChecks
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.leaRdata x0, __str_rec_21  ; "resumed\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

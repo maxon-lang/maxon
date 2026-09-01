@@ -1,0 +1,237 @@
+// Test: try-block.routed-union-result-is-released
+typealias Num = int(0 to 1000)
+
+union Shape
+    circle(r Num)
+    square(s Num)
+end 'Shape'
+
+union ShapeError
+    tooBig(limit Num)
+end 'ShapeError'
+
+function makeShape(r Num) returns Shape throws ShapeError
+    if r > 500 'tooBig'
+        throw ShapeError.tooBig(500)
+    end 'tooBig'
+
+    return Shape.circle(r)
+end 'makeShape'
+
+function classify(r Num) returns Num
+    var out = 0
+
+    // The success path must FALL OUT of the try block rather than return from inside it.
+    // An early return runs the function-exit cleanup, which released the routed temp anyway;
+    // only falling through reaches the try block's own inner scope-end, which is the one that
+    // dropped it.
+    try 'blk'
+        let s = makeShape(r)
+        match s 'm'
+            circle(v) then out = v
+            square(v) then out = 0
+        end 'm'
+    end 'blk' otherwise (e) 'h'
+        match e 'k'
+            tooBig(limit) then out = limit - 499
+        end 'k'
+    end 'h'
+
+    return out
+end 'classify'
+
+function main() returns ExitCode
+    var total = 0
+    total = total + classify(3)
+    total = total + classify(4)
+    total = total + classify(900)
+    return total
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @makeShape {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 1000
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at try-block.routed-union-result-is-released.test:13: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x19, 500
+    arm64.cset x0, gt
+    arm64.cbnz x0, tooBig
+    arm64.b ifcont
+  tooBig:
+    arm64.movImm x19, 500
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x19
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @classify {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#14
+    arm64.b __rc_chk#15
+  __rc_chk#15:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#14
+    arm64.b __rc_ok#13
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at try-block.routed-union-result-is-released.test:21: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#13:
+    arm64.bl makeShape
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryblkthrow
+    arm64.b tryblkok
+  tryblkthrow:
+    arm64.b tryblkerr
+  tryblkerr:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#9
+    arm64.b matchdead#10
+  matcharm#9:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 8]
+    arm64.sub x19, x0, 499
+    arm64.b matchcont#11
+  matchcont#11:
+    arm64.movRegReg x0, x9
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.b tryblkcont
+  matchdead#10:
+  tryblkok:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#4
+    arm64.b matchnext
+  matcharm#4:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.b matchcont#8
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#5
+    arm64.b matchdead#6
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.movImm x19, 0
+    arm64.b matchcont#8
+  matchcont#8:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.b tryblkcont
+  tryblkcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#17
+    arm64.b __rc_chk#18
+  __rc_chk#18:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#17
+    arm64.b __rc_ok#16
+  __rc_panic#17:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at try-block.routed-union-result-is-released.test:40: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#16:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead#6:
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+    arm64.bl classify
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 4
+    arm64.bl classify
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 900
+    arm64.bl classify
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at try-block.routed-union-result-is-released.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

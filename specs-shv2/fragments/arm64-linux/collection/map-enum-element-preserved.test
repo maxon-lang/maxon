@@ -1,0 +1,167 @@
+// Test: map-enum-element-preserved
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias ColorArray = Array with Color
+
+function good(c Color) returns Color
+	match c 'k'
+		red then print("saw red\n")
+		green then print("saw green\n")
+		blue then print("saw blue\n")
+	end 'k'
+	return Color.red
+end 'good'
+
+function main() returns ExitCode
+	var a = ColorArray.create()
+	a.push(Color.blue)
+	let b = a.map(good)
+	print("n={b.count()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @good {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#1
+    arm64.b matchnext#5
+  matcharm#1:
+    arm64.leaRdata x0, __str_rec_5  ; "saw red\x0a"
+    arm64.bl print
+    arm64.b matchcont
+  matchnext#5:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchnext#6
+  matcharm#2:
+    arm64.leaRdata x0, __str_rec_6  ; "saw green\x0a"
+    arm64.bl print
+    arm64.b matchcont
+  matchnext#6:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#3
+    arm64.b matchdead
+  matcharm#3:
+    arm64.leaRdata x0, __str_rec_7  ; "saw blue\x0a"
+    arm64.bl print
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot10, x28
+    arm64.storeSlotReg slot9, x27
+    arm64.storeSlotReg slot8, x26
+    arm64.storeSlotReg slot7, x25
+    arm64.storeSlotReg slot6, x24
+    arm64.storeSlotReg slot5, x23
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaFuncAddr x1, __fnref_good
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Array_Color
+    arm64.movRegReg x0, x19
+    arm64.bl Array.map
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_8  ; "n="
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __int_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_9  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x21, x22
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x20, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+}

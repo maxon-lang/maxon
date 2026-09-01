@@ -1,0 +1,345 @@
+// Test: proven-count-at-the-boundary
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Bits = int(0 to 63)
+
+function shlBy(value Num, n Bits) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n Bits) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n Bits) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function boundary(step Num) returns Bits
+	return (step * 63) as Bits
+end 'boundary'
+
+function main() returns ExitCode
+	let low = boundary(0)
+	let high = boundary(1)
+
+	if shlBy(1, n: low) != 1 'shlZero'
+		return 1
+	end 'shlZero'
+	if shlBy(1, n: high) != -9223372036854775807 - 1 'shlTop'
+		return 2
+	end 'shlTop'
+	if shrBy(-8, n: low) != -8 'shrZero'
+		return 3
+	end 'shrZero'
+	if shrBy(-8, n: high) != -1 'shrTop'
+		return 4
+	end 'shrTop'
+	if shrWordBy(u64.max, n: low) != u64.max 'shrWordZero'
+		return 5
+	end 'shrWordZero'
+	if shrWordBy(u64.max, n: high) != 1 'shrWordTop'
+		return 6
+	end 'shrWordTop'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shlBy {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at proven-count-at-the-boundary.test:6: Range check failed: value outside typealias 'Bits'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.lslv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shrBy {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at proven-count-at-the-boundary.test:10: Range check failed: value outside typealias 'Bits'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.asrv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shrWordBy {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 63
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at proven-count-at-the-boundary.test:14: Range check failed: value outside typealias 'Bits'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.lsrv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.b __il_body#16
+  __il_body#16:
+    arm64.movImm x19, 0
+    arm64.b __rc_chk#18
+  __rc_chk#18:
+    arm64.b __rc_ok#17
+  __rc_ok#17:
+    arm64.b __il_cont#15
+  __il_cont#15:
+    arm64.b __il_body#20
+  __il_body#20:
+    arm64.movImm x20, 63
+    arm64.b __rc_chk#22
+  __rc_chk#22:
+    arm64.b __rc_ok#21
+  __rc_ok#21:
+    arm64.b __il_cont#14
+  __il_cont#14:
+    arm64.movImm x0, 1
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.cmp x19, 0
+    arm64.cset x21, lt
+    arm64.cbnz x21, __il_slow#27
+    arm64.b __rc_chk#26
+  __rc_chk#26:
+    arm64.cmp x19, 63
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#27
+    arm64.b __rc_ok#25
+  __il_slow#27:
+    arm64.movRegReg x1, x19
+    arm64.bl shlBy
+    arm64.b __il_cont#13
+  __rc_ok#25:
+    arm64.lslv x0, x0, x19
+    arm64.b __il_cont#13
+  __il_cont#13:
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shlZero
+    arm64.b ifcont#2
+  shlZero:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 1
+    arm64.b __il_body#29
+  __il_body#29:
+    arm64.cmp x20, 0
+    arm64.cset x22, lt
+    arm64.cbnz x22, __il_slow#32
+    arm64.b __rc_chk#31
+  __rc_chk#31:
+    arm64.cmp x20, 63
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#32
+    arm64.b __rc_ok#30
+  __il_slow#32:
+    arm64.movRegReg x1, x20
+    arm64.bl shlBy
+    arm64.b __il_cont#28
+  __rc_ok#30:
+    arm64.lslv x0, x0, x20
+    arm64.b __il_cont#28
+  __il_cont#28:
+    arm64.movImm x1, 9223372036854775808
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shlTop
+    arm64.b ifcont#4
+  shlTop:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551608
+    arm64.b __il_body#34
+  __il_body#34:
+    arm64.cbnz x21, __il_slow#37
+    arm64.b __rc_chk#36
+  __rc_chk#36:
+    arm64.cmp x19, 63
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#37
+    arm64.b __rc_ok#35
+  __il_slow#37:
+    arm64.movRegReg x1, x19
+    arm64.bl shrBy
+    arm64.b __il_cont#33
+  __rc_ok#35:
+    arm64.asrv x0, x0, x19
+    arm64.b __il_cont#33
+  __il_cont#33:
+    arm64.cmp x0, -8
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrZero
+    arm64.b ifcont#6
+  shrZero:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 18446744073709551608
+    arm64.b __il_body#39
+  __il_body#39:
+    arm64.cbnz x22, __il_slow#42
+    arm64.b __rc_chk#41
+  __rc_chk#41:
+    arm64.cmp x20, 63
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#42
+    arm64.b __rc_ok#40
+  __il_slow#42:
+    arm64.movRegReg x1, x20
+    arm64.bl shrBy
+    arm64.b __il_cont#38
+  __rc_ok#40:
+    arm64.asrv x0, x0, x20
+    arm64.b __il_cont#38
+  __il_cont#38:
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrTop
+    arm64.b ifcont#8
+  shrTop:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_body#44
+  __il_body#44:
+    arm64.cbnz x21, __il_slow#47
+    arm64.b __rc_chk#46
+  __rc_chk#46:
+    arm64.cmp x19, 63
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#47
+    arm64.b __rc_ok#45
+  __il_slow#47:
+    arm64.movRegReg x1, x19
+    arm64.bl shrWordBy
+    arm64.b __il_cont#43
+  __rc_ok#45:
+    arm64.lsrv x0, x0, x19
+    arm64.b __il_cont#43
+  __il_cont#43:
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrWordZero
+    arm64.b ifcont#10
+  shrWordZero:
+    arm64.movImm x0, 5
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_body#49
+  __il_body#49:
+    arm64.cbnz x22, __il_slow#52
+    arm64.b __rc_chk#51
+  __rc_chk#51:
+    arm64.cmp x20, 63
+    arm64.cset x1, gt
+    arm64.cbnz x1, __il_slow#52
+    arm64.b __rc_ok#50
+  __il_slow#52:
+    arm64.movRegReg x1, x20
+    arm64.bl shrWordBy
+    arm64.b __il_cont#48
+  __rc_ok#50:
+    arm64.lsrv x0, x0, x20
+    arm64.b __il_cont#48
+  __il_cont#48:
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrWordTop
+    arm64.b ifcont#12
+  shrWordTop:
+    arm64.movImm x0, 6
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

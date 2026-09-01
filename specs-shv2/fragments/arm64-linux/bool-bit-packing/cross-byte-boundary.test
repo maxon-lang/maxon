@@ -1,0 +1,161 @@
+// Test: cross-byte-boundary
+typealias BoolArray = Array with bool
+
+function main() returns ExitCode
+	var arr = BoolArray.create()
+	var i = 0
+	while i < 9 'push'
+		arr.push(false)
+		i = i + 1
+	end 'push'
+	try arr.set(7, value: true) otherwise panic("test invariant: set OOB")
+	try arr.set(8, value: true) otherwise panic("test invariant: set OOB")
+	let v7 = try arr.get(7) otherwise false
+	let v8 = try arr.get(8) otherwise false
+	var sum = 0
+	if v7 'c7'
+		sum = sum + 1
+	end 'c7'
+	if v8 'c8'
+		sum = sum + 1
+	end 'c8'
+	return sum
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 18446744073709551615
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 9
+    arm64.cset x0, lt
+    arm64.cbnz x0, push
+    arm64.b whileexit
+  push:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x1, 7
+    arm64.movImm x2, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at cross-byte-boundary.test:11: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#4:
+    arm64.movImm x1, 8
+    arm64.movImm x2, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#7
+    arm64.b tryok#6
+  tryerr#7:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at cross-byte-boundary.test:12: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#6:
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#9
+    arm64.b tryok#8
+  tryerr#9:
+    arm64.movImm x20, 0
+    arm64.b trycont#10
+  tryok#8:
+    arm64.movRegReg x20, x0
+    arm64.b trycont#10
+  trycont#10:
+    arm64.movImm x1, 8
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#12
+    arm64.b tryok#11
+  tryerr#12:
+    arm64.movImm x0, 0
+    arm64.b trycont#13
+  tryok#11:
+    arm64.b trycont#13
+  trycont#13:
+    arm64.movImm x1, 0
+    arm64.cbnz x20, c7
+    arm64.b critsplit#21
+  c7:
+    arm64.movImm x1, 1
+    arm64.b ifcont#15
+  critsplit#21:
+    arm64.b ifcont#15
+  ifcont#15:
+    arm64.cbnz x0, c8
+    arm64.b critsplit#22
+  c8:
+    arm64.add x20, x1, 1
+    arm64.b ifcont#17
+  critsplit#22:
+    arm64.movRegReg x20, x1
+    arm64.b ifcont#17
+  ifcont#17:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at cross-byte-boundary.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

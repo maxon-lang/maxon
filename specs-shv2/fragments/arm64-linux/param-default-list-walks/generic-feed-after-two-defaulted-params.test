@@ -1,0 +1,169 @@
+// Test: generic-feed-after-two-defaulted-params
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var item as T
+
+	static function create(_ Integer = 1, _ String = "n", item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 50 'loop'
+		let s = "hello!"
+		let b = StrBox.create(2, item: s)
+		print("{b.item}")
+		total = 6
+		i = i + 1
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x2
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.movImm x19, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 50
+    arm64.cset x1, lt
+    arm64.cbnz x1, loop
+    arm64.b whileexit
+  loop:
+    arm64.leaRdata x20, __str_rec_2  ; "hello!"
+    arm64.movImm x21, 2
+    arm64.bl __paramDefault#Box.create#1
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x23, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
+    arm64.add x0, x20, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x25, x20
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x20
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x24
+    arm64.bl Box.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl print
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.movImm x21, 6
+    arm64.add x19, x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x21
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at generic-feed-after-two-defaulted-params.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+}
+
+func @__paramDefault#Box.create#1 {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_3  ; "n"
+    arm64.bl __str_retain
+    arm64.epilogue 16
+    arm64.ret
+}

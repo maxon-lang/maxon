@@ -1,0 +1,253 @@
+// Test: where-clauses.diamond-inherited-requirement
+typealias Code = int(0 to u32.max)
+
+let SlotRadix = 5
+
+interface Root
+	function base() returns Code
+end 'Root'
+
+interface Left extends Root
+	function left() returns Code
+end 'Left'
+
+interface Right extends Root
+	function right() returns Code
+end 'Right'
+
+interface Both extends Left, Right
+	function both() returns Code
+end 'Both'
+
+type Widget implements Both
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function base() returns Code
+		return 1
+	end 'base'
+
+	export function left() returns Code
+		return 2
+	end 'left'
+
+	export function right() returns Code
+		return 3
+	end 'right'
+
+	export function both() returns Code
+		return 4
+	end 'both'
+end 'Widget'
+
+type Box uses T where T is Both
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function digits() returns Code
+		return ((self.item.base() * SlotRadix + self.item.left()) * SlotRadix + self.item.right()) * SlotRadix + self.item.both()
+	end 'digits'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	let b = WidgetBox.create(Widget.create(0))
+	return b.digits()
+end 'main'
+---
+ExitCode: 194
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Widget.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x0, 4294967295
+    arm64.cmp x19, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at where-clauses.diamond-inherited-requirement.test:25: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Widget.base {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Widget.left {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Widget.right {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Widget.both {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Box.digits {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
+    arm64.blr x16
+    arm64.movImm x16, 5
+    arm64.mul x21, x0, x16
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 32]
+    arm64.blr x16
+    arm64.add x0, x21, x0
+    arm64.movImm x16, 5
+    arm64.mul x21, x0, x16
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.blr x16
+    arm64.add x0, x21, x0
+    arm64.movImm x16, 5
+    arm64.mul x21, x0, x16
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.add x0, x21, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at where-clauses.diamond-inherited-requirement.test:54: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl Widget.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Widget.Both
+    arm64.movRegReg x0, x19
+    arm64.bl Box.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.leaRdata x1, __witness_Widget.Both
+    arm64.movRegReg x0, x20
+    arm64.bl Box.digits
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_Widget
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at where-clauses.diamond-inherited-requirement.test:62: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

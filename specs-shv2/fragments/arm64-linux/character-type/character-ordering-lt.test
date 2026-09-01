@@ -1,0 +1,52 @@
+// Test: character-ordering-lt
+function main() returns ExitCode
+	let a = 'é'
+	let b = 'ü'
+	if a < b 'lt'
+		print("lt\n")
+	end 'lt'
+	if b < a 'reversed'
+		print("REVERSED\n")
+	end 'reversed'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_4  ; "\xc3\xa9"
+    arm64.leaRdata x20, __str_rec_5  ; "\xc3\xbc"
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, lt
+    arm64.b ifcont#2
+  lt:
+    arm64.leaRdata x0, __str_rec_6  ; "lt\x0a"
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, reversed
+    arm64.b ifcont#4
+  reversed:
+    arm64.leaRdata x0, __str_rec_7  ; "REVERSED\x0a"
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

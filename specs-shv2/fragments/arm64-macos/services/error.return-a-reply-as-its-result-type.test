@@ -1,0 +1,26 @@
+// Test: error.return-a-reply-as-its-result-type
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+function grab(h Calc.handle) returns Integer
+	return h.total()
+end 'grab'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	print("grabbed {grab(h)}")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3005: <fragment>:15:2: Cannot return 'struct' from function declared to return 'int'

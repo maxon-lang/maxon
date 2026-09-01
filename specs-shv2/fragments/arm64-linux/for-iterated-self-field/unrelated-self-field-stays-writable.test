@@ -1,0 +1,144 @@
+// Test: unrelated-self-field-stays-writable
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type Bag
+	export var items as IntArray
+	export var seen as Int
+
+	static function create() returns Self
+		var a = IntArray.create()
+		a.push(5)
+		a.push(7)
+		return Self{items: a, seen: 0}
+	end 'create'
+
+	function sum() returns Int
+		var total = 0
+		for it in self.items 'scan'
+			seen = seen + 1
+			total = total + it
+		end 'scan'
+		return total + seen
+	end 'sum'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	return b.sum() as ExitCode
+end 'main'
+---
+ExitCode: 14
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x20, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Bag.sum {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movImm x3, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 8]
+    arm64.cmp x3, x4
+    arm64.cset x4, lt
+    arm64.cbnz x4, scan
+    arm64.b forexit
+  scan:
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 0]
+    arm64.arm64AddLsl x4, x4, x3, lsl #3
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 8]
+    arm64.add x5, x5, 1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x5
+    arm64.add x1, x1, x4
+    arm64.b forstep
+  forstep:
+    arm64.add x3, x3, 1
+    arm64.b forhdr
+  forexit:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.sum
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at unrelated-self-field-stays-writable.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

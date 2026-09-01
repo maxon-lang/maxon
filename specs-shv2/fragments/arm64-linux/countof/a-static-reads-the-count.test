@@ -1,0 +1,223 @@
+// Test: a-static-reads-the-count
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Vec5 = Vector with 5 Int
+
+var trips = 0
+
+extension Vector
+	export static function counted() returns Self
+		var i = 0
+		while i < countof(Self) 'each'
+			trips = trips + 1
+			i = i + 1
+		end 'each'
+		return Self{}
+	end 'counted'
+
+	export function rebuild() returns Int
+		let fresh = Self.counted()
+		var slots = 0
+		for _ in fresh 'countTheRecordsSlots'
+			slots = slots + 1
+		end 'countTheRecordsSlots'
+		if slots == countof(Self) 'theStaticsResultStatesTheReceiversCount'
+			return 0
+		end 'theStaticsResultStatesTheReceiversCount'
+		panic("a `Self`-returning static builds the instance its call site holds")
+	end 'rebuild'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec5.create()
+	return a.rebuild() + b.rebuild() + trips
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __data_trips@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Vector.counted {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, x19
+    arm64.cset x2, lt
+    arm64.cbnz x2, each
+    arm64.b whileexit
+  each:
+    arm64.leaGlobal x2, __data_trips
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x2, x2, 1
+    arm64.leaGlobal x3, __data_trips
+    arm64.storeBaseDispReg.word64 [x3 + 0], x2
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __managed_resize
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Vector.rebuild {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl Vector.counted
+    arm64.movRegReg x21, x0
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x21
+    arm64.bl Vector.createIterator
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b forempty
+  critsplit:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, countTheRecordsSlots
+    arm64.b forexit
+  countTheRecordsSlots:
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x19
+    arm64.bl ArrayIterator.current
+    arm64.movRegReg x1, x0
+    arm64.add x22, x22, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __drop_type_param
+    arm64.b forstep
+  forstep:
+    arm64.movRegReg x0, x23
+    arm64.bl ArrayIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_ArrayIterator_T4b39db24a89d29c9
+    arm64.movRegReg x0, x22
+    arm64.b forjoin
+  forempty:
+    arm64.movRegReg x0, x22
+    arm64.b forjoin
+  forjoin:
+    arm64.cmp x0, x20
+    arm64.cset x0, eq
+    arm64.cbnz x0, theStaticsResultStatesTheReceiversCount
+    arm64.b ifcont
+  theStaticsResultStatesTheReceiversCount:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-static-reads-the-count.test:27: a `Self`-returning static builds the instance its call site holds\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Vector_N3_Int
+    arm64.movImm x1, 3
+    arm64.bl Vector.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __layout_Vector_N5_Int
+    arm64.movImm x1, 5
+    arm64.bl Vector.create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __layout_Vector_N3_Int
+    arm64.movImm x2, 3
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.rebuild
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x1, __layout_Vector_N5_Int
+    arm64.movImm x2, 5
+    arm64.movRegReg x0, x20
+    arm64.bl Vector.rebuild
+    arm64.add x0, x21, x0
+    arm64.leaGlobal x1, __data_trips
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x21, x0, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-static-reads-the-count.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

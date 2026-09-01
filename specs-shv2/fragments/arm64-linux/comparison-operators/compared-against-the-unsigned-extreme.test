@@ -1,0 +1,39 @@
+// Test: compared-against-the-unsigned-extreme
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let three = wide(3 as Wide)
+
+	if three > u64.max 'impossible'
+		return 1
+	end 'impossible'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, -1
+    arm64.cset x0, hi
+    arm64.cbnz x0, impossible
+    arm64.b ifcont
+  impossible:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

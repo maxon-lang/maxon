@@ -1,0 +1,592 @@
+// Test: a-shared-generic-body-keeps-the-runtime-fork
+typealias Word = int(i64.min to i64.max)
+typealias Byte = int(0 to 255)
+typealias Idx = int(0 to u64.max)
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	export static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function add(value Element)
+		items.push(value)
+	end 'add'
+
+	export function put(i Idx, value Element)
+		try items.set(i, value: value) otherwise panic("Bag.put: index out of range")
+	end 'put'
+
+	export function at(i Idx) returns Element throws ArrayError
+		return try items.get(i)
+	end 'at'
+end 'Bag'
+
+typealias WordBag = Bag with Word
+typealias ByteBag = Bag with Byte
+typealias WordArray = Array with Word
+
+function main() returns ExitCode
+	var w = WordBag.create()
+	w.add(1000000)
+	w.add(2000000)
+	w.put(1, value: 3000000)
+	if (try w.at(0) otherwise return 1) != 1000000 'wordFirst'
+		return 2
+	end 'wordFirst'
+	if (try w.at(1) otherwise return 1) != 3000000 'wordSecond'
+		return 3
+	end 'wordSecond'
+
+	var b = ByteBag.create()
+	b.add(200)
+	b.add(7)
+	b.put(1, value: 255)
+	if (try b.at(0) otherwise return 1) != 200 'byteFirst'
+		return 4
+	end 'byteFirst'
+	if (try b.at(1) otherwise return 1) != 255 'byteSecond'
+		return 5
+	end 'byteSecond'
+
+	// The same element width reached DIRECTLY, where the stride is known and the fork is gone.
+	var direct = WordArray.create()
+	direct.push(9)
+	if (try direct.get(0) otherwise return 1) != 9 'directWord'
+		return 6
+	end 'directWord'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.add {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_push
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Bag.put {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x3, lt
+    arm64.cbnz x3, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:19: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 24]
+    arm64.cmp x3, 8
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_owned#10
+  __im_owned#10:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, lt
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_bounds#11
+  __im_bounds#11:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.cmp x1, x3
+    arm64.cset x3, hs
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_buffer#12
+  __im_buffer#12:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.cmp x3, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_slow
+    arm64.b __im_viewed#13
+  __im_viewed#13:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_slow
+    arm64.b __im_store#14
+  __im_store#14:
+    arm64.arm64AddLsl x0, x3, x1, lsl #3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.b __im_cont
+  __im_stride:
+    arm64.cmp x3, 1
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_owned#15
+  __im_owned#15:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, lt
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_bounds#16
+  __im_bounds#16:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.cmp x1, x3
+    arm64.cset x3, hs
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_buffer#17
+  __im_buffer#17:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.cmp x3, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, __im_slow
+    arm64.b __im_viewed#18
+  __im_viewed#18:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_slow
+    arm64.b __im_store#19
+  __im_store#19:
+    arm64.add x0, x3, x1
+    arm64.storeBaseDispReg.byte [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.b __im_cont
+  __im_slow:
+    arm64.bl __managed_set
+    arm64.movRegReg x0, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:19: Bag.put: index out of range\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Bag.at {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x2
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:23: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
+    arm64.cmp x2, 8
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.cset x2, hs
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load#11
+  __im_load#11:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.arm64AddLsl x2, x2, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x2, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.cset x2, hs
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load#12
+  __im_load#12:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, x1
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x9, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#14
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#15
+  critsplit#15:
+    arm64.movRegReg x1, x2
+    arm64.b __im_cont
+  critsplit#14:
+    arm64.movRegReg x1, x2
+    arm64.b __im_cont
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __retain_type_param
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Bag_Word
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1000000
+    arm64.leaRdata x2, __layout_Bag_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.add
+    arm64.movImm x1, 2000000
+    arm64.leaRdata x2, __layout_Bag_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.add
+    arm64.movImm x1, 1
+    arm64.movImm x2, 3000000
+    arm64.leaRdata x3, __layout_Bag_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.put
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Bag_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.at
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movImm x16, 1000000
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, wordFirst
+    arm64.b ifcont#4
+  wordFirst:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __layout_Bag_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.at
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#5:
+    arm64.movImm x16, 3000000
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, wordSecond
+    arm64.b ifcont#8
+  wordSecond:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#8:
+    arm64.leaRdata x0, __layout_Bag_Byte
+    arm64.bl Bag.create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 200
+    arm64.leaRdata x2, __layout_Bag_Byte
+    arm64.movRegReg x0, x20
+    arm64.bl Bag.add
+    arm64.movImm x1, 7
+    arm64.leaRdata x2, __layout_Bag_Byte
+    arm64.movRegReg x0, x20
+    arm64.bl Bag.add
+    arm64.movImm x1, 1
+    arm64.movImm x2, 255
+    arm64.leaRdata x3, __layout_Bag_Byte
+    arm64.movRegReg x0, x20
+    arm64.bl Bag.put
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Bag_Byte
+    arm64.movRegReg x0, x20
+    arm64.bl Bag.at
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#10
+    arm64.b tryok#9
+  tryerr#10:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#9:
+    arm64.cmp x0, 200
+    arm64.cset x0, ne
+    arm64.cbnz x0, byteFirst
+    arm64.b ifcont#12
+  byteFirst:
+    arm64.movImm x21, 4
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __layout_Bag_Byte
+    arm64.movRegReg x0, x20
+    arm64.bl Bag.at
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#14
+    arm64.b tryok#13
+  tryerr#14:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#13:
+    arm64.cmp x0, 255
+    arm64.cset x0, ne
+    arm64.cbnz x0, byteSecond
+    arm64.b ifcont#16
+  byteSecond:
+    arm64.movImm x21, 5
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#16:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x1, 9
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#25
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#26
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#26:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#25:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#18
+    arm64.b tryok#17
+  tryerr#18:
+    arm64.movImm x22, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#17:
+    arm64.cmp x0, 9
+    arm64.cset x0, ne
+    arm64.cbnz x0, directWord
+    arm64.b ifcont#20
+  directWord:
+    arm64.movImm x22, 6
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#20:
+    arm64.movImm x22, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_Byte
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Word
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

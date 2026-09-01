@@ -1,0 +1,48 @@
+// Test: byte-string-literal.laundered-negative-resize-panics-at-the-door
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+		return n
+end 'launder'
+
+function main() returns ExitCode
+		var a = b"hey"
+		a.resize(launder(-2))
+		return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.leaRdata x1, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 3
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.b __rc_panic
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at byte-string-literal.laundered-negative-resize-panics-at-the-door.test:10: Range check failed: value outside typealias 'ElementCount'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,169 @@
+// Test: duplicate-heap-key-loop-no-leak
+typealias StrSet = Set with String
+typealias Counter = int(0 to 1000)
+
+function main() returns ExitCode
+	var i = 0 as Counter
+	var acc = 0 as Counter
+	while i < 100 'loop'
+		var s = StrSet.create()
+		s.insert("dup")
+		s.insert("dup")
+		if s.count() == 1 'ok'
+			acc = acc + 1
+		end 'ok'
+		i = i + 1
+	end 'loop'
+	if acc == 100 'all'
+		return 0
+	end 'all'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 100
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.leaRdata x0, __layout_Set_String
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.leaRdata x2, __witness_String.Equatable
+    arm64.bl Set.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __str_rec_1  ; "dup"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x25, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.leaRdata x2, __layout_Set_String
+    arm64.leaRdata x3, __witness_String.Hashable
+    arm64.leaRdata x4, __witness_String.Equatable
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.bl Set.insert
+    arm64.leaRdata x0, __str_rec_1  ; "dup"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x25, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.leaRdata x2, __layout_Set_String
+    arm64.leaRdata x3, __witness_String.Hashable
+    arm64.leaRdata x4, __witness_String.Equatable
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.bl Set.insert
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.leaRdata x2, __witness_String.Equatable
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
+    arm64.cmp x0, 0
+    arm64.cset x3, lt
+    arm64.cbnz x3, __il_slow
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.movImm x3, 4611686018427387904
+    arm64.cmp x0, x3
+    arm64.cset x3, gt
+    arm64.cbnz x3, __il_slow
+    arm64.b __rc_ok
+  __il_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl Set.count
+    arm64.b __il_cont
+  __rc_ok:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b critsplit
+  ok:
+    arm64.add x20, x20, 1
+    arm64.b ifcont#5
+  critsplit:
+    arm64.b ifcont#5
+  ifcont#5:
+    arm64.add x19, x19, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Set_String
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x20, 100
+    arm64.cset x0, eq
+    arm64.cbnz x0, all
+    arm64.b ifcont#7
+  all:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#7:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+}

@@ -1,0 +1,46 @@
+// Test: directives.union-body-cases
+union Reading
+	#if testing(false)
+		settled
+	#else
+		discarded
+	#endif
+	pending
+end 'Reading'
+
+function main() returns ExitCode
+	return match Reading.settled 'r'
+		settled gives 35
+		pending gives 90
+	end 'r'
+end 'main'
+---
+ExitCode: 35
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 35
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at directives.union-body-cases.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

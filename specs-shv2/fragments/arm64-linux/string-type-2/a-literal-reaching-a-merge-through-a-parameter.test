@@ -1,0 +1,68 @@
+// Test: a-literal-reaching-a-merge-through-a-parameter
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function pick(s String, c bool)
+	grow(s if c else "lit")
+end 'pick'
+
+function main() returns ExitCode
+	pick("ab", c: true)
+	print("done\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @grow {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x1, __str_rec_4  ; "XY"
+    arm64.bl String.append
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pick {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.cbnz x1, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.leaRdata x0, __str_rec_5  ; "lit"
+    arm64.b matchcont
+  matchcont:
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl grow
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_6  ; "ab"
+    arm64.movImm x1, 1
+    arm64.bl pick
+    arm64.leaRdata x0, __str_rec_7  ; "done\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

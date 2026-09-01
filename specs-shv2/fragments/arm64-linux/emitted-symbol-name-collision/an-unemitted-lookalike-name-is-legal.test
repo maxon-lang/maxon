@@ -1,0 +1,50 @@
+// Test: an-unemitted-lookalike-name-is-legal
+typealias Integer = int(i64.min to i64.max)
+
+function mrt_not_a_chunk() returns Integer
+	return 7
+end 'mrt_not_a_chunk'
+
+function main() returns ExitCode
+	let emitted = mrt_not_a_chunk
+	return emitted() as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @mrt_not_a_chunk {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x19, __fnref_mrt_not_a_chunk
+    arm64.movImm x0, 0
+    arm64.blr x19
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at an-unemitted-lookalike-name-is-legal.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

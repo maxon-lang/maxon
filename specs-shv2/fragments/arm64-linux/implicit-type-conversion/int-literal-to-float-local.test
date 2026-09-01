@@ -1,0 +1,25 @@
+// Test: int-literal-to-float-local
+function main() returns ExitCode
+	var scale = 0.0
+	scale = 3
+	if scale == 3.0 'exact'
+		return trunc(scale * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b exact
+  exact:
+    arm64.movImm x0, 42
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

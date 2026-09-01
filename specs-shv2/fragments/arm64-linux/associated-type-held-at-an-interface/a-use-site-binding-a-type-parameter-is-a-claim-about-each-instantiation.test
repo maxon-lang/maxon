@@ -1,0 +1,68 @@
+// Test: a-use-site-binding-a-type-parameter-is-a-claim-about-each-instantiation
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor uses Element
+	function current() returns Element
+	function tag() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+type UpCursor implements Cursor with Integer
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function tag() returns Integer
+		return self.limit
+	end 'tag'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'UpCursor'
+
+type Counter uses Element
+	typealias ElementCursor = Cursor with Element
+	export var seen as Integer
+
+	export static function of (source ElementCursor) returns Self
+		return Self{seen: source.tag()}
+	end 'of'
+end 'Counter'
+
+function main() returns ExitCode
+	print("ok\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_1  ; "ok\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

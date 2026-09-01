@@ -1,0 +1,119 @@
+// Test: three-managed-payloads-out-of-one-borrowed-union
+union R
+	one(a String)
+	three(a String, b String, c String)
+end 'R'
+
+function first(r R) returns String
+	return match r 's'
+		one(a) gives a
+		three(a, b, c) gives a
+	end 's'
+end 'first'
+
+function main() returns ExitCode
+	let r = R.three("a first payload string long enough to heap", b: "a second payload string long enough to heap", c: "a third payload string long enough to heap")
+	print(first(r))
+	return 6
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @first {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#1
+    arm64.b matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#2
+    arm64.b matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 16]
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 24]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.b matchcont
+  matchcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_3  ; "a first payload string long enough to heap"
+    arm64.leaRdata x20, __str_rec_4  ; "a second payload string long enough to heap"
+    arm64.leaRdata x21, __str_rec_5  ; "a third payload string long enough to heap"
+    arm64.movImm x0, 32
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl first
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x19, 6
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_R
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

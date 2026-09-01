@@ -1,0 +1,39 @@
+// Test: float-backed-comparison-against-a-float
+enum Threshold
+	low = 0.1
+	high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let val = 0.5
+	if val > Threshold.low and val < Threshold.high 'inRange'
+		if Threshold.high == 0.9 'exact'
+			return 1
+		end 'exact'
+	end 'inRange'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b andrhs
+  andrhs:
+    arm64.movImm x0, 1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, inRange
+    arm64.b ifcont
+  inRange:
+    arm64.b exact
+  exact:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

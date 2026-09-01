@@ -1,0 +1,360 @@
+// Test: rdata-cow-multiple-mutations
+function main() returns ExitCode
+	var arr = [1, 2, 3]
+	try arr.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try arr.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try arr.set(2, value: 30) otherwise panic("test invariant: set OOB")
+	var sum = 0
+	sum = sum + (try arr.get(0) otherwise 0)
+	sum = sum + (try arr.get(1) otherwise 0)
+	sum = sum + (try arr.get(2) otherwise 0)
+	return sum
+end 'main'
+---
+ExitCode: 60
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 3
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movImm x1, 0
+    arm64.movImm x2, 10
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow#20
+    arm64.b __im_owned#21
+  __im_owned#21:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow#20
+    arm64.b __im_bounds#22
+  __im_bounds#22:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#20
+    arm64.b __im_buffer#23
+  __im_buffer#23:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#20
+    arm64.b __im_viewed#24
+  __im_viewed#24:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow#20
+    arm64.b __im_store#25
+  __im_slow#20:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.b __im_cont#19
+  __im_store#25:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#19
+  __im_cont#19:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 20
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow#27
+    arm64.b __im_owned#28
+  __im_owned#28:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow#27
+    arm64.b __im_bounds#29
+  __im_bounds#29:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#27
+    arm64.b __im_buffer#30
+  __im_buffer#30:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#27
+    arm64.b __im_viewed#31
+  __im_viewed#31:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow#27
+    arm64.b __im_store#32
+  __im_slow#27:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.b __im_cont#26
+  __im_store#32:
+    arm64.add x0, x0, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#26
+  __im_cont#26:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#3:
+    arm64.movImm x1, 2
+    arm64.movImm x2, 30
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow#34
+    arm64.b __im_owned#35
+  __im_owned#35:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow#34
+    arm64.b __im_bounds#36
+  __im_bounds#36:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 2
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#34
+    arm64.b __im_buffer#37
+  __im_buffer#37:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#34
+    arm64.b __im_viewed#38
+  __im_viewed#38:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow#34
+    arm64.b __im_store#39
+  __im_slow#34:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.b __im_cont#33
+  __im_store#39:
+    arm64.add x0, x0, 16
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#33
+  __im_cont#33:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#5:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#41
+    arm64.b __im_load#42
+  __im_load#42:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#43
+    arm64.b critsplit#52
+  __im_empty#43:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#41
+    arm64.b critsplit#53
+  __im_slow#41:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#40
+  critsplit#53:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#40
+  critsplit#52:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#40
+  __im_cont#40:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.movImm x20, 0
+    arm64.b trycont#9
+  tryok#7:
+    arm64.movRegReg x20, x0
+    arm64.b trycont#9
+  trycont#9:
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#45
+    arm64.b __im_load#46
+  __im_load#46:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#47
+    arm64.b critsplit#54
+  __im_empty#47:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#45
+    arm64.b critsplit#55
+  __im_slow#45:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#44
+  critsplit#55:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#44
+  critsplit#54:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#44
+  __im_cont#44:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#11
+    arm64.b tryok#10
+  tryerr#11:
+    arm64.movImm x0, 0
+    arm64.b trycont#12
+  tryok#10:
+    arm64.b trycont#12
+  trycont#12:
+    arm64.add x20, x20, x0
+    arm64.movImm x1, 2
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 2
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#49
+    arm64.b __im_load#50
+  __im_load#50:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#51
+    arm64.b critsplit#56
+  __im_empty#51:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#49
+    arm64.b critsplit#57
+  __im_slow#49:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#48
+  critsplit#57:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#48
+  critsplit#56:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#48
+  __im_cont#48:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#14
+    arm64.b tryok#13
+  tryerr#14:
+    arm64.movImm x0, 0
+    arm64.b trycont#15
+  tryok#13:
+    arm64.b trycont#15
+  trycont#15:
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at rdata-cow-multiple-mutations.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

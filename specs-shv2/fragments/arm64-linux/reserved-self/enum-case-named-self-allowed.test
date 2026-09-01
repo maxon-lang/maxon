@@ -1,0 +1,25 @@
+// Test: enum-case-named-self-allowed
+enum Marker
+	first = 1
+	self = 2
+	last = 3
+end 'Marker'
+
+function main() returns ExitCode
+	let m = Marker.self
+	return m.rawValue as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

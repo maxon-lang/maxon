@@ -1,0 +1,419 @@
+// Test: stdlib-loading.json-stringify-round-trips-through-stdlib
+function main() returns ExitCode
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("name")
+	children.push(doc.add(JsonNode.stringNode("a\"b")))
+	keys.push("size")
+	children.push(doc.add(JsonNode.numberNode(2.5)))
+	keys.push("done")
+	children.push(doc.add(JsonNode.boolNode(false)))
+	var items = JsonNodeIdArray.create()
+	items.push(doc.add(JsonNode.numberNode(1.0)))
+	items.push(doc.add(JsonNode.nullNode()))
+	keys.push("items")
+	children.push(doc.add(JsonNode.arrayNode(items)))
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	let text = Json.stringify(doc)
+	print("{text}\n")
+	let round = try Json.parse(text) otherwise 'reparse'
+		panic("stringify emitted something parse rejects")
+	end 'reparse'
+	let size = try round.getInt(round.root, key: "size") otherwise 'sizeErr'
+		panic("size missing after round trip")
+	end 'sizeErr'
+	let name = try round.getString(round.root, key: "name") otherwise 'nameErr'
+		panic("name missing after round trip")
+	end 'nameErr'
+	print("{name} {size}\n")
+	return (size + 40) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 176
+    arm64.storeSlotReg slot18, x28
+    arm64.storeSlotReg slot17, x27
+    arm64.storeSlotReg slot16, x26
+    arm64.storeSlotReg slot15, x25
+    arm64.storeSlotReg slot14, x24
+    arm64.storeSlotReg slot13, x23
+    arm64.storeSlotReg slot12, x22
+    arm64.storeSlotReg slot11, x21
+    arm64.storeSlotReg slot10, x20
+    arm64.storeSlotReg slot9, x19
+    arm64.bl JsonDoc.create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot2, x21
+    arm64.leaRdata x0, __str_rec_103  ; "name"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_104  ; "a\"b"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x25, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl JsonNode.stringNode
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl JsonDoc.add
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_JsonNode
+    arm64.leaRdata x0, __str_rec_105  ; "size"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.fpLoadRdata d0, [rdata + __fconst_2.5]
+    arm64.bl JsonNode.numberNode
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl JsonDoc.add
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_JsonNode
+    arm64.leaRdata x0, __str_rec_106  ; "done"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x0, 0
+    arm64.bl JsonNode.boolNode
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl JsonDoc.add
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_JsonNode
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.storeSlotReg slot3, x22
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.bl JsonNode.numberNode
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl JsonDoc.add
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_JsonNode
+    arm64.bl JsonNode.nullNode
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl JsonDoc.add
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_JsonNode
+    arm64.leaRdata x0, __str_rec_107  ; "items"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x22
+    arm64.bl JsonNode.arrayNode
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl JsonDoc.add
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_JsonNode
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl JsonNode.objectNode
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl JsonDoc.add
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_JsonNode
+    arm64.movRegReg x0, x19
+    arm64.bl Json.stringify
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot4, x19
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_108  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x26, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl print
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl Json.parse
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot5, x19
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_109  ; "panic at stdlib-loading.json-stringify-round-trips-through-stdlib.test:21: stringify emitted something parse rejects\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  tryok#1:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.leaRdata x2, __str_rec_105  ; "size"
+    arm64.movRegReg x0, x19
+    arm64.bl JsonDoc.getInt
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot7, x20
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_110  ; "panic at stdlib-loading.json-stringify-round-trips-through-stdlib.test:24: size missing after round trip\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  tryok#3:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.leaRdata x2, __str_rec_103  ; "name"
+    arm64.movRegReg x0, x19
+    arm64.bl JsonDoc.getString
+    arm64.storeSlotReg slot6, x0
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_112  ; "panic at stdlib-loading.json-stringify-round-trips-through-stdlib.test:27: name missing after round trip\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  tryok#5:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_111  ; " "
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_108  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.add x0, x21, x23
+    arm64.add x0, x0, x20
+    arm64.add x0, x0, x26
+    arm64.storeSlotReg slot8, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x28, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x0, x19, x26
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.loadRegSlot x0, slot8
+    arm64.storeBaseDispReg.word64 [x27 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot7
+    arm64.add x19, x0, 40
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_253  ; "panic at stdlib-loading.json-stringify-round-trips-through-stdlib.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x0, slot6
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot5
+    arm64.bl __destruct_JsonDoc
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_JsonDoc
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+}

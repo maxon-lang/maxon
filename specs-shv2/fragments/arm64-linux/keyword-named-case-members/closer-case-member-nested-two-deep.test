@@ -1,0 +1,92 @@
+// Test: closer-case-member-nested-two-deep
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Integer
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < tagOf(Kw.end) 'outer'
+		if tagOf(Kw.end) == 2 'inner'
+			total = total + 21
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.b matchnext#15
+  matchnext#15:
+    arm64.b matcharm#12
+  matcharm#12:
+    arm64.movImm x2, 2
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.cmp x1, x2
+    arm64.cset x2, lt
+    arm64.cbnz x2, outer
+    arm64.b whileexit
+  outer:
+    arm64.b __il_body#19
+  __il_body#19:
+    arm64.b matchnext#24
+  matchnext#24:
+    arm64.b matcharm#21
+  matcharm#21:
+    arm64.movImm x2, 2
+    arm64.b __il_cont#18
+  __il_cont#18:
+    arm64.cmp x2, 2
+    arm64.cset x2, eq
+    arm64.cbnz x2, inner
+    arm64.b critsplit
+  inner:
+    arm64.add x0, x0, 21
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at closer-case-member-nested-two-deep.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

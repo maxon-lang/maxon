@@ -1,0 +1,108 @@
+// Test: first-class-function.indirect-call-arity-14
+typealias Integer = int(i64.min to i64.max)
+typealias Op14 = function(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer) returns Integer
+
+function sum14(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer) returns Integer
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+end 'sum14'
+
+function callIt(f Op14) returns Integer
+	return f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(sum14) as ExitCode
+end 'main'
+---
+ExitCode: 105
+---
+func @sum14 {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x8, [x29 + 16]
+    arm64.loadRegBaseDisp.word64 x9, [x29 + 24]
+    arm64.loadRegBaseDisp.word64 x10, [x29 + 32]
+    arm64.loadRegBaseDisp.word64 x11, [x29 + 40]
+    arm64.loadRegBaseDisp.word64 x12, [x29 + 48]
+    arm64.loadRegBaseDisp.word64 x13, [x29 + 56]
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.add x0, x0, x3
+    arm64.add x0, x0, x4
+    arm64.add x0, x0, x5
+    arm64.add x0, x0, x6
+    arm64.add x0, x0, x7
+    arm64.add x0, x0, x8
+    arm64.add x0, x0, x9
+    arm64.add x0, x0, x10
+    arm64.add x0, x0, x11
+    arm64.add x0, x0, x12
+    arm64.add x0, x0, x13
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @callIt {
+  entry:
+    arm64.prologue 80 record@56
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x2, 2
+    arm64.movImm x3, 3
+    arm64.movImm x4, 4
+    arm64.movImm x5, 5
+    arm64.movImm x6, 6
+    arm64.movImm x7, 7
+    arm64.movImm x8, 8
+    arm64.movImm x9, 9
+    arm64.movImm x10, 10
+    arm64.movImm x11, 11
+    arm64.movImm x12, 12
+    arm64.movImm x13, 13
+    arm64.movImm x14, 14
+    arm64.storeOutgoingArg [sp + arg0], x9
+    arm64.storeOutgoingArg [sp + arg1], x10
+    arm64.storeOutgoingArg [sp + arg2], x11
+    arm64.storeOutgoingArg [sp + arg3], x12
+    arm64.storeOutgoingArg [sp + arg4], x13
+    arm64.storeOutgoingArg [sp + arg5], x14
+    arm64.storeOutgoingArg [sp + arg6], x1
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.movRegReg x3, x4
+    arm64.movRegReg x4, x5
+    arm64.movRegReg x5, x6
+    arm64.movRegReg x6, x7
+    arm64.movRegReg x7, x8
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 80 record@56
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_sum14
+    arm64.movImm x1, 0
+    arm64.bl callIt
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.indirect-call-arity-14.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

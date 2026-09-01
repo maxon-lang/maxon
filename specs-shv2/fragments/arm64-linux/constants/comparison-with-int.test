@@ -1,0 +1,36 @@
+// Test: comparison-with-int
+enum State
+	idle
+	running
+	done
+end 'State'
+
+function main() returns ExitCode
+	let s = State.running
+	if s >= State.idle and s <= State.done 'inRange'
+		return 1
+	end 'inRange'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b andrhs
+  andrhs:
+    arm64.movImm x0, 1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, inRange
+    arm64.b ifcont
+  inRange:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

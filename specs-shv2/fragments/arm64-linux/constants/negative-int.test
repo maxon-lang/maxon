@@ -1,0 +1,49 @@
+// Test: negative-int
+enum Temperature
+	freezing = 0
+	cold = -10
+	warm = 25
+end 'Temperature'
+
+function main() returns ExitCode
+	let result = match Temperature.warm 'check'
+		freezing gives 0
+		cold gives -10
+		warm gives 25
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 25
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matchnext#5
+  matchnext#5:
+    arm64.b matchnext#6
+  matchnext#6:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 25
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at negative-int.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

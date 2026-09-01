@@ -1,0 +1,93 @@
+// Test: crossfile-float-alias-against-a-nominal-declaration
+// --- file: a.maxon
+typealias Level = float(0.0 to 5.0)
+
+export function fromA() returns Level
+	return 2.5
+end 'fromA'
+
+// --- file: b.maxon
+enum Level
+	low = 1
+	high = 9
+end 'Level'
+
+export function fromB() returns Level
+	return Level.high
+end 'fromB'
+
+export function rankOf(l Level) returns ExitCode
+	return l.rawValue
+end 'rankOf'
+
+// --- file: main.maxon
+typealias Whole = int(0 to 100)
+
+function main() returns ExitCode
+	let scaled = trunc(fromA() * 2.0) as Whole
+
+	return scaled + rankOf(fromB())
+end 'main'
+---
+ExitCode: 14
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.fpLoadRdata d0, [rdata + __fconst_2.5]
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fmul d0, d0, d1
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#2
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 100
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at main.maxon:4: Range check failed: value outside typealias 'Whole'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.b __il_body#11
+  __il_body#11:
+    arm64.b __il_cont#10
+  __il_cont#10:
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.movImm x1, 9
+    arm64.b __rc_chk#14
+  __rc_chk#14:
+    arm64.b __rc_ok#13
+  __rc_ok#13:
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#5
+    arm64.b __rc_chk#6
+  __rc_chk#6:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at main.maxon:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+}

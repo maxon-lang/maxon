@@ -1,0 +1,26 @@
+// Test: directives.else-inside-dead-branch-stays-dead
+#if testing(true)
+	#if testing(true)
+		function ghostA() returns ExitCode
+			return no_such_function_a()
+		end 'ghostA'
+	#else
+		function ghostB() returns ExitCode
+			return no_such_function_b()
+		end 'ghostB'
+	#endif
+#endif
+
+function main() returns ExitCode
+	return 36
+end 'main'
+---
+ExitCode: 36
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 36
+    arm64.epilogue 16
+    arm64.ret
+}

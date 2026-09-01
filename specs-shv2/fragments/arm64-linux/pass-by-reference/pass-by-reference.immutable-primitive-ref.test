@@ -1,0 +1,30 @@
+// Test: pass-by-reference.immutable-primitive-ref
+
+typealias Integer = int(i64.min to i64.max)
+
+function readVal(x Integer) returns Integer
+	return x
+end 'readVal'
+
+function main() returns ExitCode
+	let n = 37
+	return readVal(n)
+end 'main'
+---
+ExitCode: 37
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 37
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

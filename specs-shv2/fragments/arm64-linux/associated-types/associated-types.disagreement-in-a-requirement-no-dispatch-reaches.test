@@ -1,0 +1,205 @@
+// Test: associated-types.disagreement-in-a-requirement-no-dispatch-reaches
+typealias Integer = int(i64.min to i64.max)
+typealias Score = int(0 to 100)
+
+interface Tally uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Tally'
+
+type Wide implements Tally with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Wide'
+
+type Narrow implements Tally with Score
+	let base as Integer
+
+	function take(e Score) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Narrow'
+
+function useIt(t Tally) returns Integer
+	return t.label()
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(Wide.create(20)) + useIt(Narrow.create(11)) + Wide.create(0).take(20)) as ExitCode
+end 'main'
+---
+ExitCode: 51
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Wide.take {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Wide.label {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Wide.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Narrow.take {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 100
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at associated-types.disagreement-in-a-requirement-no-dispatch-reaches.test:29: Range check failed: value outside typealias 'Score'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Narrow.label {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Narrow.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @useIt {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 32]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 20
+    arm64.bl Wide.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __witness_Wide.Tally
+    arm64.movRegReg x0, x19
+    arm64.bl useIt
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 11
+    arm64.bl Narrow.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x1, __witness_Narrow.Tally
+    arm64.movRegReg x0, x21
+    arm64.bl useIt
+    arm64.add x0, x20, x0
+    arm64.movImm x1, 0
+    arm64.leaRegSlot x2, slot0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
+    arm64.add x1, x1, 20
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x20, x0, x1
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at associated-types.disagreement-in-a-requirement-no-dispatch-reaches.test:47: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

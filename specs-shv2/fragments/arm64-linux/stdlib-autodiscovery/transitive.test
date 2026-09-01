@@ -1,0 +1,32 @@
+// Test: transitive
+// pow -> log, exp
+function main() returns ExitCode
+	let result = Math.pow(2.0, exponent: 3.0)
+	if result > 7.5 'check'
+		return 8
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 8
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_2]
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.bl Math.pow
+    arm64.fpLoadRdata d1, [rdata + __fconst_7.5]
+    arm64.fcmp d0, d1
+    arm64.cset x0, gt
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 8
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

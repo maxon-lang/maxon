@@ -1,0 +1,86 @@
+// Test: directives.interface-body-requirement
+interface Shape
+	function area() returns ExitCode
+	#if testing(false)
+		function perimeter() returns ExitCode
+	#endif
+end 'Shape'
+
+type Square implements Shape
+	export let side as ExitCode
+
+	export static function create(side ExitCode) returns Square
+		return Square{side: side}
+	end 'create'
+
+	export function area() returns ExitCode
+		return side
+	end 'area'
+
+	export function perimeter() returns ExitCode
+		return 29
+	end 'perimeter'
+end 'Square'
+
+function main() returns ExitCode
+	let s = Square.create(4)
+	return s.perimeter()
+end 'main'
+---
+ExitCode: 29
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Square.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at directives.interface-body-requirement.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 4
+    arm64.bl Square.create
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x19, 29
+    arm64.b __il_cont
+  __il_cont:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

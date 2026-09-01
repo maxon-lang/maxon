@@ -1,0 +1,136 @@
+// Test: literal-field-init-with-try-otherwise
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var a as Integer
+	export var b as Integer
+
+	export static function create(a Integer, b Integer) returns Inner
+		return Self{a: a, b: b}
+	end 'create'
+end 'Inner'
+
+enum ParseFailure implements Error
+	badDigit
+end 'ParseFailure'
+
+type Outer
+	export var found as bool
+	export var inner as Inner
+
+	export static function miss() returns Outer
+		return Self{found: false, inner: Inner.create(0, b: try parseB() otherwise panic("miss: parseB failed"))}
+	end 'miss'
+end 'Outer'
+
+function parseB() returns Integer throws ParseFailure
+	return 7
+end 'parseB'
+
+function main() returns ExitCode
+	let o = Outer.miss()
+	return o.inner.b
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Inner.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Outer.miss {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.bl parseB
+    arm64.movRegReg x1, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at literal-field-init-with-try-otherwise.test:22: miss: parseB failed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl Inner.create
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.byte [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @parseB {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Outer.miss
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x19, [x1 + 8]
+    arm64.bl __destruct_Outer
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at literal-field-init-with-try-otherwise.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

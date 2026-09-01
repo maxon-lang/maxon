@@ -1,0 +1,64 @@
+// Test: an-integer-add-is-not-commuted
+typealias Word = int(i64.min to i64.max)
+
+function accumulate(total Word, step Word) returns Word
+	let scaled = step * 5
+	let next = total + scaled
+	return next + total
+end 'accumulate'
+
+function main() returns ExitCode
+	var seen = 0
+	for i in 0 upto 4 'feed'
+		seen = seen + accumulate(i * 3, step: i)
+	end 'feed'
+	// total = 0,3,6,9; scaled = 0,5,10,15; next = 0,8,16,24; next+total = 0,11,22,33 -> 66
+	if seen != 66 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, 4
+    arm64.cset x2, lt
+    arm64.cbnz x2, feed
+    arm64.b forexit
+  feed:
+    arm64.movImm x16, 3
+    arm64.mul x2, x1, x16
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x16, 5
+    arm64.mul x3, x1, x16
+    arm64.add x3, x2, x3
+    arm64.add x2, x3, x2
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x0, x0, x2
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x0, 66
+    arm64.cset x0, ne
+    arm64.cbnz x0, sum
+    arm64.b ifcont
+  sum:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,288 @@
+// Test: associated-types.a-held-position-carries-its-own-with-arguments-through-the-dispatch
+typealias Integer = int(i64.min to i64.max)
+typealias IntCursor = Cursor with Integer
+typealias IntBag = Bag with (Integer, IntCursor)
+
+interface Cursor uses Item
+	function item() returns Item
+end 'Cursor'
+
+interface Bag uses Element, Iter
+	function cursor() returns Iter
+end 'Bag'
+
+type IntCur implements Cursor with Integer
+	let v as Integer
+
+	function item() returns Integer
+		return v
+	end 'item'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'IntCur'
+
+type TextCur implements Cursor with String
+	let s as String
+
+	function item() returns String
+		return s
+	end 'item'
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'TextCur'
+
+type GoodBag implements Bag with (Integer, IntCur)
+	let v as Integer
+
+	function cursor() returns IntCur
+		return IntCur.create(v)
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'GoodBag'
+
+type BadBag implements Bag with (Integer, TextCur)
+	let v as Integer
+
+	function cursor() returns TextCur
+		return TextCur.create("nope")
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'BadBag'
+
+function firstOf(b IntBag) returns Integer
+	return b.cursor().item()
+end 'firstOf'
+
+function main() returns ExitCode
+	return (firstOf(GoodBag.create(7)) + BadBag.create(1).cursor().item().byteLength()) as ExitCode
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @IntCur.item {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @IntCur.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @TextCur.item {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __str_retain
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @TextCur.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @GoodBag.cursor {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl IntCur.create
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @GoodBag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @BadBag.cursor {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1  ; "nope"
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x22, x20
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl TextCur.create
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @firstOf {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 40]
+    arm64.add x19, x1, x2
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.loadRegBaseDisp.word64 x16, [x19 + 24]
+    arm64.blr x16
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 7
+    arm64.bl GoodBag.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __witness_GoodBag.Bag
+    arm64.movRegReg x0, x19
+    arm64.bl firstOf
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movRegReg x0, x1
+    arm64.bl BadBag.cursor
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.bl TextCur.item
+    arm64.movRegReg x22, x0
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __il_slow
+    arm64.b __rc_ok#6
+  __il_slow:
+    arm64.movRegReg x0, x22
+    arm64.bl String.byteLength
+    arm64.b __il_cont
+  __rc_ok#6:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x20, x20, x0
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at associated-types.a-held-position-carries-its-own-with-arguments-through-the-dispatch.test:67: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok#1:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TextCur
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

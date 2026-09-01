@@ -1,0 +1,42 @@
+// Test: error.unused-exported-type-when-the-two-interners-disagree
+// --- file: aliases/casts.maxon
+typealias Wide = int(i64.min to i64.max)
+typealias Narrow = int(0 to 100)
+
+export function clampish(v Wide) returns Wide
+	let n = v as Narrow
+	return n
+end 'clampish'
+
+// --- file: records/types.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Holder
+	export var n as Integer
+
+	export static function make() returns Holder
+		return Holder{n: 7}
+	end 'make'
+end 'Holder'
+
+export type Victim
+	export var q as Integer
+
+	export static function make() returns Victim
+		return Victim{q: 1}
+	end 'make'
+end 'Victim'
+
+// --- file: use/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function read(h Holder) returns Integer
+	return h.n
+end 'read'
+
+function main() returns ExitCode
+	return read(Holder.make()) + clampish(0)
+end 'main'
+---
+CompilerError:
+error E3092: records/<fragment>:22:13: exported type 'Victim' is never referenced outside its declaring file

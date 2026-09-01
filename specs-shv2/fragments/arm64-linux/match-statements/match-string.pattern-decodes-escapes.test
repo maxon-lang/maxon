@@ -1,0 +1,84 @@
+// Test: match-string.pattern-decodes-escapes
+typealias Choice = int(0 to 9)
+
+function pick(s String) returns Choice
+	match s 'pick'
+		"a\nb" then return 4
+		"\{" then return 2
+		default then return 1
+	end 'pick'
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick("a\nb")
+	let b = pick("\{")
+	return a + b
+end 'main'
+---
+ExitCode: 6
+---
+func @pick {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __str_rec_2  ; "a\x0ab"
+    arm64.movRegReg x0, x19
+    arm64.bl __str_eq
+    arm64.cbnz x0, matcharm#1
+    arm64.b matchnext#2
+  matcharm#1:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchnext#2:
+    arm64.leaRdata x1, __str_rec_3  ; "{"
+    arm64.movRegReg x0, x19
+    arm64.bl __str_eq
+    arm64.cbnz x0, matcharm#3
+    arm64.b matchnext#4
+  matcharm#3:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchnext#4:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_2  ; "a\x0ab"
+    arm64.bl pick
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_3  ; "{"
+    arm64.bl pick
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at match-string.pattern-decodes-escapes.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

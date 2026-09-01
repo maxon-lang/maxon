@@ -1,0 +1,36 @@
+// Test: nested-struct-backing-literal-form
+typealias Latency = int(0 to 50)
+
+type Inner
+	export let value as Latency
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+	export let flag as bool
+end 'Outer'
+
+enum Op
+	add = Outer{inner: Inner{value: 1}, flag: true}
+	nop = Outer{inner: Inner{value: 0}, flag: false}
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.add
+	if op.rawValue.flag 'flagged'
+		return op.rawValue.inner.value
+	end 'flagged'
+	return 9
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b flagged
+  flagged:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

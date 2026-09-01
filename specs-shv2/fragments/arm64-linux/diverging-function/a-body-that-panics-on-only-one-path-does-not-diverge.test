@@ -1,0 +1,44 @@
+// Test: a-body-that-panics-on-only-one-path-does-not-diverge
+function notFatal(b bool)
+	if b 'y'
+		panic("boom")
+	end 'y'
+	print("survived\n")
+end 'notFatal'
+
+function main() returns ExitCode
+	notFatal(false)
+	print("back in main\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @notFatal {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, y
+    arm64.b ifcont
+  y:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-body-that-panics-on-only-one-path-does-not-diverge.test:4: boom\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.leaRdata x0, __str_rec_3  ; "survived\x0a"
+    arm64.bl print
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl notFatal
+    arm64.leaRdata x0, __str_rec_4  ; "back in main\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,45 @@
+// Test: error.unused-exported-element-nothing-outside-reaches
+// --- file: api/store.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Item
+	export let n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+export typealias ItemArray = Array with Item
+
+export type Holder
+	export let items as ItemArray
+
+	export static function create(items ItemArray) returns Self
+		return Self{items: items}
+	end 'create'
+end 'Holder'
+
+export function makeHolder() returns Holder
+	var xs = ItemArray.create()
+	xs.push(Item.create(7))
+	return Holder.create(xs)
+end 'makeHolder'
+
+// --- file: app/main.maxon
+typealias Count = int(i64.min to i64.max)
+
+function total(h Holder) returns Count
+	var t = 0
+	for it in h.items 'each'
+		t = t + 1
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	return total(makeHolder())
+end 'main'
+---
+CompilerError:
+error E3092: api/<fragment>:5:13: exported type 'Item' is never referenced outside its declaring file

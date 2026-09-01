@@ -1,0 +1,49 @@
+// Test: match-character-range-outside
+function main() returns ExitCode
+	let c = 'Ω'
+	match c 'check'
+		'é' to 'ü' then print("inrange\n")
+		default then print("out\n")
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_5  ; "\xce\xa9"
+    arm64.leaRdata x1, __str_rec_6  ; "\xc3\xa9"
+    arm64.leaRdata x20, __str_rec_7  ; "\xc3\xbc"
+    arm64.movRegReg x0, x19
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x21, ne
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __char_cmp
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+    arm64.and x0, x21, x0
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.leaRdata x0, __str_rec_8  ; "inrange\x0a"
+    arm64.bl print
+    arm64.b matchcont
+  matchnext:
+    arm64.leaRdata x0, __str_rec_9  ; "out\x0a"
+    arm64.bl print
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

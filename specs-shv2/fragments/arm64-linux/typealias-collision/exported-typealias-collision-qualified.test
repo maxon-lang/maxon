@@ -1,0 +1,27 @@
+// Test: exported-typealias-collision-qualified
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/types.maxon
+export typealias Score = int(0 to 80)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = 50 as api.Score
+	let b = 60 as legacy.Score
+	return a + b
+end 'main'
+---
+ExitCode: 110
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 110
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

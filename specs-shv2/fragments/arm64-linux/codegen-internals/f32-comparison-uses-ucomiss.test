@@ -1,0 +1,23 @@
+// Test: f32-comparison-uses-ucomiss
+typealias F = float(f32.min to f32.max)
+
+function main() returns ExitCode
+	let a = 3.0 as F
+	let b = 5.0 as F
+	if a < b 'less'
+		return 1
+	end 'less'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b less
+  less:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

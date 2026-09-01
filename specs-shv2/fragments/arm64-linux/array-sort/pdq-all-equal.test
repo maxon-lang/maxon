@@ -1,0 +1,117 @@
+// Test: pdq-all-equal
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	for _ in 0 upto 35 'fill'
+		a.push(7)
+	end 'fill'
+	Log.startCapture()
+	a.sortUnstable(ascending)
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "pdq.equalElements") 'e'
+		print("equal-path-fired\n")
+	end 'e'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @ascending {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cbnz x2, lt
+    arm64.b ifcont#4
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#4:
+    arm64.cmp x0, x1
+    arm64.cset x0, gt
+    arm64.cbnz x0, gt
+    arm64.b ifcont#6
+  gt:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  ifcont#6:
+    arm64.movImm x0, 1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 35
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b forexit
+  fill:
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.bl Log.startCapture
+    arm64.leaFuncAddr x1, __fnref_ascending
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Array_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl Array.sortUnstable#Array.SortComparator
+    arm64.bl Log.stopCapture
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_10  ; "pdq.equalElements"
+    arm64.movRegReg x0, x20
+    arm64.bl Log.fired
+    arm64.cbnz x0, e
+    arm64.b ifcont
+  e:
+    arm64.leaRdata x0, __str_rec_11  ; "equal-path-fired\x0a"
+    arm64.bl print
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

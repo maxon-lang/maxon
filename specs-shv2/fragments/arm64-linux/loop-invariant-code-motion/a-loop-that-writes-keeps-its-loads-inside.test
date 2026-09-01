@@ -1,0 +1,95 @@
+// Test: a-loop-that-writes-keeps-its-loads-inside
+typealias Word = int(i64.min to i64.max)
+
+type Cell
+	export var value as Word
+
+	export static function of(value Word) returns Cell
+		return Self{value: value}
+	end 'of'
+end 'Cell'
+
+function drain(c Cell, budget Word) returns Word
+	var trips = 0
+	var room = budget
+	while c.value + room > 0 'loop'
+		c.value = c.value - 1
+		room = room - 1
+		trips = trips + 1
+	end 'loop'
+	return trips
+end 'drain'
+
+function main() returns ExitCode
+	var c = Cell.of(3)
+	// 3+2, 2+1, 1+0, then 0+(-1) stops: three trips, and the field reaches zero.
+	if drain(c, budget: 2) != 3 'trips'
+		return 1
+	end 'trips'
+	if c.value != 0 'drained'
+		return 2
+	end 'drained'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 3
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 2
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x2, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 0]
+    arm64.add x3, x3, x0
+    arm64.cmp x3, 0
+    arm64.cset x3, gt
+    arm64.cbnz x3, loop
+    arm64.b whileexit
+  loop:
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 0]
+    arm64.sub x3, x3, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x3
+    arm64.sub x0, x0, 1
+    arm64.add x2, x2, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x2, 3
+    arm64.cset x0, ne
+    arm64.cbnz x0, trips
+    arm64.b ifcont#2
+  trips:
+    arm64.movImm x0, 1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, drained
+    arm64.b ifcont#4
+  drained:
+    arm64.movImm x0, 2
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,27 @@
+// Test: arithmetic-as-array-index
+enum Slot
+	a
+	b
+	c
+end 'Slot'
+
+let NUM_SLOTS = 3
+
+function main() returns ExitCode
+	let idx = Slot.b * NUM_SLOTS + Slot.a
+	return idx
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

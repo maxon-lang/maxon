@@ -1,0 +1,102 @@
+// Test: if-try-in-loop
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(n Integer) returns Integer throws MyError
+	if n < 3 'check'
+		throw MyError.failed
+	end 'check'
+	return n
+end 'mayFail'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		if let val = try mayFail(i) 'check'
+			sum = sum + val
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 7
+---
+func @mayFail {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 3
+    arm64.cset x1, lt
+    arm64.cbnz x1, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 5
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.movRegReg x0, x20
+    arm64.bl mayFail
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, check
+    arm64.b ifelse
+  check:
+    arm64.add x0, x19, x0
+    arm64.b ifcont
+  ifelse:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x19, x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-in-loop.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

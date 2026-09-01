@@ -1,0 +1,75 @@
+// Test: a-constant-condition-costs-nothing
+typealias Word = int(i64.min to i64.max)
+
+function pick(a Word) returns Word
+	return a
+end 'pick'
+
+function main() returns ExitCode
+	var taken = 0
+	if pick(5) > 3 'thenArm'
+		taken = 7
+	end 'thenArm' else 'elseArm'
+		taken = 11
+	end 'elseArm'
+	if taken != 7 'thenArmRan'
+		return 1
+	end 'thenArmRan'
+
+	var other = 0
+	if pick(5) < 3 'falseThenArm'
+		other = 7
+	end 'falseThenArm' else 'falseElseArm'
+		other = 11
+	end 'falseElseArm'
+	if other != 11 'elseArmRan'
+		return 2
+	end 'elseArmRan'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.b __il_cont#11
+  __il_cont#11:
+    arm64.b thenArm
+  thenArm:
+    arm64.movImm x0, 7
+    arm64.b ifcont#3
+  ifcont#3:
+    arm64.cmp x0, 7
+    arm64.cset x0, ne
+    arm64.cbnz x0, thenArmRan
+    arm64.b ifcont#5
+  thenArmRan:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#5:
+    arm64.b __il_body#14
+  __il_body#14:
+    arm64.b __il_cont#13
+  __il_cont#13:
+    arm64.b ifelse
+  ifelse:
+    arm64.movImm x0, 11
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.cmp x0, 11
+    arm64.cset x0, ne
+    arm64.cbnz x0, elseArmRan
+    arm64.b ifcont#10
+  elseArmRan:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

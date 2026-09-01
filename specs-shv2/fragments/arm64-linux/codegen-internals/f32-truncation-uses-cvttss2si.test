@@ -1,0 +1,21 @@
+// Test: f32-truncation-uses-cvttss2si
+typealias F = float(f32.min to f32.max)
+
+function main() returns ExitCode
+	let a = 42.9 as F
+	return trunc(a)
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,95 @@
+// Test: rc-global-reassign-decrefs-old
+typealias Integer = int(i64.min to i64.max)
+
+type State
+	export var val as Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'State'
+
+var g = State.create(0)
+
+function step(n Integer)
+	g = State.create(n)
+end 'step'
+
+function main() returns ExitCode
+	step(10)
+	step(20)
+	step(30)
+	return g.val
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __data_g@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @State.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @step {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl State.create
+    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __data_g
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.leaGlobal x0, __data_g
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+    arm64.bl step
+    arm64.movImm x0, 20
+    arm64.bl step
+    arm64.movImm x0, 30
+    arm64.bl step
+    arm64.leaGlobal x0, __data_g
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-global-reassign-decrefs-old.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

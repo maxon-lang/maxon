@@ -1,0 +1,184 @@
+// Test: a-trivial-instantiation-of-an-adopted-opaque-result-is-inert
+typealias Num = int(0 to 1000)
+
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+type Holder uses T where T is Equatable
+	typealias TCell = Cell with T
+	export var cell as TCell
+
+	export static function make(cell TCell) returns Self
+		return Self{cell: cell}
+	end 'make'
+
+	export function holds(other T) returns bool
+		let mine = cell.get()
+		return mine == other
+	end 'holds'
+end 'Holder'
+
+typealias NumCell = Cell with Num
+typealias NumHolder = Holder with Num
+
+function main() returns ExitCode
+	let h = NumHolder.make(NumCell.make(7 as Num))
+	if not h.holds(7 as Num) 'mismatch'
+		return 1
+	end 'mismatch'
+	if h.holds(8 as Num) 'falsePositive'
+		return 2
+	end 'falsePositive'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Cell.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Cell.get {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Holder.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.holds {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movRegReg x1, x20
+    arm64.bl Cell.get
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.loadRegBaseDisp.word64 x16, [x21 + 24]
+    arm64.blr x16
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl __drop_type_param
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl Cell.make
+    arm64.leaRdata x1, __witness_int.Equatable
+    arm64.bl Holder.make
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 7
+    arm64.leaRdata x2, __layout_Holder_Num
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.holds
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, mismatch
+    arm64.b ifcont#2
+  mismatch:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder_Num
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x1, 8
+    arm64.leaRdata x2, __layout_Holder_Num
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.holds
+    arm64.cbnz x0, falsePositive
+    arm64.b ifcont#4
+  falsePositive:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder_Num
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder_Num
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

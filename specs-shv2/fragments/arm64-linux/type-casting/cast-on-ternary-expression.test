@@ -1,0 +1,47 @@
+// Test: cast-on-ternary-expression
+typealias Mask = int(i64.min to i64.max)
+
+// The cast operand is a ternary whose result is defined in a merge block, so
+// `currentBlock` advances past the block the cast started in. The `convert`
+// (and its `castCheck`) must emit into the merge block where the operand value
+// is bound — emitting into the original block referenced the value before its
+// definition and tripped E3013 "unresolved value name" at lowering.
+function maskFor(negate bool) returns Mask
+	return (1 if negate else (-1)) as Mask
+end 'maskFor'
+
+function main() returns ExitCode
+	let m = maskFor(false)
+	if m < 0 'neg'
+		return 2
+	end 'neg'
+	return 1
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b ternaryfalse
+  ternaryfalse:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b matchcont
+  matchcont:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, neg
+    arm64.b ifcont
+  neg:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

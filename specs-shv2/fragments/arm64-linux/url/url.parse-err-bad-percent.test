@@ -1,0 +1,40 @@
+// Test: url.parse-err-bad-percent
+function main() returns ExitCode
+	try URL.parse("https://example.com/path%GG") otherwise 'err'
+		print("invalidEncoding\n")
+		return 0
+	end 'err'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_15  ; "https://example.com/path%GG"
+    arm64.bl URL.parse
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_16  ; "invalidEncoding\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.bl __destruct_URL
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

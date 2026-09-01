@@ -1,0 +1,113 @@
+// Test: extension-body-user-generic-inner-alias-create
+typealias ExitCode = int(0 to 125)
+
+type Wrapped uses T
+	let value as T
+
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function get() returns T
+		return value
+	end 'get'
+end 'Wrapped'
+
+interface Tagged uses Tag
+	function tag() returns Tag
+end 'Tagged'
+
+export extension Tagged
+	typealias WrappedTag = Wrapped with Tag
+
+	export function wrapped() returns WrappedTag
+		return WrappedTag.create(self.tag())
+	end 'wrapped'
+end 'Tagged'
+
+type Box implements Tagged with ExitCode
+	export var v as ExitCode
+
+	export static function create() returns Self
+		return Self{v: 5}
+	end 'create'
+
+	export function tag() returns ExitCode
+		return self.v
+	end 'tag'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	return b.wrapped().get()
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Wrapped.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Wrapped.get {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box.wrapped {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.bl Wrapped.create
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.leaRegSlot x0, slot0
+    arm64.movImm x1, 5
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.bl Box.wrapped
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __layout_Wrapped_ExitCode$0_125
+    arm64.movRegReg x0, x19
+    arm64.bl Wrapped.get
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

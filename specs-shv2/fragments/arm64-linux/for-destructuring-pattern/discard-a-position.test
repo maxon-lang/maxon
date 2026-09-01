@@ -1,0 +1,117 @@
+// Test: discard-a-position
+function main() returns ExitCode
+	let m = [1: 10, 2: 20]
+	var total = 0
+	for (_, v) in m 'each'
+		total = total + v
+	end 'each'
+	return total
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 10
+    arm64.leaRdata x0, __layout_Map_int_int
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.bl Map.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x3, __layout_Map_int_int
+    arm64.leaRdata x4, __witness_int.Hashable
+    arm64.leaRdata x5, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl Map.upsert
+    arm64.movImm x1, 2
+    arm64.movImm x2, 20
+    arm64.leaRdata x3, __layout_Map_int_int
+    arm64.leaRdata x4, __witness_int.Hashable
+    arm64.leaRdata x5, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.bl Map.upsert
+    arm64.movImm x19, 0
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.movRegReg x0, x21
+    arm64.bl Map.createIterator
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit
+    arm64.b forempty
+  critsplit:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, each
+    arm64.b forexit
+  each:
+    arm64.leaRdata x1, __layout_MapIterator_int_int
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.leaRdata x3, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl MapIterator.current
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x19, x19, x1
+    arm64.bl __mm_decref
+    arm64.b forstep
+  forstep:
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl MapIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_MapIterator_int_int
+    arm64.b forjoin
+  forempty:
+    arm64.b forjoin
+  forjoin:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Map_int_int
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_21  ; "panic at discard-a-position.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

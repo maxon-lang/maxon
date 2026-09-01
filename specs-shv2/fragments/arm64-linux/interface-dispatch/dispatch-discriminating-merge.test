@@ -1,0 +1,183 @@
+// Test: dispatch-discriminating-merge
+typealias Integer = int(i64.min to i64.max)
+
+interface Shower
+	function show() returns Integer
+end 'Shower'
+
+type A implements Shower
+	function show() returns Integer
+		return 1
+	end 'show'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'A'
+
+type B implements Shower
+	function show() returns Integer
+		return 2
+	end 'show'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'B'
+
+function run(s Shower, again Shower, pick Integer) returns Integer
+	var t = s
+	if pick > 0 'grow'
+		t = again
+	end 'grow'
+	return t.show()
+end 'run'
+
+function main() returns ExitCode
+	return run(A.create(), again: B.create(), pick: 0) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @A.show {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @A.create {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @B.show {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @B.create {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @run {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x5, x0
+    arm64.movRegReg x19, x1
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.movRegReg x22, x4
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x5
+    arm64.bl __retain_existential
+    arm64.movRegReg x23, x0
+    arm64.cmp x20, 0
+    arm64.cset x0, gt
+    arm64.cbnz x0, grow
+    arm64.b critsplit
+  grow:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl __retain_existential
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.bl __drop_existential
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x19, x23
+    arm64.movRegReg x22, x21
+    arm64.b ifcont
+  ifcont:
+    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 24]
+    arm64.blr x16
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl A.create
+    arm64.movRegReg x19, x0
+    arm64.bl B.create
+    arm64.movRegReg x20, x0
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __witness_A.Shower
+    arm64.leaRdata x4, __witness_B.Shower
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl run
+    arm64.movRegReg x21, x0
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch-discriminating-merge.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

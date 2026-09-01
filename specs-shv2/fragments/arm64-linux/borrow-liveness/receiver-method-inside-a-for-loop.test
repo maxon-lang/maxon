@@ -1,0 +1,30 @@
+// Test: receiver-method-inside-a-for-loop
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function wipe()
+		items.clear()
+	end 'wipe'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	var total = 0 as Integer
+	for it in b.items 'scan'
+		b.wipe()
+		total = total + it.byteLength()
+	end 'scan'
+	print("{total}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:22:5: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 21)

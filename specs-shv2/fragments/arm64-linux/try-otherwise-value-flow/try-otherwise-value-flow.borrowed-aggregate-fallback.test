@@ -1,0 +1,152 @@
+// Test: try-otherwise-value-flow.borrowed-aggregate-fallback
+typealias Integer = int(i64.min to i64.max)
+
+enum Fail
+	nope
+end 'Fail'
+
+type Item
+	export var n as Integer
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{n: n, label: "a heap allocated label for the probe"}
+	end 'create'
+end 'Item'
+
+function risky(ok bool) returns Item throws Fail
+	if ok 'good'
+		return Item.create(7)
+	end 'good'
+	throw Fail.nope
+end 'risky'
+
+function choose(fallback Item, ok bool) returns Integer
+	let got = try risky(ok) otherwise fallback
+	return got.n
+end 'choose'
+
+function main() returns ExitCode
+	let f = Item.create(5)
+	return (choose(f, ok: false) + choose(f, ok: true)) as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Item.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x20, __str_rec_1  ; "a heap allocated label for the probe"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @risky {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, good
+    arm64.b ifcont
+  good:
+    arm64.movImm x0, 7
+    arm64.bl Item.create
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @choose {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.bl risky
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __destruct_Item
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 5
+    arm64.bl Item.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl choose
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl choose
+    arm64.add x20, x20, x0
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at try-otherwise-value-flow.borrowed-aggregate-fallback.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Item
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,163 @@
+// Test: shifted-imm12-boundary
+function main() returns ExitCode
+	let cell = [1000]
+	let x = try cell.get(0) otherwise 0
+	let addShifted = x + 16773120
+	if addShifted != 16774120 'addShifted'
+		return 21
+	end 'addShifted'
+	let subShifted = x - 16773120
+	if subShifted != -16772120 'subShifted'
+		return 22
+	end 'subShifted'
+	let addPair = x + 16777215
+	if addPair != 16778215 'addPair'
+		return 23
+	end 'addPair'
+	let subPair = x - 16777215
+	if subPair != -16776215 'subPair'
+		return 24
+	end 'subPair'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#16
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#17
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#17:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#16:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.add x1, x0, 16773120
+    arm64.movImm x16, 16774120
+    arm64.cmp x1, x16
+    arm64.cset x1, ne
+    arm64.cbnz x1, addShifted
+    arm64.b ifcont#5
+  addShifted:
+    arm64.movImm x20, 21
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#5:
+    arm64.sub x1, x0, 16773120
+    arm64.movImm x16, 18446744073692779496
+    arm64.cmp x1, x16
+    arm64.cset x1, ne
+    arm64.cbnz x1, subShifted
+    arm64.b ifcont#7
+  subShifted:
+    arm64.movImm x20, 22
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#7:
+    arm64.add x1, x0, 16777215
+    arm64.movImm x16, 16778215
+    arm64.cmp x1, x16
+    arm64.cset x1, ne
+    arm64.cbnz x1, addPair
+    arm64.b ifcont#9
+  addPair:
+    arm64.movImm x20, 23
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#9:
+    arm64.sub x0, x0, 16777215
+    arm64.movImm x16, 18446744073692775401
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, subPair
+    arm64.b ifcont#11
+  subPair:
+    arm64.movImm x20, 24
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#11:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

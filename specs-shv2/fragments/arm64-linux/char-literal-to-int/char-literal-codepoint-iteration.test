@@ -1,0 +1,107 @@
+// Test: char-literal-codepoint-iteration
+function main() returns ExitCode
+	var count = 0
+	for cp in "a-b-c".codepoints() 'chars'
+		if cp == '-' 'dash'
+			count = count + 1
+		end 'dash'
+	end 'chars'
+	return count
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.leaRdata x0, __str_rec_1  ; "a-b-c"
+    arm64.bl String.codepoints
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl CodepointView.createIterator
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x22, x9
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_CodepointView
+    arm64.movImm x0, 0
+    arm64.cmp x22, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, critsplit#14
+    arm64.b forempty
+  critsplit#14:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, chars
+    arm64.b forexit
+  chars:
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 45
+    arm64.cset x0, eq
+    arm64.cbnz x0, dash
+    arm64.b critsplit#15
+  dash:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit#15:
+    arm64.b ifcont
+  ifcont:
+    arm64.b forstep
+  forstep:
+    arm64.movRegReg x0, x21
+    arm64.bl CodepointIterator.advance
+    arm64.movRegReg x0, x9
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_CodepointIterator
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forempty:
+    arm64.movRegReg x0, x19
+    arm64.b forjoin
+  forjoin:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at char-literal-codepoint-iteration.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

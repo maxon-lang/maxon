@@ -1,0 +1,319 @@
+// Test: witness-label-three-pairs-that-underscore-join-alike
+typealias Small = int(0 to 100)
+
+interface D
+	function d() returns Small
+end 'D'
+
+interface C_D
+	function cd() returns Small
+end 'C_D'
+
+interface B_C_D
+	function bcd() returns Small
+end 'B_C_D'
+
+type A_B_C implements D
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function d() returns Small
+		return 1
+	end 'd'
+end 'A_B_C'
+
+type A_B implements C_D
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function cd() returns Small
+		return 2
+	end 'cd'
+end 'A_B'
+
+type A implements B_C_D
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function bcd() returns Small
+		return 3
+	end 'bcd'
+end 'A'
+
+type HoldD uses T where T is D
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.d()
+	end 'go'
+end 'HoldD'
+
+type HoldCD uses T where T is C_D
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.cd()
+	end 'go'
+end 'HoldCD'
+
+type HoldBCD uses T where T is B_C_D
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.bcd()
+	end 'go'
+end 'HoldBCD'
+
+typealias H1 = HoldD with A_B_C
+typealias H2 = HoldCD with A_B
+typealias H3 = HoldBCD with A
+
+function main() returns ExitCode
+	let h1 = H1.create(A_B_C.create())
+	let h2 = H2.create(A_B.create())
+	let h3 = H3.create(A.create())
+	return h1.go() * 100 + h2.go() * 10 + h3.go()
+end 'main'
+---
+ExitCode: 123
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @A_B_C.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @A_B_C.d {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @A_B.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @A_B.cd {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @A.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @A.bcd {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @HoldD.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @HoldD.go {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @HoldCD.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @HoldCD.go {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @HoldBCD.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @HoldBCD.go {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl A_B_C.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_A_B_C.D
+    arm64.movRegReg x0, x19
+    arm64.bl HoldD.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.bl A_B.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_A_B.C_D
+    arm64.movRegReg x0, x19
+    arm64.bl HoldCD.create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.bl A.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_A.B_C_D
+    arm64.movRegReg x0, x19
+    arm64.bl HoldBCD.create
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.leaRdata x1, __witness_A_B_C.D
+    arm64.movRegReg x0, x20
+    arm64.bl HoldD.go
+    arm64.movImm x16, 100
+    arm64.mul x19, x0, x16
+    arm64.leaRdata x1, __witness_A_B.C_D
+    arm64.movRegReg x0, x21
+    arm64.bl HoldCD.go
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.add x19, x19, x0
+    arm64.leaRdata x1, __witness_A.B_C_D
+    arm64.movRegReg x0, x22
+    arm64.bl HoldBCD.go
+    arm64.add x19, x19, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_HoldBCD_A
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_HoldCD_A_B
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_HoldD_A_B_C
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at witness-label-three-pairs-that-underscore-join-alike.test:84: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

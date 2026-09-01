@@ -1,0 +1,32 @@
+// Test: removing-a-handle-a-call-hands-back-is-refused
+typealias StrChain = __ManagedList with String
+typealias StrNode = __ManagedListNode with String
+
+type Keeper
+	var node as StrNode
+
+	export static function create(n StrNode) returns Self
+		return Self{node: n}
+	end 'create'
+
+	export function held() returns StrNode
+		return self.node
+	end 'held'
+
+	export function read() returns String
+		return self.node.value()
+	end 'read'
+end 'Keeper'
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let n = chain.insertLast("a heap string long enough to be a real allocation")
+	var k = Keeper.create(n)
+	let got = chain.remove(k.held())
+	print("[{got}]\n")
+	print("[{k.read()}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:25:18: Unsupported: `__ManagedList.remove` takes the element OUT of the node, so its handle must be one this statement can mark as moved — a name (`remove(n)`) or an insertion on this same chain, handed in inline. A handle arriving any other way — out of a field, an element, a call result, a merge — would go on answering `value()` from the emptied slot with nothing left to refuse the read; bind it to a name first, or use `detach`, which leaves the element where it is

@@ -1,0 +1,25 @@
+// Test: error.static-field-init-trailing-tokens
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+
+	export static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+end 'Box'
+
+type Holder
+	static var b = Box.create() zzz
+
+	export static function get() returns Integer
+		return Holder.b.v
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.get()
+end 'main'
+---
+CompilerError:
+error E2010: <fragment>:13:30: Expected 'end of global initializer' but got 'zzz'

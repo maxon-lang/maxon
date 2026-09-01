@@ -1,0 +1,104 @@
+// Test: generic-body-user-generic-inner-alias-create
+typealias ExitCode = int(0 to 125)
+
+type Holder uses Held
+	let value as Held
+
+	export static function create(value Held) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function get() returns Held
+		return value
+	end 'get'
+end 'Holder'
+
+type Wrap uses Item
+	typealias ItemHolder = Holder with Item
+
+	var seed as Item
+
+	export static function create(seed Item) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function boxed() returns ItemHolder
+		return ItemHolder.create(seed)
+	end 'boxed'
+end 'Wrap'
+
+typealias IntWrap = Wrap with ExitCode
+
+function main() returns ExitCode
+	let w = IntWrap.create(7)
+	return w.boxed().get()
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Holder.get {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Wrap.boxed {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl Holder.create
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 7
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaRdata x2, __layout_Wrap_ExitCode$0_125
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl Wrap.boxed
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __layout_Holder_ExitCode$0_125
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.get
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

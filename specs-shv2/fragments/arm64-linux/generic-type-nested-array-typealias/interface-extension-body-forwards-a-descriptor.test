@@ -1,0 +1,150 @@
+// Test: interface-extension-body-forwards-a-descriptor
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+interface Appendable uses Func
+	function opsCount() returns Count
+	function absorb(other Func)
+end 'Appendable'
+
+extension Appendable
+	export function absorbTwice(a Func, b Func)
+		self.absorb(a)
+		self.absorb(b)
+	end 'absorbTwice'
+end 'Appendable'
+
+type Bag uses Op implements Appendable with Integer
+	typealias OpArray = Array with Op
+	export var ops as OpArray
+
+	export static function create() returns Self
+		return Self{ops: OpArray.create()}
+	end 'create'
+
+	export function opsCount() returns Count
+		return self.ops.count()
+	end 'opsCount'
+
+	export function absorb(other Integer)
+		self.ops.append(self.ops)
+		_ = other
+	end 'absorb'
+end 'Bag'
+
+typealias IntBag = Bag with Integer
+
+function main() returns ExitCode
+	var a = IntBag.create()
+	a.absorbTwice(1, b: 2)
+	if a.opsCount() == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Bag.absorbTwice {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x2, x21
+    arm64.bl Bag.absorb
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Bag.absorb
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.absorb {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_append_opaque
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Bag_Integer
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movImm x2, 2
+    arm64.leaRdata x3, __layout_Bag_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.absorbTwice
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Integer
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_Integer
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

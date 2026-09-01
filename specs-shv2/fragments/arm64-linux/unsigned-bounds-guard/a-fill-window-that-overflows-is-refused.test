@@ -1,0 +1,117 @@
+// Test: a-fill-window-that-overflows-is-refused
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	a.push(1)
+	a.push(1)
+
+	let huge = 9223372036854775807
+
+	try a.managed.fill(1, count: huge, value: 5) otherwise 'wrapped'
+		var sum = 0
+		for v in a 'check'
+			sum = sum + v
+		end 'check'
+		if sum != 3 'somethingWasWritten'
+			return 1
+		end 'somethingWasWritten'
+		return 0
+	end 'wrapped'
+
+	// The overflowing window was supposed to throw, not report that it applied.
+	return 2
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x2, 9223372036854775807
+    arm64.movImm x1, 1
+    arm64.movImm x3, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_fill
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, x2
+    arm64.cset x4, lt
+    arm64.cbnz x4, check
+    arm64.b forexit
+  check:
+    arm64.arm64AddLsl x4, x3, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.add x0, x0, x4
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x0, 3
+    arm64.cset x0, ne
+    arm64.cbnz x0, somethingWasWritten
+    arm64.b ifcont
+  somethingWasWritten:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

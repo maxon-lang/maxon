@@ -1,0 +1,28 @@
+// Test: opener-case-member-as-match-scrutinee
+enum Kw
+	alpha
+	match
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	match Kw.match 'm'
+		alpha then return 11
+		match then return 22
+		omega then return 33
+	end 'm'
+end 'main'
+---
+ExitCode: 22
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 22
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,94 @@
+// Test: rc-match-char-range-cleanup
+function main() returns ExitCode
+	let c = 'G'
+	match c 'classify'
+		'a' to 'z' then return 1
+		'A' to 'Z' then return 2
+		'0' to '9' then return 3
+		default then return 0
+	end 'classify'
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_7  ; "G"
+    arm64.leaRdata x1, __str_rec_8  ; "a"
+    arm64.leaRdata x20, __str_rec_9  ; "z"
+    arm64.movRegReg x0, x19
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x21, ne
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __char_cmp
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+    arm64.and x0, x21, x0
+    arm64.cbnz x0, matcharm#1
+    arm64.b matchnext#2
+  matcharm#1:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchnext#2:
+    arm64.leaRdata x1, __str_rec_10  ; "A"
+    arm64.leaRdata x20, __str_rec_11  ; "Z"
+    arm64.movRegReg x0, x19
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x21, ne
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __char_cmp
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+    arm64.and x0, x21, x0
+    arm64.cbnz x0, matcharm#3
+    arm64.b matchnext#4
+  matcharm#3:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchnext#4:
+    arm64.leaRdata x1, __str_rec_12  ; "0"
+    arm64.leaRdata x20, __str_rec_13  ; "9"
+    arm64.movRegReg x0, x19
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x21, ne
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __char_cmp
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+    arm64.and x0, x21, x0
+    arm64.cbnz x0, matcharm#5
+    arm64.b matchnext#6
+  matcharm#5:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchnext#6:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchcont:
+}

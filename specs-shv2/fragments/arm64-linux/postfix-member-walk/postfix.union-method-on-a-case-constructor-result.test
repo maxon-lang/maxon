@@ -1,0 +1,118 @@
+// Test: postfix.union-method-on-a-case-constructor-result
+typealias Wide = int(i64.min to i64.max)
+
+union Shape
+	dot
+	box(w Wide)
+
+	function area() returns Wide
+		match self 'm'
+			dot then return 1
+			box(w) then return w
+		end 'm'
+	end 'area'
+end 'Shape'
+
+function main() returns ExitCode
+	return Shape.box(21).area() + Shape.dot.area()
+end 'main'
+---
+ExitCode: 22
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 21
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#7
+    arm64.b matchnext#10
+  matcharm#7:
+    arm64.movImm x19, 1
+    arm64.b __il_cont#5
+  matchnext#10:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#8
+    arm64.b matchdead#9
+  matcharm#8:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#13
+    arm64.b matchnext#16
+  matcharm#13:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#4
+  matchnext#16:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#14
+    arm64.b matchdead#15
+  matcharm#14:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x19, x19, x1
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at postfix.union-method-on-a-case-constructor-result.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead#15:
+  matchdead#9:
+  matchcont#11:
+  matchcont#17:
+}

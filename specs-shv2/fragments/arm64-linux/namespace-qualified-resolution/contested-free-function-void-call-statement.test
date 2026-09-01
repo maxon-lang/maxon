@@ -1,0 +1,47 @@
+// Test: contested-free-function-void-call-statement
+// --- file: alpha/a.maxon
+export function shout()
+	print("A")
+end 'shout'
+
+// --- file: beta/b.maxon
+export function shout()
+	print("B")
+end 'shout'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	alpha.shout()
+	beta.shout()
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+func @alpha.shout {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_2  ; "A"
+    arm64.bl print
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @beta.shout {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_3  ; "B"
+    arm64.bl print
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl alpha.shout
+    arm64.bl beta.shout
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

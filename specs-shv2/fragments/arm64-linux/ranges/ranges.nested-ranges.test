@@ -1,0 +1,64 @@
+// Test: ranges.nested-ranges
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 3 'outer'
+				for j in 1 to 3 'inner'
+						sum = sum + i * j
+				end 'inner'
+		end 'outer'
+		return sum
+end 'main'
+---
+ExitCode: 36
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 1
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x1, 3
+    arm64.cset x2, le
+    arm64.cbnz x2, outer
+    arm64.b forexit#4
+  outer:
+    arm64.movImm x2, 1
+    arm64.b forhdr#5
+  forhdr#5:
+    arm64.cmp x2, 3
+    arm64.cset x3, le
+    arm64.cbnz x3, inner
+    arm64.b forexit#8
+  inner:
+    arm64.mul x3, x1, x2
+    arm64.add x0, x0, x3
+    arm64.b forstep#7
+  forstep#7:
+    arm64.add x2, x2, 1
+    arm64.b forhdr#5
+  forexit#8:
+    arm64.b forstep#3
+  forstep#3:
+    arm64.add x1, x1, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at ranges.nested-ranges.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

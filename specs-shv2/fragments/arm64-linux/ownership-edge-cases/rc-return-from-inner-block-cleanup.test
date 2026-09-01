@@ -1,0 +1,80 @@
+// Test: rc-return-from-inner-block-cleanup
+typealias Integer = int(i64.min to i64.max)
+
+type Step
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Step'
+
+function compute(flag bool) returns Integer
+	@heap let outer = Step.create(1)
+	if flag 'inner'
+		@heap let inner = Step.create(2)
+		return outer.n + inner.n
+	end 'inner'
+	return outer.n
+end 'compute'
+
+function main() returns ExitCode
+	return compute(true)
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @compute {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x1, 1
+    arm64.leaRegSlot x2, slot0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.cbnz x0, inner
+    arm64.b ifcont
+  inner:
+    arm64.movImm x0, 2
+    arm64.leaRegSlot x1, slot1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x0, x0, x1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x0, [x2 + 0]
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl compute
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-return-from-inner-block-cleanup.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

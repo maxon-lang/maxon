@@ -1,0 +1,21 @@
+// Test: a-field-default-naming-a-let-global-is-still-refused
+typealias Integer = int(i64.min to i64.max)
+typealias Names = Array with Integer
+
+let sharedEmptyNames = Names.create()
+
+type Holder
+	export var names as Names = sharedEmptyNames
+
+	export static function make() returns Holder
+		return Self{}
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	print("n={Holder.make().names.count()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:8:30: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`

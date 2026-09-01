@@ -1,0 +1,103 @@
+// Test: postfix.union-method-on-a-managed-temporary-in-a-loop
+union Outcome
+	pass
+	fail(reason String)
+
+	export function isPass() returns bool
+		return match self 'p'
+			pass gives true
+			fail gives false
+		end 'p'
+	end 'isPass'
+end 'Outcome'
+
+function main() returns ExitCode
+	var i = 0
+
+	while i < 200 'loop'
+		if Outcome.fail("a rather long failure reason to force a heap allocation").isPass() 'y'
+			return 1
+		end 'y'
+		i = i + 1
+	end 'loop'
+
+	return 7
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 200
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.leaRdata x20, __str_rec_1  ; "a rather long failure reason to force a heap allocation"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#8
+    arm64.b matchnext
+  matcharm#8:
+    arm64.movImm x20, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#9
+    arm64.b matchdead
+  matcharm#9:
+    arm64.movImm x20, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Outcome
+    arm64.cbnz x20, y
+    arm64.b ifcont
+  y:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.add x19, x19, 1
+    arm64.b whilehdr
+  matchdead:
+  whileexit:
+    arm64.movImm x0, 7
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

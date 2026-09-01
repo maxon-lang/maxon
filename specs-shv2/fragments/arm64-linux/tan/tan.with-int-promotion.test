@@ -1,0 +1,31 @@
+// Test: tan.with-int-promotion
+function main() returns ExitCode
+	let x = 0  // int
+	let result = Math.tan(x)  // x promoted to 0.0
+	if result == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.bl Math.tan
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

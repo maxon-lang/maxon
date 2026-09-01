@@ -1,0 +1,64 @@
+// Test: match-break.match-label-shadows-loop-label
+function main() returns ExitCode
+	var n = 0
+	var trips = 0
+	while n < 3 'dup'
+		n = n + 1
+		match n 'dup'
+			1 then break 'dup'
+			default then trips = trips + 1
+		end 'dup'
+		trips = trips + 10
+	end 'dup'
+	return trips
+end 'main'
+---
+ExitCode: 32
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x0, 3
+    arm64.cset x2, lt
+    arm64.cbnz x2, dup
+    arm64.b whileexit
+  dup:
+    arm64.add x0, x0, 1
+    arm64.cmp x0, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.b matchcont
+  matchdefault:
+    arm64.add x1, x1, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.add x1, x1, 10
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x1, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at match-break.match-label-shadows-loop-label.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+  afterbreak:
+}

@@ -1,0 +1,93 @@
+// Test: if-try-nested
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function runStep(succeed bool) throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+end 'runStep'
+
+function main() returns ExitCode
+	var result = 0
+	if try runStep(true) 'outer'
+		if try runStep(true) 'inner'
+			result = 3
+		end 'inner'
+	end 'outer'
+	return result
+end 'main'
+---
+ExitCode: 3
+---
+func @runStep {
+  entry:
+    arm64.prologue 16
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 1
+    arm64.bl runStep
+    arm64.cmp x9, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, outer
+    arm64.b ifelse#5
+  outer:
+    arm64.movImm x0, 1
+    arm64.bl runStep
+    arm64.cmp x9, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, inner
+    arm64.b ifelse#3
+  inner:
+    arm64.movImm x0, 3
+    arm64.b ifcont#4
+  ifelse#3:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b ifcont#6
+  ifelse#5:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-nested.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

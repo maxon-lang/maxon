@@ -1,0 +1,285 @@
+// Test: interface-borrowed-field-drop-in-loop
+typealias StrArray = Array with String
+typealias Tag = int(0 to u64.max)
+
+interface Query
+	function score() returns bool
+end 'Query'
+
+type ConcreteQuery implements Query
+	export let tag as Tag
+
+	static function create(tag Tag) returns ConcreteQuery
+		return Self{tag: tag}
+	end 'create'
+
+	function score() returns bool
+		return self.tag >= 0
+	end 'score'
+end 'ConcreteQuery'
+
+// `Allocator` stores a BORROWED interface value into a field, alongside enough
+// fresh state that its constructor exceeds the inline budget (a real non-inlined
+// constructor, like the compiler's own `FunctionRegAllocator`). The allocator is a
+// short-lived local dropped at the end of `allocateFor`, and its synthesized
+// destructor decrefs the interface field. The conformer passed in is OWNED by
+// `main` and kept alive across the whole loop, so the field holds only a BORROW —
+// the destructor must NOT release it. Before interface values were refcount-managed
+// consistently (the field is drop-tracked, but the borrowed value stored into it
+// got no store-incref), the destructor over-released the caller's conformer — the
+// `__destruct_FunctionRegAllocator` `regTarget`/`opQuery` over-release that blocked
+// the self-hosted bootstrap. Runs under the suite's leak gate (and `--rc-sanitize`),
+// so an over-release or leak fails it.
+type Allocator
+	export var query as Query
+	export var f0 as StrArray
+	export var f1 as StrArray
+	export var f2 as StrArray
+	export var f3 as StrArray
+	export var f4 as StrArray
+	export var f5 as StrArray
+
+	static function create(query Query) returns Allocator
+		return Self{query: query, f0: StrArray.create(), f1: StrArray.create(), f2: StrArray.create(), f3: StrArray.create(), f4: StrArray.create(), f5: StrArray.create()}
+	end 'create'
+
+	function run() returns bool
+		return self.query.score() and self.f0.count() == 0
+	end 'run'
+end 'Allocator'
+
+function allocateFor(query Query) returns bool
+	var allocator = Allocator.create(query)
+	return allocator.run()
+end 'allocateFor'
+
+function main() returns ExitCode
+	let concrete = ConcreteQuery.create(7)
+	var trueCount = 0
+	var i = 0
+	while i < 4 'loop'
+		if allocateFor(concrete) 'ok'
+			trueCount = trueCount + 1
+		end 'ok'
+		i = i + 1
+	end 'loop'
+	return trueCount
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @ConcreteQuery.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @ConcreteQuery.score {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x0, hs
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Allocator.create {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x24, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x25, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x26, x0
+    arm64.movImm x0, 64
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __retain_existential
+    arm64.storeBaseDispReg.word64 [x27 + 0], x0
+    arm64.storeBaseDispReg.word64 [x27 + 8], x20
+    arm64.storeBaseDispReg.word64 [x27 + 16], x21
+    arm64.storeBaseDispReg.word64 [x27 + 24], x22
+    arm64.storeBaseDispReg.word64 [x27 + 32], x23
+    arm64.storeBaseDispReg.word64 [x27 + 40], x24
+    arm64.storeBaseDispReg.word64 [x27 + 48], x25
+    arm64.storeBaseDispReg.word64 [x27 + 56], x26
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x27
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}
+
+func @Allocator.run {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @allocateFor {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x2, x0
+    arm64.movRegReg x19, x1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x2
+    arm64.bl __retain_existential
+    arm64.movRegReg x1, x19
+    arm64.bl Allocator.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Allocator.run
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Allocator
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl ConcreteQuery.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x21, 4
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.leaRdata x1, __witness_ConcreteQuery.Query
+    arm64.movRegReg x0, x19
+    arm64.bl allocateFor
+    arm64.cbnz x0, ok
+    arm64.b critsplit
+  ok:
+    arm64.add x0, x20, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont
+  ifcont:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at interface-borrowed-field-drop-in-loop.test:66: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

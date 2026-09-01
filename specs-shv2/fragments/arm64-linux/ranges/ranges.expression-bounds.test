@@ -1,0 +1,67 @@
+// Test: ranges.expression-bounds
+
+typealias Integer = int(i64.min to i64.max)
+
+function getStart() returns Integer
+		return 1
+end 'getStart'
+
+function getEnd() returns Integer
+		return 4
+end 'getEnd'
+
+function main() returns ExitCode
+		var sum = 0
+		for i in getStart() to getEnd() 'loop'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.b __il_body#11
+  __il_body#11:
+    arm64.b __il_cont#8
+  __il_cont#8:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, 4
+    arm64.cset x2, le
+    arm64.cbnz x2, loop
+    arm64.b forexit
+  loop:
+    arm64.add x0, x0, x1
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at ranges.expression-bounds.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

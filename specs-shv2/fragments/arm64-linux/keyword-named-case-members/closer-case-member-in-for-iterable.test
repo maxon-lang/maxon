@@ -1,0 +1,73 @@
+// Test: closer-case-member-in-for-iterable
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Integer
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto tagOf(Kw.end) 'each'
+		acc = acc + 10 + i
+	end 'each'
+	return acc as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 21
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b __il_body
+  __il_body:
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x2, 2
+    arm64.b __il_cont
+  __il_cont:
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cbnz x3, each
+    arm64.b forexit
+  each:
+    arm64.add x0, x0, 10
+    arm64.add x0, x0, x1
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at closer-case-member-in-for-iterable.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

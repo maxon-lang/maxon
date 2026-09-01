@@ -1,0 +1,79 @@
+// Test: int-literal-to-float-field-literal
+type Reading
+	export var value as Real
+
+	export static function make() returns Self
+		return Self{value: 3}
+	end 'make'
+
+	export function raw() returns Real
+		return self.value
+	end 'raw'
+end 'Reading'
+
+function main() returns ExitCode
+	let r = Reading.make()
+	if r.raw() == 3.0 'exact'
+		return trunc(r.raw() * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+typealias Real = float(f64.min to f64.max)
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.leaRegSlot x0, slot0
+    arm64.fpLoadRdata d0, [rdata + __fconst_3]
+    arm64.storeBaseDispReg.word64 [x0 + 0], d0
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, exact
+    arm64.b ifcont
+  exact:
+    arm64.b __il_body#9
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
+    arm64.b __il_cont#8
+  __il_cont#8:
+    arm64.fpLoadRdata d1, [rdata + __fconst_14]
+    arm64.fmul d0, d0, d1
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at int-literal-to-float-field-literal.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 7
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,20 @@
+// Test: directives.dead-branch-unparsed-at-top-level
+#if testing(true)
+	function ghost() returns ExitCode
+		return no_such_function_anywhere()
+	end 'ghost'
+#endif
+
+function main() returns ExitCode
+	return 30
+end 'main'
+---
+ExitCode: 30
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 30
+    arm64.epilogue 16
+    arm64.ret
+}

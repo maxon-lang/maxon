@@ -1,0 +1,440 @@
+// Test: slab-allocator.the-header-decides-which-side-of-the-os-direct-boundary-a-box-lands
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Len = int(0 to 65536)
+
+let FirstLen = 32700
+let LenStep = 4
+let SweepCount = 26
+
+function build(n Len) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(n)
+	for i in 0 upto n 'fill'
+		b.push(((i + n) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function sweep() returns Integer
+	var bufs = Bufs.create()
+	for k in 0 upto SweepCount 'alloc'
+		bufs.push(build((FirstLen + k * LenStep) as Len))
+	end 'alloc'
+
+	var bad = 0
+	for k in 0 upto SweepCount 'check'
+		let n = FirstLen + k * LenStep
+		let b = try bufs.get(k) otherwise return 1
+		if b.count() != n 'length'
+			bad = bad + 1
+		end 'length'
+		for i in 0 upto n 'bytes'
+			let got = try b.get(i) otherwise return 1
+			if got != ((i + n) mod 251) 'value'
+				bad = bad + 1
+			end 'value'
+		end 'bytes'
+	end 'check'
+	return bad
+end 'sweep'
+
+function main() returns ExitCode
+	if sweep() != 0 'firstRound'
+		return 3
+	end 'firstRound'
+
+	// The first sweep's buffers are all dead by now, so this one re-asks for the same sizes with both
+	// free routes already run — a span slot recycled, a mapping unmapped and re-mapped.
+	if sweep() != 0 'secondRound'
+		return 4
+	end 'secondRound'
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @build {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#6
+    arm64.b __rc_chk#7
+  __rc_chk#7:
+    arm64.cmp x19, 65536
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#6
+    arm64.b __rc_ok#5
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at slab-allocator.the-header-decides-which-side-of-the-os-direct-boundary-a-box-lands.test:11: Range check failed: value outside typealias 'Len'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#5:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl Array.reserve
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x21, x19
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b forexit
+  fill:
+    arm64.add x0, x21, x19
+    arm64.movImm x1, 251
+    arm64.sdiv x16, x0, x1
+    arm64.msub x1, x16, x1, x0
+    arm64.cmp x1, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#9
+    arm64.b __rc_chk#10
+  __rc_chk#10:
+    arm64.cmp x1, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic#9
+    arm64.b __rc_ok#8
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at slab-allocator.the-header-decides-which-side-of-the-os-direct-boundary-a-box-lands.test:15: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#8:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @sweep {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x20, 26
+    arm64.cset x0, lt
+    arm64.cbnz x0, alloc
+    arm64.b forexit#4
+  alloc:
+    arm64.movImm x16, 4
+    arm64.mul x0, x20, x16
+    arm64.add x0, x0, 32700
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#22
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 65536
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#22
+    arm64.b __rc_ok#21
+  __rc_panic#22:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at slab-allocator.the-header-decides-which-side-of-the-os-direct-boundary-a-box-lands.test:23: Range check failed: value outside typealias 'Len'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok#21:
+    arm64.bl build
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.b forstep#3
+  forstep#3:
+    arm64.add x20, x20, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b forhdr#5
+  forhdr#5:
+    arm64.cmp x21, 26
+    arm64.cset x0, lt
+    arm64.cbnz x0, check
+    arm64.b forexit#8
+  check:
+    arm64.movImm x16, 4
+    arm64.mul x0, x21, x16
+    arm64.add x22, x0, 32700
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x21, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow#27
+    arm64.b __im_load#28
+  __im_load#28:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.arm64AddLsl x0, x0, x21, lsl #3
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, __im_empty#29
+    arm64.b critsplit#41
+  __im_empty#29:
+    arm64.cmp x23, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_slow#27
+    arm64.b critsplit#42
+  __im_slow#27:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x23, x0
+    arm64.b __im_cont#26
+  critsplit#42:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#26
+  critsplit#41:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#26
+  __im_cont#26:
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#10
+    arm64.b tryok#9
+  tryerr#10:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#9:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x0, x22
+    arm64.cset x0, ne
+    arm64.cbnz x0, length
+    arm64.b critsplit#39
+  length:
+    arm64.add x0, x20, 1
+    arm64.b ifcont#12
+  critsplit#39:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.movImm x20, 0
+    arm64.movRegReg x24, x0
+    arm64.b forhdr#13
+  forhdr#13:
+    arm64.cmp x20, x22
+    arm64.cset x0, lt
+    arm64.cbnz x0, bytes
+    arm64.b forexit#16
+  bytes:
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic#25
+    arm64.b __rc_ok#24
+  __rc_panic#25:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at slab-allocator.the-header-decides-which-side-of-the-os-direct-boundary-a-box-lands.test:34: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok#24:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x20, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow#31
+    arm64.b __im_load#36
+  __im_load#36:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.arm64AddLsl x0, x0, x20, lsl #3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow#31
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x20, x0
+    arm64.cset x0, hs
+    arm64.cbnz x0, __im_slow#31
+    arm64.b __im_load#37
+  __im_load#37:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.add x0, x0, x20
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x23 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty#38
+    arm64.b critsplit#43
+  __im_empty#38:
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow#31
+    arm64.b critsplit#44
+  critsplit#44:
+    arm64.b __im_cont#30
+  critsplit#43:
+    arm64.b __im_cont#30
+  __im_slow#31:
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x9
+    arm64.b __im_cont#30
+  __im_cont#30:
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#18
+    arm64.b tryok#17
+  tryerr#18:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok#17:
+    arm64.add x1, x20, x22
+    arm64.movImm x2, 251
+    arm64.sdiv x16, x1, x2
+    arm64.msub x1, x16, x2, x1
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, value
+    arm64.b critsplit#40
+  value:
+    arm64.add x0, x24, 1
+    arm64.b ifcont#20
+  critsplit#40:
+    arm64.movRegReg x0, x24
+    arm64.b ifcont#20
+  ifcont#20:
+    arm64.b forstep#15
+  forstep#15:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x24, x0
+    arm64.b forhdr#13
+  forexit#16:
+    arm64.b forstep#7
+  forstep#7:
+    arm64.add x21, x21, 1
+    arm64.movRegReg x20, x24
+    arm64.b forhdr#5
+  forexit#8:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl sweep
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, firstRound
+    arm64.b ifcont#2
+  firstRound:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.bl sweep
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, secondRound
+    arm64.b ifcont#4
+  secondRound:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,209 @@
+// Test: inner-alias-cross-file
+// --- file: types.maxon
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+export type Item
+	export var value as Integer
+	export static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+export typealias ItemArray = Array with Item
+
+export type GenericModule uses Op
+	typealias OpArray = Array with Op
+
+	export var ops as OpArray
+	export var items as ItemArray
+
+	export static function create() returns Self
+		return Self{
+			ops: OpArray.create(),
+			items: ItemArray.create()
+		}
+	end 'create'
+
+	export function pushOp(op Op)
+		self.ops.push(op)
+	end 'pushOp'
+
+	export function pushItem(item Item)
+		self.items.push(item)
+	end 'pushItem'
+
+	export function opCount() returns Count
+		return self.ops.count()
+	end 'opCount'
+
+	export function itemCount() returns Count
+		return self.items.count()
+	end 'itemCount'
+end 'GenericModule'
+
+export typealias IntModule = GenericModule with Integer
+
+// --- file: main.maxon
+typealias ExitCode = int(0 to 125)
+
+function main() returns ExitCode
+	var m = IntModule.create()
+	m.pushOp(10)
+	m.pushOp(20)
+	m.pushItem(Item.create(99))
+	let oc = m.opCount()
+	let ic = m.itemCount()
+	if oc == 2 and ic == 1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Item.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @GenericModule.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @GenericModule.pushOp {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_push
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @GenericModule.pushItem {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __managed_push
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_GenericModule_Integer
+    arm64.bl GenericModule.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.leaRdata x2, __layout_GenericModule_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl GenericModule.pushOp
+    arm64.movImm x1, 20
+    arm64.leaRdata x2, __layout_GenericModule_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl GenericModule.pushOp
+    arm64.movImm x0, 99
+    arm64.bl Item.create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x2, __layout_GenericModule_Integer
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl GenericModule.pushItem
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.movImm x2, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x1, 1
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_GenericModule_Integer
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_GenericModule_Integer
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

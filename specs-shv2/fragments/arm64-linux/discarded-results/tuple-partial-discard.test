@@ -1,0 +1,52 @@
+// Test: tuple-partial-discard
+
+typealias Small = int(0 to 100)
+
+function makePair() returns (Small, Small)
+	return (10, 20)
+end 'makePair'
+
+function main() returns ExitCode
+	let (a, _) = makePair()
+	return a
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.leaRegSlot x0, slot0
+    arm64.movImm x1, 10
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 20
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at tuple-partial-discard.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.epilogue 32
+    arm64.ret
+}

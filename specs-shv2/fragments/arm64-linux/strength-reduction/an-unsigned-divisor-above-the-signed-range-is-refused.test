@@ -1,0 +1,156 @@
+// Test: an-unsigned-divisor-above-the-signed-range-is-refused
+typealias Unsigned = int(0 to u64.max)
+typealias UPosDivisor = int(2 to u64.max)
+
+function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
+	return n / d
+end 'refUDiv'
+
+function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
+	return n mod d
+end 'refUMod'
+
+function main() returns ExitCode
+	let huge = ((9223372036854775807 as Unsigned) + (9223372036854775793 as Unsigned)) as Unsigned
+	let a = ((9223372036854775807 as Unsigned) + 1000) as Unsigned
+	if a / huge != refUDiv(a, d: huge) 'quotient'
+		return 1
+	end 'quotient'
+	if a mod huge != refUMod(a, d: huge) 'remainder'
+		return 2
+	end 'remainder'
+	if a / huge != 0 'quotientIsZero'
+		return 3
+	end 'quotientIsZero'
+	if a mod huge != a 'remainderIsTheDividend'
+		return 4
+	end 'remainderIsTheDividend'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @refUDiv {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_ok
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 2
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at an-unsigned-divisor-above-the-signed-range-is-refused.test:5: Range check failed: value outside typealias 'UPosDivisor'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.udiv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @refUMod {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_ok
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 2
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-unsigned-divisor-above-the-signed-range-is-refused.test:9: Range check failed: value outside typealias 'UPosDivisor'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.udiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 18446744073709551600
+    arm64.movImm x20, 9223372036854776807
+    arm64.udiv x21, x20, x19
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl refUDiv
+    arm64.cmp x21, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, quotient
+    arm64.b ifcont#2
+  quotient:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#2:
+    arm64.udiv x16, x20, x19
+    arm64.msub x21, x16, x19, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl refUMod
+    arm64.cmp x21, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, remainder
+    arm64.b ifcont#4
+  remainder:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.udiv x0, x20, x19
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, quotientIsZero
+    arm64.b ifcont#6
+  quotientIsZero:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.udiv x16, x20, x19
+    arm64.msub x0, x16, x19, x20
+    arm64.cmp x0, x20
+    arm64.cset x0, ne
+    arm64.cbnz x0, remainderIsTheDividend
+    arm64.b ifcont#8
+  remainderIsTheDividend:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -1,0 +1,83 @@
+// Test: a-keyword-named-condition-BESIDE-keyword-named-match-arms
+typealias Integer = int(i64.min to i64.max)
+
+enum Kw
+	function
+	end
+	if
+	other
+end 'Kw'
+
+function score(k Kw) returns Integer
+	return match k 'classify'
+		function gives 1
+		end gives 4
+		if gives 8
+		other gives 16
+	end 'classify'
+end 'score'
+
+function gap(to Integer, from Integer) returns Integer
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+
+	return 0
+end 'gap'
+
+function main() returns ExitCode
+	return (score(Kw.end) + gap(46, from: 8)) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#7, [1]=matcharm#8, [2]=matcharm#9, [3]=matcharm#10] @__jumptable_1
+  matchdead:
+  matcharm#7:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matcharm#8:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matcharm#9:
+    arm64.movImm x0, 8
+    arm64.b matchcont
+  matcharm#10:
+    arm64.movImm x0, 16
+    arm64.b matchcont
+  matchcont:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.b forward
+  forward:
+    arm64.movImm x1, 38
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-keyword-named-condition-BESIDE-keyword-named-match-arms.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

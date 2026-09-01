@@ -1,0 +1,28 @@
+// Test: closer-case-member-as-match-scrutinee
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	match Kw.end 'm'
+		alpha then return 11
+		end then return 22
+		omega then return 33
+	end 'm'
+end 'main'
+---
+ExitCode: 22
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 22
+    arm64.epilogue 16
+    arm64.ret
+}

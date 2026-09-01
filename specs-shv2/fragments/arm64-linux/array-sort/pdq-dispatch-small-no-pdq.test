@@ -1,0 +1,147 @@
+// Test: pdq-dispatch-small-no-pdq
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function ascending(x Integer, y Integer) returns Ordering
+	return x.compare(y)
+end 'ascending'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(8)
+	a.push(3)
+	a.push(1)
+	a.push(7)
+	a.push(2)
+	a.push(6)
+	a.push(4)
+	a.push(5)
+	Log.startCapture()
+	a.sortUnstable(ascending)
+	let keys = Log.stopCapture()
+	if not Log.fired(keys, key: "pdq.partition") 'p'
+		print("no-partition ")
+	end 'p'
+	if Log.fired(keys, key: "smallSort.network") 'n'
+		print("network")
+	end 'n'
+	print("\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_captured@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __data_capturing@40 = i1 0
+}
+
+func @ascending {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cbnz x2, lt
+    arm64.b ifcont#4
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#4:
+    arm64.cmp x0, x1
+    arm64.cset x0, gt
+    arm64.cbnz x0, gt
+    arm64.b ifcont#6
+  gt:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  ifcont#6:
+    arm64.movImm x0, 1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 8
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 6
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.bl Log.startCapture
+    arm64.leaFuncAddr x1, __fnref_ascending
+    arm64.movImm x2, 0
+    arm64.leaRdata x3, __layout_Array_Integer
+    arm64.movRegReg x0, x19
+    arm64.bl Array.sortUnstable#Array.SortComparator
+    arm64.bl Log.stopCapture
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_12  ; "pdq.partition"
+    arm64.movRegReg x0, x20
+    arm64.bl Log.fired
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, p
+    arm64.b ifcont#2
+  p:
+    arm64.leaRdata x0, __str_rec_13  ; "no-partition "
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.leaRdata x1, __str_rec_14  ; "smallSort.network"
+    arm64.movRegReg x0, x20
+    arm64.bl Log.fired
+    arm64.cbnz x0, n
+    arm64.b ifcont#4
+  n:
+    arm64.leaRdata x0, __str_rec_15  ; "network"
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.leaRdata x0, __str_rec_16  ; "\x0a"
+    arm64.bl print
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

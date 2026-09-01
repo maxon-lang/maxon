@@ -1,0 +1,78 @@
+// Test: unicode-escape.whitespace-chars
+function main() returns ExitCode
+	let ws = CharacterSet.whitespacesAndNewlines()
+	let nbsp = '\u00A0'
+	let enSpace = '\u2002'
+	let ideoSpace = '\u3000'
+	if ws.contains(nbsp) 'c1'
+		print("nbsp ")
+	end 'c1'
+	if ws.contains(enSpace) 'c2'
+		print("enSpace ")
+	end 'c2'
+	if ws.contains(ideoSpace) 'c3'
+		print("ideoSpace")
+	end 'c3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl CharacterSet.whitespacesAndNewlines
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __str_rec_13  ; "\xc2\xa0"
+    arm64.leaRdata x20, __str_rec_14  ; "\xe2\x80\x82"
+    arm64.leaRdata x21, __str_rec_15  ; "\xe3\x80\x80"
+    arm64.movRegReg x0, x19
+    arm64.bl CharacterSet.contains
+    arm64.cbnz x0, c1
+    arm64.b ifcont#2
+  c1:
+    arm64.leaRdata x0, __str_rec_16  ; "nbsp "
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl CharacterSet.contains
+    arm64.cbnz x0, c2
+    arm64.b ifcont#4
+  c2:
+    arm64.leaRdata x0, __str_rec_17  ; "enSpace "
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl CharacterSet.contains
+    arm64.cbnz x0, c3
+    arm64.b ifcont#6
+  c3:
+    arm64.leaRdata x0, __str_rec_18  ; "ideoSpace"
+    arm64.bl print
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_CharacterSet
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

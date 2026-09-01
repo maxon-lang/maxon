@@ -1,0 +1,82 @@
+// Test: message-is-appended
+// --- file: main.maxon
+function main() returns ExitCode
+	try Expect.equal(5, expected: 4, message: "two plus two") otherwise ignore
+	try Expect.equal(5, expected: 4) otherwise ignore
+	try Expect.isTrue(false, message: "the gate should have opened") otherwise ignore
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 5
+    arm64.movImm x1, 4
+    arm64.leaRdata x2, __str_rec_20  ; "two plus two"
+    arm64.leaRdata x3, __str_rec_21  ; "main.maxon"
+    arm64.movImm x4, 2
+    arm64.bl Expect.equal
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.b trycont#3
+  tryok#1:
+    arm64.b trycont#3
+  trycont#3:
+    arm64.movImm x19, 5
+    arm64.movImm x20, 4
+    arm64.bl __paramDefault#Expect.equal#2
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x3, __str_rec_21  ; "main.maxon"
+    arm64.movImm x4, 3
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Expect.equal
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.b trycont#6
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.leaRdata x1, __str_rec_22  ; "the gate should have opened"
+    arm64.leaRdata x2, __str_rec_21  ; "main.maxon"
+    arm64.movImm x3, 4
+    arm64.bl Expect.isTrue
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.b trycont#9
+  tryok#7:
+    arm64.b trycont#9
+  trycont#9:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

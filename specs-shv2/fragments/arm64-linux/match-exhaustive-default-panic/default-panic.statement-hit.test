@@ -1,0 +1,25 @@
+// Test: default-panic.statement-hit
+function main() returns ExitCode
+	let x = 99
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default panic("unexpected value")
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matchnext
+  matchnext:
+    arm64.b matchdefault
+  matchdefault:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at default-panic.statement-hit.test:7: unexpected value\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

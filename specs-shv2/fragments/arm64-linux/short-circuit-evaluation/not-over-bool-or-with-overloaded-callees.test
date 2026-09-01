@@ -1,0 +1,173 @@
+// Test: not-over-bool-or-with-overloaded-callees
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+	export static function make(v Integer) returns Box
+		return Box{v: v}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.v == x
+	end 'contains'
+end 'Box'
+
+type Bag
+	export var w as Integer
+	export static function make(w Integer) returns Bag
+		return Bag{w: w}
+	end 'make'
+	function contains(x Integer) returns bool
+		return self.w == x
+	end 'contains'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Box.make(5)
+	let g = Bag.make(9)
+	var code = 0
+	if not (b.contains(5) or g.contains(1)) 'a'
+		code = code + 1
+	end 'a'
+	if not (b.contains(1) or g.contains(1)) 'c'
+		code = code + 10
+	end 'c'
+	if not (b.contains(1) or g.contains(9)) 'd'
+		code = code + 100
+	end 'd'
+	return code as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.movImm x0, 5
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 9
+    arm64.leaRegSlot x2, slot1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.movImm x0, 0
+    arm64.b __il_body#17
+  __il_body#17:
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 0]
+    arm64.cmp x3, 5
+    arm64.cset x3, eq
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.movImm x4, 1
+    arm64.cbnz x3, critsplit#31
+    arm64.b orrhs#1
+  critsplit#31:
+    arm64.b scmerge#2
+  orrhs#1:
+    arm64.b __il_body#19
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
+    arm64.cmp x3, 1
+    arm64.cset x3, eq
+    arm64.b __il_cont#18
+  __il_cont#18:
+    arm64.movRegReg x4, x3
+    arm64.b scmerge#2
+  scmerge#2:
+    arm64.eor x3, x4, 1
+    arm64.cbnz x3, a
+    arm64.b critsplit#28
+  a:
+    arm64.movImm x0, 1
+    arm64.b ifcont#4
+  critsplit#28:
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b __il_body#21
+  __il_body#21:
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 0]
+    arm64.cmp x3, 1
+    arm64.cset x3, eq
+    arm64.b __il_cont#20
+  __il_cont#20:
+    arm64.movImm x4, 1
+    arm64.cbnz x3, critsplit#32
+    arm64.b orrhs#5
+  critsplit#32:
+    arm64.b scmerge#6
+  orrhs#5:
+    arm64.b __il_body#23
+  __il_body#23:
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
+    arm64.cmp x3, 1
+    arm64.cset x3, eq
+    arm64.b __il_cont#22
+  __il_cont#22:
+    arm64.movRegReg x4, x3
+    arm64.b scmerge#6
+  scmerge#6:
+    arm64.eor x3, x4, 1
+    arm64.cbnz x3, c
+    arm64.b critsplit#29
+  c:
+    arm64.add x0, x0, 10
+    arm64.b ifcont#8
+  critsplit#29:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.b __il_body#25
+  __il_body#25:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.b __il_cont#24
+  __il_cont#24:
+    arm64.movImm x3, 1
+    arm64.cbnz x1, critsplit#33
+    arm64.b orrhs#9
+  critsplit#33:
+    arm64.b scmerge#10
+  orrhs#9:
+    arm64.b __il_body#27
+  __il_body#27:
+    arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
+    arm64.cmp x1, 9
+    arm64.cset x1, eq
+    arm64.b __il_cont#26
+  __il_cont#26:
+    arm64.movRegReg x3, x1
+    arm64.b scmerge#10
+  scmerge#10:
+    arm64.eor x1, x3, 1
+    arm64.cbnz x1, d
+    arm64.b critsplit#30
+  d:
+    arm64.add x0, x0, 100
+    arm64.b ifcont#12
+  critsplit#30:
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at not-over-bool-or-with-overloaded-callees.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 32
+    arm64.ret
+}

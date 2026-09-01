@@ -1,0 +1,282 @@
+// Test: managed-memory-error-variants
+function main() returns ExitCode
+	var seen = 0
+	try __ManagedMemory.create(4, 0) otherwise (e) 'zeroElementSize'
+		match e 'k'
+			invalidAllocation then seen = seen + 1
+			default panic("create(4, 0) must report invalidAllocation")
+		end 'k'
+	end 'zeroElementSize'
+	try __ManagedMemory.create(-1, 1) otherwise (e) 'negativeCount'
+		match e 'k'
+			invalidAllocation then seen = seen + 1
+			default panic("create(-1, 1) must report invalidAllocation")
+		end 'k'
+	end 'negativeCount'
+
+	var m = try __ManagedMemory.create(4, 1) otherwise 'createFail'
+		return 1
+	end 'createFail'
+	try m.setLength(5) otherwise (e) 'aboveCapacity'
+		match e 'k'
+			invalidLength then seen = seen + 1
+			default panic("setLength above capacity must report invalidLength")
+		end 'k'
+	end 'aboveCapacity'
+	try m.setLength(-1) otherwise (e) 'negativeLength'
+		match e 'k'
+			invalidLength then seen = seen + 1
+			default panic("setLength(-1) must report invalidLength")
+		end 'k'
+	end 'negativeLength'
+	try m.setByte(4, 65) otherwise (e) 'pastLength'
+		match e 'k'
+			invalidByteRange then seen = seen + 1
+			default panic("setByte at the live length must report invalidByteRange")
+		end 'k'
+	end 'pastLength'
+	try m.setByte(-1, 65) otherwise (e) 'negativeOffset'
+		match e 'k'
+			invalidByteRange then seen = seen + 1
+			default panic("setByte(-1) must report invalidByteRange")
+		end 'k'
+	end 'negativeOffset'
+
+	if seen == 6 'allSix'
+		return 42
+	end 'allSix'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 4
+    arm64.movImm x1, 0
+    arm64.bl __managed_mem_create
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 7
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#3
+    arm64.b matchdefault#4
+  matcharm#3:
+    arm64.movImm x19, 1
+    arm64.b matchcont#5
+  matchcont#5:
+    arm64.b trycont#6
+  matchdefault#4:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at managed-memory-error-variants.test:7: create(4, 0) must report invalidAllocation\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.bl __managed_decref
+    arm64.b trycont#6
+  trycont#6:
+    arm64.movImm x0, 18446744073709551615
+    arm64.movImm x1, 1
+    arm64.bl __managed_mem_create
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 7
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#9
+    arm64.b matchdefault#10
+  matcharm#9:
+    arm64.add x19, x19, 1
+    arm64.b matchcont#11
+  matchcont#11:
+    arm64.b trycont#12
+  matchdefault#10:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at managed-memory-error-variants.test:13: create(-1, 1) must report invalidAllocation\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#7:
+    arm64.bl __managed_decref
+    arm64.b trycont#12
+  trycont#12:
+    arm64.movImm x0, 4
+    arm64.movImm x1, 1
+    arm64.bl __managed_mem_create
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#14
+    arm64.b tryok#13
+  tryerr#14:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#13:
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_length
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#16
+    arm64.b tryok#15
+  tryerr#16:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 3
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#17
+    arm64.b matchdefault#18
+  matcharm#17:
+    arm64.add x19, x19, 1
+    arm64.b matchcont#19
+  matchcont#19:
+    arm64.b trycont#20
+  matchdefault#18:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at managed-memory-error-variants.test:23: setLength above capacity must report invalidLength\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#15:
+    arm64.b trycont#20
+  trycont#20:
+    arm64.movImm x1, 18446744073709551615
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_length
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#22
+    arm64.b tryok#21
+  tryerr#22:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 3
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#23
+    arm64.b matchdefault#24
+  matcharm#23:
+    arm64.add x19, x19, 1
+    arm64.b matchcont#25
+  matchcont#25:
+    arm64.b trycont#26
+  matchdefault#24:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at managed-memory-error-variants.test:29: setLength(-1) must report invalidLength\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#21:
+    arm64.b trycont#26
+  trycont#26:
+    arm64.movImm x1, 4
+    arm64.movImm x2, 65
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_byte
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#28
+    arm64.b tryok#27
+  tryerr#28:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 6
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#29
+    arm64.b matchdefault#30
+  matcharm#29:
+    arm64.add x19, x19, 1
+    arm64.b matchcont#31
+  matchcont#31:
+    arm64.b trycont#32
+  matchdefault#30:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at managed-memory-error-variants.test:35: setByte at the live length must report invalidByteRange\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#27:
+    arm64.b trycont#32
+  trycont#32:
+    arm64.movImm x1, 18446744073709551615
+    arm64.movImm x2, 65
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set_byte
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#34
+    arm64.b tryok#33
+  tryerr#34:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 6
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#35
+    arm64.b matchdefault#36
+  matcharm#35:
+    arm64.add x0, x19, 1
+    arm64.b matchcont#37
+  matchcont#37:
+    arm64.b trycont#38
+  matchdefault#36:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at managed-memory-error-variants.test:41: setByte(-1) must report invalidByteRange\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#33:
+    arm64.movRegReg x0, x19
+    arm64.b trycont#38
+  trycont#38:
+    arm64.cmp x0, 6
+    arm64.cset x0, eq
+    arm64.cbnz x0, allSix
+    arm64.b ifcont
+  allSix:
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

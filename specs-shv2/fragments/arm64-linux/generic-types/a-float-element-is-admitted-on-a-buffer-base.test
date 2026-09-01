@@ -1,0 +1,152 @@
+// Test: a-float-element-is-admitted-on-a-buffer-base
+typealias Real = float(f64.min to f64.max)
+typealias Reals = Array with Real
+typealias Vec2 = Vector with 2 Real
+
+function main() returns ExitCode
+	var a = Reals.create()
+	a.push(1.5)
+	var v = Vec2.create()
+	try v.set(0, value: 3.5) otherwise panic("test invariant: set OOB")
+	return trunc((try a.get(0) otherwise 0.0) + (try v.get(0) otherwise 0.0))
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, d8
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 4609434218613702656
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __layout_Vector_N2_Real
+    arm64.movImm x1, 2
+    arm64.bl Vector.create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 0
+    arm64.movImm x2, 4615063718147915776
+    arm64.leaRdata x3, __layout_Vector_N2_Real
+    arm64.movImm x4, 2
+    arm64.movRegReg x0, x20
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-float-element-is-admitted-on-a-buffer-base.test:10: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot d8, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#16
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#17
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#17:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#16:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
+    arm64.fmov d8, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.b trycont#5
+  tryok#3:
+    arm64.b trycont#5
+  trycont#5:
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Vector_N2_Real
+    arm64.movRegReg x0, x20
+    arm64.bl Vector.get
+    arm64.fmov d0, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#7
+    arm64.b tryok#6
+  tryerr#7:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.b trycont#8
+  tryok#6:
+    arm64.b trycont#8
+  trycont#8:
+    arm64.fadd d0, d8, d0
+    arm64.fcvtzs x21, d0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-float-element-is-admitted-on-a-buffer-base.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot d8, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot d8, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

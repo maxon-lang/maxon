@@ -1,0 +1,169 @@
+// Test: write-back-through-a-loop-carried-nested-union-payload
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+union Expr
+	direct(ty Ty)
+	unresolved
+end 'Expr'
+
+function main() returns ExitCode
+	var e = Expr.direct(Ty.concrete("the first nested payload, long enough to be a real heap allocation"))
+	var total = 0
+
+	for i in 1 to 2 'round'
+		total = total + i
+		match e 'write'
+			direct(ty) then ty = Ty.concrete("a replacement, also a real heap allocation")
+			unresolved then total = total + 1
+		end 'write'
+		e = Expr.direct(Ty.concrete("the next round's payload, a real heap allocation too"))
+	end 'round'
+
+	return total
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_3  ; "the first nested payload, long enough to be a real heap allocation"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.movImm x19, 0
+    arm64.movImm x20, 1
+    arm64.movRegReg x21, x19
+    arm64.movRegReg x19, x0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 2
+    arm64.cset x0, le
+    arm64.cbnz x0, round
+    arm64.b forexit
+  round:
+    arm64.add x21, x21, x20
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#5
+    arm64.b matchnext
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.leaRdata x23, __str_rec_4  ; "a replacement, also a real heap allocation"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x24 + 0], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x24 + 8], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Ty
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x19 + 8], x24
+    arm64.movRegReg x0, x24
+    arm64.bl __destruct_Ty
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#6
+    arm64.b matchdead
+  matcharm#6:
+    arm64.add x21, x21, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.leaRdata x22, __str_rec_5  ; "the next round's payload, a real heap allocation too"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x23 + 8], x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x23
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Expr
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x19, x22
+    arm64.b forhdr
+  matchdead:
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Expr
+    arm64.cmp x21, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at write-back-through-a-loop-carried-nested-union-payload.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

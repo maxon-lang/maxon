@@ -1,0 +1,40 @@
+// Test: async-subprocess.the-bare-name-is-an-ordinary-declaration
+function runProcess(exe Integer, argv Integer, workingDirectory Integer) returns Integer
+	return exe + argv + workingDirectory
+end 'runProcess'
+
+function main() returns ExitCode
+	let n = runProcess(1, argv: 2, workingDirectory: 4)
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x0, 7
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at async-subprocess.the-bare-name-is-an-ordinary-declaration.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

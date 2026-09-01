@@ -1,0 +1,32 @@
+// Test: a-statement-after-a-diverging-call-is-dead-not-refused
+function fatal(tag Integer)
+	panic("fatal {tag}")
+end 'fatal'
+
+function main() returns ExitCode
+	if false 'never'
+		fatal(1)
+		return 7
+	end 'never'
+	return 3
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}

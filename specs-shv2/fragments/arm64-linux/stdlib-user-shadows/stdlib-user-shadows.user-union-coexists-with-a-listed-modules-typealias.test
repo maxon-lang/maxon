@@ -1,0 +1,28 @@
+// Test: stdlib-user-shadows.user-union-coexists-with-a-listed-modules-typealias
+union PadWidth
+	narrow
+	wide
+end 'PadWidth'
+
+function main() returns ExitCode
+	let p = PadWidth.wide
+
+	match p 'pick'
+		narrow then return 1
+		wide then return 7
+	end 'pick'
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}

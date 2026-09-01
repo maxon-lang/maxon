@@ -1,0 +1,109 @@
+// Test: primitive-conformance.hash-low32-mask
+typealias Wide = int(i64.min to i64.max)
+
+type Box uses T where T is Hashable
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemHash() returns HashValue
+		return self.item.hash()
+	end 'itemHash'
+end 'Box'
+
+typealias WideBox = Box with Wide
+
+function main() returns ExitCode
+	let a = WideBox.create(42)
+	if a.itemHash() != 42 'p1'
+		return 1
+	end 'p1'
+	let b = WideBox.create(4294967303)
+	if b.itemHash() != 7 'p2'
+		return 2
+	end 'p2'
+	let c = WideBox.create(-1)
+	if c.itemHash() != 4294967295 'p3'
+		return 3
+	end 'p3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Box.itemHash {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.movImm x0, 42
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl Box.itemHash
+    arm64.cmp x0, 42
+    arm64.cset x0, ne
+    arm64.cbnz x0, p1
+    arm64.b ifcont#2
+  p1:
+    arm64.movImm x0, 1
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#2:
+    arm64.movImm x0, 4294967303
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRegSlot x1, slot1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl Box.itemHash
+    arm64.cmp x0, 7
+    arm64.cset x0, ne
+    arm64.cbnz x0, p2
+    arm64.b ifcont#4
+  p2:
+    arm64.movImm x0, 2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551615
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRegSlot x1, slot2
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl Box.itemHash
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, p3
+    arm64.b ifcont#6
+  p3:
+    arm64.movImm x0, 3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 0
+    arm64.epilogue 48
+    arm64.ret
+}

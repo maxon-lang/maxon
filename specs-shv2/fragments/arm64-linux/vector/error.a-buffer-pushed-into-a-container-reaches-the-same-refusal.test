@@ -1,0 +1,23 @@
+// Test: error.a-buffer-pushed-into-a-container-reaches-the-same-refusal
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	typealias Bufs = Array with ElementMemory
+
+	export function bust() returns Int
+		var b = Bufs.create()
+		b.push(managed)
+		var got = try b.get(0) otherwise panic("no element")
+		got.clear()
+		return managed.length() as Int
+	end 'bust'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.bust() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:10: Unsupported: a `Vector`'s own record may not be stored into a container, a tuple or a field — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length

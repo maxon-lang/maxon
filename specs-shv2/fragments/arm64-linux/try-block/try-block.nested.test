@@ -1,0 +1,153 @@
+// Test: try-block.nested
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+    kaboom
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x bool) returns Score throws ErrA
+    if x 'c'
+        throw ErrA.kaboom
+    end 'c'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'outer'
+        try 'inner'
+            let a = callA(true)
+            sum = sum + a
+        end 'inner'
+        otherwise (ie) 'ih'
+            match ie 'ik'
+                kaboom then sum = sum + 1
+            end 'ik'
+        end 'ih'
+        let b = callB(true)
+        sum = sum + b
+    end 'outer'
+    otherwise (e) 'h'
+        match e 'k'
+            splat then sum = sum + 40
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 41
+---
+func @callA {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, c
+    arm64.b ifcont
+  c:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 5
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @callB {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, c
+    arm64.b ifcont
+  c:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 6
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl callA
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryblkerr#2
+    arm64.b tryblkok#3
+  tryblkerr#2:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#4
+    arm64.b matchdead#5
+  matcharm#4:
+    arm64.movImm x19, 1
+    arm64.b matchcont#6
+  matchcont#6:
+    arm64.b tryblkcont#7
+  matchdead#5:
+  tryblkok#3:
+    arm64.movRegReg x19, x0
+    arm64.b tryblkcont#7
+  tryblkcont#7:
+    arm64.movImm x0, 1
+    arm64.bl callB
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryblkerr#1
+    arm64.b tryblkok#8
+  tryblkerr#1:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#9
+    arm64.b matchdead#10
+  matcharm#9:
+    arm64.add x0, x19, 40
+    arm64.b matchcont#11
+  matchcont#11:
+    arm64.b tryblkcont#12
+  matchdead#10:
+  tryblkok#8:
+    arm64.add x0, x19, x0
+    arm64.b tryblkcont#12
+  tryblkcont#12:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at try-block.nested.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

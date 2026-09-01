@@ -1,0 +1,143 @@
+// Test: contested-directory-overload-set-agreeing-on-defaults
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num, b Num = 5) returns Num
+	return a + b
+end 'pick'
+
+export function pick(a bool, b Num = 5) returns Num
+	return b if a else 0
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick(2) + alpha.pick(true) + beta.pick(3)) as ExitCode
+end 'main'
+---
+ExitCode: 65
+---
+func @alpha.pick {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, -1000
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 1000
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a.maxon:3: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.cmp x1, -1000
+    arm64.cset x2, lt
+    arm64.cbnz x2, __rc_panic#5
+    arm64.b __rc_chk#6
+  __rc_chk#6:
+    arm64.cmp x1, 1000
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a.maxon:3: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, -1000
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#8
+    arm64.b __rc_chk#9
+  __rc_chk#9:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#8
+    arm64.b __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a.maxon:4: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#7:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.movImm x1, 5
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.bl alpha.pick
+    arm64.b __il_body#9
+  __il_body#9:
+    arm64.movImm x1, 5
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.b __rc_chk#15
+  __rc_chk#15:
+    arm64.b __rc_ok#14
+  __rc_ok#14:
+    arm64.b ternarytrue
+  ternarytrue:
+    arm64.b matchcont
+  matchcont:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.add x0, x0, x1
+    arm64.b __il_body#17
+  __il_body#17:
+    arm64.b __rc_chk#19
+  __rc_chk#19:
+    arm64.b __rc_ok#18
+  __rc_ok#18:
+    arm64.movImm x1, 53
+    arm64.b __rc_chk#21
+  __rc_chk#21:
+    arm64.b __rc_ok#20
+  __rc_ok#20:
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.epilogue 16
+    arm64.ret
+}

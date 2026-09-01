@@ -1,0 +1,50 @@
+// Test: cmp-imm12-boundary
+typealias Val = int(i64.min to i64.max)
+
+function base(p Val) returns Val
+	return p
+end 'base'
+
+function main() returns ExitCode
+	let x = base(4096)
+	if x == 4095 'eqLo'
+		return 11
+	end 'eqLo'
+	if not (x > 4095) 'gtLo'
+		return 12
+	end 'gtLo'
+	if not (x == 4096) 'eqHi'
+		return 13
+	end 'eqHi'
+	if x > 4096 'gtHi'
+		return 14
+	end 'gtHi'
+	if not (x < 4097) 'ltNext'
+		return 15
+	end 'ltNext'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.b ifcont#10
+  ifcont#10:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

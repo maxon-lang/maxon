@@ -1,0 +1,105 @@
+// Test: lazy-static.multiple-fields
+typealias Count = int(0 to u64.max)
+
+type Cache
+	static var a = Cache.buildA()
+	static var b = Cache.buildB()
+	export var n as Count
+
+	static function buildA() returns Cache
+		return Cache{n: 10}
+	end 'buildA'
+
+	static function buildB() returns Cache
+		return Cache{n: 20}
+	end 'buildB'
+
+	export static function sum() returns Count
+		return Cache.a.n + Cache.b.n
+	end 'sum'
+end 'Cache'
+
+function main() returns ExitCode
+	return Cache.sum()
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __data_Cache.a@0 = i64 0
+  __data_Cache.b@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @Cache.buildA {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 10
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Cache.buildB {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 20
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Cache.sum {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __lazy_init#__data_Cache.a
+    arm64.leaGlobal x0, __data_Cache.a
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __lazy_init#__data_Cache.b
+    arm64.leaGlobal x0, __data_Cache.b
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl Cache.sum
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at lazy-static.multiple-fields.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,83 @@
+// Test: string-conformance.direct-equals-on-a-concrete-string
+function main() returns ExitCode
+	let a = "ab"
+	if not a.equals("ab") 'same'
+		return 1
+	end 'same'
+	if a.equals("ac") 'differentByte'
+		return 2
+	end 'differentByte'
+	if a.equals("abc") 'differentLength'
+		return 3
+	end 'differentLength'
+	if not "".equals("") 'bothEmpty'
+		return 4
+	end 'bothEmpty'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_4  ; "ab"
+    arm64.leaRdata x1, __str_rec_4  ; "ab"
+    arm64.movRegReg x0, x19
+    arm64.bl String.equals
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, same
+    arm64.b ifcont#2
+  same:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.leaRdata x1, __str_rec_5  ; "ac"
+    arm64.movRegReg x0, x19
+    arm64.bl String.equals
+    arm64.cbnz x0, differentByte
+    arm64.b ifcont#4
+  differentByte:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.leaRdata x1, __str_rec_6  ; "abc"
+    arm64.movRegReg x0, x19
+    arm64.bl String.equals
+    arm64.cbnz x0, differentLength
+    arm64.b ifcont#6
+  differentLength:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#6:
+    arm64.leaRdata x0, __str_rec_7  ; ""
+    arm64.leaRdata x1, __str_rec_7  ; ""
+    arm64.bl String.equals
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, bothEmpty
+    arm64.b ifcont#8
+  bothEmpty:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,80 @@
+// Test: an-invariant-computation-leaves-the-loop
+typealias Word = int(i64.min to i64.max)
+
+function weighted(n Word, k Word) returns Word
+	var t = 0
+	for _ in 0 upto n 'loop'
+		t = t + k * 31 + 7
+	end 'loop'
+	return t
+end 'weighted'
+
+function main() returns ExitCode
+	var seed = 0
+	for i in 0 upto 4 'feed'
+		seed = seed + weighted(i, k: i + 1)
+	end 'feed'
+	// k*31+7 per trip, n trips: 0 + 69 + 2*100 + 3*131 = 662.
+	if seed != 662 'value'
+		return 1
+	end 'value'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x1, 4
+    arm64.cset x2, lt
+    arm64.cbnz x2, feed
+    arm64.b forexit#4
+  feed:
+    arm64.add x2, x1, 1
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x3, 0
+    arm64.movImm x4, 0
+    arm64.movImm x16, 31
+    arm64.mul x5, x2, x16
+    arm64.b forhdr#9
+  forhdr#9:
+    arm64.cmp x4, x1
+    arm64.cset x6, lt
+    arm64.cbnz x6, loop
+    arm64.b forexit#12
+  loop:
+    arm64.add x3, x3, x5
+    arm64.add x3, x3, 7
+    arm64.b forstep#11
+  forstep#11:
+    arm64.add x4, x4, 1
+    arm64.b forhdr#9
+  forexit#12:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x0, x0, x3
+    arm64.b forstep#3
+  forstep#3:
+    arm64.movRegReg x1, x2
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.cmp x0, 662
+    arm64.cset x0, ne
+    arm64.cbnz x0, value
+    arm64.b ifcont
+  value:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

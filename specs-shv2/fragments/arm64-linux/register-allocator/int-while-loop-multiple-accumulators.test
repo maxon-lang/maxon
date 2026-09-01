@@ -1,0 +1,75 @@
+// Test: int-while-loop-multiple-accumulators
+function main() returns ExitCode
+	var even_sum = 0
+	var odd_sum = 0
+	var count = 0
+	var i = 0
+	while i < 20 'loop'
+		if i mod 2 == 0 'even'
+			even_sum = even_sum + i
+			count = count + 1
+		end 'even' else 'odd'
+			odd_sum = odd_sum + i
+		end 'odd'
+		i = i + 1
+	end 'loop'
+	return (even_sum + odd_sum + count) and 125
+end 'main'
+---
+ExitCode: 72
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.movImm x3, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x3, 20
+    arm64.cset x4, lt
+    arm64.cbnz x4, loop
+    arm64.b whileexit
+  loop:
+    arm64.movImm x4, 2
+    arm64.sdiv x16, x3, x4
+    arm64.msub x4, x16, x4, x3
+    arm64.cmp x4, 0
+    arm64.cset x4, eq
+    arm64.cbnz x4, even
+    arm64.b ifelse
+  even:
+    arm64.add x0, x0, x3
+    arm64.add x2, x2, 1
+    arm64.b ifcont
+  ifelse:
+    arm64.add x1, x1, x3
+    arm64.b ifcont
+  ifcont:
+    arm64.add x3, x3, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.movImm x16, 125
+    arm64.and x0, x0, x16
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at int-while-loop-multiple-accumulators.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

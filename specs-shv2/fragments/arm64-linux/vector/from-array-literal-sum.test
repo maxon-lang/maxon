@@ -1,0 +1,110 @@
+// Test: from-array-literal-sum
+function main() returns ExitCode
+	let v = Vector from [10, 20, 30]
+	let a = try v.get(0) otherwise 0
+	let b = try v.get(1) otherwise 0
+	let c = try v.get(2) otherwise 0
+	return a + b + c
+end 'main'
+---
+ExitCode: 60
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 3
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Vector_N3_int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x20, 0
+    arm64.b trycont#3
+  tryok#1:
+    arm64.movRegReg x20, x0
+    arm64.b trycont#3
+  trycont#3:
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __layout_Vector_N3_int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.movImm x21, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.movRegReg x21, x0
+    arm64.b trycont#6
+  trycont#6:
+    arm64.movImm x1, 2
+    arm64.leaRdata x2, __layout_Vector_N3_int
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.movImm x0, 0
+    arm64.b trycont#9
+  tryok#7:
+    arm64.b trycont#9
+  trycont#9:
+    arm64.add x1, x20, x21
+    arm64.add x20, x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at from-array-literal-sum.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

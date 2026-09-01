@@ -1,0 +1,130 @@
+// Test: comparable.ordering-reversed-operands
+typealias Integer = int(0 to u32.max)
+
+type Pair uses T where T is Comparable
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function forwardLess() returns bool
+		return self.a < self.b
+	end 'forwardLess'
+	export function reverseLess() returns bool
+		return self.b < self.a
+	end 'reverseLess'
+end 'Pair'
+
+typealias IntPair = Pair with Integer
+
+function main() returns ExitCode
+	let p = IntPair.create(3, b: 9)
+	var r = 0 as Integer
+	if p.forwardLess() 'f'
+		r = r + 1
+	end 'f'
+	if p.reverseLess() 'g'
+		r = r + 10
+	end 'g'
+	return r
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Pair.forwardLess {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x3
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Pair.reverseLess {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x2, x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x3
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
+    arm64.movImm x0, 3
+    arm64.movImm x1, 9
+    arm64.leaRdata x2, __witness_int.Comparable
+    arm64.leaRegSlot x19, slot0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x1
+    arm64.movImm x20, 0
+    arm64.leaRdata x1, __witness_int.Comparable
+    arm64.movRegReg x0, x19
+    arm64.bl Pair.forwardLess
+    arm64.cbnz x0, f
+    arm64.b critsplit#8
+  f:
+    arm64.movImm x20, 1
+    arm64.b ifcont#2
+  critsplit#8:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.leaRdata x1, __witness_int.Comparable
+    arm64.movRegReg x0, x19
+    arm64.bl Pair.reverseLess
+    arm64.cbnz x0, g
+    arm64.b critsplit#9
+  g:
+    arm64.add x0, x20, 10
+    arm64.b ifcont#4
+  critsplit#9:
+    arm64.movRegReg x0, x20
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at comparable.ordering-reversed-operands.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

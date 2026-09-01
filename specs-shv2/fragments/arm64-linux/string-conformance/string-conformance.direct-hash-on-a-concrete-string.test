@@ -1,0 +1,69 @@
+// Test: string-conformance.direct-hash-on-a-concrete-string
+function main() returns ExitCode
+	let e = ""
+	if e.hash() != 5381 'p1'
+		return 1
+	end 'p1'
+	let a = "abc"
+	if a.hash() != 193485963 'p2'
+		return 2
+	end 'p2'
+	let h = "hi"
+	if h.hash() != 5863446 'p3'
+		return 3
+	end 'p3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_3  ; ""
+    arm64.bl String.hash
+    arm64.movImm x16, 5381
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, p1
+    arm64.b ifcont#2
+  p1:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#2:
+    arm64.leaRdata x0, __str_rec_4  ; "abc"
+    arm64.bl String.hash
+    arm64.movImm x16, 193485963
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, p2
+    arm64.b ifcont#4
+  p2:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#4:
+    arm64.leaRdata x0, __str_rec_5  ; "hi"
+    arm64.bl String.hash
+    arm64.movImm x16, 5863446
+    arm64.cmp x0, x16
+    arm64.cset x0, ne
+    arm64.cbnz x0, p3
+    arm64.b ifcont#6
+  p3:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

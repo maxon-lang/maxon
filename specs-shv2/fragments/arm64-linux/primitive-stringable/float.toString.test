@@ -1,0 +1,51 @@
+// Test: float.toString
+function main() returns ExitCode
+	let x = 3.14
+	let s = x.toString()
+	if s == "3.14" 'ok'
+		return 1
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.fpLoadRdata d0, [rdata + __fconst_3.14]
+    arm64.bl float.toString
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __str_rec_94  ; "3.14"
+    arm64.movRegReg x0, x19
+    arm64.bl __str_eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

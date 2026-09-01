@@ -1,0 +1,151 @@
+// Test: managed-field-as-a-value-binds-serves-the-roster-and-drops-once
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function bufLength(m __ManagedMemory) returns Integer
+	return m.length()
+end 'bufLength'
+
+function bufferOf(a ByteArray) returns __ManagedMemory
+	return a.managed
+end 'bufferOf'
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(1 as Byte)
+	arr.push(2 as Byte)
+	let m = arr.managed
+	var total = m.length() + bufLength(arr.managed) + bufferOf(arr).length() + arr.count()
+	var i = 0
+	while i < 4 'round'
+		total = total + bufLength(arr.managed)
+		i = i + 1
+	end 'round'
+	print("{total}")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @bufferOf {
+  entry:
+    arm64.prologue 16
+    arm64.bl __mm_retain
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.movRegReg x22, x0
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x21, x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl bufferOf
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.add x1, x21, x1
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.add x21, x1, x2
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movImm x22, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x22, 4
+    arm64.cset x0, lt
+    arm64.cbnz x0, round
+    arm64.b whileexit
+  round:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.add x21, x21, x1
+    arm64.bl __managed_decref
+    arm64.add x22, x22, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x21, x0
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x24, x21
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x23
+    arm64.bl print
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

@@ -1,0 +1,46 @@
+// Test: union-backing-multi-field
+typealias Flag = int(0 to 1)
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type DetailMeta
+	export let latency as Latency
+	export let isMemory as Flag
+
+	static function create(latency Latency, isMemory Flag) returns Self
+		return Self{latency: latency, isMemory: isMemory}
+	end 'create'
+end 'DetailMeta'
+
+union MemOp
+	load(dest ID, offset ID) = DetailMeta.create(4, isMemory: 1)
+	store(src ID, offset ID) = DetailMeta.create(3, isMemory: 1)
+	add(dest ID, src ID) = DetailMeta.create(1, isMemory: 0)
+end 'MemOp'
+
+function main() returns ExitCode
+	let memFlag = MemOp.load.isMemory
+	let aluFlag = MemOp.add.isMemory
+	return memFlag + aluFlag
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.b __rc_ok
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

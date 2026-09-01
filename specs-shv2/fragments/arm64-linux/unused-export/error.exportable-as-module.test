@@ -1,0 +1,22 @@
+// Test: error.exportable-as-module
+// --- file: pkg/lib.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function subtreeOnly() returns Integer
+	return 3
+end 'subtreeOnly'
+
+// --- file: pkg/sub/user.maxon
+typealias Num = int(i64.min to i64.max)
+
+export function entry() returns Num
+	return subtreeOnly()
+end 'entry'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return entry()
+end 'main'
+---
+CompilerError:
+error E3093: pkg/<fragment>:5:17: exported function 'pkg.subtreeOnly' is only referenced inside its declaring module subtree; consider 'module' visibility

@@ -1,0 +1,34 @@
+// Test: directives.top-level-nested
+#if testing(false)
+	#if testing(true)
+		function pick() returns ExitCode
+			return 98
+		end 'pick'
+	#else
+		function pick() returns ExitCode
+			return 22
+		end 'pick'
+	#endif
+#else
+	function pick() returns ExitCode
+		return 97
+	end 'pick'
+#endif
+
+function main() returns ExitCode
+	return pick()
+end 'main'
+---
+ExitCode: 22
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x0, 22
+    arm64.b __il_cont
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

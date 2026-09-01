@@ -1,0 +1,111 @@
+// Test: if-try-elseif-scope-cleanup
+enum MyError implements Error
+	failed
+end 'MyError'
+
+typealias Int = int(i64.min to i64.max)
+
+function mayFail() returns Int throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function helper(x Int) returns Int throws MyError
+	if x == 1 'case1'
+		return 10
+	end 'case1' else if x == 2 'case2'
+		let r = try mayFail()
+		return r
+	end 'case2' else 'default'
+		return 30
+	end 'default'
+end 'helper'
+
+function main() returns ExitCode
+	return try helper(3) otherwise 99
+end 'main'
+---
+ExitCode: 30
+---
+func @mayFail {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @helper {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, case1
+    arm64.b ifelse#2
+  case1:
+    arm64.movImm x0, 10
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifelse#2:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, case2
+    arm64.b ifelse#6
+  case2:
+    arm64.bl mayFail
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifelse#6:
+    arm64.movImm x0, 30
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#7:
+  ifcont#8:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.bl helper
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 99
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-elseif-scope-cleanup.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

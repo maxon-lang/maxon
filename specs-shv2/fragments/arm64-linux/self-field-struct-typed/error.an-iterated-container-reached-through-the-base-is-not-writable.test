@@ -1,0 +1,39 @@
+// Test: error.an-iterated-container-reached-through-the-base-is-not-writable
+
+typealias Small = int(0 to 1000)
+typealias StringArray = Array with String
+
+type Inner
+	export var items as StringArray
+
+	static function create() returns Self
+		var a = StringArray.create()
+		a.push("x")
+		return Self{items: a}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	export function probe() returns Small
+		var n = 0 as Small
+		for it in inner.items 'loop'
+			inner.items = StringArray.create()
+			n = n + it.byteLength() as Small
+		end 'loop'
+		return n
+	end 'probe'
+
+	static function create(i Inner) returns Self
+		return Self{inner: i}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var o = Outer.create(Inner.create())
+	return o.probe()
+end 'main'
+---
+CompilerError:
+error E2013: <fragment>:22:4: cannot assign to immutable variable: 'inner'

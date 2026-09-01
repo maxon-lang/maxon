@@ -1,0 +1,50 @@
+// Test: opener-case-member-in-if-condition
+enum Kw
+	alpha
+	while
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns Integer
+	match k 'm'
+		alpha then return 1
+		while then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.while) == 2 'ok'
+		return 25
+	end 'ok'
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 25
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  __il_cont:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 25
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

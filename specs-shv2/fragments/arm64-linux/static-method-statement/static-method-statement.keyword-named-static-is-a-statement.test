@@ -1,0 +1,61 @@
+// Test: static-method-statement.keyword-named-static-is-a-statement
+type Helper
+	export static function match()
+		print("m")
+	end 'match'
+
+	export static function upto()
+		print("u")
+	end 'upto'
+
+	export static function to()
+		print("t")
+	end 'to'
+end 'Helper'
+
+function main() returns ExitCode
+	Helper.match()
+	Helper.upto()
+	Helper.to()
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @Helper.match {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_3  ; "m"
+    arm64.bl print
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Helper.upto {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_4  ; "u"
+    arm64.bl print
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Helper.to {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_5  ; "t"
+    arm64.bl print
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl Helper.match
+    arm64.bl Helper.upto
+    arm64.bl Helper.to
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

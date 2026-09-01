@@ -1,0 +1,76 @@
+// Test: closer-case-member-before-a-ternary-else
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	var acc = 0
+	var i = 0
+	while i < 2 'spin'
+		let x = 1 if i == 0 or Kw.end == Kw.end else 2
+		acc = acc + x
+		i = i + 1
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 2
+    arm64.cset x2, lt
+    arm64.cbnz x2, spin
+    arm64.b whileexit
+  spin:
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.movImm x3, 1
+    arm64.cbnz x2, critsplit
+    arm64.b orrhs
+  critsplit:
+    arm64.b scmerge
+  orrhs:
+    arm64.movImm x2, 1
+    arm64.movRegReg x3, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x3, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x2, 1
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x2, 2
+    arm64.b matchcont
+  matchcont:
+    arm64.add x0, x0, x2
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at closer-case-member-before-a-ternary-else.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

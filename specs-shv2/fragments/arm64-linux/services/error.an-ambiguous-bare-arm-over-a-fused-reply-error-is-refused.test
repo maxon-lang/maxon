@@ -1,0 +1,35 @@
+// Test: error.an-ambiguous-bare-arm-over-a-fused-reply-error-is-refused
+enum Halt implements Error
+	stopped
+	halted
+end 'Halt'
+
+type Guard
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function risky() returns Integer throws Halt
+		if self.count == 0 'halt'
+			throw Halt.halted
+		end 'halt'
+		return self.count
+	end 'risky'
+end 'Guard'
+
+function main() returns ExitCode
+	let h = spawn Guard.create()
+	try await h.risky() otherwise (e) 'oops'
+		match e 'why'
+			stopped then return 70 as ExitCode
+			halted then return 71 as ExitCode
+		end 'why'
+	end 'oops'
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3085: <fragment>:26:4: case 'stopped' is shared by multiple union members; qualify with 'EnumName.stopped'

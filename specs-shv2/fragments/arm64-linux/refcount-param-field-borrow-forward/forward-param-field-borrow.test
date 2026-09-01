@@ -1,0 +1,483 @@
+// Test: forward-param-field-borrow
+enum IterErr implements Error
+	stop
+end 'IterErr'
+
+type Tok
+	export var line as Integer
+
+	static function make(l Integer) returns Tok
+		return Self{line: l}
+	end 'make'
+end 'Tok'
+
+typealias TokBuf = Array with Tok
+typealias TokCur = ArrayIterator with Tok
+
+type Lex
+	var toks as TokBuf
+	var cur as TokCur
+	var counter as Integer
+
+	static function create() returns Self throws IterErr
+		var toks = TokBuf.create()
+		for i in 0 upto 200 'fill'
+			toks.push(Tok.make(i))
+		end 'fill'
+		let cur = try toks.cursor() otherwise throw IterErr.stop
+		return Self{toks: toks, cur: cur, counter: 0}
+	end 'create'
+
+	// Returns cur.current() (a borrow of the self-field-owned token array). The
+	// counter arithmetic keeps this over the inline budget so it stays a standalone
+	// borrow-returning function, mirroring the large real Parser.consume.
+	function consume() returns Tok throws IterErr
+		counter = counter + 1
+		counter = counter + 2
+		counter = counter + 3
+		counter = counter + 4
+		counter = counter + 5
+		counter = counter + 6
+		counter = counter + 7
+		counter = counter + 8
+		counter = counter + 9
+		counter = counter + 10
+		let t = cur.current()
+		try cur.advance() otherwise throw IterErr.stop
+		return t
+	end 'consume'
+
+	// Mirrors Parser.consumeExpecting: `return try consume()`. Bloated so it stays
+	// standalone and the returned-borrow retain would land in its own body.
+	function consumeExpecting(tag Integer) returns Tok throws IterErr
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		return try consume()
+	end 'consumeExpecting'
+end 'Lex'
+
+function run() returns Integer throws IterErr
+	var lex = try Lex.create()
+	var sum = 0
+	for _ in 0 upto 40 'loop'
+		let a = try lex.consumeExpecting(1)
+		sum = sum + a.line
+	end 'loop'
+	let b = try lex.consumeExpecting(2)
+	let c = try lex.consumeExpecting(3)
+	let d = try lex.consumeExpecting(4)
+	sum = sum + b.line + c.line + d.line
+	return sum
+end 'run'
+
+function main() returns ExitCode
+	// The borrowed token fields sum to 903; the exit code checks the value
+	// AND, via the leak gate, that no forwarded token leaked (a leak would
+	// exit 101 instead of 903 mod 256 = 135).
+	let s = try run() otherwise 0
+	return s mod 256
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 135
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Tok.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Lex.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 200
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b forexit
+  fill:
+    arm64.movRegReg x0, x20
+    arm64.bl Tok.make
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl Array.cursor
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movImm x21, 0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x22 + 0], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x22 + 8], x20
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_ArrayIterator_Tok
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Lex.consume {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 2
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 3
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 4
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 5
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 6
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 7
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 9
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.add x0, x0, 10
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.leaRdata x1, __layout_ArrayIterator_Tok
+    arm64.bl ArrayIterator.current
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl ArrayIterator.advance
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Lex.consumeExpecting {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x2, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x2, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x2, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x2, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x2, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x2, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x2, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.add x1, x2, x1
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.bl Lex.consume
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @run {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Lex.create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x21, 40
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b forexit
+  loop:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl Lex.consumeExpecting
+    arm64.movRegReg x22, x9
+    arm64.cmp x22, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Lex
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#7:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x20, x20, x1
+    arm64.bl __mm_decref
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl Lex.consumeExpecting
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x22, x9
+    arm64.cmp x22, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#10
+    arm64.b tryok#9
+  tryerr#10:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Lex
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#9:
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl Lex.consumeExpecting
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x23, x9
+    arm64.cmp x23, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#12
+    arm64.b tryok#11
+  tryerr#12:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Lex
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#11:
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl Lex.consumeExpecting
+    arm64.movRegReg x23, x9
+    arm64.cmp x23, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#14
+    arm64.b tryok#13
+  tryerr#14:
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Lex
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#13:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.add x1, x20, x1
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 0]
+    arm64.add x1, x1, x2
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x20, x1, x2
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Lex
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl run
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 256
+    arm64.sdiv x16, x0, x1
+    arm64.msub x0, x16, x1, x0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at forward-param-field-borrow.test:84: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

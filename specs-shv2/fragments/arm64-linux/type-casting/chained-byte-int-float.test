@@ -1,0 +1,49 @@
+// Test: chained-byte-int-float
+
+typealias Float = float(f64.min to f64.max)
+typealias Byte = int(0 to u8.max)
+
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
+function main() returns ExitCode
+	let b = 25 as Byte
+	let f = toFloat(b)
+	return trunc(f)
+end 'main'
+---
+ExitCode: 25
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b __il_body
+  __il_body:
+    arm64.b __rc_chk#7
+  __rc_chk#7:
+    arm64.b __rc_ok#6
+  __rc_ok#6:
+    arm64.fpLoadRdata d0, [rdata + __fconst_25]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.fcvtzs x0, d0
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at chained-byte-int-float.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.epilogue 16
+    arm64.ret
+}
