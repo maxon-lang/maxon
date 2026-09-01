@@ -1,9 +1,4 @@
 // Test: sched-runqueue.the-ring-index-wraps-past-its-capacity
-// Far above the one yield a healthy round spends — a lost wake is a wrong answer, not a hang.
-let settleSpinLimit = 200000
-
-var sum = 0
-
 type Step
 	var n as Integer
 
@@ -12,23 +7,24 @@ type Step
 	end 'create'
 
 	export function tick()
-		sum = sum + 1
+		self.n = self.n + 1
 	end 'tick'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
 end 'Step'
 
 function main() returns ExitCode
 	let h = spawn Step.create()
 
+	var sum = 0
 	var i = 0
 	while i < 6000 'rounds'
 		h.tick()
-
-		var spins = 0
-		while sum <= i and spins < settleSpinLimit 'settle'
-			Runtime.yield()
-			spins = spins + 1
-		end 'settle'
-
+		// Queued behind the tick, so this IS the settle: the service is drained and re-published once more
+		// per round, which is what drives both monotonic counters far past 256 slots.
+		sum = try await h.total() otherwise 0
 		i = i + 1
 	end 'rounds'
 
@@ -40,30 +36,32 @@ typealias Integer = int(i64.min to i64.max)
 ExitCode: 0
 ---
 data {
-  __data_sum@0 = i64 0
-  __mm_alloc_count@8 = i64 0
-  __gt_run_queue_head@16 = i64 0
-  __gt_run_queue_tail@24 = i64 0
-  __gt_init_done@32 = i64 0
-  __gt_timer_count@40 = i64 0
-  __gt_timer_heap_base@48 = i64 0
-  __gt_timer_capacity@56 = i64 0
-  __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_live_count@96 = i64 0
-  __sched_active_workers@104 = i64 1
-  __sched_max_active_workers@112 = i64 1
-  __sched_tls_index@120 = i64 0
-  __sched_tls_teb_offset@128 = i64 0
-  __sched_procs@136 = i64 0
-  __sched_num_procs@144 = i64 0
-  __sched_shutdown_flag@152 = i64 0
-  __sched_lock@160 = i64 0
-  __slab_arena_list@168 = i64 0
-  __slab_arena_map_l1@176 = i64 0
-  __slab_state@184 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_trace_counter@56 = i64 0
+  __gt_proc_count@64 = i64 0
+  __gt_proc_handles_base@72 = i64 0
+  __gt_proc_gts_base@80 = i64 0
+  __gt_proc_wait_snapshot@88 = i64 0
+  __gt_proc_poller@96 = i64 0
+  __gt_live_count@104 = i64 0
+  __sched_progress@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_num_procs@160 = i64 0
+  __sched_shutdown_flag@168 = i64 0
+  __sched_lock@176 = i64 0
+  __slab_arena_list@184 = i64 0
+  __slab_arena_map_l1@192 = i64 0
+  __slab_state@200 = i64 0
 }
 
 func @Step.create {
@@ -106,9 +104,10 @@ func @main {
     x64.storeSlotReg slot0, r12
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
     x64.movRegImm32 rbx, 0
-  whilehdr#1:
-    x64.cmpRegImm32 rbx, 6000
-    x64.jcc greaterEqual, whileexit#3
+    x64.movRegImm32 r13, 0
+  whilehdr:
+    x64.cmpRegImm32 r13, 6000
+    x64.jcc greaterEqual, whileexit
   rounds:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -120,41 +119,44 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
-    x64.movRegImm32 r13, 0
-  whilehdr#4:
-    x64.leaRegGlobal rax, __data_sum
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegReg rax, rbx
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
     x64.movRegImm32 rax, 0
-    x64.jcc greater, scmerge
-  andrhs:
-    x64.cmpRegImm32 r13, 200000
-    x64.setccReg less, rax
-  scmerge:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, whileexit#8
-  settle:
-    x64.callDirect Runtime.yield
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
     x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp whilehdr#4
-  whileexit#8:
-    x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp whilehdr#1
-  whileexit#3:
+    x64.movRegReg rbx, rax
+    x64.jmp whilehdr
+  whileexit:
     x64.leaRegRdata rax, [rip + __str_rec_1]  ; "sum="
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegGlobal rax, __data_sum
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect __int_to_string
-    x64.movRegReg r13, r8
-    x64.leaRegRegReg rax, r12, r13
+    x64.movRegReg rbx, r8
+    x64.leaRegRegReg rax, r13, rbx
     x64.storeSlotReg slot1, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
@@ -162,15 +164,15 @@ func @main {
     x64.storeSlotReg slot2, r8
     x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r15, r12
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
+    x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r13
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, rbx
     x64.loadRegSlot rbx, slot2
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot1
@@ -205,6 +207,8 @@ func @Step.__loop {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
@@ -215,7 +219,7 @@ func @Step.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=__il_body] @__jumptable_2
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=__il_body#11, [2]=total] @__jumptable_2
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -235,6 +239,8 @@ func @Step.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_service_exit
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -244,15 +250,25 @@ func @Step.__loop {
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_abandon
     x64.jmp drain
-  __il_body:
-    x64.leaRegGlobal rax, __data_sum
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_body#11:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.leaRegGlobal rcx, __data_sum
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-  __il_cont:
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+  __il_cont#10:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
+    x64.jmp serve
+  total:
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+  __il_cont#12:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __gt_cell_complete
     x64.jmp serve
 }
 
@@ -264,8 +280,14 @@ func @Step.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_3
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=total] @__jumptable_3
   __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  total:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1

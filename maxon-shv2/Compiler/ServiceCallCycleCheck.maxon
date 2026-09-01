@@ -139,92 +139,6 @@ end 'ServiceBlockingGraph'
 // rule: `CsrIndex` is 0-based and 0 is a real node, so the absence sits above every key a program can mint.
 let NoServiceNode = u64.max as CsrIndex
 
-typealias ServiceAwaitSiteArray = Array with ServiceAwaitSite
-
-// ⭐⭐⭐ **EVERY (FUNCTION, AWAITED SERVICE) PAIR IN THE PROGRAM — ONE ROW PER `await`, NOT ONE PER FUNCTION
-// (SV2 review).** A message that awaits replies from TWO services owes an edge to BOTH, and a single site
-// per function can carry only one of them.
-//
-// ⛔⛔ **MEASURED AT REVIEW, WITH ITS POSITIVE CONTROL.** The walk used to return ONE site and kept the LAST
-// one its op sweep saw, so `A.ping` awaiting `B` and then `C` seeded `C` alone and the `A → B` edge was
-// never built: the ring `A.ping → B.pong → A.ack` COMPILED CLEAN, exit 0, with one unrelated `await` added
-// to `A.ping` — and the very same program without that await is E3139. A dropped edge is a MISSED refusal,
-// which is exactly the deadlock this file exists to make unrepresentable.
-//
-// ⭐ **AND THERE IS NO "AWAITS NOTHING" SITE ANY MORE.** Absence is the absence of a ROW, so the empty-name
-// sentinel site and the parallel `BoolArray` that had to guard it are both gone: a function that awaits no
-// reply simply appears in no row, and nothing has to remember not to read its fields.
-type ServiceAwaitRoster
-	// Row ⇒ the function whose own body holds the `await`.
-	var funcIndices as CsrColumn
-	// Row ⇒ which service that await blocks on, and where it is written.
-	var sites as ServiceAwaitSiteArray
-
-	static function create() returns ServiceAwaitRoster
-		return Self{funcIndices: CsrColumn.create(), sites: ServiceAwaitSiteArray.create()}
-	end 'create'
-
-	function note(funcIndex FuncIndex, site ServiceAwaitSite)
-		self.funcIndices.push(funcIndex)
-		self.sites.push(site)
-	end 'note'
-
-	function rowCount() returns CsrIndex
-		return self.sites.count()
-	end 'rowCount'
-
-	function siteAt(row CsrIndex) returns ServiceAwaitSite
-		return try self.sites.get(row) otherwise panic("ServiceAwaitRoster.siteAt: sites.get OOB at {row} below count {self.rowCount()}")
-	end 'siteAt'
-
-	function funcIndexAt(row CsrIndex) returns FuncIndex
-		return try self.funcIndices.get(row) otherwise panic("ServiceAwaitRoster.funcIndexAt: funcIndices.get OOB at {row} below count {self.rowCount()}")
-	end 'funcIndexAt'
-
-	// Mark every function whose OWN body awaits a reply from `awaitedName`. ⚡ ONE sweep of the roster per
-	// SERVICE, rather than one test per (function, service) pair — which is why carrying every await costs
-	// less than the single-site column it replaced, not more.
-	function seedFunctionsAwaiting(awaitedName ByteArray, seeds BoolArray)
-		for row in 0 upto self.rowCount() 'eachRow'
-			if not self.siteAt(row).serviceTypeName.equals(awaitedName) 'anotherService'
-				continue
-			end 'anotherService'
-
-			let funcIndex = self.funcIndexAt(row)
-			try seeds.set(funcIndex, value: true) otherwise panic("ServiceAwaitRoster.seedFunctionsAwaiting: seeds.set OOB at {funcIndex} — every row's function index came from the same function list the seed column was sized to")
-		end 'eachRow'
-	end 'seedFunctionsAwaiting'
-
-	// The FIRST row in which `funcIndex` itself awaits `awaitedName`, or `NoAwaitRow` when it blocks on that
-	// service only through a helper.
-	function rowWhere(funcIndex FuncIndex, awaitedName ByteArray) returns CsrIndex
-		for row in 0 upto self.rowCount() 'eachRow'
-			if self.funcIndexAt(row) == funcIndex and self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsItHere'
-				return row
-			end 'awaitsItHere'
-		end 'eachRow'
-
-		return NoAwaitRow
-	end 'rowWhere'
-
-	// The first row ANYWHERE that awaits `awaitedName` — the anchor for a message that blocks only through a
-	// helper. It panics rather than answering a default: a caller reaches it only for a function the closure
-	// marked, and a mark reaches a caller only from a seed.
-	function firstRowAwaiting(awaitedName ByteArray) returns CsrIndex
-		for row in 0 upto self.rowCount() 'eachRow'
-			if self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsIt'
-				return row
-			end 'awaitsIt'
-		end 'eachRow'
-
-		panic("ServiceAwaitRoster.firstRowAwaiting: no function awaits a reply from `{String.from(awaitedName)}`, yet the closure marked one as blocking on it — a mark reaches a caller only from a seed, and a seed is a direct await")
-	end 'firstRowAwaiting'
-end 'ServiceAwaitRoster'
-
-// ⭐ **"NO SUCH ROW" AS A VALUE** — `NoServiceNode`'s rule, one column over: row 0 is a real row, so the
-// absence sits above every key the roster can mint.
-let NoAwaitRow = u64.max as CsrIndex
-
 // ⭐ **THE E3139 CHECK.** Build the blocking graph, ask `nodesOnACycle` once for the whole of it, and report
 // the EARLIEST-SPAWNED service that lies on a cycle.
 //
@@ -233,16 +147,12 @@ let NoAwaitRow = u64.max as CsrIndex
 // mistake, and reporting whichever the roster happened to yield first would make the diagnostic a property
 // of iteration order; the roster IS first-spawn order, so the lowest node is the one the author wrote first.
 //
-// ⚠ **THE GATE IS `serviceAwaitSites`, WHICH IS EMPTY FOR EVERY PROGRAM THAT AWAITS NO REPLY.** That is
-// every program with no service in it and every SV1-shaped program that only sends fire-and-forget, so the
-// overwhelming majority of compiles pay one `count()` and nothing else — no roster walk, no call-graph
-// pass, no CSR.
-export function checkServiceCallCycles(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
-	if project.serviceAwaitSites.count() == 0 'nothingBlocksOnAReply'
-		return
-	end 'nothingBlocksOnAReply'
-
-	let graph = buildServiceBlockingGraph(project, module: module, signatures: signatures, funcNames: funcNames)
+// ⚠ **THE GATE IS `serviceAwaitSites`, WHICH IS EMPTY FOR EVERY PROGRAM THAT AWAITS NO REPLY** — that is
+// every program with no service in it and every SV1-shaped program that only sends fire-and-forget — and it
+// is asked by `checkServiceRules`, which owns the survey this check and E3143 share. Neither rule builds a
+// call graph of its own any more; see `ServiceProgramSurvey`.
+module function checkServiceCallCycles(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
+	let graph = buildServiceBlockingGraph(signatures, funcNames: funcNames, survey: survey)
 	let onCycle = nodesOnACycle(graph.adjacency())
 	for node in 0 upto graph.nodeCount() 'eachService'
 		let lies = try onCycle.get(node) otherwise panic("checkServiceCallCycles: node {node} is outside the {onCycle.count()}-node answer the graph was built over")
@@ -253,31 +163,19 @@ export function checkServiceCallCycles(project Project, module MaxonModule, sign
 	end 'eachService'
 end 'checkServiceCallCycles'
 
-// ⭐⭐ **THE GRAPH, IN ONE CALL-GRAPH PASS PLUS ONE CLOSURE PER SERVICE.** The pass fills the call edges and,
-// per service, the functions whose OWN body awaits a reply from it; the closure then pushes each of those
-// marks up into every caller, and a marked function that is itself a MESSAGE contributes the edge.
+// ⭐⭐ **THE GRAPH, IN ONE CLOSURE PER SERVICE OVER THE SHARED SURVEY.** The survey has already filled the
+// call edges and, per function, the awaits its OWN body holds; the closure then pushes each of those marks
+// up into every caller, and a marked function that is itself a MESSAGE contributes the edge.
 //
 // ⚡ **ONE EDGE WALK, `services` CLOSURES.** The alternative — one closure over a bit-set per function —
 // would need a per-function set and a widened `markSeededCallers`; a program has one or two services and the
 // closure is linear in the call graph, so `services` sweeps over one shared edge list is the cheaper shape
 // AND leaves the shared closure untouched.
-function buildServiceBlockingGraph(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns ServiceBlockingGraph
+function buildServiceBlockingGraph(signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns ServiceBlockingGraph
 	var graph = ServiceBlockingGraph.create(serviceTypeRoster(signatures))
-	var edges = CallGraphEdges.create()
-	var awaits = ServiceAwaitRoster.create()
-	// ⚡ **THE MESSAGE ROSTER IS ASKED ONCE PER FUNCTION, NOT ONCE PER (FUNCTION, SERVICE).**
-	// `serviceMessageOwnerOf` walks every service's every variant, and the closure below runs once per
-	// SERVICE — so asking it inside that loop would make the whole check quadratic in the service count for
-	// no gain: whether a function is a message does not depend on which service is being closed over.
-	var ownerPerFunc = ByteArrayArray.create()
-	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
-		let func = try funcNames.functions.get(funcIndex) otherwise panic("buildServiceBlockingGraph: functions.get OOB at {funcIndex}")
-		noteServiceCallEdges(project, module: module, func: func, funcIndexByName: funcNames.byName, callerIndex: funcIndex, edges: edges, awaits: awaits)
-		ownerPerFunc.push(messageOwnerNameOf(signatures, callee: func.name))
-	end 'eachFunc'
 
 	for awaited in 0 upto graph.nodeCount() 'eachAwaitedService'
-		addBlockingEdgesTo(graph, awaited: awaited, funcNames: funcNames, edges: edges, awaits: awaits, ownerPerFunc: ownerPerFunc)
+		addBlockingEdgesTo(graph, awaited: awaited, funcNames: funcNames, survey: survey)
 	end 'eachAwaitedService'
 	return graph
 end 'buildServiceBlockingGraph'
@@ -285,7 +183,10 @@ end 'buildServiceBlockingGraph'
 // The service a function is a message of, or EMPTY. The empty name is safe as the absence here — unlike a
 // node index, which has a real 0 — because no declaration is named by the empty string and the only reader
 // tests it with `isEmpty`.
-function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray
+// ⚠ `module`, because `ServiceGlobalAccessCheck` seeds its forward closure from the very same question — *"is
+// this function a message, and of which service?"* — and a second spelling of it there would be free to
+// disagree about what a message is.
+module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray
 	return match serviceMessageOwnerOf(signatures, callee: callee) 'owner'
 		notAMessage gives EmptySourceText
 		ofService(typeName, _) gives typeName
@@ -294,27 +195,27 @@ end 'messageOwnerNameOf'
 
 // One awaited service's closure and the edges it produces. Split from the walk above so each half is one
 // statement of one idea, and because the seed column has to be rebuilt per service anyway.
-function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNames FunctionNameIndex, edges CallGraphEdges, awaits ServiceAwaitRoster, ownerPerFunc ByteArrayArray)
+function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
 	let awaitedName = graph.serviceNameOf(awaited)
 	var seeds = BoolArray.create()
-	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
+	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
 		seeds.push(false)
 	end 'eachFunc'
-	awaits.seedFunctionsAwaiting(awaitedName, seeds: seeds)
+	survey.awaits.seedFunctionsAwaiting(awaitedName, seeds: seeds)
 
-	let blocks = markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count())
-	for funcIndex in 0 upto funcNames.functions.count() 'eachBlockedFunc'
+	let blocks = markSeededCallers(survey.edges, seeds: seeds, nodeCount: survey.funcCount())
+	for funcIndex in 0 upto survey.funcCount() 'eachBlockedFunc'
 		if not (try blocks.get(funcIndex) otherwise panic("addBlockingEdgesTo: blocks.get OOB at {funcIndex} below count {blocks.count()}")) 'blocksOnNothing'
 			continue
 		end 'blocksOnNothing'
 
-		let ownerName = try ownerPerFunc.get(funcIndex) otherwise panic("addBlockingEdgesTo: ownerPerFunc.get OOB at {funcIndex}")
+		let ownerName = survey.serviceOf(funcIndex)
 		if ownerName.isEmpty() 'notAMessage'
 			continue
 		end 'notAMessage'
 
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("addBlockingEdgesTo: functions.get OOB at {funcIndex}")
-		noteBlockingEdge(graph, owner: ownerName, awaited: awaited, message: func.name, site: blockingSiteFor(funcIndex, awaitedName: awaitedName, awaits: awaits))
+		noteBlockingEdge(graph, owner: ownerName, awaited: awaited, message: func.name, site: blockingSiteFor(funcIndex, awaitedName: awaitedName, awaits: survey.awaits))
 	end 'eachBlockedFunc'
 end 'addBlockingEdgesTo'
 
@@ -343,36 +244,19 @@ function blockingSiteFor(funcIndex FuncIndex, awaitedName ByteArray, awaits Serv
 	return awaits.siteAt(awaits.firstRowAwaiting(awaitedName))
 end 'blockingSiteFor'
 
-// ⭐⭐ **ONE FUNCTION'S CALL EDGES, AND EVERY SERVICE REPLY ITS OWN BODY AWAITS.** Both come out of ONE
-// pass over its ops, on `functionYieldsDirectly`'s shape and for its reason.
-//
 // ⭐⭐⭐ **A `serviceSend` IS EXCLUDED, AND THAT IS THE RULE THIS WHOLE FILE RESTS ON.**
 // `maxonOpCalleeKind` answers `direct` for a send — which is right for `UnusedExportCheck`, whose question
 // is *"is this export referenced?"* — but a send is not a CALL in this frame: it enqueues, returns, and the
 // handler runs on another green thread. Counting it here would make every peer-to-peer ring a cycle and
 // would refuse `services.fire-and-forget-cycle-is-legal`, which is the case that exists to catch exactly
 // this. Delete the guard and watch it go red.
-function noteServiceCallEdges(project Project, module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, awaits ServiceAwaitRoster)
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("noteServiceCallEdges: blockRef from func.blockRefs not in module.blocks")
-		for opIndex in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIndex) otherwise panic("noteServiceCallEdges: opIndex {opIndex} not in module.ops")
-			if opIsACallGraphEdge(op) 'aCall'
-				_ = recordCallGraphEdge(maxonOpCalleeName(op), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
-			end 'aCall'
-
-			// ⛔ **EVERY await IS NOTED, NOT THE LAST ONE.** See `ServiceAwaitRoster` for the ring that compiled
-			// clean while this kept one site per function.
-			if let site = try project.serviceAwaitSites.get(opIndex) 'awaitsAReply'
-				awaits.note(callerIndex, site: site)
-			end 'awaitsAReply'
-		end 'eachOp'
-	end 'eachBlock'
-end 'noteServiceCallEdges'
-
-// Does this op hand control to a NAMED function in this frame? See `noteServiceCallEdges` for why a
-// `serviceSend` — which `maxonOpCalleeKind` also calls `direct` — is not one.
-function opIsACallGraphEdge(op MaxonOp) returns bool
+//
+// Does this op hand control to a NAMED function in this frame?
+//
+// ⚠ `module`, and `ServiceProgramSurvey` is the one asker for both rules. E3143's exclusion of a send is
+// right there for the same reason read from the other end: a send's handler runs on the SERVICE's green
+// thread, and that handler is already a seed of that walk in its own right.
+module function opIsACallGraphEdge(op MaxonOp) returns bool
 	if opIsAServiceSend(op) 'enqueuesRatherThanCalls'
 		return false
 	end 'enqueuesRatherThanCalls'

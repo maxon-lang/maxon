@@ -307,6 +307,28 @@ export let NetworkMarker = "<!-- network:"
 // which is the failure `AsyncTraceMarker` documents having actually shipped.
 export let NetworkLiveValue = "live"
 
+// ⭐⭐ **HOW MANY PROCESSORS THIS CASE'S PROGRAM RUNS ON — `<!-- procs: 4 -->`, the marker that makes the
+// scheduler's processor count a property of the CASE rather than of the machine and the build.**
+//
+// `MAXON_MAX_PROCS` is read once, at process start, by the emitted scheduler
+// (`SchedRuntime.emitResolveMaxProcs`), and until this marker existed **no spec case could set it**: the
+// harness gave a case an argv and the parent's environment unchanged, so every multi-processor property the
+// green-thread substrate has was reachable only from a driver script. `specs-shv2/sched-runqueue.md` stated
+// that restriction in as many words. The marker lifts it in BOTH directions — a case may PIN one processor
+// against a default that is about to become the machine's count, and a case may ask for more than the
+// default — which is why the value is a count and not a flag.
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A DEFAULT** — `parseProcsValue`, which follows
+// `parseNetworkValue` exactly. Reading `<!-- procs: two -->` as "leave the default alone" would run the case
+// at whatever the machine gave it and report the result as though the number had been honoured, which is
+// the silently-declined claim `AsyncTraceMarker` records having shipped.
+//
+// It is not a superstring or substring of any other marker ("<!-- procs:" first differs from "<!-- test:",
+// "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace", "<!-- LogTrace"
+// and "<!-- network:" at the character after "<!-- "), so the marker checks stay independent and none can
+// swallow another.
+let ProcsMarker = "<!-- procs:"
+
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
@@ -755,6 +777,26 @@ export union SpecNetwork
 	live
 end 'SpecNetwork'
 
+// A processor count a `<!-- procs: N -->` marker may name. The scheduler CLAMPS whatever it is given against
+// the machine's own count and floors it at one (`SchedRuntime.emitResolveMaxProcs`), so the only bound this
+// alias owes is the one the decimal itself has — a spec that names more processors than exist gets the
+// machine, which is the same answer the variable gives when it is set by hand.
+export typealias ProcessorCount = int(1 to i64.max)
+
+// ⭐ **HOW MANY PROCESSORS A CASE ASKS FOR — see `ProcsMarker` for why this is a per-case fact.**
+//
+// A UNION rather than a count with a zero standing in for "no marker", for `SpecNetwork`'s reason: the
+// absence of the marker is a DIFFERENT claim from any number — it says the case takes the process default,
+// which `specs-shv2/sched-default-procs.md`'s first case exists to assert — and a sentinel would let a
+// reader confuse the two silently. It also makes every consumer's `match` total.
+export union SpecProcs
+	// No marker: the program is spawned with the parent's environment unchanged and resolves whatever
+	// `DefaultMaxProcs` and the machine give it.
+	unset
+	// `<!-- procs: N -->`: `MAXON_MAX_PROCS=N` is placed in the environment of this case's program alone.
+	pinned(count ProcessorCount)
+end 'SpecProcs'
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
@@ -814,11 +856,16 @@ export type SpecTest
 	// `SpecTestRunner.networkModeAllows`.
 	export let network as SpecNetwork
 
+	// How many processors this case's program runs on (a `<!-- procs: … -->` marker). It rides HERE for
+	// `programArgs`' reason and is the same kind of fact: it changes how the run is PERFORMED — the one
+	// environment variable the child is given — not what the run must produce.
+	export let procs as SpecProcs
+
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, traceCapture SpecTraceCapture, network SpecNetwork) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1189,6 +1236,9 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// `none` unless a `<!-- network: … -->` marker says otherwise — the ordinary case, and the literal
 	// answer for a case that reaches no host, not a default standing in for an unread marker.
 	var network = SpecNetwork.none
+	// `unset` unless a `<!-- procs: … -->` marker says otherwise — the literal answer for a case that names
+	// no count and takes the process default, not a default standing in for an unread marker.
+	var procs = SpecProcs.unset
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -1265,6 +1315,15 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'networkMarker'
+
+		// The processor count the author asked for, consumed identically to the six above — including on a
+		// DISABLED case, so shelving a multi-processor case does not leave its marker to fall through as
+		// unread prose. The VALUE is refused rather than defaulted; see `parseProcsValue`.
+		if openingsCarry(openings, marker: ProcsMarker) 'procsMarker'
+			procs = parseProcsValue(line, specPath: specPath, testName: name)
+			i = i + 1
+			continue
+		end 'procsMarker'
 
 		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
 		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
@@ -1441,7 +1500,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			unpinned to pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
 		end 'traceCaptureOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs))
 		return i
 	end 'rejected'
 
@@ -1455,7 +1514,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs))
 
 	return i
 end 'scanTestFromMarker'
@@ -1749,7 +1808,7 @@ end 'markerValue'
 // ARE — so every question after this one is a plain `startsWith` against a constant, with no
 // whitespace rule of its own and nothing to allocate. NORMALIZING THE OPENING RATHER THAN TAKING EACH
 // MARKER CONSTANT APART is what makes the tolerance cost one allocation per LINE instead of one per
-// (line × marker family): there are eight families, and `scanTestFromMarker` asks about all of them on
+// (line × marker family): there are NINE families, and `scanTestFromMarker` asks about all of them on
 // every line of every case (measured 2026-08-24: the per-family form cost ~0.5 s of fixed overhead on
 // a run that parses the corpus and exits).
 //
@@ -1787,8 +1846,8 @@ end 'markerBodyOf'
 // plain prefix test the marker constants were always written to be — the whitespace the reference
 // allows was spent once, in `markerOpeningsIn`.
 //
-// Takes the OPENINGS rather than the line so the caller can compute them once and ask about all eight
-// families; `carriesMarker` below is the door for a caller that asks once.
+// Takes the OPENINGS rather than the line so the caller can compute them once and ask about EVERY
+// family; `carriesMarker` below is the door for a caller that asks once.
 function openingsCarry(openings StringArray, marker String) returns bool
 	return match markerOpeningAmong(openings, marker: marker) 'opening'
 		at gives true
@@ -1854,6 +1913,26 @@ function parseNetworkValue(line String, specPath FilePath, testName String) retu
 
 	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{NetworkMarker} {value} -->`, and '{NetworkLiveValue}' is the only value this marker takes. It says the case opens a socket to a REAL EXTERNAL HOST, so a default run leaves it out and `--network` brings it back; an unrecognized value would quietly read as 'reaches no host' and put the case back in the default gate")
 end 'parseNetworkValue'
+
+// How many processors a `<!-- procs: … -->` marker asks for, read through the same `markerValue` every other
+// valued marker goes through.
+//
+// ⛔ **AN UNREADABLE OR NON-POSITIVE VALUE IS A PANIC, NOT AN `unset`**, for `parseNetworkValue`'s reason
+// exactly: a defaulted value would run the case at whatever the machine happened to give it and report the
+// answer as though the number had been honoured. The scheduler itself treats a malformed `MAXON_MAX_PROCS`
+// as "leave the default alone" (`SchedRuntime.emitResolveMaxProcs`) — which is the right answer for a value
+// a USER typed at a shell and the wrong one for a value a SPEC FILE states, because only one of the two is
+// a committed claim somebody expects to be checked.
+function parseProcsValue(line String, specPath FilePath, testName String) returns SpecProcs
+	let value = markerValue(line)
+	let count = try int.fromString(value) otherwise panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{ProcsMarker} {value} -->`, and this marker takes a positive decimal processor count. It becomes `{String.from(MaxProcsEnvName)}={value}` in the environment of this case's program alone, so a value the harness cannot read is a claim the file makes and nothing honours")
+
+	if count < 1 'notPositive'
+		panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{ProcsMarker} {value} -->`, and a processor count below 1 is not one. The scheduler builds at least one P whatever it is told (`emitResolveMaxProcs` floors it), so this number would be silently discarded rather than honoured")
+	end 'notPositive'
+
+	return SpecProcs.pinned(count as ProcessorCount)
+end 'parseProcsValue'
 
 // The arguments an `<!-- Args: … -->` marker names, in order — its value split into the argv the
 // program is spawned with. `<!-- Args: -5.5 -->` is ONE argument, `-5.5`: a value beginning with `-`

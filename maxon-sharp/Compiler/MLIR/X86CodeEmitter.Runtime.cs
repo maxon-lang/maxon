@@ -39,6 +39,7 @@ public partial class X86CodeEmitter {
     EmitMaxonBoolToString();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
+    EmitMaxonOsEnvironmentEntry();
     EmitMaxonExecutablePath();
     EmitMaxonFileSize();
     EmitMaxonFileRead();
@@ -1174,6 +1175,170 @@ public partial class X86CodeEmitter {
     // Step 9: Return buffer pointer
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     DefineLabel("rt_cla_return");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Load the UTF-16 code unit the cursor at <paramref name="cursorSlot"/> points at into RCX,
+  /// leaving the cursor pointer itself in RAX. RDX is clobbered.
+  ///
+  /// TWO BYTE LOADS RATHER THAN ONE WORD LOAD, deliberately: the unit being tested is sometimes the
+  /// very last one of the region GetEnvironmentStringsW handed back, and a wider load would read past
+  /// the end of it. Both halves are needed — a wide NUL is two zero bytes, and a code unit whose LOW
+  /// byte is zero and whose high byte is not (U+0100 and up) is a real character that may
+  /// legitimately begin an entry.
+  /// </summary>
+  private void EmitLoadWideUnitAtCursor(int cursorSlot) {
+    EmitMovRegMem(X86Register.Rax, cursorSlot, 8);
+    EmitMovzxRegByteIndirect(X86Register.Rcx, X86Register.Rax, 0);
+    EmitMovzxRegByteIndirect(X86Register.Rdx, X86Register.Rax, 1);
+    EmitShlRegImm(X86Register.Rdx, 8);
+    EmitOrRegReg(X86Register.Rcx, X86Register.Rdx);
+  }
+
+  /// <summary>
+  /// maxon_os_environment_entry(index) -> cstring_ptr: the index-th <c>NAME=VALUE</c> entry of THIS
+  /// process's environment, as a freshly mm_raw_alloc'd UTF-8 string. An index past the last entry
+  /// answers a 1-byte "".
+  ///
+  /// It is <see cref="EmitMaxonCommandLineArg"/>'s twin in every respect that matters: same ownership
+  /// (the RuntimeCallToManaged lowering wraps the cstring into a __ManagedMemory and mm_raw_free's
+  /// this buffer), same UTF-8 boundary, same out-of-range answer. The stdlib walks it from 0 until it
+  /// sees the empty answer (Subprocess.currentEnvironmentEntries) and reassembles the entries into the
+  /// block a spawn is given.
+  ///
+  /// WIDE ALL THE WAY IN, UTF-8 ONLY AT THE MAXON BOUNDARY — the convention the command line and the
+  /// working directory already follow in this file. GetEnvironmentStringsA would save the
+  /// WideCharToMultiByte, and it would be LOSSY: it renders whatever the ANSI codepage cannot express
+  /// as '?', so a PATH holding a non-ASCII user name would reach a child MANGLED rather than merely
+  /// re-encoded — and the entire point of reading the environment here is to hand it back to a child
+  /// unchanged except at the names the caller actually named.
+  ///
+  /// EMPTY MEANS "PAST THE END", AND IT CANNOT MEAN ANYTHING ELSE: every environment entry carries at
+  /// least a name, so no real entry is the empty string. Same convention, and the same reason, as
+  /// maxon_subprocess_resolve_on_path's "not found".
+  ///
+  /// Stack: [rbp-0x08]=index (counted down), [rbp-0x10]=block base (for FreeEnvironmentStringsW),
+  ///        [rbp-0x18]=cursor, [rbp-0x20]=wide length of the found entry, [rbp-0x28]=utf8 size,
+  ///        [rbp-0x30]=utf8 buffer
+  /// </summary>
+  private void EmitMaxonOsEnvironmentEntry() {
+    EmitRuntimeFunctionStart("maxon_os_environment_entry", 1, 0x80);
+
+    EmitCallImportOnSystemStack("kernel32.dll", "GetEnvironmentStringsW");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);                     // block base
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);                     // cursor = base
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_oee_no_block");
+
+    // Walk entry by entry until the requested index, or until the block's own terminator.
+    DefineLabel("rt_oee_scan");
+    EmitLoadWideUnitAtCursor(-0x18);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_oee_free_empty");                            // block terminator: past the end
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_oee_found");
+    EmitSubRegImm(X86Register.Rcx, 1);
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8);
+
+    // Skip this entry's characters, then its own terminating wide NUL.
+    DefineLabel("rt_oee_skip");
+    EmitLoadWideUnitAtCursor(-0x18);
+    EmitAddRegImm(X86Register.Rax, 2);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("nz", "rt_oee_skip");
+    EmitJmp("rt_oee_scan");
+
+    // The cursor sits on the entry we want. Measure it in code units.
+    DefineLabel("rt_oee_found");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);                     // the measuring cursor
+    DefineLabel("rt_oee_measure");
+    EmitLoadWideUnitAtCursor(-0x20);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_oee_measured");
+    EmitAddRegImm(X86Register.Rax, 2);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitJmp("rt_oee_measure");
+    DefineLabel("rt_oee_measured");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitShrRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);                     // code units, terminator excluded
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_oee_free_empty");                            // an entry with no characters is none
+
+    // Required UTF-8 bytes. The length is passed exactly, so no terminator is counted.
+    EmitSystemStackEnter(0x40);
+    EmitMovRegImm(X86Register.Rcx, 65001);                        // CP_UTF8
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);              // flags
+    EmitMovRegMem(X86Register.R8, -0x18, 8);                      // wide entry
+    EmitMovRegMem(X86Register.R9, -0x20, 4);                      // code units
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);  // lpMultiByteStr = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00);  // cbMultiByte = 0
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);  // lpDefaultChar = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00);  // lpUsedDefaultChar = NULL
+    EmitCallImport("kernel32.dll", "WideCharToMultiByte");
+    EmitSystemStackLeave(0x40);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_oee_free_empty");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);                     // utf8 size, terminator excluded
+
+    // One byte more than the conversion needs, for the NUL this answer is read back through.
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitAddRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_oee_free_empty");
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+
+    EmitSystemStackEnter(0x40);
+    EmitMovRegImm(X86Register.Rcx, 65001);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovRegMem(X86Register.R8, -0x18, 8);
+    EmitMovRegMem(X86Register.R9, -0x20, 4);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x20);                      // lpMultiByteStr = buffer
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x28);                      // cbMultiByte = size
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "WideCharToMultiByte");
+    EmitSystemStackLeave(0x40);
+
+    // NUL-terminate at utf8 size.
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitAddRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitBytes(0xC6, 0x00, 0x00);                                  // MOV byte [RAX], 0
+    EmitJmp("rt_oee_free_and_return");
+
+    // Past the end, or a conversion that could not answer: a fresh 1-byte "".
+    DefineLabel("rt_oee_free_empty");
+    EmitMovRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitBytes(0xC6, 0x00, 0x00);                                  // MOV byte [RAX], 0
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+
+    DefineLabel("rt_oee_free_and_return");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCallImportOnSystemStack("kernel32.dll", "FreeEnvironmentStringsW");
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitJmp("rt_oee_done");
+
+    // GetEnvironmentStringsW itself answered nothing: there is no block to free.
+    DefineLabel("rt_oee_no_block");
+    EmitMovRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitBytes(0xC6, 0x00, 0x00);                                  // MOV byte [RAX], 0
+
+    DefineLabel("rt_oee_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -10564,12 +10729,22 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__subp_managed_to_wide_or_null");
     EmitMovMemReg(SlotCwdWide, X86Register.Rax, 8);
 
-    // Build env block (or NULL if envInherit).
+    // Build env block (or NULL if envInherit). The test is `== EnvSourceParent` rather than
+    // "non-zero" so an unrecognised value falls to the caller-built-block path — see
+    // `Runtime/SubprocessContract.EnvSourceParent` for which direction each spelling fails in.
     EmitMovRegMem(X86Register.Rax, -0x28, 8);                    // envInherit
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("nz", "rt_subp_sc_env_null");
+    EmitCmpRegImm(X86Register.Rax, Runtime.SubprocessContract.EnvSourceParent);
+    EmitJcc("z", "rt_subp_sc_env_null");
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);                    // env_managed
     EmitCallRuntimeLabel("__subp_build_env_wide");
+    // ⛔ A ZERO IS A FAILED CONVERSION AND IS FAILED HERE, exactly as the command line thirteen lines up
+    // is. It used to fall through: a 0 stored in SlotEnvWide also suppresses CREATE_UNICODE_ENVIRONMENT
+    // below and reaches CreateProcessW as `lpEnvironment = NULL`, so an allocation failure mid-build handed
+    // the child THE PARENT'S ENVIRONMENT while its caller had asked for another — the silent wrong answer
+    // the caller-built-block path exists to prevent, indistinguishable at every later step from a spawn
+    // that did what it was told.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_sc_fail");
     EmitMovMemReg(SlotEnvWide, X86Register.Rax, 8);
     EmitJmp("rt_subp_sc_env_done");
     DefineLabel("rt_subp_sc_env_null");
@@ -11082,6 +11257,17 @@ public partial class X86CodeEmitter {
     EmitJcc("z", "rt_subp_sc_no_detach");
     EmitOrRegImm(X86Register.Rax, 0x08 | 0x200);
     DefineLabel("rt_subp_sc_no_detach");
+    // CREATE_UNICODE_ENVIRONMENT, and ONLY when we actually hand over a block. Without it
+    // CreateProcessW reads lpEnvironment as ANSI, so the UTF-16 block __subp_build_env_wide just
+    // assembled would be read one byte per character and the child would see its first variable's
+    // name followed by a NUL — an environment of one broken entry, silently. It is NOT set on the
+    // inherit path, where lpEnvironment is NULL and the flag would be describing the parent's block
+    // rather than ours.
+    EmitMovRegMem(X86Register.Rcx, SlotEnvWide, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_sc_no_unicode_env");
+    EmitOrRegImm(X86Register.Rax, 0x400);
+    DefineLabel("rt_subp_sc_no_unicode_env");
     EmitBytes(0x48, 0x89, 0x44, 0x24, 0x28);                      // [rsp+0x28] = creation flags
 
     // arg7 (qword [rsp+0x30]): lpEnvironment
@@ -12126,16 +12312,113 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // __subp_build_env_wide(env_managed_rcx) — TODO Phase 3.x: parse
-  // newline-separated K=V pairs from env_managed's buffer and assemble a
-  // double-null-terminated UTF-16 environment block. For Phase 3.2 the
-  // stdlib only invokes us when envInherit=0 with an explicit env; we
-  // return NULL to fall back to inherit semantics until the real parser
-  // lands. Callers must surface the "custom env not yet implemented"
-  // limitation higher up the stack.
+  // __subp_build_env_wide(env_buffer_rcx) — the caller's environment block, converted from the
+  // UTF-8 form the stdlib assembles (Subprocess.spawnEnvironmentFor) into the UTF-16 form
+  // CreateProcessW reads under CREATE_UNICODE_ENVIRONMENT. Returns an mm_raw_alloc'd block, or 0
+  // when the input is null.
+  //
+  // ⭐ THE INPUT IS SELF-DELIMITING AND MUST BE: the RuntimeCall lowering hands over a
+  // __ManagedMemory's BUFFER POINTER with no length beside it, so the walk below is the only thing
+  // that knows where the block ends. Its shape is the platform's own — NUL-terminated "NAME=VALUE"
+  // entries back-to-back, then one more NUL — so `p += strlen(p) + 1` until `*p == 0` measures it
+  // without ever reading past the terminator it is looking for. A "scan for two NULs in a row" would
+  // read one byte beyond an EMPTY block, which is exactly one byte long.
+  //
+  // ⚠ THE CONVERSION EXCLUDES THE BLOCK'S OWN TERMINATOR AND TWO WIDE NULS ARE APPENDED INSTEAD.
+  // MultiByteToWideChar refuses a zero-length source, and an empty environment is a block of length
+  // zero by that measure — so the terminator cannot ride through the conversion and be relied on.
+  // Appending both unconditionally gives an empty environment the L"\0\0" MSDN specifies and gives a
+  // populated one its last entry's NUL (already converted) followed by the block's, which is the same
+  // block either way.
   private void EmitMaxonSubprocessBuildEnvWide() {
-    EmitRuntimeFunctionStart("__subp_build_env_wide", 1, 0x20);
+    // [rbp-0x08] block  [rbp-0x10] cursor / utf8 length  [rbp-0x18] wchars  [rbp-0x20] wide buf
+    EmitRuntimeFunctionStart("__subp_build_env_wide", 1, 0x40);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_bew_null");
+
+    // Walk to the block terminator: the byte length is everything before it.
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);                     // cursor = block
+    DefineLabel("rt_subp_bew_walk");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovzxRegByteIndirect(X86Register.Rcx, X86Register.Rax, 0);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_bew_walked");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_strlen")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitAddRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitAddRegImm(X86Register.Rcx, 1);                            // past this entry's own NUL
+    EmitMovMemReg(-0x10, X86Register.Rcx, 8);
+    EmitJmp("rt_subp_bew_walk");
+
+    DefineLabel("rt_subp_bew_walked");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);                     // utf8 length, terminator excluded
+
+    // An empty environment converts nothing; the two appended NULs are the whole block.
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovMemReg(-0x18, X86Register.Rcx, 8);                     // wchars = 0
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_bew_alloc");
+
+    EmitSystemStackEnter(0x40);
+    EmitMovRegImm(X86Register.Rcx, 65001);                        // CP_UTF8
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovRegMem(X86Register.R8, -0x08, 8);                      // utf8 block
+    EmitMovRegMem(X86Register.R9, -0x10, 4);                      // utf8 length (DWORD)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "MultiByteToWideChar");
+    EmitSystemStackLeave(0x40);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_bew_null");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);                     // wchars
+
+    DefineLabel("rt_subp_bew_alloc");
+    // (wchars + 2) * 2 — the converted units, then the two terminating wide NULs.
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitAddRegImm(X86Register.Rcx, 2);
+    EmitShlRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_bew_null");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_bew_terminate");
+
+    EmitSystemStackEnter(0x40);
+    EmitMovRegImm(X86Register.Rcx, 65001);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovRegMem(X86Register.R8, -0x08, 8);
+    EmitMovRegMem(X86Register.R9, -0x10, 4);
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x20);
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x28);
+    EmitCallImport("kernel32.dll", "MultiByteToWideChar");
+    EmitSystemStackLeave(0x40);
+
+    DefineLabel("rt_subp_bew_terminate");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitShlRegImm(X86Register.Rcx, 1);
+    EmitAddRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitBytes(0x66, 0xC7, 0x00, 0x00, 0x00);                      // MOV word [RAX], 0
+    EmitBytes(0x66, 0xC7, 0x40, 0x02, 0x00, 0x00);                // MOV word [RAX+2], 0
+
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitJmp("rt_subp_bew_done");
+
+    DefineLabel("rt_subp_bew_null");
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+
+    DefineLabel("rt_subp_bew_done");
     EmitRuntimeFunctionEnd();
   }
 

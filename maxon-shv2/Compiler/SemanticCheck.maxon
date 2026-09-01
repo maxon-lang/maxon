@@ -87,10 +87,12 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// E3073 — a spawn whose callee can never suspend. Whole-program like the summary above it, and for the same
 	// reason: whether `f` yields depends on what `f` calls, which is only knowable once every file has merged.
 	checkAsyncYielding(project, module: module, funcNames: funcNames)
-	// E3139 — two services that can await replies from each other. Whole-program for `checkAsyncYielding`'s
-	// exact reason, and over the same closure: whether a message blocks on a service depends on what it
-	// CALLS, which is only knowable once every file has merged. See `ServiceCallCycleCheck`.
-	checkServiceCallCycles(project, module: module, signatures: signatures, funcNames: funcNames)
+	// E3139 and E3143 — two services that can await replies from each other, and a module-level `var` read or
+	// written from a green thread. Whole-program for `checkAsyncYielding`'s exact reason, and over ONE closure
+	// apiece rowed opposite ways over ONE shared call graph (`ServiceProgramSurvey`): the first asks which
+	// messages BLOCK ON a service, the second what a message RUNS. Their gates, their order and the single
+	// sweep they share are all in `checkServiceRules`.
+	checkServiceRules(project, module: module, signatures: signatures, funcNames: funcNames)
 	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
 	// PARSER's (a binding exists nowhere else in shv2), and this is the first point that holds the
 	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
@@ -3629,6 +3631,19 @@ end 'buildYieldingSummary'
 module function markSeededCallers(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
 	return reverseReachabilityMark(buildCsr(edges.calleeIndices, to: edges.callerIndices, nodeCount: nodeCount), seeds: seeds)
 end 'markSeededCallers'
+
+// ⭐⭐ **THE FORWARD TWIN — "what can a seed REACH?" — and it is the SAME engine with the two columns the
+// other way round.** Every summary above asks which functions are AFFECTED BY a fact, which travels up into
+// callers; E3143 asks the opposite question, *"what does a message run?"*, which travels down into callees.
+// The mark walk itself is direction-free — it drains a worklist over whatever adjacency it is handed — so
+// the whole difference between the two questions is which column `buildCsr` rows by, and that is stated
+// here, once, rather than by a second walk.
+//
+// ⚠ The engine keeps `reverseReachabilityMark`'s name because REVERSE is what it is to its four other
+// callers; renaming it for this one would make four correct call sites read wrongly.
+module function markSeededCallees(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
+	return reverseReachabilityMark(buildCsr(edges.callerIndices, to: edges.calleeIndices, nodeCount: nodeCount), seeds: seeds)
+end 'markSeededCallees'
 
 // The SEED: does this function's OWN body reach a park point, before the call graph is closed? The same walk
 // records the caller-callee edges, so the graph and the seeds come out of ONE pass — `functionShowsAnEffect`'s

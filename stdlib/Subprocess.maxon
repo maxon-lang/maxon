@@ -163,6 +163,42 @@ public union Environment
 	custom(vars EnvMap)
 end 'Environment'
 
+// What the spawn contract's `envInherit` slot says about the `env` slot beside it.
+//
+// ⚠ THE TRUTHY VALUE IS `parent`, WHICH READS BACKWARDS FOR A SLOT NAMED AFTER THE OTHER ANSWER. The
+// numbers are the runtime contract's, not this file's: `inherit` was the only arm any emitter served
+// for long enough that all of them spell it as the 1. Naming the pair is what stops a call site from
+// spelling either as a bare literal and getting the sense inverted.
+enum EnvSource
+	// `env` points at a caller-built block and IS the child's whole environment.
+	block = 0
+	// The child inherits this process's environment; the `env` slot is not read.
+	parent = 1
+end 'EnvSource'
+
+typealias EnvSourceValue = int(0 to 1)
+
+// The NUL that ends ONE TOKEN of a runtime blob — an argv token, an environment entry, and, one more
+// of it after the last entry, the environment block itself. Declared as the BYTE it is because that is
+// the only form its readers use: these blobs are assembled byte by byte here and walked byte by byte
+// by both runtimes.
+let BlobTokenTerminator = 0 as Byte
+
+// What separates a name from its value inside one entry: `=` (0x3D).
+let EnvNameValueSeparator = 61 as Byte
+
+/// Carries the (block, source) pair the spawn contract's `env` / `envInherit` slots take. A type for
+/// `StdioRuntimeTriple`'s reason: the two are one decision and a caller that computed them separately
+/// could compute a block for a spawn that will not read it, or the reverse.
+type SpawnEnvironment
+	public var block as String
+	public var source as EnvSourceValue
+
+	public static function create(block String, source EnvSourceValue) returns SpawnEnvironment
+		return SpawnEnvironment{block: block, source: source}
+	end 'create'
+end 'SpawnEnvironment'
+
 // =============================================================================
 // Input / Output sources
 // =============================================================================
@@ -399,14 +435,13 @@ public type Subprocess
 		let exePath = try resolveExecutablePath(config.executable)
 		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
-		let emptyMm = subprocessEmptyManaged()
-		try requireInheritEnv(config.environment)
+		let spawnEnv = spawnEnvironmentFor(config.environment)
 		let stdinTriple = stdinTripleFromSource(config.standardInput)
 		let stdoutTriple = outputTripleFromDestination(config.standardOutput)
 		let stderrTriple = outputTripleFromDestination(config.standardError)
 		let flags = attachedFlagsFor(config.platformOptions)
 
-		let handle = __Builtins.subprocessSpawn(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), emptyMm, 1, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+		let handle = __Builtins.subprocessSpawn(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 		if handle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -443,12 +478,11 @@ public type Subprocess
 		let exePath = try resolveExecutablePath(config.executable)
 		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
-		let emptyMm = subprocessEmptyManaged()
+		let spawnEnv = spawnEnvironmentFor(config.environment)
 		let emptyCStr = subprocessEmptyCString()
-		try requireInheritEnv(config.environment)
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), emptyMm, 1, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+		let pid = __Builtins.subprocessDetach(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 		if pid == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -534,35 +568,11 @@ function buildArgvBlob(executablePath String, args StringArray) returns String
 end 'buildArgvBlob'
 
 function appendNulTerminated(out ByteArray, source String)
-	let bytes = source.toByteArray()
-	let n = bytes.count()
-	for i in 0 upto n 'byte'
-		let b = try bytes.get(i) otherwise panic("appendNulTerminated: bytes.get(i) out of bounds")
-		out.push(b)
-	end 'byte'
-	out.push(0)
+	appendBytesOf(out, source: source)
+	out.push(BlobTokenTerminator)
 end 'appendNulTerminated'
 
-/// Single shared empty ManagedMemory buffer. Several spawn args are
-/// "logically empty" (envBlock when inheriting, stdio data slots that don't
-/// carry a payload); the runtime treats an empty buffer (cstring with leading
-/// NUL) the same as a missing one for those slots. Producing it once per call
-/// avoids re-walking ASCII-scan logic for an empty string literal.
-function subprocessEmptyManaged() returns __ManagedMemory
-	// MUST return an OWNED record (`create`'s rc=1 contract), not a borrow of a
-	// local: `let empty = ""; return empty.addressableBytes()` hands back the record
-	// of a String RELEASED at this function's exit — the record was freed before
-	// the caller passed it to spawn, and the caller's release of the
-	// callReturnRc1-classified result then drove the freed header negative.
-	// (Spelled with today's door: the trap is unchanged, because while a String IS
-	// its record `addressableBytes()` hands out a borrow of it, not a copy.)
-	// Capacity 1 (not 0) so the record carries a real, zero-filled buffer —
-	// the runtime reads the slot as a leading-NUL cstring, and a NULL buffer
-	// pointer faulted inside spawn.
-	return try __ManagedMemory.create(1, 1) otherwise panic("subprocessEmptyManaged: create(1, 1) cannot fail")
-end 'subprocessEmptyManaged'
-
-/// Empty cstring sentinel — paired with `subprocessEmptyManaged()` for slots
+/// Empty cstring sentinel for the slots
 /// whose runtime contract is a cstring but whose value carries no payload
 /// (`StdinKind.none`, `OutputKind.discard`, `OutputKind.inherit`,
 /// `OutputKind.collect`). Hoisted out of the spawn call site so the same
@@ -572,20 +582,163 @@ function subprocessEmptyCString() returns cstring
 	return empty.cstr()
 end 'subprocessEmptyCString'
 
-/// Only `Environment.inherit` is supported today. TODO: Phase 3.3+ adds
-/// runtime env-block construction; until the Unix runtime can build a custom
-/// env block, the other two arms throw a clear `spawnFailed`. Tracked in the
-/// subprocess phase plan alongside the Unix runtime work.
-function requireInheritEnv(env Environment) throws SubprocessError
-	let reason = match env 'e'
-		inherit gives ""
-		inheritUpdating gives "Environment.inheritUpdating: not yet implemented (runtime env-block builder pending)"
-		custom gives "Environment.custom: not yet implemented (runtime env-block builder pending)"
+/// ⭐⭐ THE CHILD'S ENVIRONMENT, AND THE ONE PLACE ALL THREE `Environment` ARMS ARE ANSWERED.
+///
+/// The answer is a BLOCK — NUL-terminated `NAME=VALUE` entries back-to-back, then one more NUL — plus
+/// the flag that says whether the spawn should read it at all. That shape is the platform's own on
+/// Windows and is trivially turned into `char *const envp[]` on POSIX, so each runtime does a
+/// conversion and no runtime does any LOGIC: which entries survive, which are replaced and which are
+/// added is decided here, once, in a language that has a Map.
+///
+/// ⚠ THE BLOCK IS SELF-DELIMITING BECAUSE IT HAS TO BE. Only its BYTES reach the OS — the bootstrap's
+/// intrinsic lowering extracts the `__ManagedMemory`'s buffer pointer before the call and shv2's runtime
+/// entry reads the same field itself — and no length travels beside them, so the terminating NUL after
+/// the last entry is the only thing that tells a runtime where the block ends.
+function spawnEnvironmentFor(env Environment) returns SpawnEnvironment
+	var out = ByteArray.create()
+
+	match env 'e'
+		inherit then return SpawnEnvironment.create(emptyEnvBlock(), source: EnvSource.parent.rawValue)
+		inheritUpdating(overrides) then appendInheritedEntries(out, overrides: overrides)
+		custom(vars) then appendEnvEntries(out, vars: vars)
 	end 'e'
-	if not reason.isEmpty() 'bad'
-		throw SubprocessError.spawnFailed(reason)
-	end 'bad'
-end 'requireInheritEnv'
+
+	out.push(BlobTokenTerminator)
+	return SpawnEnvironment.create(String.from(out), source: EnvSource.block.rawValue)
+end 'spawnEnvironmentFor'
+
+/// The block handed over when the child INHERITS: zero entries, so nothing but the block's own
+/// terminator. The runtime never reads it — `EnvSource.parent` tells it not to — but the slot is a
+/// buffer pointer that the argument lowering dereferences either way, so it has to be a real one.
+function emptyEnvBlock() returns String
+	var out = ByteArray.create()
+	out.push(BlobTokenTerminator)
+	return String.from(out)
+end 'emptyEnvBlock'
+
+/// This process's own entries, with a named entry's VALUE replaced where the caller supplied one, and
+/// the overrides that named nothing already present appended after them.
+///
+/// ⭐ THE INHERITED ORDER IS PRESERVED RATHER THAN REBUILT FROM A MAP, deliberately: the block a child
+/// receives is then byte-identical to this process's own except at the names the caller actually
+/// named. Windows reports its block sorted and CreateProcess documents wanting a sorted one; a map's
+/// iteration order would answer neither, and the platform's own `=X:=X:\dir` drive entries — which
+/// must come first — would move.
+function appendInheritedEntries(out ByteArray, overrides EnvMap)
+	// The overrides not yet spent on an inherited entry. A copy, because deciding which ones are left
+	// over is exactly what the walk below does and the caller's map is not ours to empty.
+	var pending = EnvMap.create()
+	for (name, value) in overrides 'eachOverride'
+		pending.upsert(name, value: value)
+	end 'eachOverride'
+
+	for entry in currentEnvironmentEntries() 'eachInherited'
+		let name = envEntryName(entry)
+		if let replacement = try pending.get(name) 'overridden'
+			// The entry is rebuilt rather than patched, and the REMOVE comes after it: what is left in
+			// `pending` at the end is exactly the overrides that named nothing inherited.
+			appendEnvEntry(out, name: name, value: replacement)
+			_ = pending.remove(name)
+		end 'overridden' else 'kept'
+			appendNulTerminated(out, source: entry)
+		end 'kept'
+	end 'eachInherited'
+
+	appendEnvEntries(out, vars: pending)
+end 'appendInheritedEntries'
+
+/// Every pair of `vars` as its own entry. The whole of `Environment.custom`, and the tail of
+/// `inheritUpdating` — an override that matched no inherited name is a new variable and nothing else.
+function appendEnvEntries(out ByteArray, vars EnvMap)
+	for (name, value) in vars 'eachVar'
+		appendEnvEntry(out, name: name, value: value)
+	end 'eachVar'
+end 'appendEnvEntries'
+
+/// One `NAME=VALUE` entry and its terminator.
+function appendEnvEntry(out ByteArray, name String, value String)
+	appendBytesOf(out, source: name)
+	out.push(EnvNameValueSeparator)
+	appendNulTerminated(out, source: value)
+end 'appendEnvEntry'
+
+/// This process's environment, one `NAME=VALUE` entry per element, in the order the OS reports them.
+///
+/// ⚠ THE WALK ENDS AT THE FIRST EMPTY ANSWER, and that is the intrinsic's contract rather than a
+/// guess: every environment entry carries at least a name, so no real one is the empty string and
+/// nothing a real environment contains can end the walk early.
+///
+/// ⛔⛔ **AND THREE OF THE FOUR PRODUCERS BREAK THAT CONTRACT ON THEIR FAILURE ARMS, WHICH MAKES A
+/// TRUNCATED ENVIRONMENT INDISTINGUISHABLE FROM A COMPLETE ONE. NOT FIXED — see below.**
+/// The empty answer means "past the end" to this walk, and each producer also answers it when it
+/// COULD NOT ANSWER:
+///
+///   • the bootstrap's x86 `maxon_os_environment_entry` shares one `rt_oee_free_empty` arm between
+///     past-the-end, a `WideCharToMultiByte` sizing failure and an `mm_raw_alloc` that returned NULL;
+///   • its arm64 twin has the same shape;
+///   • shv2's `__gt_subp_env_entry` answers empty when `GetEnvironmentStringsA` itself failed
+///     (`SubprocessRuntime.buildSubpEnvEntryFromBlock`'s `subpenvnone` arm).
+///
+/// A failure at entry k therefore stops the walk at k, and `appendInheritedEntries` hands the child a
+/// block missing every variable from k on — silently, with a successful spawn. ⚠ shv2's POSIX shape
+/// (`buildSubpEnvEntryFromVector`) is the one that does NOT: its only empty answers are a NULL
+/// `environ` and a NULL `environ[k]`, both of which genuinely mean "no entry".
+///
+/// ⇒ THE CURE IS A SECOND CHANNEL, not a different sentinel: a failure has to be reportable
+/// separately from an answer, in all three producers, and this walk has to fail the spawn when one is
+/// raised — which makes `spawnEnvironmentFor` and its callers throwing. That is a change to the spawn
+/// contract across two compilers and both of the bootstrap's backends, so it is a rung rather than
+/// something to bolt onto one producer and leave the other two disagreeing.
+function currentEnvironmentEntries() returns StringArray
+	var entries = StringArray.create()
+	var index = 0
+
+	while true 'eachEntry'
+		let entry = String.init(__Builtins.osEnvironmentEntry(index))
+		if entry.isEmpty() 'pastTheEnd'
+			break
+		end 'pastTheEnd'
+
+		entries.push(entry)
+		index = index + 1
+	end 'eachEntry'
+
+	return entries
+end 'currentEnvironmentEntries'
+
+/// The NAME half of one `NAME=VALUE` entry — everything before its first `=`, or the whole entry when
+/// it holds none.
+///
+/// ⚠ THE SEARCH STARTS AT BYTE 1, NOT BYTE 0, and that is a platform fact rather than a defensive
+/// flourish: a Windows process's environment begins with entries like `=C:=C:\dir` recording the
+/// current directory of each drive, whose NAME is `=C:`. Splitting at byte 0 would give every one of
+/// them the empty name, and they would then collide with each other in the override lookup.
+function envEntryName(entry String) returns String
+	let bytes = entry.toByteArray()
+	let n = bytes.count()
+	var name = ByteArray.create()
+
+	for i in 0 upto n 'eachByte'
+		let b = try bytes.get(i) otherwise panic("envEntryName: i < n = bytes.count() but get({i}) failed")
+		if i > 0 and b == EnvNameValueSeparator 'atSeparator'
+			return String.from(name)
+		end 'atSeparator'
+		name.push(b)
+	end 'eachByte'
+
+	return entry
+end 'envEntryName'
+
+/// One String's bytes, appended verbatim. `appendNulTerminated` is this plus the terminator; an entry's
+/// NAME needs the half without it, because the entry does not end there.
+function appendBytesOf(out ByteArray, source String)
+	let bytes = source.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byte'
+		let b = try bytes.get(i) otherwise panic("appendBytesOf: i < n = bytes.count() but get({i}) failed")
+		out.push(b)
+	end 'byte'
+end 'appendBytesOf'
 
 /// Convert a runtime-reported `ResultStatusKind` + payload into the
 /// user-facing TerminationStatus, or throw `SubprocessError.timeout` for

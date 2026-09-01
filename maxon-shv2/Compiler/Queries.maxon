@@ -1769,6 +1769,28 @@ function resetMergeTargets(project Project)
 	// (`merged`) is rebuilt from empty on every miss, so a span table carried over
 	// from a prior run would start out of step and trip that assert.
 	project.opRanges = SourceRangeTable.create()
+
+	// ⛔⛔ **EVERY TABLE `mergeArtifact` KEYS BY AN OP INDEX RESETS HERE, AND FIVE OF THEM DID NOT — WHICH IS
+	// THE SAME DEFECT `opRanges` IS ASSERTED AGAINST, MINUS THE ASSERT.** A round of the body-demand fixpoint
+	// folds every file into a FRESH module, so a file whose stdlib bodies grew shifts every later file's
+	// `opOffset`; a key from the previous round then names a DIFFERENT op, in a different function, carrying
+	// the previous round's payload. Nothing notices, because a map has no count to be out of step with.
+	//
+	// MEASURED on a two-service program naming `Log`: 14 keys in `moduleVarAccessSites` against 9 live rows,
+	// and one of the nine put `stdlib/Log.maxon:34:6`'s read of `capturing` inside
+	// `__fieldDefault#JsonDoc#nodes` — a function in another file that does not mention it. E3143 then blames
+	// whichever of the two rows it reaches first (function-major order), and in a program whose true holder is
+	// NOT message-reachable while the stale row's host IS, the refusal is entirely spurious.
+	//
+	// ⚠ `valueOrigins` is the one that DOUBLES rather than merely mis-keying: `ValueOriginTable.record` PUSHES
+	// and `lookup` is a first-match linear scan, so a stale row does not lose to the fresh one — it WINS, and
+	// E5001 then names the previous round's span.
+	project.moduleVarAccessSites = ModuleVarAccessSiteMap.create()
+	project.serviceAwaitSites = ServiceAwaitSiteMap.create()
+	project.asyncSpawnSites = AsyncSpawnSiteMap.create()
+	project.allocTagSites = AllocTagSiteMap.create()
+	project.debugStreamNameSites = DebugStreamNameSiteMap.create()
+	project.valueOrigins = ValueOriginTable.create()
 end 'resetMergeTargets'
 
 // Map a fatal LexerError to a project diagnostic. Each kind reports under the code

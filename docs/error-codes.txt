@@ -2401,3 +2401,39 @@ E3142 SemanticPromiseAlreadyConsumed
 	doc This is the parser-time, value-keyed half of the rule. E3100 is the flow-sensitive backstop for a
 	doc second consume that this half cannot see -- across a loop back edge, where one lexical `await`
 	doc consumes one thread on every iteration.
+
+E3143 SemanticSharedGlobalAccessFromGreenThread
+	shv2 semanticSharedGlobalAccessFromGreenThread
+	doc A module-level `var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function a message
+	doc reaches through the call graph. A message runs on a green thread the scheduler may put on any OS
+	doc thread, and a module `var` is one word every one of them shares.
+	doc THE TWO DIRECTIONS FAIL DIFFERENTLY AND BOTH ARE REFUSED BY THIS ONE CODE, because they are one rule
+	doc with one cure and one reachability question; only the diagnostic's subject clause differs.
+	doc A WRITE is an arithmetic failure rather than a crash, which is why it cannot be a run-time check:
+	doc `total = total + by` is a load, an add and a store two Ms can interleave, nothing traps, nothing
+	doc leaks, and the program merely answers a number that is sometimes too small. MEASURED at
+	doc MAXON_MAX_PROCS=16 over 1200 sends, ten runs: five lost an update and every one exited 0.
+	doc A READ is worse. The write that changes the slot RELEASES the record it was holding, so a green
+	doc thread that has already loaded the pointer reads on into freed memory -- a use-after-free, not a
+	doc stale word. MEASURED: 12 services spinning on `label.count()` while `main` reassigned an
+	doc INTERPOLATED string 4000 times read 8 of 8 clean at one processor and 20 of 20 EXIT 139 at sixteen,
+	doc several panicking inside `utf8DecodeAt` with "value outside typealias 'Codepoint'".
+	doc THE RULE IS ABOUT WHO TOUCHES IT, not about globals as such. A write to `self.<field>` is legal -- a
+	doc service's fields are reached by one green thread, which is the whole point of putting state there. A
+	doc read of a module-level `let` is legal and is the escape hatch every configuration constant takes: it
+	doc is written once before any green thread exists, so no store can free anything under a reader. And a
+	doc plain function no message reaches may read and write a module `var` all it likes: a `spawn` somewhere
+	doc does not make the rest of the program concurrent.
+	doc REACHABILITY IS TRANSITIVE, exactly as a service's blocking edge (E3139) is, and that is what makes
+	doc the rule worth having -- a rule keyed on writes syntactically inside a handler body would refuse only
+	doc the shape an author would have spotted anyway, while the race does not care which frame the store
+	doc instruction sits in.
+	doc An INDIRECT or WITNESS dispatch reached from a message is followed by treating every function in the
+	doc program as message-reachable, which is this rule's refusing direction: unlike E3139 -- where a missed
+	doc edge costs a guarantee -- a missed edge here costs a silently wrong answer at run time.
+	doc The cure is always available and is always the same for both directions: keep the value in a field of
+	doc `self` and hand it back through a reply, or make the global a `let`. A reply is a Promise the awaiter
+	doc owns, so the value is handled by one green thread at every instant.
+	doc The diagnostic anchors at the ACCESS -- which is where the program can be repaired -- names the message
+	doc that reaches it, and carries the `spawn` that made the type a service as a note, because whether a
+	doc type is a service is a whole-program property whose cause may be in another file.

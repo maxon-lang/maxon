@@ -619,6 +619,7 @@ type StdToArm64Lowering
 			osEnterBackgroundPriority gives 0
 			// MAC4: two register arguments through the shared `creat`, exactly as `osFileOpenWrite` above.
 			osFileOpenWriteExecutable gives 0
+			osEnvBlock to osEnvBlockFree gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -730,7 +731,7 @@ type StdToArm64Lowering
 			// register. `osProcessSpawn` and `osProcessSpawnInherit` share ONE chunk, because the flag that
 			// separates them on Windows — `bInheritHandles` — has no POSIX twin: `POSIX_SPAWN_CLOEXEC_DEFAULT`
 			// plus the file actions decide what crosses the exec, whichever op asked.
-			osProcessSpawn(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, dstRef: dstRef)
+			osProcessSpawn(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
 			osProcessExitCode(handleId, codePtrId) then self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinProcExitCodeName, args: twoArgs(handleId, second: codePtrId), opName: "osProcessExitCode")
 			// ⭐⭐ **MAC3: THE THREE WAIT/HANDLE OPS DO LOWER HERE, AND THEY HAD TO — they are STATICALLY
 			// REACHABLE in a pure-`async` program.** The netpoll's process arm and `__gt_proc_check` sit on
@@ -798,7 +799,7 @@ type StdToArm64Lowering
 			// FILESYSTEM.** It is the op every failing file and directory call is classified through, so it
 			// lands here with them rather than with the overlapped reads it was declared beside.
 			osLastError(resultId) then self.lowerDarwinChunkValue(resultId, args: ValueIdArray.create(), chunk: DarwinLastErrorName, dstRef: dstRef)
-			osProcessSpawnInherit(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, dstRef: dstRef)
+			osProcessSpawnInherit(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
 			// ⛔ **`osCancelIo` IS STATICALLY REACHABLE AND DYNAMICALLY UNREACHABLE HERE, so it is a RUNTIME
 			// abort rather than a compile-time one** — `lowerOsWaitHandles`' old shape, and the same argument.
 			// `__gt_promise_drop`'s cancel arm is built whenever the pipe substrate is, but it runs only when
@@ -939,6 +940,17 @@ type StdToArm64Lowering
 			// mode. On Windows the two are one `CreateFileA`; here the mode is the whole difference, which is
 			// why they are two ops (`StdOp.osFileOpenWriteExecutable`).
 			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.creat, argument: DarwinCreateExecutableFileMode, opName: "osFileOpenWriteExecutable", dstRef: dstRef)
+			// ⭐ **`osEnvBlock` IS SERVED HERE, AND THE PANIC THAT USED TO STAND IN ITS PLACE RESTED ON A FALSE
+			// PREMISE.** It claimed the whole attached-subprocess substrate was refused on this lane; the
+			// facility table says `subprocess gives true` for arm64-macOS, so `buildSubpEnvEntry` was built,
+			// nothing dropped it, and every program that so much as named `runConfiguration` panicked the
+			// compiler — with the DEFAULT `Environment.inherit`, which reads no environment at all.
+			osEnvBlock(resultId) then self.lowerOsEnvBlock(resultId, dstRef: dstRef)
+			// ⛔ `osEnvBlockFree` HAS NO COUNTERPART HERE, AND ITS ABSENCE IS A FACT ABOUT `environ` RATHER THAN
+			// A GAP: this lane answers `EnvironmentSnapshotShape.pointerVector`, whose producer emits no free
+			// because the vector is the live table and not a copy. A no-op stub would be the same claim written
+			// where nothing can check it; this panic is the backstop for a producer that starts emitting one.
+			osEnvBlockFree then panic("lowerStdToArm64: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and this lane has none — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for macOS, whose `__gt_subp_env_entry` body indexes the live `environ` and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1007,6 +1019,7 @@ type StdToArm64Lowering
 			tlsAlloc to osSetEvent then panic("lowerStdToArm64: a TLS op or an event signal appeared as a block terminator (lowering bug — neither is a terminator)")
 			osEnterBackgroundPriority then panic("lowerStdToArm64: an `osEnterBackgroundPriority` op appeared as a block terminator (lowering bug — the priority door is a value-producing body op)")
 			osFileOpenWriteExecutable then panic("lowerStdToArm64: an `osFileOpenWriteExecutable` op appeared as a block terminator (lowering bug — an open is a value-producing body op, exactly like its two siblings)")
+			osEnvBlock to osEnvBlockFree then panic("lowerStdToArm64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2300,10 +2313,45 @@ type StdToArm64Lowering
 		end 'route'
 	end 'requireDarwinSubprocessRoute'
 
+	// ⭐⭐ `osEnvBlock(result)` ⇒ `*_NSGetEnviron()` — this process's `environ`, which is the POSIX shape of
+	// the question `GetEnvironmentStringsA` answers on Windows. `SubprocessRuntime.environmentSnapshotShape`
+	// is what tells the producer which of the two it is indexing, so nothing below the Std tier has to know.
+	//
+	// ⚠ **THE ACCESSOR ANSWERS THE ADDRESS OF `environ`, NOT `environ` ITSELF**, so the load is part of the
+	// operation rather than a peephole waiting to be folded: a Mach-O main executable may not name the
+	// `environ` symbol directly, which is the entire reason `_NSGetEnviron` exists.
+	// `Arm64DarwinRuntime`'s spawn chunk reaches the same table by the same two steps.
+	//
+	// ⚠ **THE ANSWER IS PARKED IN x16 ACROSS THE LOAD** for `lowerTlsSlotLoad`'s reason, stated in full at
+	// `Arm64Scratch`: nothing a post-isel pass splices in writes x16, so no reload can land between the
+	// dereference and the capture. x0 is captured in the op immediately after the call, which is the shape
+	// every import-call lowering in this file already relies on.
+	function lowerOsEnvBlock(resultId ValueId, dstRef BlockRef)
+		self.requireDarwinSubprocessRoute("osEnvBlock")
+		let scratch = arm64PhysReg(Arm64Scratch)
+
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.nsGetEnviron)))
+		self.emit(dstRef, op: TargetOp.movRegReg(scratch, srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(scratch, base: scratch, disp: 0, width: X64AccessWidth.word64))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: scratch))
+	end 'lowerOsEnvBlock'
+
 	// ⭐ `osProcessSpawn` / `osProcessSpawnInherit` ⇒ ONE chunk. See the two arms' own comments for why the
 	// inheritance flag that separates them on Windows has no POSIX twin to lower.
-	function lowerOsProcessSpawn(commandId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, dstRef BlockRef)
-		self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinSpawnName, args: fiveArgs(commandId, second: cwdPtrId, third: creationFlagsId, fourth: startupPtrId, fifth: procInfoPtrId), opName: "osProcessSpawn")
+	// ⚠ **`envPtr` IS PASSED ON AND THE CHUNK REFUSES A NON-NULL ONE**, which is a real refusal rather than a
+	// gap left open: `lpEnvironment` is a BLOCK on Windows and `envp` is a POINTER VECTOR under POSIX, so the
+	// conversion is code this lane does not have.
+	//
+	// ⛔ **AND IT IS REACHABLE FROM THE LANGUAGE, WHICH THIS NOTE USED TO DENY.** It said the attached
+	// `Subprocess` family was refused here at its own source span (E3104); the facility table answers
+	// `subprocess gives true` for arm64-macOS, so `Environment.inheritUpdating` and `Environment.custom` DO
+	// build a block and DO arrive here — and are answered with `ENOTSUP` and a zero `hProcess`, which the Std
+	// tier reads as `SubprocessError.spawnFailed`. `Environment.inherit`, the default, passes a constant 0 and
+	// is unaffected. ⇒ what this lane owes is a block→`envp` conversion (the bootstrap's arm64 emitter has one,
+	// `__subp_build_envp`); until it has one, a named spawn failure is the honest answer and a child quietly
+	// running with the wrong environment is not.
+	function lowerOsProcessSpawn(commandId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId, dstRef BlockRef)
+		self.lowerDarwinSchedulerChunk(dstRef, chunk: DarwinSpawnName, args: sixArgs(commandId, second: cwdPtrId, third: creationFlagsId, fourth: startupPtrId, fifth: procInfoPtrId, sixth: envPtrId), opName: "osProcessSpawn")
 	end 'lowerOsProcessSpawn'
 
 	// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable — the shape

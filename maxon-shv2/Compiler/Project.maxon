@@ -832,6 +832,70 @@ end 'ServiceAwaitSite'
 // `await`/`tryAwait` op index ⇒ the service its reply comes from. See `ServiceAwaitSite`.
 export typealias ServiceAwaitSiteMap = Map with (OpIndex, ServiceAwaitSite)
 
+// ⭐⭐ **WHAT THE SHARED-GLOBAL RULE NEEDS ABOUT ONE ACCESS TO MODULE STORAGE, AND CANNOT GET AT ITS OWN
+// TIER (E3143).** A global's write lowers to `globalAddr` + `storeIndirect` and its read to `globalAddr` +
+// `loadIndirect` — so the two are told apart only by the op that FOLLOWS the address, and the `globalAddr`
+// op itself carries a mangled LABEL rather than the name the author wrote. Worse, the same ops are emitted
+// for storage nobody touched in source: `ModuleInit`'s initializing store, a lazy static's first-access
+// fill, and `emitCheckedGlobalStore`'s decref LOAD of the value a write is discarding. Refusing any of those
+// would refuse every program that has a global at all.
+//
+// ⇒ the parser records the two doors an AUTHOR-WRITTEN access to MUTABLE module storage passes through —
+// `Parser.storeToGlobal` (past the immutability refusal, so every write reaching it is to a `var`) and
+// `Parser.emitGlobalLoad` (whose `reader` parameter is what excludes the compiler's own load) — keyed by the
+// op that door is about to emit, exactly as `ServiceAwaitSite` is. The op index is what tells the check
+// which FUNCTION the access sits in, so nothing here carries a function name.
+//
+// ⚠ It is the STORAGE name and not a service name that distinguishes this from `ServiceAwaitSite`: a static
+// member's target is `Counter.count`, which no single token spells (`Parser.moduleStorageSubjectName` is the
+// one place that name is formed), and the diagnostic quotes it back at the author.
+export type ModuleVarAccessSite
+	// The module slot this statement touches, spelled as the author would name it.
+	export let storageName as ByteArray
+	// Which direction — the one thing the two `globalAddr` shapes cannot say for themselves.
+	export let access as ModuleVarAccess
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let declFilePath as FilePath
+
+	export static function create(storageName ByteArray, access ModuleVarAccess, line LineNumber, column ColumnNumber, declFilePath FilePath) returns ModuleVarAccessSite
+		return Self{storageName: storageName, access: access, line: line, column: column, declFilePath: declFilePath}
+	end 'create'
+end 'ModuleVarAccessSite'
+
+// ⭐ **ONE RULE, TWO DIRECTIONS.** ⚖ A message may not WRITE a module `var` (its update is a load-add-store
+// two Ms interleave) and may not READ one either (the writer's store decrefs the record the reader has
+// already loaded — a use-after-free rather than a stale word). The kind exists only so the diagnostic can
+// name what the author actually wrote; the rule, the reachability and the cure are identical.
+export union ModuleVarAccess
+	read
+	write
+end 'ModuleVarAccess'
+
+// Who is loading a module slot. A UNION rather than an optional token, because "not this rule's business"
+// is a real answer and an empty token would be a sentinel every reader had to know to test.
+export union ModuleSlotReader
+	// NOT an access the shared-global rule is about, for either of the two reasons there are:
+	//   • it is the COMPILER's own load — `Parser.emitCheckedGlobalStore`'s decref of the value a write is
+	//     discarding, which is half of a WRITE; filing it as a read would report `total = 5` as reading
+	//     `total`;
+	//   • the slot is a `let`, which the rule declares legal to read and is the escape hatch every
+	//     configuration constant takes.
+	//
+	// ⛔⛔ **THE `let` HALF WAS MISSING FOR ONE BUILD AND IT REFUSED THE STDLIB.** `emitGlobalLoad` recorded
+	// every read whatever the slot's mutability, so `CharacterSet.whitespaces()` — which returns the
+	// `static let cachedWhitespaces` — read as a shared-global access, and both
+	// `sched-syscall-handoff` cases died on **E3143 pointing into `stdlib/CharacterSet.maxon`**. The write
+	// door cannot have this bug (`storeToGlobal` refuses an immutable slot before recording anything), which
+	// is exactly why the read door has to state the exemption itself.
+	notASharedAccess
+	// An author naming a MUTABLE module slot in an expression, at the token they spelled it with.
+	source(nameTok Token)
+end 'ModuleSlotReader'
+
+// An op index inside the accessing statement ⇒ the module slot it touches. See `ModuleVarAccessSite`.
+export typealias ModuleVarAccessSiteMap = Map with (OpIndex, ModuleVarAccessSite)
+
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
 export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
 
@@ -7429,6 +7493,11 @@ export type Project
 	// `asyncSpawnSites` is. EMPTY for every program that awaits no reply, which is every program with no
 	// service in it, and the check reads that count as its own gate.
 	export var serviceAwaitSites as ServiceAwaitSiteMap
+	// ⭐ Every author-written READ OR WRITE of mutable module storage in the program, by op index (E3143) —
+	// the candidate set of the shared-global rule. Folded from the per-file artifact with the merge's op
+	// offset, exactly as `asyncSpawnSites` is. EMPTY for every program that names no module `var`, and the
+	// check reads that count as its own gate. See `ModuleVarAccessSite`.
+	export var moduleVarAccessSites as ModuleVarAccessSiteMap
 	// ⭐⭐ **THE mm-trace TAG FOR A BOX THE PARSER MINTS THAT IS NOT ANY DECLARED TYPE'S** — an interpolated
 	// part's scratch byte run, a closure's captured environment, and the one-slot cell a reassigned
 	// by-reference parameter is promoted into. Keyed by the `__mm_alloc` call's own op index, SPARSE like
@@ -7593,6 +7662,7 @@ export type Project
 			debugStream: false,
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
+			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
 			stdOpElementStrides: StdOpElementStrideMap.create(),

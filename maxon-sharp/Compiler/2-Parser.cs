@@ -12315,6 +12315,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["executablePath"] = RuntimeCallToManaged(
       "Returns the absolute executable path as a __ManagedMemory.\n\n`__Builtins.executablePath() returns __ManagedMemory`",
       "maxon_executable_path", [], freeFunc: "mm_raw_free"),
+    // Walked from 0 upward by `stdlib/Subprocess.maxon`, which stops at the first empty answer —
+    // there is deliberately no count entry beside it. An environment entry always carries at least a
+    // name, so "" cannot be one, and an end-of-sequence marker that no real element can imitate is
+    // cheaper and less racy than a count taken before the walk.
+    ["osEnvironmentEntry"] = RuntimeCallToManaged(
+      "Returns a __ManagedMemory holding this process's index-th `NAME=VALUE` environment entry, or an empty one when the index is past the last entry.\n\n`__Builtins.osEnvironmentEntry(index) returns __ManagedMemory`",
+      "maxon_os_environment_entry", ["i64"], freeFunc: "mm_raw_free"),
     // === Subprocess intrinsics ===
     // Each maps directly to a `maxon_subprocess_*` C runtime symbol.
     // `stdlib/Subprocess.maxon` calls these from `runConfiguration` and

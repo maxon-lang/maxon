@@ -1,0 +1,295 @@
+// ServiceProgramSurvey.maxon — ONE SWEEP OF EVERY FUNCTION'S EVERY OP, AND THE TWO WHOLE-PROGRAM SERVICE
+// RULES BOTH READ IT.
+//
+// ⭐⭐ **E3139 AND E3143 CLOSE OVER THE SAME CALL GRAPH, ROWED OPPOSITE WAYS, AND THEY USED TO BUILD IT
+// TWICE.** `ServiceCallCycleCheck` asked *"which messages BLOCK ON a service?"* and
+// `ServiceGlobalAccessCheck` asked *"what does a message RUN?"*, and each swept every function's every op
+// into its own `CallGraphEdges` and its own `ownerPerFunc`, back to back in `semanticCheck`. The PREDICATES
+// were already shared (`opIsACallGraphEdge`, `messageOwnerNameOf`) — the WALK was not, which is the shape
+// this project keeps paying for: an edit to "the ops of a function" reaches one copy, the two rules then
+// close over different graphs, and the disagreement is a WRONG ANSWER rather than a compile error.
+//
+// ⇒ the walk is here, once, and the facts it collects are the union of what the two rules need. Which rule
+// consumes which column is stated on the column.
+//
+// ⚠ **THE UNION IS COLLECTED WHENEVER EITHER RULE RUNS, and that is the deliberate price of one walk.** Each
+// extra column is one map `get` per op on a walk that was already visiting every op; what it replaces is a
+// second full pass. `checkServiceRules` still asks both gates first, so a program that triggers neither pays
+// one `count()` and nothing else — which is every program with no service in it.
+
+// One `await` on a service reply. Rows, not a per-function column: see `ServiceAwaitRoster`.
+module typealias ServiceAwaitSiteArray = Array with ServiceAwaitSite
+
+// One row per ACCESS to module storage: which function holds it, which direction, and what the author wrote
+// there. A ROSTER rather than a per-function column, on `ServiceAwaitRoster`'s discipline and for its reason
+// — a function may touch two globals, and a read-modify-write touches one of them twice, so a single site
+// per function can carry neither. Rows are appended in function-major then op-major order, which is what
+// makes "the earliest offending access" a scan rather than a sort.
+typealias ModuleVarAccessSiteArray = Array with ModuleVarAccessSite
+
+// ⭐ **"NO SUCH ROW" AS A VALUE** — `ServiceCallCycleCheck.NoServiceNode`'s rule, one column over: row 0 is a
+// real row, so the absence sits above every key the roster can mint.
+module let NoAwaitRow = u64.max as CsrIndex
+
+// ⭐⭐⭐ **EVERY (FUNCTION, AWAITED SERVICE) PAIR IN THE PROGRAM — ONE ROW PER `await`, NOT ONE PER FUNCTION
+// (SV2 review).** A message that awaits replies from TWO services owes an edge to BOTH, and a single site
+// per function can carry only one of them.
+//
+// ⛔⛔ **MEASURED AT REVIEW, WITH ITS POSITIVE CONTROL.** The walk used to return ONE site and kept the LAST
+// one its op sweep saw, so `A.ping` awaiting `B` and then `C` seeded `C` alone and the `A → B` edge was
+// never built: the ring `A.ping → B.pong → A.ack` COMPILED CLEAN, exit 0, with one unrelated `await` added
+// to `A.ping` — and the very same program without that await is E3139. A dropped edge is a MISSED refusal,
+// which is exactly the deadlock `ServiceCallCycleCheck` exists to make unrepresentable.
+//
+// ⭐ **AND THERE IS NO "AWAITS NOTHING" SITE ANY MORE.** Absence is the absence of a ROW, so the empty-name
+// sentinel site and the parallel `BoolArray` that had to guard it are both gone: a function that awaits no
+// reply simply appears in no row, and nothing has to remember not to read its fields.
+module type ServiceAwaitRoster
+	// Row ⇒ the function whose own body holds the `await`.
+	var funcIndices as CsrColumn
+	// Row ⇒ which service that await blocks on, and where it is written.
+	var sites as ServiceAwaitSiteArray
+
+	static function create() returns ServiceAwaitRoster
+		return Self{funcIndices: CsrColumn.create(), sites: ServiceAwaitSiteArray.create()}
+	end 'create'
+
+	function note(funcIndex FuncIndex, site ServiceAwaitSite)
+		self.funcIndices.push(funcIndex)
+		self.sites.push(site)
+	end 'note'
+
+	function rowCount() returns CsrIndex
+		return self.sites.count()
+	end 'rowCount'
+
+	export function siteAt(row CsrIndex) returns ServiceAwaitSite
+		return try self.sites.get(row) otherwise panic("ServiceAwaitRoster.siteAt: sites.get OOB at {row} below count {self.rowCount()}")
+	end 'siteAt'
+
+	function funcIndexAt(row CsrIndex) returns FuncIndex
+		return try self.funcIndices.get(row) otherwise panic("ServiceAwaitRoster.funcIndexAt: funcIndices.get OOB at {row} below count {self.rowCount()}")
+	end 'funcIndexAt'
+
+	// Mark every function whose OWN body awaits a reply from `awaitedName`. ⚡ ONE sweep of the roster per
+	// SERVICE, rather than one test per (function, service) pair — which is why carrying every await costs
+	// less than the single-site column it replaced, not more.
+	export function seedFunctionsAwaiting(awaitedName ByteArray, seeds BoolArray)
+		for row in 0 upto self.rowCount() 'eachRow'
+			if not self.siteAt(row).serviceTypeName.equals(awaitedName) 'anotherService'
+				continue
+			end 'anotherService'
+
+			let funcIndex = self.funcIndexAt(row)
+			try seeds.set(funcIndex, value: true) otherwise panic("ServiceAwaitRoster.seedFunctionsAwaiting: seeds.set OOB at {funcIndex} — every row's function index came from the same function list the seed column was sized to")
+		end 'eachRow'
+	end 'seedFunctionsAwaiting'
+
+	// The FIRST row in which `funcIndex` itself awaits `awaitedName`, or `NoAwaitRow` when it blocks on that
+	// service only through a helper.
+	export function rowWhere(funcIndex FuncIndex, awaitedName ByteArray) returns CsrIndex
+		for row in 0 upto self.rowCount() 'eachRow'
+			if self.funcIndexAt(row) == funcIndex and self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsItHere'
+				return row
+			end 'awaitsItHere'
+		end 'eachRow'
+
+		return NoAwaitRow
+	end 'rowWhere'
+
+	// The first row ANYWHERE that awaits `awaitedName` — the anchor for a message that blocks only through a
+	// helper. It panics rather than answering a default: a caller reaches it only for a function the closure
+	// marked, and a mark reaches a caller only from a seed.
+	export function firstRowAwaiting(awaitedName ByteArray) returns CsrIndex
+		for row in 0 upto self.rowCount() 'eachRow'
+			if self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsIt'
+				return row
+			end 'awaitsIt'
+		end 'eachRow'
+
+		panic("ServiceAwaitRoster.firstRowAwaiting: no function awaits a reply from `{String.from(awaitedName)}`, yet the closure marked one as blocking on it — a mark reaches a caller only from a seed, and a seed is a direct await")
+	end 'firstRowAwaiting'
+end 'ServiceAwaitRoster'
+
+// ⭐⭐ **EVERY WHOLE-PROGRAM FACT THE TWO SERVICE RULES NEED, OUT OF ONE PASS OVER EVERY FUNCTION'S EVERY OP.**
+module type ServiceProgramSurvey
+	// Call edges in the shared `(callee, caller)` shape every summary closes over. E3139 rows them with
+	// `markSeededCallers`, E3143 with `markSeededCallees`; the EDGES are the same relation either way.
+	export var edges as CallGraphEdges
+	// funcIndex ⇒ the service this function is a message of, or EMPTY. Asked once per FUNCTION rather than
+	// once per (function, service): `messageOwnerNameOf` already walks every service's every variant.
+	var ownerPerFunc as ByteArrayArray
+	// funcIndex ⇒ is it a message? The same fact as `ownerPerFunc`, in the shape `markSeededCallees` takes.
+	export var messageSeeds as BoolArray
+	// E3139's column: every (function, awaited service) pair.
+	export var awaits as ServiceAwaitRoster
+	// E3143's column: funcIndex ⇒ does its body choose a callee at run time? See `ServiceGlobalAccessCheck`'s
+	// header for why that is the one unknown that rule resolves toward refusing.
+	export var dispatchesBlindly as BoolArray
+	// ⭐ E3143's column: the functions whose ADDRESS this program takes — one entry per `functionRef` that
+	// resolves to a declared function. Collected as indices rather than as a marked column because a
+	// `functionRef` may name a function this sweep has not reached yet; the column is built once at the end,
+	// where the function count is known (`possibleIndirectCallTargets`).
+	var addressTaken as CsrColumn
+	// E3143's roster, in two parallel columns.
+	var accessFuncs as CsrColumn
+	var accessSites as ModuleVarAccessSiteArray
+
+	static function create() returns ServiceProgramSurvey
+		return Self{edges: CallGraphEdges.create(), ownerPerFunc: ByteArrayArray.create(), messageSeeds: BoolArray.create(), awaits: ServiceAwaitRoster.create(), dispatchesBlindly: BoolArray.create(), addressTaken: CsrColumn.create(), accessFuncs: CsrColumn.create(), accessSites: ModuleVarAccessSiteArray.create()}
+	end 'create'
+
+	export function funcCount() returns CsrIndex
+		return self.messageSeeds.count()
+	end 'funcCount'
+
+	export function isAMessage(funcIndex FuncIndex) returns bool
+		return try self.messageSeeds.get(funcIndex) otherwise panic("ServiceProgramSurvey.isAMessage: messageSeeds.get OOB at {funcIndex} below count {self.funcCount()}")
+	end 'isAMessage'
+
+	export function serviceOf(funcIndex FuncIndex) returns ByteArray
+		return try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.serviceOf: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}")
+	end 'serviceOf'
+
+	export function accessRowCount() returns CsrIndex
+		return self.accessSites.count()
+	end 'accessRowCount'
+
+	export function accessFuncAt(row CsrIndex) returns FuncIndex
+		return try self.accessFuncs.get(row) otherwise panic("ServiceProgramSurvey.accessFuncAt: accessFuncs.get OOB at {row} below count {self.accessRowCount()}")
+	end 'accessFuncAt'
+
+	export function accessSiteAt(row CsrIndex) returns ModuleVarAccessSite
+		return try self.accessSites.get(row) otherwise panic("ServiceProgramSurvey.accessSiteAt: accessSites.get OOB at {row} below count {self.accessRowCount()}")
+	end 'accessSiteAt'
+
+	// ⭐⭐ **WHERE AN `indirectCall` OR A `witnessDispatch` CAN ACTUALLY LAND — the WHOLE of it, and it is a
+	// tiny set in every program that is not a plugin host.** A function value in this language comes from
+	// exactly two places: a `functionRef` (a closure literal or a named function used as a value) and a
+	// witness slot, whose accepted member `ConformanceCheck.recordWitnessSlotImpl` files by name. A function
+	// that appears in neither has no address anywhere in the image, so nothing can call it indirectly.
+	//
+	// ⛔⛔ **THIS IS WHAT MAKES E3143's WIDENING USABLE, AND WITHOUT IT THE RULE REFUSED THE STDLIB.** The
+	// widening used to mark EVERY function, so one ordinary interface dispatch anywhere in a handler's cone
+	// implicated `Log.startCapture` — a function in a file the author does not own, with a cure
+	// (*"make `capturing` a `let`"*) they cannot apply. MEASURED: a six-line service whose handler calls one
+	// interface method and then `Log.trace` was refused outright, and the same program without the interface
+	// compiled. `Log.startCapture` is neither address-taken nor a conformance member, so it is not in this
+	// set and no dispatch can reach it.
+	//
+	// ⚠ **THE SAFE DIRECTION IS KEPT WITHIN THE SET**: every function here is marked, and the marks then
+	// close FORWARD over the named call graph, because a dispatch landing in `f` also runs whatever `f` calls.
+	export function possibleIndirectCallTargets(project Project, funcNames FunctionNameIndex) returns BoolArray
+		var targets = BoolArray.create()
+		for _ in 0 upto self.funcCount() 'eachFunc'
+			targets.push(false)
+		end 'eachFunc'
+
+		for funcIndex in self.addressTaken 'eachAddressTaken'
+			try targets.set(funcIndex, value: true) otherwise panic("ServiceProgramSurvey.possibleIndirectCallTargets: addressTaken holds {funcIndex}, which the sweep resolved through the same function index the column was sized to")
+		end 'eachAddressTaken'
+
+		// ⚠ A recorded member that resolves to no function index is not an omission: a BUILTIN conformer
+		// declares no `implements` and its slot is stamped from a Std-tier entry point that is installed after
+		// lowering and appears in no source. Nothing with a user's module slot in it can be one.
+		for (_, member) in project.witnessSlotImpls 'eachWitnessSlot'
+			if let memberIndex = try funcNames.byName.get(member) 'declaredHere'
+				try targets.set(memberIndex, value: true) otherwise panic("ServiceProgramSurvey.possibleIndirectCallTargets: `funcNames.byName` answered index {memberIndex}, which is outside the same function list this column was sized to")
+			end 'declaredHere'
+		end 'eachWitnessSlot'
+
+		return targets
+	end 'possibleIndirectCallTargets'
+
+	// ⭐⭐ **ONE FUNCTION'S EDGES, ITS AWAITS, ITS BLINDNESS, ITS ADDRESS-TAKING AND ITS MODULE ACCESSES — ALL
+	// OUT OF THE SAME OP SWEEP.** Five facts about one body; five walks of it would be five chances to
+	// disagree about which ops that body has, which is this file's whole reason for existing.
+	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex FuncIndex)
+		let owner = messageOwnerNameOf(signatures, callee: func.name)
+		self.messageSeeds.push(not owner.isEmpty())
+		self.ownerPerFunc.push(owner)
+
+		var blind = false
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("ServiceProgramSurvey.noteFunction: blockRef from func.blockRefs not in module.blocks")
+			for opIndex in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIndex) otherwise panic("ServiceProgramSurvey.noteFunction: opIndex {opIndex} not in module.ops")
+				if opIsACallGraphEdge(op) 'aCall'
+					_ = recordCallGraphEdge(maxonOpCalleeName(op), funcIndexByName: funcIndexByName, callerIndex: funcIndex, edges: self.edges)
+				end 'aCall'
+
+				if opTakesAFunctionsAddress(op) 'aFunctionValue'
+					if let target = try funcIndexByName.get(maxonOpCalleeName(op)) 'namesADeclaredFunction'
+						self.addressTaken.push(target)
+					end 'namesADeclaredFunction'
+				end 'aFunctionValue'
+
+				if opChoosesItsTargetAtRunTime(op) 'anUnnameableTarget'
+					blind = true
+				end 'anUnnameableTarget'
+
+				// ⛔ **EVERY await IS NOTED, NOT THE LAST ONE.** See `ServiceAwaitRoster` for the ring that
+				// compiled clean while this kept one site per function.
+				if let awaitSite = try project.serviceAwaitSites.get(opIndex) 'awaitsAReply'
+					self.awaits.note(funcIndex, site: awaitSite)
+				end 'awaitsAReply'
+
+				if let accessSite = try project.moduleVarAccessSites.get(opIndex) 'touchesModuleStorage'
+					self.accessFuncs.push(funcIndex)
+					self.accessSites.push(accessSite)
+				end 'touchesModuleStorage'
+			end 'eachOp'
+		end 'eachBlock'
+
+		self.dispatchesBlindly.push(blind)
+	end 'noteFunction'
+end 'ServiceProgramSurvey'
+
+// ⭐⭐ **THE TWO WHOLE-PROGRAM SERVICE RULES, AND THE ONE SURVEY THEY SHARE.**
+//
+// ⚠ **THE GATES ARE ASKED BEFORE THE SWEEP, AND EACH IS EMPTY FOR A DIFFERENT ENORMOUS POPULATION.**
+// `serviceAwaitSites` is empty for every program that awaits no reply — every program with no service in it,
+// and every fire-and-forget one. `moduleVarAccessSites` is empty for every program that never names a module
+// `var`, and `serviceTypeRoster` is empty for every program that spawns nothing. A compile that triggers
+// neither rule pays three `count()`s and nothing else.
+//
+// ⚠ **E3139 REPORTS FIRST, and that ordering is the reason the two calls are sequenced here rather than left
+// to `semanticCheck`.** A ring that cannot make progress is the more fundamental of the two defects, so a
+// program with both is told about the deadlock.
+export function checkServiceRules(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
+	let blockingRuleApplies = project.serviceAwaitSites.count() != 0
+	let globalRuleApplies = project.moduleVarAccessSites.count() != 0 and serviceTypeRoster(signatures).count() != 0
+	if not blockingRuleApplies and not globalRuleApplies 'neitherRuleHasAnythingToSay'
+		return
+	end 'neitherRuleHasAnythingToSay'
+
+	var survey = ServiceProgramSurvey.create()
+	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(funcIndex) otherwise panic("checkServiceRules: functions.get OOB at {funcIndex}")
+		survey.noteFunction(project, module: module, signatures: signatures, func: func, funcIndexByName: funcNames.byName, funcIndex: funcIndex)
+	end 'eachFunc'
+
+	if blockingRuleApplies 'e3139'
+		checkServiceCallCycles(project, signatures: signatures, funcNames: funcNames, survey: survey)
+	end 'e3139'
+
+	if globalRuleApplies 'e3143'
+		checkServiceGlobalAccesses(project, signatures: signatures, funcNames: funcNames, survey: survey)
+	end 'e3143'
+end 'checkServiceRules'
+
+// Does this op take a function's ADDRESS — put a callable value somewhere a later `indirectCall` can find
+// it? The bands are `opChoosesItsTargetAtRunTime`'s, so a newly appended op fails to compile here too, and
+// this predicate's accepting direction is the dangerous one: a function value this walk cannot see is a
+// target `possibleIndirectCallTargets` would leave out.
+function opTakesAFunctionsAddress(op MaxonOp) returns bool
+	return match op 'op'
+		call to branch gives false
+		globalAddr to tryCall gives false
+		throwError to panicAbort gives false
+		functionRef gives true
+		indirectCall to switch gives false
+		witnessDispatch to errorFlagEncode gives false
+		serviceSpawn to serviceReplyCell gives false
+	end 'op'
+end 'opTakesAFunctionsAddress'

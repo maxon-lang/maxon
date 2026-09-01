@@ -398,6 +398,15 @@ export type RuntimeUsage
 	// checkpoint's: the body is a constant return, so it declares nothing — emphatically not `usesGt`, since
 	// a program may ask the question having spawned nothing (see `CpuParallelRuntime`'s header).
 	export var usesSchedMaxActiveWorkers as bool
+	// The program asks the SCHEDULER how many processors it resolved (`__Builtins.schedProcessorCount` ⇒
+	// `__sched_processor_count`). Its own bit for its band-mate's reason, and it gates something the band-mate's
+	// does not: `__sched_num_procs` is otherwise a `usesGt` word, so without this bit a program that asks the
+	// question having spawned nothing would `globalAddr` a slot the image never laid out.
+	//
+	// ⚠ **IT DELIBERATELY DOES NOT DECLARE `usesGt`, WHICH IS WHERE IT PARTS FROM `__sched_steal_count`.**
+	// That one walks the `P*` array and is therefore meaningless without the machinery that builds it; this
+	// one reads a single word whose 0 — no scheduler has initialized — is a truthful answer.
+	export var usesSchedProcessorCount as bool
 	// ⭐⭐ **THE PROGRAM READS THE ALLOCATOR'S OWN TRAFFIC COUNTERS** (`__Builtins.mmAllocTotal` and its five
 	// siblings ⇒ the `__mm_counter_*` band). Its own bit, and here the discipline buys the most it ever has:
 	// the bit gates not just an entry point but the COUNTER MAINTENANCE ITSELF — the loads, adds and stores
@@ -443,7 +452,7 @@ export type RuntimeUsage
 	export var usesSlabArena as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -725,8 +734,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isSchedRuntimeCallee(callee) 'schedMaxActiveWorkers'
 		usage.usesSchedMaxActiveWorkers = true
 	end 'schedMaxActiveWorkers'
-	// ⭐⭐ **THE STEAL COUNT SETS `usesGt` AND HAS NO BIT OF ITS OWN, WHICH IS THE OPPOSITE OF ITS BAND-MATE
-	// ONE LINE UP — and the difference is what the two questions actually need.**
+	// ⭐ **THE PROCESSOR COUNT — the same shape, a different word, and therefore a different bit.** A plain
+	// name compare rather than a second predicate beside `isSchedRuntimeCallee`, on `__sched_steal_count`'s
+	// precedent one arm down: a function whose whole body is one `.equals` is the thin wrapper the house
+	// rules forbid, and the two cannot share a predicate anyway, because they set different bits.
+	if callee.equals(SchedProcessorCountName) 'schedProcessorCount'
+		usage.usesSchedProcessorCount = true
+	end 'schedProcessorCount'
+	// ⭐⭐ **THE STEAL COUNT SETS `usesGt` AND HAS NO BIT OF ITS OWN, WHICH IS THE OPPOSITE OF BOTH ITS
+	// BAND-MATES ABOVE — and the difference is what the three questions actually need.**
 	// `__sched_max_active_workers` is a `.data` load whose answer (1) is TRUE for a program with no scheduler
 	// at all, so it must not drag one in. `__sched_steal_count` walks `__sched_procs`, an array only
 	// `__sched_init_procs` builds: without the scheduler there is nothing to walk, so asking the question IS

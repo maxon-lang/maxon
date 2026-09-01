@@ -181,6 +181,7 @@ function leafOpRole(op StdOp) returns LeafOpRole
 		// hold, the import calls refuse.
 		osCommandLine to osEnterBackgroundPriority then break 'kind'
 		osFileOpenWriteExecutable then break 'kind'
+		osEnvBlock to osEnvBlockFree then break 'kind'
 	end 'kind'
 
 	return LeafOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else LeafOpRole.body
@@ -801,6 +802,7 @@ type LeafInliner
 				call(_, callee, _) then self.considerSite(pos, callee: callee)
 				retVoid to osEnterBackgroundPriority then break 'kind'
 				osFileOpenWriteExecutable then break 'kind'
+				osEnvBlock to osEnvBlockFree then break 'kind'
 			end 'kind'
 		end 'eachOp'
 		return self.sitePositions.count()
@@ -852,6 +854,7 @@ type LeafInliner
 			call(resultId, callee, args) then self.splice(predRef, contRef: contRef, calleeIndex: calleeIndex, callee: callee, args: args, resultId: resultId)
 			retVoid to osEnterBackgroundPriority then self.refuseNotTheSplitCall()
 			osFileOpenWriteExecutable then self.refuseNotTheSplitCall()
+			osEnvBlock to osEnvBlockFree then self.refuseNotTheSplitCall()
 		end 'site'
 		var pred = self.blockAt(predRef)
 		pred.opRefs.truncate(tail)
@@ -1207,6 +1210,7 @@ type LeafInliner
 			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
 			witnessCall to osEnterBackgroundPriority then refuseNotATerminator(calleeFunc)
 			osFileOpenWriteExecutable then refuseNotATerminator(calleeFunc)
+			osEnvBlock to osEnvBlockFree then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -1320,6 +1324,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 		param(resultId, index, _) then requireParamValueIsItsIndex(resultId, index: index, calleeFunc: calleeFunc)
 		call to osEnterBackgroundPriority then refuseNotAParamOp()
 		osFileOpenWriteExecutable then refuseNotAParamOp()
+		osEnvBlock to osEnvBlockFree then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

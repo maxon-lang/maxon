@@ -171,3 +171,64 @@ names a thread true
 ```exitcode
 7
 ```
+
+<!-- test: promise-typing.a-promise-array-element-may-be-spelled-inline -->
+<!-- targets: x64-windows, arm64-macos -->
+⛔⛔ **`Array with Promise with (T, E)` AND THE TWO-STEP ALIAS ARE ONE TYPE, AND THE INLINE SPELLING USED TO
+PANIC THE COMPILER.** `typealias Ps = Promise with (Integer, ServiceError)` followed by `Array with Ps`
+compiled and ran correctly the whole time; writing the element inline instead raised
+
+```
+panic at LayoutDescriptor.maxon:568: primitiveTypeByteSize: a `genericInstance` is an aggregate —
+size it through its base StructLayout.sizeBytes, not this helper
+  in ProgramSignatures.trivialElementSlot → arrayElementSize → Parser.emitArrayCreateOp
+```
+
+⇒ **one meaning, two answers — and a panic is never one of the two.** The case asserts the ANSWER rather
+than the absence of a crash: the array is built, a reply promise is pushed into it, popped and awaited, and
+the value arrives.
+
+⭐ **THE CAUSE WAS A PREDICATE THAT STOPPED MEANING WHAT IT WAS ASKED FOR.** `arrayElementSize` decided
+"is this element stored as a POINTER?" by asking `containerElementIsManaged` — *"is it an `__mm` box?"* —
+and those two came apart at `W217`, when a promise became a pointer into the scheduler's own slab that
+`__gt_promise_drop` reclaims and no refcount owns. `typeIsManaged` therefore answers **false** for a
+promise by design (*"an `Array with Promise` answers `false` there and `true` here"*, in
+`containerElementOwesDrop`'s words), the element fell through to the INLINE-STORAGE path, and
+`trivialElementSlot` — whose own header claimed *"a trivial element is never a struct or a generic
+instance"* — sized an aggregate through the primitive helper. The two-step spelling escaped only because
+its element is still the alias NAME, which the undeclared-`named` fallback happens to size at a machine
+word. `containerElementOccupiesAPointerSlot` is the question actually being asked, and both populations
+now answer it.
+
+⚠ **THE FIX IS BYTE-NEUTRAL, WHICH IS THE EVIDENCE THAT THE TWO SPELLINGS AGREE.** A drop-the-promises
+program — an `Array with Promise` filled and abandoned, `W217`'s own shape — emits **41,351 bytes and
+exits 0** under both spellings, so the inline form gets the same `element_size@24` stride and the same
+`element_destroy@40` stamp rather than merely stopping short of the panic.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromiseArray = Array with Promise with (Integer, ServiceError)
+
+type Calc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function double(by Integer) returns Integer
+		return by * 2
+	end 'double'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	var ps = IntPromiseArray.create()
+	ps.push(h.double(21))
+
+	let p = try ps.pop() otherwise panic("the push above filled it")
+	return (try await p otherwise 0) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```

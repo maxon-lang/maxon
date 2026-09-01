@@ -390,6 +390,30 @@ export enum IatSlot
 	// asks to be de-prioritised should not pay two IAT thunks and two Hint/Name records for the privilege.
 	SetPriorityClass
 	GetPriorityClass
+	// ⭐⭐ **THE TWO WHOLE-ENVIRONMENT IMPORTS.** APPENDED AFTER `GetPriorityClass` for the reason every entry
+	// above states: every existing slot INDEX, and hence every emitted `iatCall` relocation, is unchanged.
+	// kernel32 again, so they add no import DIRECTORY entry (see `ImportDll`), and they are the LAST kernel32
+	// slots — the `ws2_32` note below still bounds this append.
+	//
+	// ⭐⭐ **`GetEnvironmentVariableA` — already a slot four bands up — CANNOT ANSWER THIS QUESTION.** It reads
+	// ONE name the caller already knows. `Environment.inheritUpdating` means "the parent's environment plus
+	// these", and the parent's names are exactly what the caller does NOT know, so the whole block has to be
+	// enumerable. See `StdOp.osEnvBlock`.
+	//
+	// ⚠ **THE SNAPSHOT IS OWNED, WHICH IS WHY THE FREE IS AN IMPORT AND NOT AN OMISSION.**
+	// `GetEnvironmentStringsA` hands back a converted COPY; a program that spawned children in a loop and
+	// never released it would leak one environment per spawn.
+	//
+	// ⚠ The `A` variants, inheriting `CreateFileA`'s stated LIMITATION unchanged and inheriting it
+	// CONSISTENTLY: the block comes back in the system ANSI codepage and is handed straight back to
+	// `CreateProcessA`, which reads it in the same one — so the round trip holds, exactly as
+	// `GetCommandLineA`'s does.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, on the same terms as every
+	// band above: their only producer is the attached-subprocess substrate, so a program that spawns nothing
+	// pays neither.
+	GetEnvironmentStringsA
+	FreeEnvironmentStringsA
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -416,7 +440,7 @@ end 'IatSlot'
 // which would point its thunk at another library's Hint/Name entry.
 function slotDll(slot IatSlot) returns ImportDll
 	return match slot 'dll'
-		ExitProcess to GetPriorityClass gives ImportDll.kernel32
+		ExitProcess to FreeEnvironmentStringsA gives ImportDll.kernel32
 		WSAStartup to closesocket gives ImportDll.ws2_32
 	end 'dll'
 end 'slotDll'
@@ -477,7 +501,7 @@ end 'iatSlotIndex'
 // producer added later must extend the range (or fail this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
-		GetEnvironmentVariableA to GetPriorityClass gives true
+		GetEnvironmentVariableA to FreeEnvironmentStringsA gives true
 		ExitProcess to GetModuleFileNameA gives false
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides

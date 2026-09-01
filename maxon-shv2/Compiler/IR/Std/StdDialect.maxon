@@ -1247,11 +1247,13 @@ export union StdOp
 	// (the netpoll re-scans after `osWaitHandles`), exactly as `osWriteStdout` ignores `WriteFile`'s `BOOL` — so
 	// they carry no result id and their x64 lowering emits no RAX capture.
 	//
-	// `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr)` = `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, FALSE,
-	// 0, NULL, NULL, startupPtr, procInfoPtr)`. Three VALUE operands (the mutable cmdline buffer + the two OUT
-	// structs); ten Win64 arguments, six of them on the stack (see `win64OutgoingArgDisp`). It is the only op here
-	// with outgoing stack-argument space (`stdOpOutgoingArgBytes`), which is why it is declared FIRST.
-	osProcessSpawn(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr)` = `CreateProcessA(NULL,
+	// cmdlinePtr, NULL, NULL, FALSE, creationFlags, envPtr, cwdPtr, startupPtr, procInfoPtr)`. SIX VALUE operands
+	// (the mutable cmdline buffer, the working directory, the creation flags, the two OUT structs and the
+	// environment block); ten Win64 arguments, six of them on the stack (see `win64OutgoingArgDisp`). It is the only
+	// op here with outgoing stack-argument space (`stdOpOutgoingArgBytes`), which is why it is declared FIRST.
+	// `envPtr` is 0 for the child that inherits — see `osProcessSpawnInherit` for why it is an operand at all.
+	osProcessSpawn(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// `osProcessExitCode(handle, codePtr)` = `GetExitCodeProcess(handle, codePtr)` — writes the child's DWORD exit
 	// code to `[codePtr]` (an out-param buffer, like `osReadClock`'s). Two VALUE operands, no result.
 	osProcessExitCode(handleId ValueId, codePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
@@ -1432,11 +1434,15 @@ export union StdOp
 	// flag bits are three of the fourteen arguments of the contract this op is the floor of. A NULL `lpCurrentDirectory`
 	// means "inherit the parent's", so 0 remains the value a caller with nothing to say passes — the widening adds a
 	// spelling, it does not change the old one's meaning.
-	// ⚠ `lpEnvironment` stays a hard NULL, and that is the CONTRACT rather than an omission: `stdlib/Subprocess.maxon`
-	// refuses `Environment.custom`/`inheritUpdating` in `requireInheritEnv` before any spawn call is made, so the only
-	// value the corpus can reach here is "inherit", which IS NULL. An operand nothing can supply would be a fourth
-	// zero wearing a parameter's name.
-	osProcessSpawnInherit(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// ⭐ **`envPtr` IS NOW A REAL OPERAND TOO, AND THIS NOTE USED TO SAY IT COULD NEVER BE ONE.** It read
+	// *"`lpEnvironment` stays a hard NULL, and that is the CONTRACT rather than an omission … an operand
+	// nothing can supply would be a fourth zero wearing a parameter's name"*, which was true exactly while
+	// `stdlib/Subprocess.maxon` refused `Environment.custom`/`inheritUpdating` before any spawn call was
+	// made. It builds the block now, so something CAN supply it — and the same sentence then argues the
+	// other way: an environment a caller assembled and a lowering discarded would be a SILENT wrong answer,
+	// a child running with the parent's environment while its caller was told it had another. A NULL still
+	// means "inherit the parent's", so 0 remains what a caller with nothing to say passes.
+	osProcessSpawnInherit(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel a specific pending overlapped read (P1.5 slice
 	// 1a-ii, the in-flight-reader-promise DROP path). Two VALUE operands (the pipe read handle + the OVERLAPPED whose
 	// operation to cancel), no result: the cancellation posts an ERROR_OPERATION_ABORTED completion packet the
@@ -2429,6 +2435,45 @@ export union StdOp
 	// target-specific number. Two ops, each naming an INTENT, leaves each backend to spell that intent in
 	// its own vocabulary.
 	osFileOpenWriteExecutable(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The WHOLE environment, which `osEnvRead` cannot reach ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osFileOpenWriteExecutable`, per the band-append
+	// invariant every entry above states: a mid-band insert is silently swallowed by a `… to X` range arm.
+	// Both carry `category: system`, placing them logically in the system band independent of this tail
+	// position.
+	//
+	// `osEnvBlock(result)` = a pointer to this process's whole environment IN THE PLATFORM'S OWN SHAPE, or 0
+	// when the host could not answer. `osCommandLine`'s shape exactly, and for its reason: the API hands back
+	// a pointer rather than writing through one.
+	//   • x64-windows — `GetEnvironmentStringsA()`: a COPY, NUL-terminated `NAME=VALUE` entries back-to-back
+	//     with one more NUL after the last.
+	//   • arm64-macOS — `*_NSGetEnviron()`: the LIVE `environ`, a NULL-terminated vector of `char *`.
+	// `osEnvBlockFree(blockPtr)` = `FreeEnvironmentStringsA(blockPtr)` — the release a COPY owes, emitted only
+	// by the shape that takes one.
+	//
+	// ⚠ **THE OP IS THE QUESTION, NOT THE ANSWER'S LAYOUT**, and `SubprocessRuntime.EnvironmentSnapshotShape`
+	// is where the layout is decided — once, in the one producer, so no consumer has to ask what target it is
+	// running on. That separation is what makes a single op pair honest across two genuinely different data
+	// structures.
+	//
+	// ⭐⭐ **`osEnvRead` CANNOT BE ASKED THIS QUESTION, WHICH IS WHY THERE IS A SECOND ENVIRONMENT OP.** It
+	// answers ONE NAME the caller already knows. Building a child's environment means walking the names the
+	// caller does NOT know — that is what `Environment.inheritUpdating` means — and no sequence of
+	// `GetEnvironmentVariableA` calls can enumerate them.
+	//
+	// ⭐ **TWO OPS AND NOT ONE, because a Win32 snapshot is OWNED.** `GetEnvironmentStringsA` returns a copy
+	// the caller must release, so a single "read the environment" op would either leak one block per spawn or
+	// have to hide the free inside a lowering that cannot know when the walk is finished.
+	//
+	// ⭐ **GATED ON `HostFacility.subprocess`, WHICH IS NOT THE SAME SET AS "x64-windows".** The sole caller
+	// is `SubprocessRuntime.buildSubpEnvEntry`, whose entry point is under the `__gt_subp_` prefix
+	// `SemanticCheck.calleeHostFacility` maps to that facility; `targetProvidesFacility` answers `true` for
+	// x64-windows AND arm64-macOS, so BOTH lower `osEnvBlock` and only the first ever sees `osEnvBlockFree`.
+	// A backend the facility denies never sees either, which is why wasm stubs neither — a stub would answer
+	// "this process has no environment", and a child built from that answer would start with an EMPTY one.
+	// Full call-barrier metadata: both ARE indirect calls once lowered.
+	osEnvBlock(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+	osEnvBlockFree(blockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2734,6 +2779,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		//     answers and addresses, none of which is an arithmetic shape at all.
 		div to osEnterBackgroundPriority then operands.recordNeither()
 		osFileOpenWriteExecutable then operands.recordNeither()
+		osEnvBlock to osEnvBlockFree then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -2821,6 +2867,7 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 		loadIndirect(resultId, addrId, offset, valueType) then load.recordLoad(resultId, address: addrId, displacement: offset, readType: valueType)
 		storeIndirect to osEnterBackgroundPriority then load.recordNotALoad()
 		osFileOpenWriteExecutable then load.recordNotALoad()
+		osEnvBlock to osEnvBlockFree then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3016,7 +3063,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osSleepMs(msId) then referenced.insert(msId)
 		// P1.5 subprocess: each reads its operands and (except `osWaitHandle`) defines nothing. `osWaitHandle`'s
 		// `resultId` is a DEF, so it is skipped here exactly as `osAllocPages`'s result id is.
-		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) then insertUseQuint(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr)
+		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
 		osProcessExitCode(handle, codePtr) then insertUsePair(referenced, a: handle, b: codePtr)
 		osWaitHandles(handleArrayPtr, count, timeoutMs) then insertUseTriple(referenced, a: handleArrayPtr, b: count, c: timeoutMs)
 		osCloseHandle(handle) then referenced.insert(handle)
@@ -3050,7 +3097,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osLockLeave(lockPtr) then referenced.insert(lockPtr)
 		osReadOverlapped(_, handle, buf, cap, bytesOutPtr, ovl) then insertUseQuint(referenced, a: handle, b: buf, c: cap, d: bytesOutPtr, e: ovl)
 		osLastError then break 'u'
-		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) then insertUseQuint(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr)
+		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
 		osCancelIo(handle, ovl) then insertUsePair(referenced, a: handle, b: ovl)
 		osGetPid then break 'u'
 		// P1.5 dogfood slice 1b: the streaming stdin pipe reads four value operands (its two out-pointers are
@@ -3075,6 +3122,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osReadFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
 		osFileOpenWrite(_, pathPtr) then referenced.insert(pathPtr)
 		osFileOpenWriteExecutable(_, pathPtr) then referenced.insert(pathPtr)
+		osEnvBlock then break 'u'
+		osEnvBlockFree(blockPtr) then referenced.insert(blockPtr)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
@@ -3298,6 +3347,8 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osReadFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileOpenWrite(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osFileOpenWriteExecutable(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osEnvBlock(resultId) gives DefinedValueLookup.defines(resultId)
+		osEnvBlockFree gives DefinedValueLookup.none
 		osFileSize(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileDelete(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
@@ -3410,6 +3461,13 @@ function insertUseQuint(referenced StdValueUseSet, a ValueId, b ValueId, c Value
 	referenced.insert(e)
 end 'insertUseQuint'
 
+// The six-operand twin — for the two `CreateProcessA` ops, whose command line, working directory,
+// creation flags, STARTUPINFO, PROCESS_INFORMATION and environment block are all values.
+function insertUseSextet(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId, d ValueId, e ValueId, f ValueId)
+	insertUseQuint(referenced, a: a, b: b, c: c, d: d, e: e)
+	referenced.insert(f)
+end 'insertUseSextet'
+
 // An indirect call reads its callee register AND every argument. The callee is a value operand (the
 // code pointer), unlike a direct `call` whose callee is a NAME — so it must be inserted alongside the
 // args or the value holding the function pointer would look dead and be pruned.
@@ -3484,7 +3542,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSleepMs(msId) gives StdOp.osSleepMs(remappedValue(msId, subst: subst))
 		// The exact mirror of `collectStdOpUses`'s subprocess arms: rewrite exactly the operands they read;
 		// `osWaitHandle`'s `resultId` is a def, so it passes through unmapped.
-		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) gives StdOp.osProcessSpawn(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
+		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) gives StdOp.osProcessSpawn(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst), envPtrId: remappedValue(envPtr, subst: subst))
 		osProcessExitCode(handle, codePtr) gives StdOp.osProcessExitCode(remappedValue(handle, subst: subst), codePtrId: remappedValue(codePtr, subst: subst))
 		osWaitHandles(handleArrayPtr, count, timeoutMs) gives StdOp.osWaitHandles(remappedValue(handleArrayPtr, subst: subst), countId: remappedValue(count, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 		osCloseHandle(handle) gives StdOp.osCloseHandle(remappedValue(handle, subst: subst))
@@ -3513,7 +3571,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osLockLeave(lockPtr) gives StdOp.osLockLeave(remappedValue(lockPtr, subst: subst))
 		osReadOverlapped(resultId, handle, buf, cap, bytesOutPtr, ovl) gives StdOp.osReadOverlapped(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), capId: remappedValue(cap, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osLastError gives op
-		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
+		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst), envPtrId: remappedValue(envPtr, subst: subst))
 		osCancelIo(handle, ovl) gives StdOp.osCancelIo(remappedValue(handle, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osGetPid gives op
 		// P1.5 dogfood slice 1b: the streaming stdin pipe + write, rewriting exactly the value operands they read.
@@ -3534,6 +3592,8 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osReadFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osReadFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
 		osFileOpenWrite(resultId, pathPtr) gives StdOp.osFileOpenWrite(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileOpenWriteExecutable(resultId, pathPtr) gives StdOp.osFileOpenWriteExecutable(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osEnvBlock(resultId) gives StdOp.osEnvBlock(resultId)
+		osEnvBlockFree(blockPtr) gives StdOp.osEnvBlockFree(remappedValue(blockPtr, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -3771,6 +3831,7 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		atomicRmw(resultId, addrId, operandId, opcode) then return StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: addrId, operandId: operandId, opcode: opcode)
 		currentThreadToken to osEnterBackgroundPriority then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
 		osFileOpenWriteExecutable then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+		osEnvBlock to osEnvBlockFree then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -4014,6 +4075,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
 		witnessCall to osEnterBackgroundPriority then break 'term'
 		osFileOpenWriteExecutable then break 'term'
+		osEnvBlock to osEnvBlockFree then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 

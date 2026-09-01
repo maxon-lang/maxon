@@ -457,6 +457,22 @@ function batchKeyShellVar() returns String
 	return "${BatchKeyShellName}"
 end 'batchKeyShellVar'
 
+// ⭐ **THE CASE'S `<!-- procs: N -->` COUNT, CARRIED INTO THE BATCH AS THE FIRST ARGUMENT OF EVERY CALL.**
+// The batched lane runs a whole spec's programs inside ONE `wsl` entry, so the per-child environment the
+// host lane builds with `Environment.inheritUpdating` has to be built by the SCRIPT instead — one export
+// inside the per-execution subshell. This is the name it lands in.
+//
+// ⚠ **THE SLOT IS ALWAYS PRESENT AND AN EMPTY VALUE MEANS "NAME NO COUNT".** That is the shell's own way of
+// spelling absence (`[ -z ]`), not a sentinel standing in for an unread marker: the argument is a shell
+// word, and there is no shorter word than none. A case with no marker therefore exports nothing at all and
+// resolves the same default it resolves on the host lane.
+let BatchProcsShellName = "p"
+
+// The `$`-reference to it — `batchKeyShellVar`'s twin, and a function for the same reason.
+function batchProcsShellVar() returns String
+	return "${BatchProcsShellName}"
+end 'batchProcsShellVar'
+
 // coreutils' per-execution bound. NAMED here rather than spelled in the script, because
 // `requireWslAvailable` probes for exactly this command and the two must be the same word.
 let GuestTimeoutCommand = "timeout"
@@ -761,11 +777,16 @@ end 'inheritedWorkingDir'
 // harness that performs ONE execution wants the same value, and there is exactly one caller that
 // performs many at once and must therefore say so (`runWslBatch`). Defaulting puts the number in one
 // place and makes the one site that differs the one site that states it.
-export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs) returns ProcessCapture throws SubprocessError
+//
+// ⚠ `environment` DEFAULTS FOR EXACTLY THAT REASON AND NOT FOR `workingDirectory`'s: every spawn here but
+// ONE wants the parent's environment unchanged, and the one that differs is the RUN step, where a case's
+// `<!-- procs: N -->` marker names the processor count its program must start on (`runEnvironmentFor`).
+export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
 	config.arguments = argv
 	config.timeoutMs = timeoutMs
 	config.workingDirectory = workingDirectory
+	config.environment = environment
 
 	let collected = try Subprocess.runConfiguration(config)
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
@@ -3548,12 +3569,32 @@ function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
-	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir) otherwise (e) 'runSpawnFailed'
+	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(pending.compiled.test.procs)) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
 
 	return RunObservation.completed(spawned)
 end 'spawnOneRun'
+
+// ⭐⭐ **WHAT A CASE'S `<!-- procs: N -->` MARKER MEANS AT THE SPAWN: one variable, in one child's
+// environment, and nothing else changed.**
+//
+// ⛔ **IT MAY NOT BE DONE BY SETTING THE VARIABLE IN THIS PROCESS AND LETTING THE CHILD INHERIT IT.** That
+// would make the count a property of the WORKER rather than of the CASE — every test the worker went on to
+// run would carry the last marked case's number until something overwrote it, and the correctness of the
+// whole scheme would rest on a claim nothing here checks (that a worker performs one run at a time, and that
+// no other spawn of this process ever races the assignment). `Environment.inheritUpdating` states the fact
+// where it is true: in the environment block of the one child that is about to be created.
+//
+// ⚠ The variable is spelled from `SchedRuntime.MaxProcsEnvName` — the same constant the emitted scheduler
+// reads it back through — because a marker set under one name and read under another is accepted, ignored
+// and silent.
+function runEnvironmentFor(procs SpecProcs) returns Environment
+	return match procs 'p'
+		unset gives Environment.inherit
+		pinned(count) gives Environment.inheritUpdating([String.from(MaxProcsEnvName): "{count}"])
+	end 'p'
+end 'runEnvironmentFor'
 
 // Whether the one `wsl` entry happened at all. A launch that never got off the ground is not one test's
 // failure — every test the batch was carrying has to be told, in its own record, which is what keeps
@@ -3795,8 +3836,13 @@ function batchScript(prepared PreparedTestArray) returns String
 	var out = StringBuilder.create()
 
 	out.append("{BatchRunFunctionName}() (\n")
-	out.append("\t{BatchKeyShellName}=$1\n")
-	out.append("\tshift\n")
+	out.append("\t{BatchProcsShellName}=$1\n")
+	out.append("\t{BatchKeyShellName}=$2\n")
+	out.append("\tshift 2\n")
+	// ⭐ THE CASE'S OWN PROCESSOR COUNT, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND NOWHERE ELSE. The
+	// function body is a SUBSHELL (see this function's header), so the export dies with the execution and
+	// the next test in the batch starts from the batch's own environment however this one ended.
+	out.append("\t[ -z \"{batchProcsShellVar()}\" ] || export {String.from(MaxProcsEnvName)}=\"{batchProcsShellVar()}\"\n")
 	out.append("\tc=\"{guestCapturePath(BatchStatusExtension)}\"\n")
 	out.append("\t{GuestTimeoutCommand} -k {BatchKillGraceSeconds}{GuestTimeoutSecondsSuffix} {SpecSpawnTimeoutSeconds}{GuestTimeoutSecondsSuffix} {GuestShell} {GuestShellCommandFlag} 'exe=$1; out=$2; err=$3; code=$4; shift 4; ( exec \"$exe\" \"$@\" > \"$out\" 2> \"$err\" ); printf %s $? > \"$code\"' _ \"{WslRelativePrefix}{batchKeyShellVar()}\" \"{guestCapturePath(BatchStdoutExtension)}\" \"{guestCapturePath(BatchStderrExtension)}\" \"$c\" \"$@\"\n")
 	out.append("\t[ -f \"$c\" ] || printf %s {BatchTimedOutToken} > \"$c\"\n")
@@ -3824,14 +3870,21 @@ function guestCapturePath(extension String) returns String
 	return "{BatchSubdirName}{PathSeparator}{batchKeyShellVar()}{extension}"
 end 'guestCapturePath'
 
-// One test's line: the function, the binary's own filename, then the case's own `Args:`.
+// One test's line: the function, the case's processor count, the binary's own filename, then the case's own
+// `Args:`.
 //
 // ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, exactly as they do behind every other runner
 // (`buildRunCommand`): the shell function forwards whatever follows the key straight to the binary, so
-// `Args:` reaches the same argv[1..] a direct spawn would have given it.
+// `Args:` reaches the same argv[1..] a direct spawn would have given it. The count goes FIRST because it is
+// the script's own business and never the program's — nothing after the `shift 2` can reach it.
 function batchCallLine(compiled CompiledTest) returns String
 	var line = StringBuilder.create()
 	line.append(BatchRunFunctionName)
+	line.append(" ")
+	line.append(shQuoted(match compiled.test.procs 'procs'
+		unset gives ""
+		pinned(count) gives "{count}"
+	end 'procs'))
 	line.append(" ")
 	line.append(shQuoted(batchKeyFor(compiled)))
 

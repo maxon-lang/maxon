@@ -820,7 +820,7 @@ export let GtPromiseDropName = b"__gt_promise_drop"
 //
 // **`__gt_reclaim(gt)` — the SECOND party's half, whichever of the two that turns out to be.** The releaser
 // call and the struct free, in that order and once.
-export let GtRunnerDoneName = b"__gt_runner_done"
+let GtRunnerDoneName = b"__gt_runner_done"
 
 // ⭐ EXPORTED since SV1 wave 3: a SERVICE has no promise, so its green thread is its own consumer and calls
 // this itself at the end of its loop (`MailboxRuntime.buildMboxServiceExit`, which carries why the ticket
@@ -1432,6 +1432,49 @@ let GtProcCountLabel = b"__gt_proc_count"
 let GtProcHandlesBaseLabel = b"__gt_proc_handles_base"
 let GtProcGtsBaseLabel = b"__gt_proc_gts_base"
 
+// ⭐⭐⭐ **THE SINGLE-POLLER CLAIM — "I AM THE M THAT IS BLOCKING ON THE CHILDREN" (A2).** 0 = free,
+// 1 = claimed. Taken by CAS and released by a plain store by the same M that took it.
+//
+// ⛔⛔ **WHAT IT REPLACES WAS AN UNLOCKED READ OF A STORE ANOTHER M REWRITES.** `emitProcWait` called itself
+// *"the netpoll's SINGLE-M block on the parked children"* and meant it: it loaded
+// `__gt_proc_handles_base`, took a count the netpoll had read from `__gt_proc_count` with **no lock at all**,
+// and handed the pair straight to `WaitForMultipleObjects` — while `__gt_proc_check` swap-removes entries
+// and `__gt_proc_add_locked` appends them **under `__sched_lock`**. Two Ms in drivers could both be blocked
+// on that array while a third mutated it. The array is fixed-capacity so nothing can be walked into freed
+// memory, but the pair (count, contents) is still read torn: a count from before a reap addresses a slot the
+// swap-down has just duplicated, which is `WaitForMultipleObjects` with a repeated handle —
+// `ERROR_INVALID_PARAMETER`, an immediate return, and a driver that spins instead of blocking.
+//
+// ⭐ **GO'S SHAPE, AND GO'S REASON.** `vendor/go/src/runtime/proc.go`'s `findRunnable` claims the netpoll with
+// a `Swap(0)` on `sched.lastpoll` so that exactly one M is ever inside the blocking poll; every other M takes
+// a bounded path and comes back. Here the claim buys a second thing Go's does not need: it is also the
+// mutual exclusion on `GtProcWaitSnapshotLabel`, which is why that buffer needs no lock of its own.
+//
+// ⚠ **THE CLAIM IS NOT A LOCK AND MUST NOT BECOME ONE.** A loser does not wait for it — waiting is the whole
+// thing it is avoiding — it takes the shared arm below and re-polls, so the claim can be held across a
+// blocking wait of unbounded length without any other M being stalled by it.
+let GtProcPollerLabel = b"__gt_proc_poller"
+let GtProcPollerFree = 0 as ParsedInt
+let GtProcPollerClaimed = 1 as ParsedInt
+
+// ⭐⭐ **THE POLLER'S PRIVATE COPY OF THE HANDLE ARRAY.** The claimant snapshots `__gt_proc_count` and that
+// many handles into here UNDER `__sched_lock`, releases the lock, and waits on the SNAPSHOT — because the
+// lock may not be held across a blocking wait and the live array may not be read without it. Same
+// `ProcStoreBytes` region as the store itself, allocated once beside it in `__gt_init`.
+//
+// ⚠ **ONE BUFFER, NOT ONE PER P, AND THE CLAIM IS WHAT MAKES THAT SOUND.** Only the M holding
+// `__gt_proc_poller` ever reads or writes it, so a per-P copy would be `ProcStoreBytes` per processor to
+// serialise writers that are already serialised.
+let GtProcWaitSnapshotLabel = b"__gt_proc_wait_snapshot"
+
+// ⭐ **HOW LONG A NON-CLAIMANT SLEEPS BEFORE LOOKING AGAIN.** It cannot join the blocking wait (that is the
+// claim's whole point) and it must not spin, so it sleeps this long and re-enters the netpoll, which re-reads
+// the child count, the timer store and its own exit condition from scratch. Deliberately the same 1 ms as
+// `OtherWorkerPollMs` and for the same reason — it is the granularity of the coarsest wait Windows will
+// honour — but a DISTINCT constant, because the two answer different questions and a shared one would make
+// tuning either of them move the other.
+let ProcWaiterShareMs = 1 as ParsedInt
+
 // P1.5 dogfood slice 1a-ii IOCP substrate `.data` slots. `__io_iocp` = the process-wide completion port;
 // `__io_done_event` = the AUTO-reset event the completion thread signals to wake the netpoll's WaitForSingleObject;
 // `__io_init_done` = the idempotency guard for `__io_init`; `__io_pending` = the count of in-flight overlapped
@@ -1917,11 +1960,21 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep)
 	// P1.5 subprocess store: the parked-child count + the two parallel-array bases.
 	pushRuntimeGlobal(out, label: GtProcCountLabel, sharing: MultiMSharing.underSchedLock)
-	// The two BASES are written once by `__gt_init` and never again — the store is FIXED-capacity, so nothing
-	// republishes or frees them and the netpoll may read them for its `WaitForMultipleObjects` without the lock.
-	// Only the COUNT and the slots move, and both move under it.
+	// The BASES are written once by `__gt_init` and never again — the store is FIXED-capacity, so nothing
+	// republishes or frees them and any M may load them without the lock. Only the COUNT and the SLOTS move,
+	// and both move under it.
+	//
+	// ⛔ **THAT SENTENCE USED TO END "…so the netpoll may read them for its `WaitForMultipleObjects` without
+	// the lock", WHICH WAS A NON-SEQUITUR AND IS A2's DEFECT.** A stable BASE says nothing about the slots it
+	// addresses or about the count that bounds them, and the wait needed all three to agree. The base is still
+	// read unlocked; the count and the slots are now copied under the lock into `GtProcWaitSnapshotLabel` by
+	// the one M that holds `GtProcPollerLabel`.
 	pushRuntimeGlobal(out, label: GtProcHandlesBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 	pushRuntimeGlobal(out, label: GtProcGtsBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: GtProcWaitSnapshotLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	// The claim word itself: every mutation is an `atomicCas` (take) or the releasing store made by the M that
+	// took it, so no second M can be between the two.
+	pushRuntimeGlobal(out, label: GtProcPollerLabel, sharing: MultiMSharing.atomicStep)
 	// P1.5-B2 #88: the green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It is
 	// the ONE `.data` word this family still owns for memory bookkeeping: S3 retired the GT-struct free-list
 	// head and the five subprocess scratch slots beside it, because a runtime with a free path needs no
@@ -2172,6 +2225,13 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let procGtsBaseAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(procGtsBaseAddr, label: GtProcGtsBaseLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(procGtsBaseAddr, offset: 0, valueId: procGtsBase, valueType: StdType.i64))
+	// And the poller's private snapshot of the handle array — same capacity, allocated on the same road, so a
+	// change to `ProcStoreBytes` cannot move one without the other. See `GtProcWaitSnapshotLabel`.
+	let procSnapshotBase = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(procSnapshotBase, callee: SlabAllocName, args: argsOf(procRegionSizeConst)))
+	let procSnapshotBaseAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(procSnapshotBaseAddr, label: GtProcWaitSnapshotLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(procSnapshotBaseAddr, offset: 0, valueId: procSnapshotBase, valueType: StdType.i64))
 	// ⚠ **THE 64 KB SYSCALL STACK IS NO LONGER ALLOCATED HERE (G1).** It used to be ONE global region whose
 	// top was published to a `.data` word, and the invariant that made that safe was the prose *"single-M
 	// runs one thing at a time"* — which multi-M falsifies by definition, as silent interleaved corruption.
@@ -2680,6 +2740,9 @@ function buildGtCoroEnqueue(module StdModule)
 	var emptyBlock = module.addBlock(func, label: b"empty")
 
 	emitParams(module, block: entry, count: 1)
+	// ⭐ A coroutine becoming runnable is PROGRESS, and this is the door the IOCP completion thread
+	// reaches directly — the one publish that does not come through `__sched_publish*` (A1).
+	emitSchedNoteProgress(module, block: entry, ids: ids)
 	let g = 0 as ValueId
 
 	// `entry` dominates both arms, so the owner is read once here and the ends name it throughout.
@@ -3226,11 +3289,6 @@ function emitCeilMs(module StdModule, block IrBlock, ids ValueMinter, earliest V
 	return deltaMs
 end 'emitCeilMs'
 
-// Emit the netpoll's single-M block on the parked children into `block`: `WaitForMultipleObjects(procHandles, pc,
-// FALSE, timeoutMs)` then `__gt_proc_check()` to wake every child that has since exited. `timeoutMs` is INFINITE
-// when no timer bounds the wait, else the timer delta. The handle array is the store's `procHandles` array itself
-// — parallel-array storage keeps it contiguous, so no gather copy is needed. Factored so the two blocks that
-// block on children (bounded and unbounded) share one spelling of the wait+recheck.
 // Emit the netpoll's block on the IOCP wake event into `block`: `WaitForSingleObject(__io_done_event, timeoutMs)`
 // (P1.5 slice 1a-ii). The completion thread SetEvents this AUTO-reset event after it re-readies a completed read, so
 // the main M wakes as soon as any overlapped read finishes (never a busy-spin). `timeoutMs` is INFINITE when no timer
@@ -3244,14 +3302,112 @@ function emitIoEventWait(module StdModule, block IrBlock, ids ValueMinter, timeo
 	module.appendOp(block, op: StdOp.osWaitHandle(waitResult, handleId: eventHandle, timeoutMsId: timeoutMs))
 end 'emitIoEventWait'
 
-function emitProcWait(module StdModule, block IrBlock, ids ValueMinter, pc ValueId, timeoutMs ValueId)
-	let handlesBaseAddr = ids.mint()
-	module.appendOp(block, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
-	let handlesBase = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.osWaitHandles(handlesBase, countId: pc, timeoutMsId: timeoutMs))
-	let checkResult = ids.mint()
-	module.appendOp(block, op: StdOp.call(checkResult, callee: GtProcCheckName, args: ValueIdArray.create()))
+// ⭐⭐⭐ **THE NETPOLL'S BLOCK ON THE PARKED CHILDREN, UNDER GO'S SINGLE-POLLER CLAIM (A2).** Exactly one M
+// may be the blocking process-waiter: it claims `__gt_proc_poller`, copies the count and that many handles
+// into `__gt_proc_wait_snapshot` **under `__sched_lock`**, releases the lock, blocks on the SNAPSHOT, and
+// releases the claim. Every other M sleeps `ProcWaiterShareMs` and re-enters the netpoll, which re-reads
+// everything. Both arms end in `__gt_proc_check()`, which is what actually wakes the children that exited.
+//
+// `GtProcPollerLabel` carries the defect this replaces (an unlocked count handed to a wait while another M
+// swap-removed under the lock) and why a loser must not queue on the claim.
+//
+// ⛔ **THE LOCK IS RELEASED BEFORE THE WAIT, NOT AFTER, AND THAT IS NOT NEGOTIABLE.** `osLockEnter` is
+// recursive on the wrong identity (`MailboxRuntime.maxon:17-23`), so a scheduler lock held across a blocking
+// call is not a deadlock — it is a sibling walking the recursive path straight into the critical section. The
+// copy exists precisely so the lock's span is a bounded memcpy and nothing else.
+//
+// ⚠ **A SNAPSHOT COUNT OF ZERO SKIPS THE WAIT, AND THAT ARM IS REACHABLE.** The netpoll chose this path on a
+// `__gt_proc_count` read taken without the lock, so another M may have reaped the last child in between —
+// and `WaitForMultipleObjects` with `nCount == 0` is `ERROR_INVALID_PARAMETER`, an immediate return, which
+// would turn an INFINITE wait into a spin. The old code had this hazard too and no arm for it.
+//
+// ⚠ **A HANDLE THE SNAPSHOT NAMES CAN BE REAPED AND CLOSED WHILE WE WAIT, AND THAT IS SELF-CORRECTING
+// RATHER THAN HANDLED.** The wait then fails immediately — but the M that closed it did so by reaping the
+// entry first, so the store is already smaller, the `__gt_proc_check` below finds the woken thread, and the
+// next pass snapshots without it. It costs one extra turn of the drive loop, once per reap, and cannot spin:
+// each occurrence consumes the entry that caused it.
+//
+// Factored so the two netpoll blocks that wait on children (bounded and unbounded) share one spelling of the
+// whole protocol; `cur` is where it starts and every arm converges on `cont`.
+function emitProcWait(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, timeoutMs ValueId, cont IrBlock)
+	var shareWait = module.addBlock(func, label: b"pwshare")
+	var snapshot = module.addBlock(func, label: b"pwsnap")
+	var copyHdr = module.addBlock(func, label: b"pwcopyhdr")
+	var copyBody = module.addBlock(func, label: b"pwcopybody")
+	var copyDone = module.addBlock(func, label: b"pwcopydone")
+	var doWait = module.addBlock(func, label: b"pwwait")
+	var release = module.addBlock(func, label: b"pwrelease")
+	var recheck = module.addBlock(func, label: b"pwrecheck")
+
+	// cur: CAS the claim free -> claimed. The winner polls; every loser shares.
+	let pollerAddr = ids.mint()
+	module.appendOp(cur, op: StdOp.globalAddr(pollerAddr, label: GtProcPollerLabel))
+	let free = emitConst(module, block: cur, value: GtProcPollerFree, ids: ids)
+	let claimedValue = emitConst(module, block: cur, value: GtProcPollerClaimed, ids: ids)
+	let claimResult = ids.mint()
+	module.appendOp(cur, op: StdOp.atomicCas(claimResult, addrId: pollerAddr, expectedId: free, replacementId: claimedValue))
+	let lostClaim = emitCasLost(module, block: cur, result: claimResult, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(lostClaim, thenBlockId: shareWait.id, elseBlockId: snapshot.id))
+
+	// shareWait: somebody else is inside the blocking wait. Sleep briefly and let the netpoll decide again.
+	let shareMs = emitConst(module, block: shareWait, value: ProcWaiterShareMs, ids: ids)
+	module.appendOp(shareWait, op: StdOp.osSleepMs(shareMs))
+	module.setTerminator(shareWait, op: StdOp.branch(recheck.id))
+
+	// snapshot: under the lock, read the count and copy that many handles into the poller's buffer.
+	emitSchedLockEnter(module, block: snapshot, ids: ids)
+	let snapCount = emitLoadGlobalWord(module, block: snapshot, label: GtProcCountLabel, ids: ids)
+	let liveBase = emitLoadGlobalWord(module, block: snapshot, label: GtProcHandlesBaseLabel, ids: ids)
+	let snapBase = emitLoadGlobalWord(module, block: snapshot, label: GtProcWaitSnapshotLabel, ids: ids)
+	let slotBytes = emitConst(module, block: snapshot, value: ProcSlotBytes, ids: ids)
+	let copyStart = emitConst(module, block: snapshot, value: 0, ids: ids)
+	let copyIndex = ids.mint()
+	copyHdr.blockArgs.push(IrBlockArg.create(copyIndex, argType: StdType.i64))
+	module.setTerminator(snapshot, op: StdOp.branch(copyHdr.id))
+	snapshot.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(copyStart)))
+
+	let copied = emitCmp(module, block: copyHdr, a: copyIndex, b: snapCount, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(copyHdr, op: StdOp.condBranch(copied, thenBlockId: copyDone.id, elseBlockId: copyBody.id))
+
+	let copyOff = emitBin(module, block: copyBody, a: copyIndex, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
+	let sourceSlot = emitBin(module, block: copyBody, a: liveBase, b: copyOff, opcode: StdBinOpcode.add, ids: ids)
+	let destSlot = emitBin(module, block: copyBody, a: snapBase, b: copyOff, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: copyBody, record: destSlot, offset: 0, value: emitLoadField(module, block: copyBody, record: sourceSlot, offset: 0, ids: ids))
+	let copyStep = emitConst(module, block: copyBody, value: 1, ids: ids)
+	let nextCopy = emitBin(module, block: copyBody, a: copyIndex, b: copyStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
+	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(nextCopy)))
+
+	// copyDone: out of the critical section, then decide whether there is anything left to wait ON.
+	emitSchedLockLeave(module, block: copyDone, ids: ids)
+	let zero = emitConst(module, block: copyDone, value: 0, ids: ids)
+	let nothingParked = emitCmp(module, block: copyDone, a: snapCount, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(copyDone, op: StdOp.condBranch(nothingParked, thenBlockId: release.id, elseBlockId: doWait.id))
+
+	module.appendOp(doWait, op: StdOp.osWaitHandles(snapBase, countId: snapCount, timeoutMsId: timeoutMs))
+	module.setTerminator(doWait, op: StdOp.branch(release.id))
+
+	// release: hand the claim back, with the SAME `atomicCas` the take used and not a plain store.
+	//
+	// ⚠ **"only the holder releases it" MAKES THE STORE UNCONTENDED, NOT ORDERED, AND THIS SLOT IS DECLARED
+	// `MultiMSharing.atomicStep`** — *"every mutation is `atomicRmw` or `atomicCas` in every build where a
+	// second M can exist"*. The release was a plain `emitStoreGlobalWord`, so the class was a claim the code
+	// did not keep. It is not only hygiene: on a weakly-ordered lane a plain store carries no release
+	// semantics, so the hand-back may become visible to the next claimant BEFORE this M's snapshot reads and
+	// its wait are done with the buffer the claim is the mutual exclusion on
+	// (`GtProcWaitSnapshotLabel` — "only the M holding `__gt_proc_poller` ever reads or writes it").
+	//
+	// The CAS cannot fail — no other party can hold `claimed` — so its answer is not tested; what it is here
+	// for is the barrier and the class.
+	let releaseAddr = ids.mint()
+	module.appendOp(release, op: StdOp.globalAddr(releaseAddr, label: GtProcPollerLabel))
+	module.appendOp(release, op: StdOp.atomicCas(ids.mint(), addrId: releaseAddr, expectedId: emitConst(module, block: release, value: GtProcPollerClaimed, ids: ids), replacementId: emitConst(module, block: release, value: GtProcPollerFree, ids: ids)))
+	module.setTerminator(release, op: StdOp.branch(recheck.id))
+
+	// recheck: BOTH arms reap. A sharer polls the children it was not allowed to block on, which is what keeps
+	// its sleep a latency and not a correctness gap.
+	module.appendOp(recheck, op: StdOp.call(ids.mint(), callee: GtProcCheckName, args: ValueIdArray.create()))
+	module.setTerminator(recheck, op: StdOp.branch(cont.id))
 end 'emitProcWait'
 
 // ⭐⭐ **THE ANSWER `__gt_any_completed` GIVES WHEN NOTHING HAS FINISHED.** It cannot be the `0` every other
@@ -3573,6 +3729,12 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.setTerminator(driveGreen, op: StdOp.condBranch(greenNull, thenBlockId: netpoll.id, elseBlockId: run.id))
 	driveGreen.branchEdges.push(BranchEdge.create(run.id, argIds: argsOf(greenGt)))
 
+	// ⭐ **FOUND SOMETHING — SO THIS M IS NOT QUIESCENT, AND THE DEADLOCK DETECTOR'S FLAG COMES DOWN (A1).**
+	// Both edges into `run` are "a driveable thread was handed back" (this owner's coroutine queue, or the
+	// scheduler's three tiers), which is one of the exactly two events `POffQuiesced` is cleared by; `done` is
+	// the other. Clearing it anywhere else — at the loop top, say — would make the flag a snapshot of the last
+	// few microseconds instead of a state, and the detector a race again.
+	emitSchedSetQuiesced(module, block: run, p: driverProc, waiting: false, ids: ids)
 	emitGtRunOne(module, run: run, handOff: handOff, g: runGt, selfGt: selfGt, p: driverProc, continuation: loopHdr, ids: ids)
 
 	// netpoll: nothing is runnable anywhere. Block this M until something becomes ready — a parked TIMER fires
@@ -3613,6 +3775,8 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 		module.setTerminator(checkIo, op: StdOp.condBranch(noIo, thenBlockId: timerOnly.id, elseBlockId: ioPending.id))
 
 		// ioPending: a read is in flight → block on __io_done_event. No timer → INFINITE; else bound by the timer.
+		// ⭐ A read in flight IS a wakeup source, so this M is not quiesced however long it blocks (A1).
+		emitSchedSetQuiesced(module, block: ioPending, p: driverProc, waiting: false, ids: ids)
 		let noTimersIo = ids.mint()
 		module.appendOp(ioPending, op: StdOp.cmp(noTimersIo, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 		module.setTerminator(ioPending, op: StdOp.condBranch(noTimersIo, thenBlockId: ioInfinite.id, elseBlockId: ioTimerDecide.id))
@@ -3647,9 +3811,10 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.appendOp(timerOnly, op: StdOp.cmp(noTimers, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(timerOnly, op: StdOp.condBranch(noTimers, thenBlockId: otherMs.id, elseBlockId: timerDecide.id))
 
-	// ⭐⭐⭐ **NOTHING TO RUN, NOTHING TO WAIT ON, AND THIS IS THE ONLY M — AND WHAT THAT MEANS DEPENDS ON WHY
-	// WE ARE DRIVING (SV1).** Reaching here means: this green thread's coroutine queue is empty, the
-	// scheduler's three tiers hold nothing, no child is parked and no timer is pending.
+	// ⭐⭐⭐ **NOTHING TO RUN, NOTHING TO WAIT ON, AND NO OTHER M IS EXECUTING — AND WHAT THAT MEANS DEPENDS ON
+	// WHY WE ARE DRIVING (SV1).** Reaching here means: this green thread's coroutine queue is empty, the
+	// scheduler's three tiers hold nothing, no child is parked, no timer is pending, and every other M that
+	// exists has reached the same conclusion about its own search (A1).
 	//
 	//   • **`statusEquals` — an AWAIT, a `sleep`, a `runProcess` or a yielding read. It ABORTS.** The exit
 	//     condition is a thread that will now never be run by anybody, so returning hands the caller a promise
@@ -3671,19 +3836,46 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// ⚠⚠ **THE `awaitOtherM` ARM IS WHAT KEEPS THE ABORT HONEST, AND ITS PREMISE IS LIVE AGAIN.** It reads
 	// *"the thread this driver is waiting for may be RUNNING on another M right now"* — false for a COROUTINE
 	// (published only to its owner's queue, driven only by this chain of drivers), true for a GREEN THREAD the
-	// moment `spawn` produces one, which is this rung. So when another M is live we sleep a millisecond and
-	// re-poll instead of accusing anybody; the loop's own exit condition, tested at `loophdr`, is what ends the
-	// wait, so it terminates exactly when the other M finishes — bounded by the sleep, not by it.
+	// moment `spawn` produces one. So when another M is EXECUTING we sleep a millisecond and re-poll instead
+	// of accusing anybody; the loop's own exit condition, tested at `loophdr`, is what ends the wait, so it
+	// terminates exactly when the other M finishes — bounded by the sleep, not by it.
 	//
-	// ⚠ **A GENUINE MULTI-M DEADLOCK THEREFORE HANGS WHERE A SINGLE-M ONE ABORTS**, and that is the honest
-	// trade: `__sched_active_workers` counts a PARKED worker as live, so this cannot distinguish "another M is
-	// about to answer me" from "every M is waiting on something that will never come". Distinguishing them
-	// needs a count of green threads currently EXECUTING on some M, which is a scheduler-state rung rather than
-	// this one.
-	let liveMs = emitLoadGlobalWord(module, block: otherMs, label: SchedActiveWorkersLabel, ids: ids)
-	let oneM = emitConst(module, block: otherMs, value: 1, ids: ids)
-	let aloneHere = emitCmp(module, block: otherMs, a: liveMs, b: oneM, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(otherMs, op: StdOp.condBranch(aloneHere, thenBlockId: nothingLeft.id, elseBlockId: awaitOtherM.id))
+	// ⛔⛔ **AND *EXECUTING* IS THE WHOLE OF A1's FIX, BECAUSE THIS ARM USED TO ASK *ALIVE*.** It read
+	// `__sched_active_workers <= 1` — a count that never falls while the program runs, so a parked worker read
+	// as a party who might still answer and **a genuine multi-M deadlock HUNG where a single-M one aborted**.
+	// MEASURED on `services/a-blocking-cycle-through-an-indirect-call-aborts`, one binary: 92 in under 320 ms
+	// at `MAXON_MAX_PROCS=1`, and at 4 processors **5 of 11 runs still going at a 10 s cap.**
+	//
+	// ⚠ **THE FLAG IS PUBLISHED BEFORE THE QUESTION IS ASKED, AND THAT ORDER IS LOAD-BEARING.** This driver is
+	// itself a party to the roster `__sched_any_executing` walks, so it marks its own P quiesced first; the
+	// walk then needs no "except me" arm, and a solitary M asks with every active P quiesced and gets 0. That
+	// is the single-M abort this arm has always had, DERIVED rather than special-cased — the old
+	// `__sched_active_workers <= 1` test is gone, and one processor is now just the case where the roster has
+	// one entry. ⚠ It is no longer UNCONDITIONAL even there: the confirmation run below applies at every
+	// processor count, so a single-M deadlock aborts after `DeadlockConfirmPolls` polls rather than on the
+	// first, which is why that constant's table records the one-processor timing too.
+	// `SchedRuntime.POffQuiesced` carries the stickiness argument and the stale-read analysis.
+	emitSchedSetQuiesced(module, block: otherMs, p: driverProc, waiting: true, ids: ids)
+	let anyExecuting = ids.mint()
+	module.appendOp(otherMs, op: StdOp.call(anyExecuting, callee: SchedAnyExecutingName, args: ValueIdArray.create()))
+	let noneExecuting = emitCmp(module, block: otherMs, a: anyExecuting, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	var confirmQuiet = module.addBlock(func, label: b"confirmquiet")
+	var someoneRunning = module.addBlock(func, label: b"someonerunning")
+	module.setTerminator(otherMs, op: StdOp.condBranch(noneExecuting, thenBlockId: confirmQuiet.id, elseBlockId: someoneRunning.id))
+
+	// ⭐⭐ **A CONFIRMATION RUN IS *CONSECUTIVE*, AND THIS BLOCK IS WHAT MAKES THE WORD TRUE (A1).** Seeing
+	// another M executing does not merely postpone the abort — it FALSIFIES every confirmation taken so far,
+	// because what the run has to establish is that the system was dead throughout, not that it was dead
+	// sixteen times with work in between. Without this reset a long-lived program that goes momentarily quiet
+	// often enough would accumulate its way to an abort while never being stuck for two polls together.
+	emitSchedSetQuiesced(module, block: someoneRunning, p: driverProc, waiting: false, ids: ids)
+	module.setTerminator(someoneRunning, op: StdOp.branch(awaitOtherM.id))
+
+	// ⭐⭐ **ONE READING IS NOT A DEADLOCK — the corroboration term (A1).** `SchedRuntime.POffQuietPolls`
+	// carries why a census this runtime cannot take under a lock has to be confirmed rather than believed,
+	// and why erring LATE is the only acceptable direction: a false 92 kills a program that was working.
+	let proved = emitSchedConfirmQuiet(module, cur: confirmQuiet, p: driverProc, ids: ids)
+	module.setTerminator(confirmQuiet, op: StdOp.condBranch(proved, thenBlockId: nothingLeft.id, elseBlockId: awaitOtherM.id))
 	match exit 'nothingLeftMeans'
 		statusEquals or anyCompleted then emitRuntimeAbort(module, func: func, block: nothingLeft, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
 		liveCountZero then module.setTerminator(nothingLeft, op: StdOp.branch(doneBlock.id))
@@ -3693,6 +3885,13 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.setTerminator(awaitOtherM, op: StdOp.branch(loopHdr.id))
 
 	// timerDecide: if the earliest deadline has passed → firenow, else → sleepwait.
+	//
+	// ⭐ **A TIMER EXISTS, SO THIS M IS NOT QUIESCED (A1) — and this is the arm whose omission produced a
+	// SPURIOUS ABORT.** Both roads out of here are progress or a bounded wait on a real deadline: `firenow`
+	// fires due timers and PUBLISHES the coroutines they wake, and `sleepwait` sleeps on the delta. An M
+	// carrying a stale `waiting` through either would let another M read every P as quiesced while this one
+	// was doing the work. `SchedRuntime.emitSchedSetQuiesced` carries the measurement.
+	emitSchedSetQuiesced(module, block: timerDecide, p: driverProc, waiting: false, ids: ids)
 	let isDue = ids.mint()
 	module.appendOp(timerDecide, op: StdOp.cmp(isDue, lhs: earliest, rhs: now, pred: StdCmpPred.le, operandType: StdType.i64))
 	module.setTerminator(timerDecide, op: StdOp.condBranch(isDue, thenBlockId: firenow.id, elseBlockId: sleepwait.id))
@@ -3703,13 +3902,33 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.appendOp(firenow, op: StdOp.call(checkResult, callee: GtTimerCheckName, args: argsOf(now)))
 	module.setTerminator(firenow, op: StdOp.branch(loopHdr.id))
 
-	// sleepwait: pc == 0, earliest > now → plain Sleep on the timer delta, then re-poll (no GT is enqueued yet, so
-	// re-entering netpoll cannot reach `nothingLeft` — the timer is still in the store until `firenow` fires it).
+	// sleepwait: pc == 0, earliest > now → plain Sleep on the timer delta, then re-check from the LOOP TOP.
+	//
+	// ⛔⛔ **IT USED TO BRANCH STRAIGHT BACK TO `netpoll`, AND THAT WAS A MULTI-M WRONG ANSWER (A1).** The
+	// note here read *"no GT is enqueued yet, so re-entering netpoll cannot reach `nothingLeft` — the timer is
+	// still in the store until `firenow` fires it"*, and that premise is exactly true at ONE processor and
+	// false at more than one: since SV1 a **worker M fires timers too** (`buildSchedWorkerLoop`'s `doWait`
+	// polls `__gt_timer_check` after every park). So while this driver slept, another M could fire its
+	// deadline and publish the woken coroutine to THIS green thread's own queue — after which re-entering
+	// `netpoll` reads an empty timer store, skips `loopHdr`'s drain, skips `drive`'s `__gt_coro_next`, and
+	// falls into `otherMs` **holding runnable work it never looked at**.
+	//
+	// **MEASURED:** one service whose handler awaits a 50 ms sleeping coroutine, forty times, exits 92 on 4 of
+	// 4 runs at `MAXON_MAX_PROCS=4` and 42 at 1. Before A1 the same wrong answer was merely INVISIBLE — the
+	// old detector could not fire above one M at all, so this fell into the poll-and-retry arm and cost a
+	// millisecond instead of the process.
+	//
+	// ⇒ **EVERY WAIT IN THIS NETPOLL NOW RETURNS TO `loopHdr`**, which is where the exit condition is tested,
+	// the deferred slots are drained and both work sources are consulted. The three proc/IO waits already did,
+	// each for a version of this reason (*"a just-woken GT sits in the run queue, and netpoll would read the
+	// now-empty stores as a false deadlock"*); this was the one arm that did not, and it had the same reason.
 	let sleepMs = emitCeilMs(module, block: sleepwait, ids: ids, earliest: earliest, now: now)
 	module.appendOp(sleepwait, op: StdOp.osSleepMs(sleepMs))
-	module.setTerminator(sleepwait, op: StdOp.branch(netpoll.id))
+	module.setTerminator(sleepwait, op: StdOp.branch(loopHdr.id))
 
 	// haveProcs (pc >= 1): block on the children. No timer bounds the wait → INFINITE; else bound it by the timer.
+	// ⭐ A parked child IS a wakeup source, so this M is not quiesced however long the wait runs (A1).
+	emitSchedSetQuiesced(module, block: haveProcs, p: driverProc, waiting: false, ids: ids)
 	let noTimersProcs = ids.mint()
 	module.appendOp(haveProcs, op: StdOp.cmp(noTimersProcs, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(haveProcs, op: StdOp.condBranch(noTimersProcs, thenBlockId: procInfinite.id, elseBlockId: procTimerDecide.id))
@@ -3719,8 +3938,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// just-woken GT sits in the run queue, and netpoll would read the now-empty stores as a false deadlock).
 	let infiniteConst = ids.mint()
 	module.appendOp(procInfinite, op: StdOp.const(infiniteConst, value: WaitInfinite, valueType: StdType.i64))
-	emitProcWait(module, block: procInfinite, ids: ids, pc: pc, timeoutMs: infiniteConst)
-	module.setTerminator(procInfinite, op: StdOp.branch(loopHdr.id))
+	emitProcWait(module, func: func, cur: procInfinite, ids: ids, timeoutMs: infiniteConst, cont: loopHdr)
 
 	// procTimerDecide: a timer exists. If it is ALREADY due, fire it first (firenow) without blocking; else block
 	// on the children bounded by the timer delta.
@@ -3731,13 +3949,25 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// procWaitBounded: block on the children for at most the timer delta, then poll BOTH the children (in
 	// `emitProcWait`) and — with a FRESH clock, since the wait consumed time — the timers, since either a child
 	// exited OR the timer expired during the wait. Re-check via loopHdr, for the same reason procInfinite does.
+	// ⚠ The timer re-check moved into its own block when `emitProcWait` grew a control-flow shape (A2): the
+	// wait is now a claim, a locked snapshot and two arms, so the ops that must run AFTER it can no longer sit
+	// below it in the same block.
+	var procTimersAfter = module.addBlock(func, label: b"proctimersafter")
 	let boundedMs = emitCeilMs(module, block: procWaitBounded, ids: ids, earliest: earliest, now: now)
-	emitProcWait(module, block: procWaitBounded, ids: ids, pc: pc, timeoutMs: boundedMs)
+	emitProcWait(module, func: func, cur: procWaitBounded, ids: ids, timeoutMs: boundedMs, cont: procTimersAfter)
 	let nowAfter = ids.mint()
-	module.appendOp(procWaitBounded, op: StdOp.call(nowAfter, callee: GtNowNsName, args: ValueIdArray.create()))
+	module.appendOp(procTimersAfter, op: StdOp.call(nowAfter, callee: GtNowNsName, args: ValueIdArray.create()))
 	let timerCheckResult = ids.mint()
-	module.appendOp(procWaitBounded, op: StdOp.call(timerCheckResult, callee: GtTimerCheckName, args: argsOf(nowAfter)))
-	module.setTerminator(procWaitBounded, op: StdOp.branch(loopHdr.id))
+	module.appendOp(procTimersAfter, op: StdOp.call(timerCheckResult, callee: GtTimerCheckName, args: argsOf(nowAfter)))
+	module.setTerminator(procTimersAfter, op: StdOp.branch(loopHdr.id))
+
+	// ⭐⭐ **LEAVING THE DRIVER IS THE OTHER EVENT THAT CLEARS THE QUIESCED FLAG (A1), AND IT IS THE ONE THAT
+	// IS EASY TO MISS.** Every road out of this loop passes through here, including `nothingLeft`'s
+	// `liveCountZero` arm. Without it, a `main` whose await completed after a spell in `awaitOtherM` would go
+	// back to ORDINARY USER CODE with P0 still published as quiesced — and another M reaching `otherMs` would
+	// then count a running main as a waiting one and abort a program that was making progress. That is the
+	// spurious-abort direction, so it is the store that must not be forgotten.
+	emitSchedSetQuiesced(module, block: doneBlock, p: driverProc, waiting: false, ids: ids)
 
 	// `done` RETURNS WHAT THE SIGNATURE PROMISED, read off the signature — a loop declared to answer a value
 	// and `ret`ting void is a shape no diagnostic catches.
@@ -4101,6 +4331,14 @@ end 'buildGtOwnerDone'
 // `__io_pending` above zero, which is not a leak but a HANG: `__gt_drive_until`'s netpoll blocks on
 // `__io_done_event` for a completion that has already been consumed.
 //
+// ⚠ **IT IS FILE-LOCAL AGAIN SINCE A3, AND THE COUNT OF ITS ASKERS IS DOWN FROM FOUR TO TWO.**
+// `__sched_sweep_dropped`'s ring peek was the one caller outside this file and it was DELETED — it asked
+// this question of a thread it had not claimed, which is an access violation the day the scavenger
+// decommits under it (`SchedRuntime.buildSchedSweepDropped` carries the whole argument). The two askers left
+// are `__gt_coro_next` and `__sched_find_runnable`, both through `emitGtTombstoneHandback`, and both ask it
+// of a candidate they have already POPPED. The self-compile's E3092 is what noticed the export had gone
+// stale.
+//
 // ⇒ **A STARTED thread whose promise was renounced is therefore RUN TO COMPLETION, not abandoned in a
 // queue**, and its driver's hand-off reclaims it. It is reachable only above one M (on one processor the
 // dropper is the only thread running, so nothing it drops can be mid-flight) or through a mid-body yield,
@@ -4109,7 +4347,7 @@ end 'buildGtOwnerDone'
 // `__gt_promise_drop` are unaffected — a PARKED thread is deregistered and freed by its dropper, which is a
 // party that can do the cleanup, and `async-promise-drop.never-ran-drop-not-run` still pins that a never-run
 // thread's body never runs.
-export function emitGtIsDropped(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
+function emitGtIsDropped(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
 	let teardown = emitLoadField(module, block: block, record: gt, offset: GtOffTeardown, ids: ids)
 	let consumerOnly = emitConst(module, block: block, value: GtTeardownConsumerTicket, ids: ids)
 	let renounced = emitCmp(module, block: block, a: teardown, b: consumerOnly, pred: StdCmpPred.eq, ids: ids)
@@ -5941,7 +6179,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	// becomes `/bin/sh -c <line>` — see `SubprocessRuntime.emitSubpCommandFromLine`, which emits nothing at
 	// all under the command-line shape.
 	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
-	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(command, cwdPtrId: spawnDefaultsConst, creationFlagsId: spawnDefaultsConst, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(command, cwdPtrId: spawnDefaultsConst, creationFlagsId: spawnDefaultsConst, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: spawnDefaultsConst))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
@@ -6370,7 +6608,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	let probeSpawnDefaults = emitConst(module, block: afterCopy, value: 0, ids: ids)
 	// MAC8: the probe's input is a command LINE too — `__gt_process_run`'s twin note carries the reason.
 	let probeCommand = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
-	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(probeCommand, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(probeCommand, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: probeSpawnDefaults))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
@@ -6893,7 +7131,12 @@ export let SubpReqErrKind = 64 as ByteOffset
 export let SubpReqErrData = 72 as ByteOffset
 export let SubpReqErrLimit = 80 as ByteOffset
 export let SubpReqDetach = 88 as ByteOffset  // 1 ⇒ answer the child's PID and let it go, rather than a handle
-let SubpReqBytes = 96 as ParsedInt
+// The child's whole environment, as the NUL-separated `NAME=VALUE` block CreateProcessA reads, or 0 to
+// inherit this process's. ⚠ ZERO IS THE INHERIT ANSWER AND THE SLAB ZERO-FILLS, so the two entry points that
+// have no environment to pass (`__gt_subp_stream_spawn` and the two `runProcess(cmd)` shapes) say nothing at
+// all and get it — the same arrangement `SubpReqDetach` has.
+export let SubpReqEnv = 96 as ByteOffset
+let SubpReqBytes = 104 as ParsedInt
 
 // ⭐ **THE STDIO KIND DISCRIMINATORS, WHICH ARE `stdlib/Subprocess.maxon`'s OWN ENUM VALUES.** `StdinKind`
 // (`none`/`inherit`/`bytes`/`file`) and `OutputKind` (`discard`/`inherit`/`collect`/`file`) are declared there
@@ -7058,7 +7301,8 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let cmdlinePtr = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqCmdline, ids: ids)
 	let cwdPtr = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqCwd, ids: ids)
 	let creationFlags = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqFlags, ids: ids)
-	module.appendOp(afterStderr, op: StdOp.osProcessSpawnInherit(cmdlinePtr, cwdPtrId: cwdPtr, creationFlagsId: creationFlags, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	let envPtr = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqEnv, ids: ids)
+	module.appendOp(afterStderr, op: StdOp.osProcessSpawnInherit(cmdlinePtr, cwdPtrId: cwdPtr, creationFlagsId: creationFlags, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: envPtr))
 	let hProcess = emitLoadField(module, block: afterStderr, record: procInfoPtr, offset: ProcInfoHProcessOffset, ids: ids)
 	let zeroA = emitConst(module, block: afterStderr, value: 0, ids: ids)
 	let spawnFailed = emitCmp(module, block: afterStderr, a: hProcess, b: zeroA, pred: StdCmpPred.eq, ids: ids)

@@ -586,6 +586,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonFileRename();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
+    EmitMaxonOsEnvironmentEntryPosix();
     EmitMaxonExecutablePath();
     EmitMaxonDirectoryExists();
     EmitMaxonCreateDirectory();
@@ -2084,6 +2085,73 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitWord(0x39000001 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X1)); // STRB W1, [X0, #0]
+
+    DefineLabel(doneLabel);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // maxon_os_environment_entry(index) -> heap-allocated cstring copy of environ[index], or a
+  // freshly allocated "" once the index is past the last entry.
+  //
+  // maxon_command_line_arg's twin, and deliberately so: same ownership (RuntimeCallToManaged wraps
+  // the cstring and mm_raw_free's this buffer), same out-of-range answer, same bytes-are-bytes
+  // boundary. `stdlib/Subprocess.maxon` walks it from 0 until the empty answer and reassembles the
+  // entries into the block a spawn is given, so there is no count entry beside it — the environment
+  // has no empty entry a real one could be confused with.
+  //
+  // POSIX needs no encoding step at either end: environ[i] is already the UTF-8 "NAME=VALUE" cstring
+  // the stdlib wants, and __subp_build_envp hands the reassembled block straight back to
+  // posix_spawnp. (The Windows emitter converts, because its environment is UTF-16 — see
+  // X86CodeEmitter.Runtime's EmitMaxonOsEnvironmentEntry.)
+  //
+  // Stack: [x29+0x18]=index counted down, [x29+0x20]=cursor into environ, [x29+0x28]=entry,
+  //        [x29+0x30]=byte count including the NUL, [x29+0x38]=destination
+  private void EmitMaxonOsEnvironmentEntryPosix() {
+    EmitRuntimeFunctionStart("maxon_os_environment_entry", 1, 0x40);
+    int n = _uniqueLabelCounter++;
+    string scanLabel = $"__oee_scan_{n}";
+    string foundLabel = $"__oee_found_{n}";
+    string emptyLabel = $"__oee_empty_{n}";
+    string doneLabel = $"__oee_done_{n}";
+
+    EmitReloadArg(0);
+    EmitStoreToStack(0x18, ARM64Register.X0, 8);
+    EmitCallImport("_NSGetEnviron");
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);
+    EmitStoreToStack(0x20, ARM64Register.X0, 8);
+
+    DefineLabel(scanLabel);
+    EmitLoadFromStack(ARM64Register.X0, 0x20, 8);
+    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X0, 0, 8);
+    EmitCmpImm(ARM64Register.X1, 0);
+    EmitBranchCond(ARM64ConditionCode.Eq, emptyLabel);
+    EmitStoreToStack(0x28, ARM64Register.X1, 8);
+    EmitLoadFromStack(ARM64Register.X2, 0x18, 8);
+    EmitCmpImm(ARM64Register.X2, 0);
+    EmitBranchCond(ARM64ConditionCode.Eq, foundLabel);
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X2, 1, isAdd: false);
+    EmitStoreToStack(0x18, ARM64Register.X2, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 8, isAdd: true);
+    EmitStoreToStack(0x20, ARM64Register.X0, 8);
+    EmitBranch(scanLabel);
+
+    DefineLabel(foundLabel);
+    EmitLoadFromStack(ARM64Register.X0, 0x28, 8);
+    EmitBranchLink("maxon_strlen");
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
+    EmitStoreToStack(0x30, ARM64Register.X0, 8);
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
+    EmitStoreToStack(0x38, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X1, 0x28, 8);
+    EmitLoadFromStack(ARM64Register.X2, 0x30, 8);
+    EmitBranchLink("maxon_memcpy");
+    EmitLoadFromStack(ARM64Register.X0, 0x38, 8);
+    EmitBranch(doneLabel);
+
+    DefineLabel(emptyLabel);
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
+    EmitStoreIndirect(ARM64Register.X0, 0, ARM64Register.Xzr, 1);
 
     DefineLabel(doneLabel);
     EmitRuntimeFunctionEnd();
@@ -7377,6 +7445,7 @@ public partial class ARM64CodeEmitter {
     // spec runner (stdin=none → /dev/null, stdout/stderr=collect → pipe).
     EmitSubpDrain();
     EmitSubpBuildArgv();
+    EmitSubpBuildEnvp();
     EmitMaxonSubprocessSpawnPosix();
     EmitMaxonSubprocessWaitCollectPosix();
     EmitMaxonSubprocessGetPidPosix();
@@ -7527,6 +7596,9 @@ public partial class ARM64CodeEmitter {
     string skipStdinPipe = $"__subp_sp_skstdinpipe_{n}";
     string skipWriteStdin = $"__subp_sp_skwrstdin_{n}";
     string skipChdir = $"__subp_sp_skchdir_{n}";
+    string inheritEnv = $"__subp_sp_envinh_{n}";
+    string envReady = $"__subp_sp_envrdy_{n}";
+    string envpNotOwned = $"__subp_sp_envfree_{n}";
     string spawnFail = $"__subp_sp_fail_{n}";
     string skipCloseOut = $"__subp_sp_skcout_{n}";
     string skipCloseErr = $"__subp_sp_skcerr_{n}";
@@ -7535,6 +7607,8 @@ public partial class ARM64CodeEmitter {
     //   0x60 fa  0x68 pid  0x70 handle  0x78 argv  0x80-0x8F "/dev/null"
     //   0x90 bufStart  0x98 blobLen  0xA0 envp  0xA8 outKind  0xB0 errKind  0xB8 argc
     //   0xC0 inPipe(rd@0xC0,wr@0xC4)  0xC8 stdinKind  0xD0 stdinData
+    //   0xD8 ownedEnvp (the vector THIS spawn built, or 0 when envp is the process's own environ)
+    //   0xE0 posix_spawnp result, held across the ownedEnvp free
     // Args 8..13 (stack): [x29 + 0x100 + (i-8)*8]; stderrKind=arg10 @ 0x110.
 
     // Default pipe read/write fds to -1 (4-byte) so non-collect/non-bytes streams
@@ -7544,6 +7618,8 @@ public partial class ARM64CodeEmitter {
     EmitStoreToStack(0x58, ARM64Register.X0, 4);
     EmitStoreToStack(0xC0, ARM64Register.X0, 4);
     EmitStoreToStack(0xC4, ARM64Register.X0, 4);
+    // Nothing owned yet, on every path out — the free below is unconditional and reads this slot.
+    EmitStoreToStack(0xD8, ARM64Register.Xzr, 8);
 
     // --- argv build ---
     // arg0 (argvBlob.managed) is passed as the BUFFER pointer directly (the
@@ -7660,10 +7736,28 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("posix_spawn_file_actions_addchdir_np");
     DefineLabel(skipChdir);
 
-    // environ
+    // The child's environment: the caller's own block when it supplied one, otherwise this process's
+    // environ. The block is the self-delimiting NUL-separated form `stdlib/Subprocess.maxon`
+    // assembles; __subp_build_envp turns it into the vector posix_spawnp takes WITHOUT copying any
+    // bytes, so what is owned here is the vector alone.
+    //
+    // The test is `== EnvSourceParent` rather than "non-zero" so an unrecognised value falls to the
+    // caller-built-block path — see `Runtime/SubprocessContract.EnvSourceParent`.
+    EmitLoadFromStack(ARM64Register.X0, 0x30, 8);               // envInherit (arg4 home)
+    EmitCmpImm(ARM64Register.X0, Runtime.SubprocessContract.EnvSourceParent);
+    EmitBranchCond(ARM64ConditionCode.Eq, inheritEnv);
+    EmitLoadFromStack(ARM64Register.X0, 0x28, 8);               // env block buffer (arg3 home)
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Eq, inheritEnv);
+    EmitBranchLink("__subp_build_envp");
+    EmitStoreToStack(0xA0, ARM64Register.X0, 8);
+    EmitStoreToStack(0xD8, ARM64Register.X0, 8);
+    EmitBranch(envReady);
+    DefineLabel(inheritEnv);
     EmitCallImport("_NSGetEnviron");
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);
     EmitStoreToStack(0xA0, ARM64Register.X0, 8);
+    DefineLabel(envReady);
 
     // posix_spawnp(&pid, file, &fa, NULL, argv, envp) — like posix_spawn but does an
     // execvp-style PATH search when `file` has no slash. `Executable.name(n)` whose
@@ -7678,6 +7772,17 @@ public partial class ARM64CodeEmitter {
     EmitLoadFromStack(ARM64Register.X4, 0x78, 8);               // argv
     EmitLoadFromStack(ARM64Register.X5, 0xA0, 8);               // envp
     EmitCallImport("posix_spawnp");
+
+    // The kernel has copied the vector, so release it here — on the failure path as much as on the
+    // success one, which is why the result is parked first rather than tested first.
+    EmitStoreToStack(0xE0, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0xD8, 8);
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Eq, envpNotOwned);
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    DefineLabel(envpNotOwned);
+    EmitLoadFromStack(ARM64Register.X0, 0xE0, 8);
+
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Ne, spawnFail);
 
@@ -8190,6 +8295,84 @@ public partial class ARM64CodeEmitter {
   /// Allocates (argc+1) pointers, points argv[0..argc-1] at the argc
   /// NUL-separated tokens packed in bufStart, NULL-terminates argv[argc].
   /// Shared by the sync (maxon_subprocess_spawn) and streaming spawn paths.
+  /// Emit a walk over a NUL-separated, NUL-terminated environment block — the self-delimiting form
+  /// `stdlib/Subprocess.maxon` assembles and hands to the spawn contract's `env` slot.
+  ///
+  /// X10 is the cursor and holds the first byte of one entry each time <paramref name="onEntry"/>
+  /// runs; X11 and X16 are the walk's own scratch. The walk exists as ONE emitter because
+  /// `__subp_build_envp` performs it twice — once to count the entries and once to fill the vector —
+  /// and a second hand-written copy is where the two would come to disagree about where an entry
+  /// ends.
+  private void EmitEnvBlockWalk(string tag, System.Action onEntry) {
+    int n = _uniqueLabelCounter++;
+    string loopLabel = $"__subp_envw_{tag}_{n}";
+    string scanLabel = $"__subp_envw_{tag}_scan_{n}";
+    string doneLabel = $"__subp_envw_{tag}_done_{n}";
+
+    DefineLabel(loopLabel);
+    EmitLoadIndirect(ARM64Register.X16, ARM64Register.X10, 0, 1);
+    EmitCmpImm(ARM64Register.X16, Runtime.SubprocessContract.BlobTokenTerminator);
+    EmitBranchCond(ARM64ConditionCode.Eq, doneLabel);
+    onEntry();
+    // Advance past this entry's own bytes and then past its NUL.
+    EmitMovRegReg(ARM64Register.X11, ARM64Register.X10);
+    DefineLabel(scanLabel);
+    EmitLoadIndirect(ARM64Register.X16, ARM64Register.X11, 0, 1);
+    EmitAddSubImm(ARM64Register.X11, ARM64Register.X11, 1, isAdd: true);
+    EmitCmpImm(ARM64Register.X16, Runtime.SubprocessContract.BlobTokenTerminator);
+    EmitBranchCond(ARM64ConditionCode.Ne, scanLabel);
+    EmitMovRegReg(ARM64Register.X10, ARM64Register.X11);
+    EmitBranch(loopLabel);
+    DefineLabel(doneLabel);
+  }
+
+  /// __subp_build_envp(block) -> char *const envp[] — the NUL-terminated vector posix_spawnp takes,
+  /// built over the caller's environment block. Returns an mm_raw_alloc'd vector of POINTERS INTO
+  /// THE BLOCK: nothing is copied, so the block must outlive the spawn (it does — it is a
+  /// __ManagedMemory the stdlib holds across the call) and only the vector is freed afterwards.
+  ///
+  /// Two walks and one allocation between them, rather than one walk into a guessed-at capacity:
+  /// the entry count is what sizes the vector and there is no bound on it worth guessing.
+  /// Stack: [x29+0x20]=block, [x29+0x28]=entry count, [x29+0x30]=vector
+  private void EmitSubpBuildEnvp() {
+    EmitRuntimeFunctionStart("__subp_build_envp", 1, 0x40);
+    EmitReloadArg(0);
+    EmitStoreToStack(0x20, ARM64Register.X0, 8);
+
+    // Count.
+    EmitMovRegImm(ARM64Register.X9, 0);
+    EmitLoadFromStack(ARM64Register.X10, 0x20, 8);
+    EmitEnvBlockWalk("count", () => {
+      EmitAddSubImm(ARM64Register.X9, ARM64Register.X9, 1, isAdd: true);
+    });
+    EmitStoreToStack(0x28, ARM64Register.X9, 8);
+
+    // (count + 1) * 8 — one slot per entry and the NULL that ends the vector.
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, 1, isAdd: true);
+    EmitLslImm(ARM64Register.X0, ARM64Register.X0, 3);
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
+    EmitStoreToStack(0x30, ARM64Register.X0, 8);
+
+    // Fill.
+    EmitMovRegImm(ARM64Register.X9, 0);
+    EmitLoadFromStack(ARM64Register.X10, 0x20, 8);
+    EmitLoadFromStack(ARM64Register.X14, 0x30, 8);
+    EmitEnvBlockWalk("fill", () => {
+      EmitLslImm(ARM64Register.X17, ARM64Register.X9, 3);
+      EmitAluRegReg(0x8B000000, ARM64Register.X17, ARM64Register.X14, ARM64Register.X17);
+      EmitStoreIndirect(ARM64Register.X17, 0, ARM64Register.X10, 8);
+      EmitAddSubImm(ARM64Register.X9, ARM64Register.X9, 1, isAdd: true);
+    });
+
+    EmitLoadFromStack(ARM64Register.X13, 0x28, 8);
+    EmitLoadFromStack(ARM64Register.X14, 0x30, 8);
+    EmitLslImm(ARM64Register.X17, ARM64Register.X13, 3);
+    EmitAluRegReg(0x8B000000, ARM64Register.X17, ARM64Register.X14, ARM64Register.X17);
+    EmitStoreIndirect(ARM64Register.X17, 0, ARM64Register.Xzr, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x30, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
   private void EmitSubpBuildArgv() {
     EmitRuntimeFunctionStart("__subp_build_argv", 2, 0x40);
     int n = _uniqueLabelCounter++;

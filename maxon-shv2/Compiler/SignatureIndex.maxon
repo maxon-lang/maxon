@@ -4485,6 +4485,44 @@ end 'managedFieldDropCallee'
 // and without that the field is dropped by nobody and the program exits 101 on the leak gate) — widening it
 // and leaving the drop router unresolved turned that leak into the `undeclared` PANIC at the bottom of this
 // function, on a program the other walk order compiled and ran.
+// ⭐⭐⭐ **HOW A VALUE OF THIS DECLARED TYPE IS RETAINED — THE DUAL OF `managedNameDropCallee`, AND IT DID
+// NOT EXIST (W232).** Every co-own in the language went through a bare `__mm_incref` of the box, on the
+// reasoning that a managed record is a managed record. That is true of the BOX and false of what the box
+// stands for: a `<T>.handle` box names a mailbox whose `handles` and `refs` counts its drop steps DOWN, so a
+// retain that stepped neither made the two sides of one ownership asymmetric — the mailbox freed while a
+// live handle still named it, then freed again. `Runtime/MailboxRuntime.MboxHandleRetainBoxName` carries the
+// measurement.
+//
+// ⭐⭐ **THE THREE OS-HANDLE AGGREGATES TAKE THE PLAIN BOX INCREF, AND THAT IS SYMMETRIC — MEASURED, AFTER
+// A PANIC HERE FAILED 356 TESTS.** A review read the collapsed
+// `managedFile or managedDirectory or managedSocket or userDeclared gives MmIncrefName` arm as the W232
+// double-free one type over, and this arm was briefly a `panic` asserting *"nothing in the language co-owns
+// one"*. **That premise is false and the suite says so**: `file-io`, `managed-file`, `managed-directory`,
+// `tcp-client`, `http-client`, `async-tcp`, `file-info` and a dozen more route here through ordinary
+// co-ownership, and the panic took 21 spec files down with it.
+//
+// ⚠ **THE RETAIN AND THE DROP ARE ALREADY BALANCED, AND THE DROP IS WHERE TO CHECK IT.**
+// `managedNameDropCallee` answers `__mf_destruct` / `__md_destruct` / `__ms_destruct` — each the
+// **refcount-CHECKED** teardown (see its own bullet: *"the refcount-checked teardown that does both"*). It
+// steps the count down and closes the handle only at zero, so one `__mm_incref` per co-owner is exactly its
+// dual. Closing twice needs a drop that closes UNCONDITIONALLY, which none of these three has.
+//
+// ⇒ what made `<T>.handle` different was never "it owns a handle" — it was that
+// `__mbox_handle_drop_box` steps **three** things down (a `handles` share, a `refs` share, and the box) while
+// a bare `__mm_incref` stepped only the box. That asymmetry is the bug; a refcount-checked close is not one.
+// A future aggregate whose drop releases more than the box owes an arm here, and it earns one by having that
+// shape — not by owning an OS handle.
+export function managedNameRetainCallee(signatures ProgramSignatures, declaredName ByteArray) returns ByteArray
+	return match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
+		// Kept apart from `userDeclared` below though the callee is the same: these three answer it because
+		// their destruct is refcount-checked, that one because a plain box is a plain box. Same answer, two
+		// different reasons, and the day either reason changes only one arm should move.
+		managedFile to managedSocket gives MmIncrefName
+		serviceHandle gives MboxHandleRetainBoxName
+		userDeclared gives MmIncrefName
+	end 'compilerOwned'
+end 'managedNameRetainCallee'
+
 function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteArray) returns ByteArray
 	// ⭐⭐ **A COMPILER-OWNED AGGREGATE TAKES A COMPILER-OWNED DROP, AND IS ASKED BEFORE THE DECLARED-STRUCT
 	// LOOKUP.** Each has a REGISTERED layout — they need a nominal identity — so the generic route below
@@ -20104,6 +20142,31 @@ export type ProgramSignatures
 		return self.typeIsManaged(self.containerElementType(id), from: self.typeNames)
 	end 'containerElementIsManaged'
 
+	// ⭐⭐ **IS THE ELEMENT STORED AS AN ADDRESS RATHER THAN INLINE? — the STORAGE question, which "is it an
+	// `__mm` box" answered until a promise stopped being one.** Two populations and one width: a managed box,
+	// whose slot holds a refcounted pointer; and a GREEN-THREAD HANDLE, whose slot holds a pointer into the
+	// scheduler's own slab that `__gt_promise_drop` reclaims and no refcount owns (`PromiseType.maxon`).
+	//
+	// ⛔⛔ **THE TWO CAME APART AT `W217` AND `arrayElementSize` WAS STILL ASKING THE OLD ONE — MEASURED AS A
+	// COMPILER PANIC ON A LEGAL PROGRAM.** `typealias Ps = Array with Promise with (Integer, ServiceError)`
+	// (the element spelled INLINE) reached `trivialElementSlot` with a `genericInstance`, because
+	// `containerElementIsManaged` is `typeIsManaged`, and `typeIsManaged`'s own instance arm answers `false`
+	// for a promise handle by design — *"an `Array with Promise` answers `false` there and `true` here"*, in
+	// `containerElementOwesDrop`'s words. `trivialElementSlot` then sized an aggregate through
+	// `primitiveTypeByteSize` and **panicked**: `a `genericInstance` is an aggregate — size it through its base
+	// StructLayout.sizeBytes`. ⚠ The TWO-STEP spelling (`typealias P = Promise with (…)` then
+	// `Array with P`) compiled and ran correctly the whole time, so this was one meaning with two answers.
+	//
+	// ⚠ **`arrayElementMayBeConstantBlob` ONE FUNCTION DOWN STILL ASKS THE NARROW QUESTION, AND ITS OWN STATED
+	// REASON IS THIS ONE** — *"a MANAGED element's slot holds a POINTER … and an address the loader chooses is
+	// not a value a compile-time image can contain"*, which is as true of a scheduler-slab address. It is not
+	// changed here because no program can reach the difference: a promise is never a compile-time constant, so
+	// `everyElementIsAKnownConstant` refuses the blob before that predicate's answer is used. A latent second
+	// face, not a live one.
+	export function containerElementOccupiesAPointerSlot(id GenericInstanceId) returns bool
+		return self.containerElementIsManaged(id) or self.containerElementIsAGreenThreadHandle(id)
+	end 'containerElementOccupiesAPointerSlot'
+
 	// ⭐ **DOES THIS CONTAINER'S ELEMENT OWE A DROP?** The instance-keyed spelling of `typeOwesDrop`, and the
 	// question the ELEMENT DESTRUCTOR STAMP must ask — `containerElementIsManaged` is the narrower "is the
 	// element an `__mm` box", which is right for deciding a retain or a clone and wrong for deciding whether
@@ -20457,9 +20520,11 @@ export type ProgramSignatures
 	// second "unpacked byte width" accessor beside this one would be a second producer of a stride, which
 	// is the shape this function's own name exists to prevent.
 	export function arrayElementSize(id GenericInstanceId) returns ElementStride
-		if self.containerElementIsManaged(id) 'managed'
+		// ⚠ **THE STORAGE QUESTION AND NOT THE REFCOUNT ONE** — see `containerElementOccupiesAPointerSlot`,
+		// whose header carries the compiler panic that measured the difference.
+		if self.containerElementOccupiesAPointerSlot(id) 'storedAsAnAddress'
 			return ManagedArrayElementBytes as ElementStride
-		end 'managed'
+		end 'storedAsAnAddress'
 
 		let element = self.containerElementType(id)
 		return elementStrideOf(self.arrayElementPackedBits(id), storageBytes: self.trivialElementSlot(element).bytes)
@@ -25023,6 +25088,32 @@ export type ProgramSignatures
 			return tupleName
 		end 'noElementMoved'
 
+		// ⛔⛔ **THE PANIC HERE READ "…which its declaration view already passed", AND THAT PREMISE IS FALSE
+		// (W232).** The declaration view of an iterator's `(Iterator, Element)` is two type PARAMETERS; what
+		// it passed says nothing whatever about what the INSTANCE view holds once `Element` becomes a real
+		// type. It now names WHICH refusal it hit and on which element, because "it was refused" without the
+		// reason is what made the live instance of this take a day to place.
+		//
+		// ⚠⚠ **AND THAT LIVE INSTANCE IS STILL OPEN — `W232` — SO THIS IS A DIAGNOSED ABORT, NOT AN
+		// IMPOSSIBLE ONE.** `for (iter, h) in handles.withIterator()` over an `Array with <T>.handle`
+		// substitutes `Element := <T>.handle`, whose companion is registered under `"{T}.handle"`
+		// (`Project.serviceHandleCompanionName`) — dot included, because that is how the author spells the
+		// type. `requireSeparatorFreeElementName` then refuses it CORRECTLY, and a correct refusal reached by
+		// a legal program lands here as a compiler abort.
+		//
+		// ⛔ **`canonicalTupleElement`'s STATED INVARIANT IS THE THING THAT BROKE, AND IT IS STILL WRITTEN
+		// AS IF TRUE:** *"an inner ranged alias … the only name form in the language that can hold the
+		// element separator"*. Services falsified it. Two cures are open and neither is this rung's: cite such
+		// a name by a separator-free token the way a NESTED TUPLE is cited, or give the handle companion a
+		// separator-free registered name and keep `<T>.handle` as the surface spelling only. ⚠ **The first
+		// was attempted and REVERTED**: recording the token lazily from inside `tupleElementName` put a
+		// mutation inside a query the interning path calls while it is still deciding what to intern, and it
+		// HUNG the compiler — past seven minutes and climbing in memory against a normal ~35 s. A pure digest
+		// avoids that mutation but changes tuple IDENTITY, which is a `L-types` decision with its own golden
+		// blast radius. Whoever takes it: build the probe first
+		// (`temp/hf/it1.maxon`'s shape — spawn a service, push the handle, `for (iter, h) in
+		// a.withIterator()`), and TIME the self-compile, because the failure mode of the obvious fix is a
+		// hang rather than a wrong answer.
 		return try self.internTupleType(substituted, from: self.typeNames, slotScopeFilePath: layout.declFilePath) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: the instance view of `{String.from(tupleName)}` was refused as a tuple element list, which its declaration view already passed")
 	end 'substituteTupleThroughInstance'
 
@@ -27484,7 +27575,6 @@ export type ProgramSignatures
 			tupleAlias gives false
 		end 'form'
 	end 'declaredNameIsAGreenThreadHandle'
-
 
 	// Is `name` the CANONICAL rendering of an interned generic instance? The registry is keyed by the
 	// instance's structural KEY and its canonical NAME is derived, so the reverse direction needs an index of

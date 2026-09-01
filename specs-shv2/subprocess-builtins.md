@@ -35,10 +35,14 @@ stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr, stderrLim
   the bootstrap's rule to the byte.
 - **cwd** is a `cstring`; the EMPTY one means "inherit", which is
   `stdlib/Subprocess.maxon`'s own sentinel.
-- **env / envInherit**: only `1` (inherit) is servable. There is no producer for a caller-built
-  environment block anywhere in the corpus — `requireInheritEnv` refuses `Environment.custom` and
-  `inheritUpdating` before any spawn call is made — so `envInherit = 0` answers `-1` with a recorded
-  error rather than silently serving the parent's environment under another name.
+- **env / envInherit**: `envInherit = 1` (`EnvSource.parent`) hands the child this process's own
+  environment and the `env` slot beside it is not read; `envInherit = 0` (`EnvSource.block`) makes
+  `env` the child's WHOLE environment — a NUL-separated `NAME=VALUE` block ended by one more NUL,
+  which `a-caller-built-environment-is-the-childs-whole-environment` pins by having the child expand
+  a name that exists only in the block it was given. ⚠ This bullet used to say the block was refused
+  because *"`requireInheritEnv` refuses `Environment.custom` and `inheritUpdating` before any spawn
+  call is made"*; **that function is deleted** — `stdlib/Subprocess.maxon` assembles the block from
+  this process's own entries with the caller's overrides applied, so both arms are servable.
 - **stdinKind** is `StdinKind`'s raw value: `0` none (the NUL device), `1` inherit, `2` bytes (the
   payload is pushed into a pipe while the child runs), `3` file.
 - **stdoutKind** / **stderrKind** are `OutputKind`'s: `0` discard (NUL), `1` inherit, `2` collect
@@ -1195,12 +1199,26 @@ cleanLen=0 spawn=-1 message=true
 
 ```
 
-<!-- test: subprocess-builtins.custom-environment-is-refused -->
+<!-- test: subprocess-builtins.a-caller-built-environment-is-the-childs-whole-environment -->
 <!-- targets: x64-windows -->
-`envInherit = 0` asks for a caller-BUILT environment block, which nothing in the corpus can produce
-— `stdlib/Subprocess.maxon`'s `requireInheritEnv` refuses `Environment.custom` before any spawn call
-is made. The runtime answers a failure rather than silently serving the parent's environment under
-another name.
+⭐⭐ **`envInherit = 0` HANDS THE CHILD THE CALLER'S OWN BLOCK, AND THIS CASE USED TO ASSERT THE
+OPPOSITE.** It was `custom-environment-is-refused`, and its prose said *"a caller-BUILT environment
+block … nothing in the corpus can produce"* — true exactly while `stdlib/Subprocess.maxon` refused
+`Environment.custom` and `Environment.inheritUpdating` before any spawn call was made. That refusal is
+gone: the stdlib assembles a block from this process's own entries (`__Builtins.osEnvironmentEntry`)
+with the caller's overrides applied, and this is the contract underneath it.
+
+⚠ **THE ASSERTION IS THE CHILD'S OWN READING, NOT THE SPAWN'S RETURN.** A spawn that merely SUCCEEDS
+would be satisfied by a runtime that accepted the block and then passed NULL — which is precisely the
+silent wrong answer the old refusal existed to prevent — so the child expands a name that exists ONLY
+in the block it was given and echoes it back.
+
+The block is the platform's own shape: NUL-terminated `NAME=VALUE` entries back to back, then one more
+NUL. `appendToken` writes the first NUL of each entry, and the lone `push(0)` after the last one ends
+the block.
+
+⚠ `cmd` still resolves although the child's environment carries no `PATH`: `CreateProcessA` searches
+with the CALLING process's PATH, not the one it is about to hand over.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -1217,10 +1235,21 @@ end 'appendToken'
 function main() returns ExitCode
 	var argv = ByteArray.create()
 	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "echo")
+	appendToken(argv, token: "%MAXON_ENV_PROBE%")
+
+	var env = ByteArray.create()
+	appendToken(env, token: "MAXON_ENV_PROBE=seen")
+	env.push(0)
+
 	let empty = ""
-	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 0, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
-	print("spawn={h}")
+	let h = __Builtins.subprocessSpawn(argv, 4, empty.cstr(), env, 0, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	print("spawned={h >= 0} echoed={out.startsWith("seen")} len={out.byteLength()}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
 	return 0 as ExitCode
 end 'main'
 ```
@@ -1228,15 +1257,24 @@ end 'main'
 0
 ```
 ```stdout
-spawn=-1
+spawned=true echoed=true len=6
 
 ```
 
 <!-- test: subprocess-builtins.rejected-on-wasm -->
 <!-- targets: wasm32-wasi -->
-The subprocess substrate is x64-windows only. On any other target the call is refused at its source
-span with `E3104`, naming the runtime entry that has no lowering there — never a panic from inside
-the wasm backend, which is what this family did before this rung.
+The subprocess substrate is gated on `HostFacility.subprocess`, which x64-windows and arm64-macOS
+both provide and wasm does not. On a target that does not, the call is refused at its source span
+with `E3104`, naming the runtime entry that has no lowering there — never a panic from inside the
+wasm backend, which is what this family did before this rung.
+
+⚠ **THIS LINE READ "the subprocess substrate is x64-windows only", AND THAT PREMISE OUTLIVED ITS
+TRUTH BY A WHOLE LANE.** Three compiler comments and one isel panic rested on the same sentence after
+arm64-macOS grew the substrate, and the panic is what a program hit: any `--target=arm64-macos`
+program touching `Subprocess` — with the DEFAULT `Environment.inherit`, which reads no environment at
+all — died in `StdToArm64Conversion` on the environment-block ops, because the reader was built for a
+lane whose lowering had been left out on the strength of this claim. The gate is the facility table,
+and it always was.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -1276,4 +1314,67 @@ end 'main'
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_subp_spawn', which has no arm64-linux implementation
+```
+
+<!-- test: subprocess-builtins.the-stdlib-api-compiles-on-arm64 -->
+<!-- targets: arm64-macos -->
+⛔⛔ **A `Subprocess` PROGRAM CROSS-COMPILED TO arm64-macOS, AND THE COMPILER USED TO PANIC ON THIS
+EXACT SIX LINES.** `--target=arm64-macos` on a `Configuration.create` + `runConfiguration` with the
+DEFAULT `Environment.inherit` died with *"panic at StdToArm64Conversion.maxon:948: the
+environment-block ops are x64-windows only"*, exit 1, while `--target=x64-windows` on the same source
+exited 0. The claim in that panic was FALSE — `TargetFacilities` answers `subprocess gives true` for
+arm64-macOS, so the whole `__gt_subp_` family is built there, `__gt_subp_env_entry` with it, and dead
+code elimination cannot drop what the stdlib's spawn path calls.
+
+⭐ **WHY IT NEEDED A CASE OF ITS OWN, WITH EVERY OTHER arm64 SUBPROCESS CASE IN THIS FILE GREEN.** The
+nine `posix-*` cases above drive `__Builtins.subprocessSpawn` DIRECTLY, so none of them reaches
+`stdlib/Subprocess.maxon`'s `spawnEnvironmentFor` — and `spawnEnvironmentFor` is what keeps the
+environment reader alive, for `Environment.inherit` as much as for the other two arms. This is the
+first case on this lane that goes through the stdlib's own API, which is the door the compiler was
+panicking at. ⚠ `maxon-shv2/Testing/SpecTestRunner.maxon` calls `runConfiguration`, so the shv2
+binary itself is inside this blast radius.
+
+⚠ **THE ANSWER IS THE CHILD'S, NOT THE COMPILE'S**, so this is a run case rather than a compile-only
+one: `/bin/sh -c 'printf ok'` is echoed back through a collected stdout. On a host that cannot execute
+arm64-macOS the harness reports it COMPILED but NOT RUN, which is still the whole of what the panic
+made impossible.
+```maxon
+function main() returns ExitCode
+	var config = Configuration.create(Executable.name("/bin/sh"))
+	config.arguments = ["-c", "printf ok"]
+	config.workingDirectory = try FilePath.from("") otherwise return 1
+	let r = try Subprocess.runConfiguration(config) otherwise return 2
+	print("exit={r.exitCode()} out={r.stdout}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+exit=0 out=ok
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-builtins.the-stdlib-api-runs-on-windows -->
+<!-- targets: x64-windows -->
+The host-lane twin of `the-stdlib-api-compiles-on-arm64`, and the reason both exist: the arm64 case is
+the one that pins the compile that used to panic, and this one is the same door with its ANSWER
+checked on a lane this box can execute. Between them the stdlib's `Configuration` +
+`runConfiguration` path — which nothing else in `specs-shv2` exercised — is covered on both lanes the
+`subprocess` facility serves.
+```maxon
+function main() returns ExitCode
+	var config = Configuration.create(Executable.name("cmd"))
+	config.arguments = ["/c", "echo ok"]
+	config.workingDirectory = try FilePath.from("") otherwise return 1
+	let r = try Subprocess.runConfiguration(config) otherwise return 2
+	print("exit={r.exitCode()} out={r.stdout.trim()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+exit=0 out=ok
+```
+```exitcode
+0
 ```

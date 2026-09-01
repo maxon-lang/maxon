@@ -91,13 +91,20 @@ status**, because the hand-assembled trampoline overwrites `status` with `comple
 a park overwrites it with `waiting`: a mark left there is erased by exactly the events the rendezvous
 exists to meet.
 
-⛔⛔ **A SPEC CASE CANNOT SET `MAXON_MAX_PROCS`, SO NOTHING BELOW EXERCISES TWO PROCESSORS** — the
-harness gives a case `Args:` and no environment, and `DefaultMaxProcs` is 1. For a COROUTINE that costs
-nothing: it cannot reach a second processor at any processor count, so the `async` answers below are the
-answers everywhere. **For a SERVICE it is a real restriction**, and the cases that drive one say so where
-it matters — one P means one M, which is what makes a global counter a legal channel in a program whose
-green threads all mutate it. **Work stealing, the head CAS under contention and the Dekker fence on the
-ring publish are therefore all out of reach from here**; the multi-processor gate is
+⛔⛔ **THIS PARAGRAPH USED TO READ *"A SPEC CASE CANNOT SET `MAXON_MAX_PROCS`, SO NOTHING BELOW EXERCISES
+TWO PROCESSORS"*, AND BOTH HALVES OF THAT HAVE SINCE STOPPED BEING TRUE.** A case CAN name its own
+processor count — `<!-- procs: N -->`, whose parser and whose gate are `specs-shv2/sched-default-procs.md`'s
+— and the five SERVICE cases below now carry `procs: 1` explicitly rather than inheriting it from a default
+that is about to become the machine's processor count. Each of them asserts something that IS a property of
+one P — a ring's own monotonic counters, the every-61st-schedule fairness tick, the ring-versus-global
+preference a yielder is routed against, a steal count of zero — so the marker is what preserves the
+assertion rather than what narrows it. And the argument that used to follow, *"one P means one M,
+which is what makes a global counter a legal channel"*, has been **withdrawn at the language level**: a
+message may no longer write a module-level `var` at all (`specs-shv2/green-thread-globals.md`, E3143), and
+every service case below now tallies in `self` and reports through an awaited reply. What remains true is
+the COROUTINE half — a coroutine cannot reach a second processor at any processor count, so the `async`
+answers below are the answers everywhere. **Work stealing, the head CAS under contention and the Dekker
+fence on the ring publish are still out of reach from a case pinned to one P**; the multi-processor gate is
 `maxon-shv2/track0/pin-matrix.sh`, which drives the `track0` programs across
 `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program and
 `workers >= 2, steals > 0` at N ≥ 2 of every SPAWN-driven one.
@@ -512,38 +519,42 @@ r=5 steals=0
 
 <!-- test: sched-runqueue.ring-overflow-runs-every-spawned-service -->
 <!-- targets: x64-windows -->
+<!-- procs: 1 -->
 **THE OVERFLOW, AND THE PROOF THAT NOTHING IS LOST IN IT.** Three hundred `spawn`s run back to back with
-nothing between them that yields, so all 300 green threads are published before the first one runs —
-`beforeAnyRan=0` is that fact, and it is what makes the overflow reachable at all. The ring fills to its
-256 slots and the 257th push moves the OLDEST HALF plus the new thread to the global queue. The drain
-then unwinds both tiers, and every one of the 300 handles its one message exactly once whichever tier it
-ended up in.
+nothing between them that yields, so all 300 green threads are published before the first one runs. The ring
+fills to its 256 slots and the 257th push moves the OLDEST HALF plus the new thread to the global queue. The
+drain then unwinds both tiers, and every one of the 300 handles its one message exactly once whichever tier
+it ended up in.
 
-⚠ **A GLOBAL COUNTER IS THE ONLY CHANNEL A SERVICE HAS IN SV1, AND IT IS SOUND HERE FOR A STATED
-REASON.** There are no replies yet, so a fire-and-forget send delivers no value a sender could await;
-what a handler did is observable only through a global. That is a data race in general and not here: a
-spec case gets no environment, `DefaultMaxProcs` is 1, and one P means one M — every green thread in
-this program runs on the OS thread that started it. The multi-processor reading of the same shape is
-`track0/service-torture.maxon`, which is a harness program precisely because a spec cannot set the
-variable.
+⛔⛔ **A MODULE-LEVEL `var ran` USED TO BE THE ONLY CHANNEL A SERVICE HAD, AND THIS CASE'S OWN NOTE ARGUED IT
+WAS SOUND *"because a spec case gets no environment, `DefaultMaxProcs` is 1, and one P means one M"*.** That
+argument expired with the default, and `specs-shv2/green-thread-globals.md` now refuses the write outright —
+so each `Sink` tallies into its own field and `main` sums 300 awaited replies on the one green thread that
+awaited them. The old note's escape hatch, `track0/service-torture.maxon`, is no longer the only place the
+shape can be read at more than one processor: this program's answer is now processor-independent by
+construction.
 
-⚠ **THE DRAIN IS BOUNDED SO THAT A LOST THREAD IS A WRONG ANSWER RATHER THAN A HANG.** A thread the
-overflow dropped would never run, `ran` would never reach 300, and an unbounded wait would sit there for
-ever with nothing to print. The limit is four orders of magnitude above the 300 turns a healthy run
-spends, so it can only be reached by a program that has already lost something.
+⭐ **AND `beforeAnyRan` IS NOW AN AWAITED REPLY FROM SINK #1, WHICH IS STRICTLY MORE THAN THE GLOBAL COULD
+SAY.** Read off a global, the number could only ever be 0 — nothing had been *sent*, so no handler could have
+run whatever the scheduler did, and the line asserted nothing. Read as a reply from the FIRST-spawned sink —
+the one the 257th push moved out of the ring and onto the global queue — it says that thread is alive,
+scheduled and answering, at the point in the program where the overflow has just happened and before a single
+`bump` exists to confuse the reading.
+
+⚠ **A LOST THREAD IS NOW A DIAGNOSIS RATHER THAN A SHORT NUMBER, AND THE BOUNDED SPIN IS GONE WITH THE
+GLOBAL.** A thread the overflow dropped never runs, so the reply `main` awaits from it never resolves, every
+green thread in the program is parked and none can become ready — which is `__sched_find_runnable`'s
+`nothingLeft` arm, **exit 92**, in 35 ms at one processor (`services.a-blocking-cycle-through-an-indirect-call-aborts`
+measures both that code and its timing). `<!-- procs: 1 -->` is what keeps that unconditional: the same case
+measures the detector BIMODAL above one M.
 
 ⭐ **SEEN RED.** With `__sched_runq_put`'s overflow no longer publishing the thread that overflowed it —
-one line, the `emitSchedEnqueueLocked` at `moveDone` — this case reads `beforeAnyRan=0 / ran=299` and
-**exits 101**. Exactly one thread is lost, which is the arithmetic: pushes 1-256 fill the ring, push 257
-moves 128 out and drops the new one, and pushes 258-300 fit in the room that made. The leak gate is what
-turns the loss into an exit code; `ran=299` is what names it.
+one line, the `emitSchedEnqueueLocked` at `moveDone` — exactly one thread is lost, which is the arithmetic:
+pushes 1-256 fill the ring, push 257 moves 128 out and drops the new one, and pushes 258-300 fit in the room
+that made. Under the old global tally that read `ran=299` and exit 101; it now stops at the reply that never
+comes.
 ```maxon
 typealias SinkHandleArray = Array with Sink.handle
-
-// Far above the 300 yields a healthy run spends — see the note above.
-let drainSpinLimit = 200000
-
-var ran = 0
 
 type Sink
 	var n as Integer
@@ -553,8 +564,12 @@ type Sink
 	end 'create'
 
 	export function bump()
-		ran = ran + 1
+		self.n = self.n + 1
 	end 'bump'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
 end 'Sink'
 
 function main() returns ExitCode
@@ -566,7 +581,11 @@ function main() returns ExitCode
 		i = i + 1
 	end 'spawnEach'
 
-	print("beforeAnyRan={ran}\n")
+	// Sink #1 is the thread the 257th push moved to the global queue. Nothing has been sent yet, so this
+	// asks the overflow's own victim to answer 0 — see the note above.
+	let first = try sinks.get(0) otherwise panic("sinks.get OOB at 0 — the loop above pushed 300")
+	let beforeAnyRan = try await first.total() otherwise 0
+	print("beforeAnyRan={beforeAnyRan}\n")
 
 	var k = 0
 	while k < 300 'sendEach'
@@ -575,11 +594,13 @@ function main() returns ExitCode
 		k = k + 1
 	end 'sendEach'
 
-	var spins = 0
-	while ran < 300 and spins < drainSpinLimit 'drain'
-		Runtime.yield()
-		spins = spins + 1
-	end 'drain'
+	var ran = 0
+	var n = 0
+	while n < 300 'collect'
+		let sink = try sinks.get(n) otherwise panic("sinks.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		ran = ran + (try await sink.total() otherwise 0)
+		n = n + 1
+	end 'collect'
 
 	print("ran={ran}")
 	return 0 as ExitCode
@@ -596,6 +617,7 @@ ran=300
 
 <!-- test: sched-runqueue.the-ring-index-wraps-past-its-capacity -->
 <!-- targets: x64-windows -->
+<!-- procs: 1 -->
 **THE WRAP.** `runqhead`/`runqtail` are monotonic counters, not indices. One service takes six thousand
 messages one at a time, each drained before the next is sent, so the service is woken and re-published
 six thousand times while the ring never holds more than one thread — which drives both counters far past
@@ -622,12 +644,19 @@ monotonic counter with no `and RunqIndexMask`), one round count per build of thi
 being invisible. **DO NOT "simplify" it back**: the first cut of this case used 400 rounds, and the table
 above is what that would buy. (The pre-EC10 `async` shape of this case measured 2,000 green and 5,000
 segfaulting — the same threshold within a factor of two, reached through a different producer.)
+
+⛔ **THE TALLY MOVED OUT OF A MODULE-LEVEL `var sum` AND INTO `self`, WHICH `green-thread-globals.md` NOW
+REQUIRES — AND THE SPIN LOOP WENT WITH IT.** The old round waited for the tick to be handled by watching a
+shared word; the round now ASKS, and a reply is queued behind the tick that came before it, so the await is
+the settle. **That only widens the margin the table above measures:** a round used to publish the service
+once and now publishes it twice — the tick and the reply — so the monotonic counters reach any given
+distance past 256 in FEWER rounds than when the table was taken, and 6,000 remains a floor rather than a
+number to re-derive.
+
+⚠ **`<!-- procs: 1 -->` IS WHAT KEEPS THAT TABLE APPLICABLE.** The distance a counter travels is per-P; a
+service free to migrate between Ps splits its wakes across several rings and each one advances more slowly,
+which is the one change that could put 6,000 rounds back under the threshold.
 ```maxon
-// Far above the one yield a healthy round spends — a lost wake is a wrong answer, not a hang.
-let settleSpinLimit = 200000
-
-var sum = 0
-
 type Step
 	var n as Integer
 
@@ -636,23 +665,24 @@ type Step
 	end 'create'
 
 	export function tick()
-		sum = sum + 1
+		self.n = self.n + 1
 	end 'tick'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
 end 'Step'
 
 function main() returns ExitCode
 	let h = spawn Step.create()
 
+	var sum = 0
 	var i = 0
 	while i < 6000 'rounds'
 		h.tick()
-
-		var spins = 0
-		while sum <= i and spins < settleSpinLimit 'settle'
-			Runtime.yield()
-			spins = spins + 1
-		end 'settle'
-
+		// Queued behind the tick, so this IS the settle: the service is drained and re-published once more
+		// per round, which is what drives both monotonic counters far past 256 slots.
+		sum = try await h.total() otherwise 0
 		i = i + 1
 	end 'rounds'
 
@@ -670,6 +700,7 @@ sum=6000
 
 <!-- test: sched-runqueue.the-global-queue-is-consulted-within-sixty-one-schedules -->
 <!-- targets: x64-windows -->
+<!-- procs: 1 -->
 **THE FAIRNESS CHECK, AND THE ONE SHAPE THAT CAN SEE IT.** The overflow above moves the OLDEST half of
 the ring to the global queue, so service #1 — the first ever spawned — ends up at the global head while
 ~170 services remain in the ring. The scheduler prefers its ring, so without the every-61st-schedule
@@ -685,13 +716,54 @@ are ~61 and ~171, so the boundary at 130 has a wide margin either way.
 increment. With the check disabled (`atFairness` compared against `GtFairnessInterval`, a value
 `tick mod 61` can never take) it prints `firstPos=172` and this case reads `oldest=late`. 61 against 172
 is why the boundary is a wide one rather than a pinned number.
+
+⛔⛔ **THE SEQUENCE IS A SERVICE'S MAILBOX AND NO LONGER A MODULE-LEVEL `var runCount`, WHICH
+`green-thread-globals.md` REFUSES — AND A MAILBOX IS THE RIGHT CHANNEL RATHER THAN A SUBSTITUTE FOR ONE.**
+This case is the only one in the file whose subject is an ORDER ACROSS SERVICES, so its tally genuinely
+cannot live in any one leaf's `self`. What it can live in is a 301st service: each leaf sends `note(id)`
+fire-and-forget as it runs, and a mailbox is FIFO, so the order the notes are *enqueued* — which is the order
+the leaves *ran* — is the order `Tally` counts them in. That is exactly the sequence the shared word used to
+approximate, and it is a sequence rather than a read-modify-write, so no interleaving can lose a step at any
+processor count.
+
+⚠ **`Tally` IS SPAWNED LAST, AFTER ALL 300 LEAVES, AND THAT IS NOT TIDINESS.** The whole measurement rests on
+leaf #1 being the FIRST thread ever published, so that the 257th push is what moves it to the global head.
+Spawning the collector ahead of the leaves would put it in that slot and shift every position the table above
+was measured at.
+
+⚠ **THE BOUNDED DRAIN SURVIVES, AND SO DOES ITS REASON.** `main` now asks `Tally` for the count instead of
+reading a word, but the loop is still bounded, so a leaf the overflow dropped still leaves `runCount` short
+and still prints a wrong answer rather than wedging.
 ```maxon
 typealias LeafHandleArray = Array with Leaf.handle
 
 let drainSpinLimit = 200000
 
-var runCount = 0
-var firstPos = 0
+// The 301st service, and the only shared sequence in the program. A send is an ENQUEUE, so the order these
+// arrive in is the order the leaves ran — with no word two green threads both step.
+type Tally
+	var n as Integer
+	var firstPos as Integer
+
+	static function create() returns Self
+		return Self{n: 0, firstPos: 0}
+	end 'create'
+
+	export function note(id Integer)
+		self.n = self.n + 1
+		if id == 1 'oldest'
+			self.firstPos = self.n
+		end 'oldest'
+	end 'note'
+
+	export function count() returns Integer
+		return self.n
+	end 'count'
+
+	export function oldestPosition() returns Integer
+		return self.firstPos
+	end 'oldestPosition'
+end 'Tally'
 
 type Leaf
 	var id as Integer
@@ -700,11 +772,8 @@ type Leaf
 		return Self{id: id}
 	end 'create'
 
-	export function go()
-		runCount = runCount + 1
-		if self.id == 1 'oldest'
-			firstPos = runCount
-		end 'oldest'
+	export function go(sink Tally.handle)
+		sink.note(self.id)
 	end 'go'
 end 'Leaf'
 
@@ -717,19 +786,25 @@ function main() returns ExitCode
 		i = i + 1
 	end 'spawnEach'
 
+	// Last, so leaf #1 keeps the first-published slot the overflow arithmetic depends on.
+	let tally = spawn Tally.create()
+
 	var k = 0
 	while k < 300 'sendEach'
 		let leaf = try leaves.get(k) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		leaf.go()
+		// A send MOVES its argument, so each leaf gets its own reference to the collector.
+		leaf.go(tally.clone())
 		k = k + 1
 	end 'sendEach'
 
+	var runCount = 0
 	var spins = 0
 	while runCount < 300 and spins < drainSpinLimit 'drain'
-		Runtime.yield()
+		runCount = try await tally.count() otherwise 0
 		spins = spins + 1
 	end 'drain'
 
+	let firstPos = try await tally.oldestPosition() otherwise 0
 	if firstPos < 130 'early'
 		print("runCount={runCount} oldest=early")
 	end 'early' else 'late'
@@ -749,6 +824,7 @@ runCount=300 oldest=early
 
 <!-- test: sched-runqueue.a-yield-goes-behind-the-global-queue -->
 <!-- targets: x64-windows -->
+<!-- procs: 1 -->
 **THE BACK OF THE QUEUE, AND THE ONLY SHAPE AT ONE PROCESSOR THAT CAN SEE IT.** A drained yielder goes to
 the GLOBAL queue's tail; the scheduler consults its RING first, so anything pushed to the ring AFTER the
 yielder was drained still runs BEFORE the yielder resumes. That is Go's split exactly (`Gosched` →
@@ -774,12 +850,52 @@ and is blind to RING-versus-GLOBAL, which only a green thread has two tiers to h
 ⚠ **`spawnee`'s HANDLE IS DROPPED BEFORE IT HAS RUN, AND THAT IS THE POINT AT WHICH IT IS STILL QUEUED.**
 A drop closes the mailbox, and a closed mailbox DRAINS what is already in it — so the message survives
 its handle and the service still runs it once.
+
+⛔⛔ **THE POSITIONS COME OFF A COLLECTOR'S MAILBOX AND NO LONGER OFF A MODULE-LEVEL `var order`, WHICH
+`green-thread-globals.md` REFUSES.** Like the fairness case above, this one's subject is an ORDER ACROSS
+services, so the sequence cannot live in any one of them; it lives in a `Tally` service each of the three
+sends `note(id)` to as it runs. A send is an ENQUEUE and a mailbox is FIFO, so the arrival order IS the run
+order — the same discrimination the shared word made, through a channel with no read-modify-write in it.
+
+⚠ **`Tally` IS SPAWNED THIRD, AFTER `y` AND `s`.** Both of those keep the publication slots the argument
+above turns on; a collector spawned ahead of them would take `y`'s.
 ```maxon
 let drainSpinLimit = 200000
 
-var order = 0
-var sPos = 0
-var yPos = 0
+let spawneeId = 1
+let yielderId = 2
+
+// The only shared sequence in the program — see the note above.
+type Tally
+	var n as Integer
+	var sPos as Integer
+	var yPos as Integer
+
+	static function create() returns Self
+		return Self{n: 0, sPos: 0, yPos: 0}
+	end 'create'
+
+	export function note(id Integer)
+		self.n = self.n + 1
+		if id == spawneeId 'theSpawnee'
+			self.sPos = self.n
+		end 'theSpawnee' else 'theYielder'
+			self.yPos = self.n
+		end 'theYielder'
+	end 'note'
+
+	export function count() returns Integer
+		return self.n
+	end 'count'
+
+	export function spawneePosition() returns Integer
+		return self.sPos
+	end 'spawneePosition'
+
+	export function yielderPosition() returns Integer
+		return self.yPos
+	end 'yielderPosition'
+end 'Tally'
 
 type Spawnee
 	var n as Integer
@@ -788,9 +904,8 @@ type Spawnee
 		return Self{n: 0}
 	end 'create'
 
-	export function go()
-		order = order + 1
-		sPos = order
+	export function go(sink Tally.handle)
+		sink.note(spawneeId)
 	end 'go'
 end 'Spawnee'
 
@@ -801,9 +916,10 @@ type Spawner
 		return Self{n: 0}
 	end 'create'
 
-	export function go()
+	export function go(sink Tally.handle)
 		let child = spawn Spawnee.create()
-		child.go()
+		// A send MOVES, and `sink` arrived BORROWED, so the child gets its own reference.
+		child.go(sink.clone())
 	end 'go'
 end 'Spawner'
 
@@ -814,25 +930,28 @@ type Yielder
 		return Self{n: 0}
 	end 'create'
 
-	export function go()
+	export function go(sink Tally.handle)
 		Runtime.yield()
-		order = order + 1
-		yPos = order
+		sink.note(yielderId)
 	end 'go'
 end 'Yielder'
 
 function main() returns ExitCode
 	let y = spawn Yielder.create()
 	let s = spawn Spawner.create()
-	y.go()
-	s.go()
+	let tally = spawn Tally.create()
+	y.go(tally.clone())
+	s.go(tally.clone())
 
+	var order = 0
 	var spins = 0
 	while order < 2 and spins < drainSpinLimit 'drain'
-		Runtime.yield()
+		order = try await tally.count() otherwise 0
 		spins = spins + 1
 	end 'drain'
 
+	let sPos = try await tally.spawneePosition() otherwise 0
+	let yPos = try await tally.yielderPosition() otherwise 0
 	print("sPos={sPos} yPos={yPos}")
 	return 0 as ExitCode
 end 'main'
@@ -847,6 +966,7 @@ sPos=1 yPos=2
 
 <!-- test: sched-runqueue.nothing-is-stolen-on-one-processor -->
 <!-- targets: x64-windows -->
+<!-- procs: 1 -->
 **THE STEAL COUNTER, AND THE ONE ANSWER A SPEC CAN PIN — the SERVICE twin of
 `no-coroutine-is-ever-stolen` above, and the reason the two are different cases.** That one reads 0
 because a coroutine never enters a P ring at all, so its zero is an arm nothing executes. This one reads
@@ -860,12 +980,24 @@ always there.
 reads `done=1200 steals=1062` and `steals=1197` on two builds — while `no-coroutine-is-ever-stolen` above
 **passes unchanged**, because a coroutine enters no queue a thief can reach at any processor count. One
 sabotage, two opposite answers, each the one its case claims.
+
+⛔⛔ **THE TALLY WAS A MODULE-LEVEL `var done` UNTIL `green-thread-globals.md` REFUSED IT, AND THIS CASE'S
+OWN NUMBERS ARE THAT SPEC'S OPENING MEASUREMENT.** `done = done + 1` inside `Work.go` is a load, an add and
+a store on a word twelve green threads share; re-run at `MAXON_MAX_PROCS=16`, ten times, it read 1200, 1200,
+**1199**, **1199**, **1198**, **1199**, **1199**, 1200, **1199**, 1200 — five runs short, all ten exit 0.
+Each `Work` now tallies into its own field and `main` sums twelve awaited replies on the one green thread
+that awaited them, so the 1200 is arithmetic rather than a coincidence of scheduling. **The drain spin loop
+is gone with it and that is a strengthening, not a simplification:** a reply arrives only after the 100 `go`s
+queued ahead of it, so the awaits ARE the drain — where the old bounded spin could give up and print a short
+number that looked like a lost message, a lost message now shows as a short sum and nothing else can produce
+one.
+
+⚠ **AND IT NOW CARRIES `<!-- procs: 1 -->`, WHICH ITS NAME ALWAYS IMPLIED AND THE DEFAULT USED TO SUPPLY.**
+`steals=0` is a claim about ONE processor and is false at any other count — the sabotage above measures
+`steals=1062` at twelve. The `done=1200` half is now processor-independent; the `steals=0` half is not, and
+pinning the count is what keeps it the assertion its name makes.
 ```maxon
 typealias WorkHandleArray = Array with Work.handle
-
-let drainSpinLimit = 200000
-
-var done = 0
 
 type Work
 	var n as Integer
@@ -875,8 +1007,12 @@ type Work
 	end 'create'
 
 	export function go()
-		done = done + 1
+		self.n = self.n + 1
 	end 'go'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
 end 'Work'
 
 function main() returns ExitCode
@@ -899,11 +1035,14 @@ function main() returns ExitCode
 		r = r + 1
 	end 'eachRound'
 
-	var spins = 0
-	while done < 1200 and spins < drainSpinLimit 'drain'
-		Runtime.yield()
-		spins = spins + 1
-	end 'drain'
+	// A reply is queued behind the 100 sends that came before it, so awaiting all twelve is the drain.
+	var done = 0
+	var n = 0
+	while n < 12 'collect'
+		let worker = try workers.get(n) otherwise panic("workers.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		done = done + (try await worker.total() otherwise 0)
+		n = n + 1
+	end 'collect'
 
 	print("done={done} steals={__Builtins.schedStealCount()}")
 	return 0 as ExitCode

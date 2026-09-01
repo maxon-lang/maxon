@@ -1,0 +1,54 @@
+// ⛔⛔ REPRODUCER FOR W233 — THIS FILE HANGS `bin/maxon.exe` FOR EVER. DO NOT ADD IT TO ANY SUITE.
+//
+// `./bin/maxon.exe build maxon-shv2/track0/bootstrap-otherwise-binding-hang.maxon` never returns: the
+// bootstrap spins with FLAT memory (343 MB across samples 5 s apart) and `--log=compiler:debug` prints
+// nothing after `Starting compilation`. Measured 241 s, 3.5 min and 7.3 min across three runs before being
+// killed.
+//
+// ⭐⭐ THE SUBJECT IS ONE LINE — `nameOf`'s body — AND THE CONSTRUCT IS INVALID MAXON, WHICH IS THE POINT.
+// `otherwise (e)` is the BLOCK form and owes a label (`otherwise (e) 'err' … end 'err'`); the
+// single-expression form takes no binding (`otherwise panic("…")`). There is no `otherwise (e) <expr>`, so
+// the correct answer is a diagnostic, and at FILE SCOPE the bootstrap gives exactly that:
+//
+//     error E2010: Expected characterliteral but got 'panic'
+//
+// ⭐ MOVE `nameOf` OUT OF THE `type` AND THE HANG BECOMES THAT ERROR, IN UNDER A SECOND. That is the whole
+// discriminator: the production is refused correctly at file scope and fails to re-synchronise inside a
+// METHOD body, so the bug is the bootstrap's error RECOVERY, not the rule it is recovering from.
+//
+// ⚠ shv2 IS UNAFFECTED and is not the compiler to test this against — the bootstrap is what builds shv2, and
+// it never gets far enough to hand this source to anything. The fix and its gate are `maxon-sharp`'s.
+//
+// ACCEPTANCE when W233 is taken: this file compiles to the E2010 above in under a second.
+
+typealias Tally = int(0 to u64.max)
+
+union Refusal
+	badTag(position Tally, tagName String)
+end 'Refusal'
+
+type Holder
+	var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function mint(v Tally) returns String throws Refusal
+		if v > 3 'tooBig'
+			throw Refusal.badTag(v, tagName: "big")
+		end 'tooBig'
+		return "ok{v}"
+	end 'mint'
+
+	// Inside a METHOD of a type, as in SignatureIndex.ProgramSignatures.
+	export function nameOf(v Tally) returns String
+		return try self.mint(v) otherwise (rejection) panic("refused {v}")
+	end 'nameOf'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	print("{h.nameOf(1)}\n")
+	return 42 as ExitCode
+end 'main'

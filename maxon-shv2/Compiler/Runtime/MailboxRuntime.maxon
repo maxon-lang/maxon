@@ -132,6 +132,28 @@ export let MboxHandleCloneBoxName = b"__mbox_handle_clone_box"
 // scope exit, an array element drop and a struct-field cascade all shut a service down.
 export let MboxHandleDropBoxName = b"__mbox_handle_drop_box"
 
+// ⭐⭐⭐ **`__mbox_handle_retain_box(handleBox)` — THE EXACT MIRROR OF THE DROP, AND ITS ABSENCE WAS A
+// DOUBLE FREE (W232).** A `<T>.handle` value owns THREE things — a share of the mailbox's `handles` count,
+// a share of its `refs` count, and a reference to the little box that names it — and
+// `__mbox_handle_drop_box` releases all three. Until this entry existed the RETAIN released... sorry,
+// ACQUIRED only the third: `Parser.emitIncref` emitted a bare `__mm_incref` of the box, because a handle box
+// is an ordinary managed record and every generic co-own path treats it as one.
+//
+// ⇒ **TWO OWNERS, ONE SHARE, TWO RELEASES.** `let w = spawn T.create()` then `arr.push(w)` increfs the box
+// to 2, and each of the two eventual drops steps `handles` and `refs` DOWN — so the mailbox is closed and
+// **FREED while the array's handle still names it**, and the second drop frees it again.
+// **MEASURED:** that program is exit **89 (`RuntimeAbort.slabFreeOfParkedSpan`)** from three services up,
+// exit **101** at one or two, and a SEGFAULT at `MAXON_MAX_PROCS >= 7` — while `arr.push(spawn T.create())`
+// is clean at every count, because a temporary's one reference is MOVED and never increfed. The corpus stood
+// entirely on the clean side of that line (`services.handles-in-an-array` pushes the `spawn` directly), which
+// is why 6,800 green cases never saw it.
+//
+// ⚠ **SO THE INVARIANT IS: EVERY REFERENCE TO A HANDLE BOX OWNS ONE SHARE OF EACH COUNT.** A clone takes a
+// FRESH box and one share of each (`__mbox_handle_clone_box`); a retain takes a SECOND REFERENCE to an
+// existing box and one share of each; a drop gives back one of each. All three step the pair, and the pair
+// is what decides when the service stops and when its record is freed.
+export let MboxHandleRetainBoxName = b"__mbox_handle_retain_box"
+
 // `__mbox_service_exit(mbox)` — the loop's last act. Exported because `ServiceLoop` emits the call as the
 // tail of every synthesized `<T>.__loop`.
 export let MboxServiceExitName = b"__mbox_service_exit"
@@ -158,6 +180,7 @@ export function installMailboxRuntime(module StdModule)
 	buildMboxRecv(module)
 	buildMboxClose(module)
 	buildMboxHandleCloneBox(module)
+	buildMboxHandleRetainBox(module)
 	buildMboxHandleDropBox(module)
 	buildMboxServiceExit(module)
 	buildMboxAbandon(module)
@@ -437,6 +460,30 @@ function buildMboxHandleCloneBox(module StdModule)
 
 	module.functions.push(func)
 end 'buildMboxHandleCloneBox'
+
+// `__mbox_handle_retain_box(handleBox)`. See `MboxHandleRetainBoxName` for the double free its absence was.
+//
+// ⚠ **IT IS THE DROP READ BACKWARDS, INCLUDING THE ORDER.** The drop is close-then-release because
+// `__mbox_close` reads the record and needs `refs` to still be holding it; going up there is no such
+// hazard — nothing is freed on this road — so the two steps are simply both taken before the box's own
+// incref. What matters is that the SET is the same set: miss either count here and the drop's matching step
+// runs one time too many, which is the failure this function exists to prevent.
+function buildMboxHandleRetainBox(module StdModule)
+	var func = IrFunction.createFromStd(MboxHandleRetainBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let handleBox = 0 as ValueId
+
+	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
+	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
+	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountUp, ids: ids)
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(handleBox)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMboxHandleRetainBox'
 
 // `__mbox_handle_drop_box(handleBox)`. See `MboxHandleDropBoxName`.
 //

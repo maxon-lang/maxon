@@ -2845,6 +2845,98 @@ error E3139: <fragment>:10:15: service call cycle — these messages can deadloc
     A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
 ```
 
+<!-- test: a-blocking-cycle-through-an-indirect-call-aborts -->
+<!-- targets: x64-windows, arm64-macos -->
+<!-- procs: 4 -->
+⛔⛔ **THE HALF OF THE DEADLOCK RULE THAT IS A RUNTIME PROPERTY, BECAUSE E3139 CANNOT REACH IT.**
+`ServiceCallCycleCheck` walks a graph of NAMED callees, so every case above it can be refused at compile
+time. This program's `A → B` edge goes through a **closure value** — `callIndirect` calls whatever
+function it was handed, and what it was handed is decided at the call site rather than at the callee's
+name — so the roster records `B → A` alone, which is not a ring, and the program **compiles clean**. The
+ring is real all the same: `main` awaits `A.kick`, `A.kick` awaits `B.work` through the closure, and
+`B.work` awaits `A.ack` — which `A` cannot serve, because `A` is inside `kick`.
+
+⇒ **the refusal a static check cannot make, the runtime must.** Every green thread in the program is
+parked and none of them can ever become ready, which is exactly the `nothingLeft` arm of
+`__sched_find_runnable` — `RuntimeAbort.schedulerDeadlock`, **exit 92**, silent on both streams. The
+answer is a diagnosis rather than a hang: a wedged process tells you nothing and costs a 120 s harness
+timeout; a 92 names the condition.
+
+⭐⭐ **THE EXIT CODE WAS TAKEN EMPIRICALLY, AND THIS CASE WAS THE ACCEPTANCE FOR A DEFECT THAT IS NOW
+CLOSED (A1).** At `MAXON_MAX_PROCS=1` it has always aborted promptly — one M, so the moment it finds both
+queues empty it is provably alone. **Above one processor it was BIMODAL**, measured on one box, one binary:
+
+| | exit 92 | hung |
+|---|---|---|
+| `MAXON_MAX_PROCS=1` | 5 of 5, <320 ms | — |
+| `MAXON_MAX_PROCS=4` | 6 of 11, 87-313 ms | **5 of 11** — still running at a 10 s cap |
+
+⇒ **it was not "slower to notice", it was a coin flip between noticing in 90 ms and never noticing** — the
+flip being purely whether a worker M happened to be spawned at all. The `aloneHere` test that guarded the arm
+read `__sched_active_workers`, a count of Ms that have ENTERED the worker loop and not yet left it, which
+never falls while the program runs. **A deadlock detector that only fires when there is one processor stops
+being a detector on the day the default stops being one processor**, which is the same day this case's
+`procs: 4` starts being honoured.
+
+✅ **CLOSED: the arm now asks whether any M is EXECUTING, not whether any M is ALIVE.** `POffQuiesced` is
+published by every M that has established there is nothing runnable anywhere, `__sched_progress` is bumped by
+every publish so a quiet M that has not yet had its look still counts as live, and the state must be
+confirmed `DeadlockConfirmPolls` times before the abort fires. **MEASURED after the fix: exit 92 on 20 of 20
+direct runs at `procs: 4`, 327-530 ms**, and 92 at 1, 2, 8 and 16 processors. `SchedRuntime.POffQuiesced`,
+`POffQuiescedGen` and `POffQuietPolls` carry the three terms and the false abort each one closes.
+
+⚠ The closure clones the handle it forwards (`m.clone()`): a message parameter arrives BORROWED and a
+send MOVES, so the handle crossing into `B.work` has to be one this frame owns — E3138 otherwise, which
+is `error.a-borrowed-parameter-may-not-be-sent`'s subject and has nothing to do with this one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias WorkFn = function(B.handle, A.handle) returns Integer
+
+// The indirection. It calls the function it was HANDED, so no roster keyed on a callee's name can say
+// which body runs here — which is what keeps `A.ping`'s edge to `B` out of the cycle graph.
+function callIndirect(f WorkFn, peer B.handle, mine A.handle) returns Integer
+	return f(peer, mine)
+end 'callIndirect'
+
+type A
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function kick(peer B.handle, mine A.handle) returns Integer
+		return callIndirect(function(p B.handle, m A.handle) gives (try await p.work(m.clone()) otherwise 0), peer: peer, mine: mine)
+	end 'kick'
+
+	export function ack() returns Integer
+		return 7
+	end 'ack'
+end 'A'
+
+type B
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function work(back A.handle) returns Integer
+		return try await back.ack() otherwise 0
+	end 'work'
+end 'B'
+
+function main() returns ExitCode
+	let a = spawn A.create()
+	let b = spawn B.create()
+	let v = try await a.kick(b.clone(), mine: a.clone()) otherwise 0
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+92
+```
+
 <!-- test: deep-acyclic-chain-runs -->
 <!-- targets: x64-windows, arm64-macos -->
 Three services in a chain, each awaiting the next. An acyclic graph has a topological order, so the service
@@ -3393,4 +3485,70 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 names a thread true
+```
+
+<!-- test: a-service-shut-down-with-async-work-in-flight -->
+<!-- targets: x64-windows, arm64-macos -->
+<!-- procs: 4 -->
+⭐⭐ **W226's SHAPE, COMMITTED — AND IT IS THE PROOF THAT THE LEAK IT PREDICTED IS NOT THERE.** No case in
+this file had a handler use `async` at all, and the `SV1` review that opened `W226` could not measure whether
+a coroutine owned by a service green thread is STRANDED when its owner is reclaimed: since `EC10` a coroutine
+is published only to its owner's queue and driven only by that owner's chain of drivers, so if `<T>.__loop`
+exits with work still on its `coroHead`, nothing drives it and nothing frees it — and a stranded slab
+allocation never reaches the exit gate, which is why the row says the shape *"is invisible to every gate the
+suite has"*.
+
+⭐ **SO IT WAS MEASURED AGAINST `__Builtins.mmRawAllocLive()` RATHER THAN THE EXIT CODE, AND THE ANSWER IS
+NO.** 100 rounds of *spawn a service, send one message whose handler `async`s a 30 ms sleep and NEVER awaits
+it, drop the handle* grows the live-allocation count by **400 at `MAXON_MAX_PROCS=1`, 247 at 4 and 204 at
+8** — and the CONTROL, the same program whose handler `await`s that coroutine so nothing can be stranded,
+grows by **400 at 1 and 491 at 4**. **The two are the same number.** What the counter is reading is a
+service's own teardown lagging its handle drop until the exit drain, not a coroutine anybody lost; the
+un-awaited coroutine costs nothing the awaited one does not. The exit gate is clean at every processor count,
+which is the second half of the same answer.
+
+⇒ **the case stays as the proof.** It pins that a service may be shut down with `async` work in flight and
+the process still terminates cleanly — no 101, no 75, no hang — which is the property `W226` was really
+asking about, and it is the case that will go red if a later rung gives the loop's exit block a coroutine
+sweep it gets wrong.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function slowWork(n Integer) returns Integer
+	sleep(30)
+	return n * 2
+end 'slowWork'
+
+type Worker
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	// Starts a coroutine on the SERVICE's own green thread and never awaits it. The promise dies at handler
+	// scope exit, and the service is shut down by the handle drop below while the sleep is still in flight.
+	export function fire(v Integer) returns Integer
+		let p = async slowWork(v)
+		_ = p
+		self.n = self.n + 1
+		return self.n
+	end 'fire'
+end 'Worker'
+
+function main() returns ExitCode
+	for round in 1 to 8 'rounds'
+		let w = spawn Worker.create()
+		w.fire(round)
+	end 'rounds'
+
+	print("survived\n")
+	return 42 as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+survived
 ```

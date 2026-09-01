@@ -67,14 +67,31 @@
 //       that ever holds those boxes (`MmRuntime.emitAdjustRefcount`; `SchedRuntime.maxon` states the
 //       invariant). What survived the flip back is the half that was doing the work: the decref decides "am
 //       I the last owner?" from the value its own decrement displaced rather than from a prior read.
-//   (2) **The drop path's `threw`/`result` reads** are the one still open here, and they are a different
-//       shape from the other two: `__gt_promise_drop` reads `gt.status`, picks an arm, and then reads
-//       `gt.threw`/`gt.result` — while a completion landing on another M can move `status` in between. It is
-//       not a lost update (each word is one aligned machine word, written whole) but a torn VIEW across two
-//       of them, and closing it means publishing the completion as one transition the drop can test once —
-//       which is a GT state-machine change, not an atomic. ⚠ Reaching it needs a promise dropped by one M
-//       while another completes its thread, which per-await linearity makes unreachable for `await` and
-//       leaves open for `cancel`.
+//   (2) ✅ **The drop path's `threw`/`result` reads are CLOSED, and they were closed by the TEARDOWN
+//       RENDEZVOUS rather than by anything in this file.** This block used to read *"the one still open
+//       here"* and describe the hazard as `__gt_promise_drop` reading `gt.status`, picking an arm, and then
+//       reading `gt.threw`/`gt.result` while a completion on another M moved `status` in between — a torn
+//       VIEW across two words rather than a lost update. **RE-DERIVED AT THE CODE (A1-A6, 2026-08-31): the
+//       drop reads NEITHER WORD.** `buildGtPromiseDrop` loads `status`, `parkKind`, `ioParked`, `io_handle`
+//       and `owner`, and nothing else; the only reader of `threw`/`result` on this road is the releaser, and
+//       the releaser runs only inside `__gt_reclaim` — which is reached only by the party that
+//       `emitGtTeardownArrive` told was **SECOND**. The completing party writes both answer words and
+//       `status` and only THEN arrives, so a second arrival that reads them is reading behind a `lock xadd`
+//       that the writer has already passed. `GtRuntime.emitGtTeardownArrive`'s header states the same rule
+//       from its own end — *"every read of the struct must precede the caller's own arrival"* — and names
+//       this item as the thing it closes.
+//
+//       ⚠ **AND THE CANCEL ROAD THIS ITEM WORRIED ABOUT IS GENUINELY REACHABLE NOW, WHICH IS WHY THE
+//       RE-DERIVATION MATTERED RATHER THAN THE CONCLUSION.** SV2's reply cell IS a promise, completed by
+//       `__gt_cell_complete` on the SERVICE's green thread while the CLIENT may drop or cancel it on
+//       another M — the first cross-M drop-versus-completion in the language, where per-await linearity had
+//       previously made the whole shape unreachable. `services.pending-reply-dropped-then-answered` and
+//       `services.completed-reply-dropped-is-reclaimed` are the two orders, committed. The hazard is absent
+//       because of the ordering rule, not because nobody can stand there.
+//
+//       ⛔ **SO THE RULE, NOT THE VERDICT, IS WHAT A LATER READER NEEDS:** a party on this road may read
+//       `gt.result` or `gt.threw` ONLY before its own `emitGtTeardownArrive`, and today only the second
+//       arrival does. Move a release ahead of the rendezvous and this item reopens.
 
 // The symbol prefix. Its `__gt_` head puts a releaser inside the syscall-shim family exactly as the rest of
 // the green-thread runtime is, which matters because a drop callee it calls may reach a kernel call.

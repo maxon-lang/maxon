@@ -69,6 +69,22 @@ export let SubpResultDurationName = b"__gt_subp_result_duration"
 export let SubpResultReleaseName = b"__gt_subp_result_release"
 export let SubpResolvePathName = b"__gt_subp_resolve_path"
 export let SubpLastErrorName = b"__gt_subp_last_error"
+// ⭐ **THE ENVIRONMENT READER, AND ITS `__gt_subp_` PREFIX IS THE WHOLE OF ITS TARGET GATE.** It is not a
+// spawn, but it exists for one: `stdlib/Subprocess.maxon` walks it to assemble the block an
+// `Environment.inheritUpdating` child is given, and it has no other caller in the language. Naming it into
+// this family is what puts it under `HostFacility.subprocess` — `SemanticCheck.calleeHostFacility` maps the
+// prefix to that facility and `targetProvidesFacility` answers for the lane — so a target with no spawn
+// refuses it with the SAME E3104 that refuses the spawn beside it: a program that could read this process's
+// environment but not spawn anything would be vocabulary with no consumer.
+//
+// ⛔⛔ **AND THAT GATE IS `subprocess`, NOT "x64-windows" — ARM64-MACOS ANSWERS `true` FOR IT.** This header
+// used to name a `calleeNeedsWin32Substrate` that no longer exists and conclude the reader was refused
+// everywhere but Windows. It is not: the whole family is BUILT on arm64-macOS, so this entry point is built
+// there too, and `EnvironmentSnapshotShape` below is what makes its body serve that lane rather than a
+// backstop panic in the isel. (MEASURED: a six-line `runConfiguration` program with the DEFAULT
+// `Environment.inherit` panicked `StdToArm64Conversion` at `--target=arm64-macos`, because the comment's
+// premise was false and nothing downstream re-derived it.)
+export let SubpEnvEntryName = b"__gt_subp_env_entry"
 
 // ⭐⭐ **ONE NAME, TWO BODIES (MAC8).** `SubprocessCommandShape` decides which is built; nothing downstream
 // of the install ever asks which target it is compiling for. See that enum for the whole argument.
@@ -194,6 +210,32 @@ let BackslashByte = 92 as ParsedInt
 let ClBytesPerSourceByte = 2 as ParsedInt
 let ClBytesPerArg = 3 as ParsedInt
 
+// ⭐ **THE ENVIRONMENT WALK'S STATE, IN MEMORY** — this file's header again: a hand-built runtime function's
+// values are span-less, so loop state lives in a slab record rather than in block arguments.
+//
+// `EnvCursor` walks the block entry by entry, `EnvRemaining` counts the requested index down to zero, and
+// `EnvBlock` holds the snapshot's base so both exits can release it.
+let EnvCursor = 0 as ByteOffset
+let EnvRemaining = 8 as ByteOffset
+let EnvBlock = 16 as ByteOffset
+let EnvWalkBytes = 24 as ParsedInt
+
+// One `char *` in the `EnvironmentSnapshotShape.pointerVector` table. Both lanes that answer that shape are
+// 64-bit; the day a 32-bit one does, this is the one place it is written down.
+let EnvPointerStride = 8 as ParsedInt
+
+// ⭐ **THE `envInherit` SLOT'S VALUE MEANING "the child inherits this process's environment".**
+// `stdlib/Subprocess.maxon`'s `EnvSource.parent` decides it; this is that number read back, named rather
+// than spelled as a bare `1` at the one site that decodes it.
+//
+// ⚠ **THE TEST IS `== EnvSourceParent`, NOT "non-zero", AND THE TWO BOOTSTRAP BACKENDS SPELLED IT THE OTHER
+// WAY UNTIL THIS CHANGE.** Both agree on the only two values the stdlib produces; they differ on the
+// direction an unrecognised one fails in, and "non-zero" fails toward INHERIT — a child silently given the
+// parent's environment while its caller was told it had another, which is the failure
+// `StdDialect`'s `osProcessSpawn` note says the design exists to prevent.
+// `maxon-sharp/Compiler/MLIR/Runtime/SubprocessContract.cs` carries the same constant for the two emitters.
+let EnvSourceParent = 1 as ParsedInt
+
 // ⭐ **THE PATH WALK'S STATE, IN MEMORY.** Two nested lists — the directories of `PATH` and the extensions of
 // `PATHEXT` — plus a synthetic empty member at the head of each, which is what makes "the name exactly as
 // given" and "the name with no extension added" ordinary iterations rather than special cases before the loop.
@@ -295,6 +337,33 @@ export function subprocessCommandShape(target Target) returns SubprocessCommandS
 		linux to wasi gives SubprocessCommandShape.argumentVector
 	end 'os'
 end 'subprocessCommandShape'
+
+// ⭐⭐ **THE SHAPE THIS PROCESS'S OWN ENVIRONMENT ARRIVES IN — the second "one name, two bodies" fork, and
+// for the same reason as the command shape above: the two platforms hand it over in genuinely different
+// data structures, and pretending otherwise is where the arm64 compiler panic came from.**
+//
+// ⚠ **THIS IS A DIFFERENT AXIS FROM `SubprocessCommandShape` EVEN THOUGH IT SPLITS ON THE SAME OS.** One is
+// about what a SPAWN PRIMITIVE takes, the other about what an ENVIRONMENT READ answers; reusing the command
+// enum for both would tie two independent platform facts to one name, and the first lane that had one
+// without the other could not be expressed.
+enum EnvironmentSnapshotShape
+	// Windows: `GetEnvironmentStringsA` answers ONE BLOCK — NUL-terminated `NAME=VALUE` entries back to
+	// back, ended by one more NUL — and it is a COPY the caller owes `FreeEnvironmentStringsA`.
+	nulSeparatedBlock
+	// POSIX: `environ` is a NULL-terminated vector of `char *`. It is the live table rather than a copy, so
+	// there is nothing to release — which is why the `pointerVector` body emits no `osEnvBlockFree` and the
+	// arm64 lane needs no lowering for one.
+	pointerVector
+end 'EnvironmentSnapshotShape'
+
+// ⚠ **KEYED ON THE OS, exactly as `subprocessCommandShape` is, and for the same reason**: which shape a
+// process's environment is published in is an ABI fact about the platform and not about the instruction set.
+function environmentSnapshotShape(target Target) returns EnvironmentSnapshotShape
+	return match target.os 'os'
+		windows gives EnvironmentSnapshotShape.nulSeparatedBlock
+		linux to wasi gives EnvironmentSnapshotShape.pointerVector
+	end 'os'
+end 'environmentSnapshotShape'
 
 // ⭐ **THE COMMAND A `runProcess(cmd)`-SHAPED ENTRY BUILDS.** Two entry points hand the spawn a whole
 // COMMAND LINE a user wrote rather than an argv blob — `__gt_process_run` and the one-shot read probe — and
@@ -761,25 +830,29 @@ end 'emitSubpCwdOrNull'
 // detach bit their caller has already put in `flags`, which is the bootstrap's own arrangement
 // (`2-Parser.cs:11964-11966`).
 //
-// ⚠⚠ **`envInherit == 0` ANSWERS A FAILURE, AND THAT IS THE CONTRACT RATHER THAN A GAP.** The two arguments
-// `env` and `envInherit` describe a caller-BUILT environment block, and there is no producer for one anywhere
-// in the corpus: `stdlib/Subprocess.maxon`'s `requireInheritEnv` refuses `Environment.custom` and
-// `Environment.inheritUpdating` with a `spawnFailed` BEFORE any spawn call is made, and the `env` argument it
-// then passes is a one-byte empty `__ManagedMemory`. So the only environment a program can ask for is the
-// parent's, `lpEnvironment` is NULL for it, and a request for anything else is refused HERE with a recorded
-// error rather than silently served the parent's environment under another name.
+// ⭐⭐ **`envInherit == 0` NOW MEANS WHAT IT SAYS, AND THIS COMMENT USED TO EXPLAIN WHY IT COULD NOT.** It read
+// *"`envInherit == 0` ANSWERS A FAILURE, AND THAT IS THE CONTRACT RATHER THAN A GAP … there is no producer for
+// one anywhere in the corpus"*, which was true exactly while `stdlib/Subprocess.maxon` refused
+// `Environment.custom` and `Environment.inheritUpdating` before any spawn call was made. It builds the block
+// now — this process's own entries, read back through `__gt_subp_env_entry`, with the caller's overrides
+// applied — so the argument arrives populated and is passed straight through to `lpEnvironment`.
+//
+// ⚠ **THE FLAG IS STILL DECODED HERE AND NOT AT THE CALL SITE**, because the two answers are different
+// POINTERS rather than different code paths: inherit is NULL, and a caller-built block is its own buffer.
 function buildSubpAttachedSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SubpAttachedSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: SubprocessSpawnParamCount, paramTypes: fourteenI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(SubprocessSpawnParamCount)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var noCustomEnv = module.addBlock(func, label: b"subpnoenv")
+	var inheritEnv = module.addBlock(func, label: b"subpinhenv")
+	var callerEnv = module.addBlock(func, label: b"subpownenv")
 	var build = module.addBlock(func, label: b"subpbuild")
 
 	emitParams(module, block: entry, count: SubprocessSpawnParamCount)
 	let argv = 0 as ValueId
 	let argc = 1 as ValueId
 	let cwd = 2 as ValueId
+	let env = 3 as ValueId
 	let envInherit = 4 as ValueId
 	let stdinKind = 5 as ValueId
 	let stdinData = 6 as ValueId
@@ -791,21 +864,37 @@ function buildSubpAttachedSpawn(module StdModule)
 	let errLimit = 12 as ValueId
 	let surfaceFlags = 13 as ValueId
 
-	let one = emitConst(module, block: entry, value: 1, ids: ids)
-	let inherits = emitCmp(module, block: entry, a: envInherit, b: one, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(inherits, thenBlockId: build.id, elseBlockId: noCustomEnv.id))
+	// ⭐ **THE FLAG DECIDES A POINTER, AND `build` RECEIVES IT AS ITS ONE BLOCK ARGUMENT.** Inherit is
+	// `lpEnvironment = NULL`; a caller-built block is the BYTES of the `__ManagedMemory` it arrived in.
+	// Deciding it here rather than in the spawn core keeps the core's request record holding a Win32 argument
+	// and nothing that has to be re-interpreted.
+	//
+	// ⛔⛔ **THE `env` PARAMETER IS THE RECORD, NOT THE BUFFER, AND ASSUMING OTHERWISE IS A MEASURED WRONG
+	// ANSWER.** The bootstrap's intrinsic lowering extracts a `__ManagedMemory` argument's buffer pointer
+	// before the call, so its runtime entry receives bytes; shv2's `requireIntrinsicArgs` VALIDATES the
+	// argument's type and passes the record through untouched, which is why `__gt_subp_argv_command` takes an
+	// `argvRec` and reads the buffer field itself. Handing the record straight to `lpEnvironment` gave
+	// `CreateProcessA` a struct header to read as `NAME=VALUE` text — MEASURED as `win32 error 87`
+	// (ERROR_INVALID_PARAMETER) on every spawn that named an override, while `inherit` went on working
+	// because it never reads the slot.
+	let envPtr = ids.mint()
+	build.blockArgs.push(IrBlockArg.create(envPtr, argType: StdType.i64))
+	let parentSource = emitConst(module, block: entry, value: EnvSourceParent, ids: ids)
+	let inherits = emitCmp(module, block: entry, a: envInherit, b: parentSource, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(inherits, thenBlockId: inheritEnv.id, elseBlockId: callerEnv.id))
 
-	// A caller-built environment block has no producer, so this refusal is shv2's own rather than the OS's —
-	// which is why it STORES a code instead of capturing `GetLastError()`. Capturing would publish whatever
-	// the thread's last-error word happened to hold from an unrelated call, and a message that names an
-	// arbitrary earlier failure is worse than none.
-	emitSubpStoreLastError(module, block: noCustomEnv, ids: ids, code: ErrorNotSupported)
-	let failure = emitConst(module, block: noCustomEnv, value: SubpFailure, ids: ids)
-	module.setTerminator(noCustomEnv, op: StdOp.ret(failure))
+	let nullEnv = emitConst(module, block: inheritEnv, value: 0, ids: ids)
+	module.setTerminator(inheritEnv, op: StdOp.branch(build.id))
+	inheritEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(nullEnv)))
+
+	let envBuffer = emitLoadField(module, block: callerEnv, record: env, offset: ManagedRecordBufferOffset, ids: ids)
+	module.setTerminator(callerEnv, op: StdOp.branch(build.id))
+	callerEnv.branchEdges.push(BranchEdge.create(build.id, argIds: argsOf(envBuffer)))
 
 	let cmdline = ids.mint()
 	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
 	let req = emitSubpNewRequest(module, block: build, ids: ids, cmdline: cmdline)
+	emitStoreField(module, block: build, record: req, offset: SubpReqEnv, value: envPtr)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinKind)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinData, value: stdinData)
 	emitStoreField(module, block: build, record: req, offset: SubpReqOutKind, value: outKind)
@@ -1612,12 +1701,10 @@ function buildSubpLastError(module StdModule)
 	let clean = emitCmp(module, block: entry, a: code, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(clean, thenBlockId: noError.id, elseBlockId: render.id))
 
-	// The one place in this file that does NOT go through `emitSubpOwnedByteCopy`, and deliberately: there is
-	// nothing to copy. `__managed_reserve` leaves the length 0, which IS the answer — an empty message means
-	// "nothing has failed", and `stdlib/Subprocess.maxon`'s `lastErrorMessage()` renders it as the empty String.
-	let emptyRecord = ids.mint()
-	let emptyLen = emitConst(module, block: noError, value: 0, ids: ids)
-	_ = emitManagedByteBuffer(module, block: noError, record: emptyRecord, byteCount: emptyLen, ids: ids)
+	// Neither of this file's two empty answers goes through `emitSubpOwnedByteCopy`, and deliberately: there
+	// is nothing to copy. An empty message means "nothing has failed", and `stdlib/Subprocess.maxon`'s
+	// `lastErrorMessage()` renders it as the empty String.
+	let emptyRecord = emitSubpEmptyManaged(module, block: noError, ids: ids)
 	module.setTerminator(noError, op: StdOp.ret(emptyRecord))
 
 	// render: `win32 error <n>` — the prefix is stored byte by byte at build time, the digits by the shared
@@ -1647,6 +1734,163 @@ function buildSubpLastError(module StdModule)
 
 	module.functions.push(func)
 end 'buildSubpLastError'
+
+// ⭐ **AN OWNED, EMPTY `__ManagedMemory`.** `__managed_reserve` sets the capacity and leaves the length 0 —
+// that is its contract — so a reserved-but-unpublished record IS the empty answer rather than a record that
+// forgot something. Two entry points here need it and mean different things by it: `__gt_subp_last_error`
+// means "nothing has failed", `__gt_subp_env_entry` means "there is no entry at that index".
+function emitSubpEmptyManaged(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let record = ids.mint()
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	_ = emitManagedByteBuffer(module, block: block, record: record, byteCount: zero, ids: ids)
+	return record
+end 'emitSubpEmptyManaged'
+
+// ⭐⭐ `__gt_subp_env_entry(index) -> ownedManagedMemory` — `__Builtins.osEnvironmentEntry(i)`: this process's
+// index-th `NAME=VALUE` environment entry, or an EMPTY record once the index is past the last one.
+//
+// ⭐⭐ **AN EMPTY ANSWER IS "PAST THE END", AND NOTHING A REAL ENVIRONMENT HOLDS CAN IMITATE IT** — every entry
+// carries at least a name. That is what lets the walk in `stdlib/Subprocess.maxon` run from 0 until it stops,
+// with no count entry point beside this one: a count would be a second question asked of a snapshot this one
+// takes and releases, and the two could disagree.
+//
+// ⭐ **THE SNAPSHOT IS TAKEN AND RELEASED PER CALL, WHICH IS O(n) PER ENTRY AND DELIBERATE.**
+// `GetEnvironmentStringsA` hands back a COPY the caller owns; holding one across the whole walk would mean a
+// runtime-global cache with a lifetime nothing here can bound. An environment is tens of entries and this
+// runs once per spawn that names an override, so the quadratic is over a number that does not grow.
+//
+// ⭐⭐ **ONE NAME, TWO BODIES — `EnvironmentSnapshotShape` picks, and every caller above is written once.**
+// The ANSWER is identical on both lanes (the index-th entry, or empty past the end); only the structure being
+// indexed differs, and that structure is the platform's, not this compiler's choice.
+function buildSubpEnvEntry(module StdModule, shape EnvironmentSnapshotShape)
+	match shape 'shape'
+		nulSeparatedBlock then buildSubpEnvEntryFromBlock(module)
+		pointerVector then buildSubpEnvEntryFromVector(module)
+	end 'shape'
+end 'buildSubpEnvEntry'
+
+// ⭐ **THE POSIX BODY: `environ[index]`, and there is no walk at all.** A pointer vector is randomly
+// addressable, so the block-scan below — cursor, countdown, per-byte skip — has no counterpart here: the
+// index IS the subscript. Both "the host published no vector" and "the index is past the last entry" answer
+// the same EMPTY record, and they arrive at one block because they mean the same thing to the caller.
+//
+// ⚠ **NOTHING IS RELEASED, AND THAT IS THE SHAPE'S OWN CONTRACT rather than a forgotten free**: `environ` is
+// the live table this process runs on, not a copy taken for us. See `EnvironmentSnapshotShape.pointerVector`.
+function buildSubpEnvEntryFromVector(module StdModule)
+	var func = IrFunction.createFromStd(SubpEnvEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var subscript = module.addBlock(func, label: b"subpenvat")
+	var found = module.addBlock(func, label: b"subpenvfound")
+	var noEntry = module.addBlock(func, label: b"subpenvnone")
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0 as ValueId
+
+	let vector = ids.mint()
+	module.appendOp(entry, op: StdOp.osEnvBlock(vector))
+	let zeroVector = emitConst(module, block: entry, value: 0, ids: ids)
+	let hostSaidNothing = emitCmp(module, block: entry, a: vector, b: zeroVector, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(hostSaidNothing, thenBlockId: noEntry.id, elseBlockId: subscript.id))
+
+	let stride = emitConst(module, block: subscript, value: EnvPointerStride, ids: ids)
+	let displacement = emitBin(module, block: subscript, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
+	let slot = emitBin(module, block: subscript, a: vector, b: displacement, opcode: StdBinOpcode.add, ids: ids)
+	let cursor = emitLoadField(module, block: subscript, record: slot, offset: 0 as ByteOffset, ids: ids)
+	let zeroCursor = emitConst(module, block: subscript, value: 0, ids: ids)
+	// The vector's own NULL terminator is what says "past the end" — the same fact the block shape reads off
+	// its second NUL.
+	let pastEnd = emitCmp(module, block: subscript, a: cursor, b: zeroCursor, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(subscript, op: StdOp.condBranch(pastEnd, thenBlockId: noEntry.id, elseBlockId: found.id))
+
+	let record = ids.mint()
+	var afterCopy = emitCStringToManaged(module, func: func, cur: found, cstr: cursor, record: record, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.ret(record))
+
+	let emptyRecord = emitSubpEmptyManaged(module, block: noEntry, ids: ids)
+	module.setTerminator(noEntry, op: StdOp.ret(emptyRecord))
+
+	module.functions.push(func)
+end 'buildSubpEnvEntryFromVector'
+
+// The Win32 body: a NUL-separated block, walked entry by entry because it is not randomly addressable, and
+// released on BOTH exits because `GetEnvironmentStringsA` handed over a copy.
+function buildSubpEnvEntryFromBlock(module StdModule)
+	var func = IrFunction.createFromStd(SubpEnvEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var noBlock = module.addBlock(func, label: b"subpenvnone")
+	var scan = module.addBlock(func, label: b"subpenvscan")
+	var skip = module.addBlock(func, label: b"subpenvskip")
+	var found = module.addBlock(func, label: b"subpenvfound")
+	var pastEnd = module.addBlock(func, label: b"subpenvend")
+
+	emitParams(module, block: entry, count: 1)
+	let index = 0 as ValueId
+
+	let block = ids.mint()
+	module.appendOp(entry, op: StdOp.osEnvBlock(block))
+	let state = emitSubpScratch(module, block: entry, ids: ids, size: EnvWalkBytes)
+	emitStoreField(module, block: entry, record: state, offset: EnvBlock, value: block)
+	emitStoreField(module, block: entry, record: state, offset: EnvCursor, value: block)
+	emitStoreField(module, block: entry, record: state, offset: EnvRemaining, value: index)
+	let zeroBlock = emitConst(module, block: entry, value: 0, ids: ids)
+	let hostSaidNothing = emitCmp(module, block: entry, a: block, b: zeroBlock, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(hostSaidNothing, thenBlockId: noBlock.id, elseBlockId: scan.id))
+
+	// There is no snapshot to release on this arm, which is the whole reason it is not `pastEnd`.
+	let noneRecord = emitSubpEmptyManaged(module, block: noBlock, ids: ids)
+	module.setTerminator(noBlock, op: StdOp.ret(noneRecord))
+
+	// The cursor stands on the first byte of an entry, or on the block's own terminator.
+	let cursor = emitLoadField(module, block: scan, record: state, offset: EnvCursor, ids: ids)
+	let zeroIdx = emitConst(module, block: scan, value: 0, ids: ids)
+	let firstByte = emitLoadByte(module, block: scan, base: cursor, index: zeroIdx, ids: ids)
+	let zeroByte = emitConst(module, block: scan, value: 0, ids: ids)
+	let blockEnded = emitCmp(module, block: scan, a: firstByte, b: zeroByte, pred: StdCmpPred.eq, ids: ids)
+	var stillCounting = module.addBlock(func, label: b"subpenvcount")
+	module.setTerminator(scan, op: StdOp.condBranch(blockEnded, thenBlockId: pastEnd.id, elseBlockId: stillCounting.id))
+
+	let remaining = emitLoadField(module, block: stillCounting, record: state, offset: EnvRemaining, ids: ids)
+	let zeroRem = emitConst(module, block: stillCounting, value: 0, ids: ids)
+	let arrived = emitCmp(module, block: stillCounting, a: remaining, b: zeroRem, pred: StdCmpPred.eq, ids: ids)
+	var stepOn = module.addBlock(func, label: b"subpenvstep")
+	module.setTerminator(stillCounting, op: StdOp.condBranch(arrived, thenBlockId: found.id, elseBlockId: stepOn.id))
+
+	let oneStep = emitConst(module, block: stepOn, value: 1, ids: ids)
+	let remaining2 = emitLoadField(module, block: stepOn, record: state, offset: EnvRemaining, ids: ids)
+	let nextRemaining = emitBin(module, block: stepOn, a: remaining2, b: oneStep, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: stepOn, record: state, offset: EnvRemaining, value: nextRemaining)
+	module.setTerminator(stepOn, op: StdOp.branch(skip.id))
+
+	// Past this entry's bytes and then past its own terminator, which is where the next entry begins.
+	let skipCursor = emitLoadField(module, block: skip, record: state, offset: EnvCursor, ids: ids)
+	let skipIdx = emitConst(module, block: skip, value: 0, ids: ids)
+	let skipByte = emitLoadByte(module, block: skip, base: skipCursor, index: skipIdx, ids: ids)
+	let oneByte = emitConst(module, block: skip, value: 1, ids: ids)
+	let advanced = emitBin(module, block: skip, a: skipCursor, b: oneByte, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: skip, record: state, offset: EnvCursor, value: advanced)
+	let zeroSkip = emitConst(module, block: skip, value: 0, ids: ids)
+	let entryEnded = emitCmp(module, block: skip, a: skipByte, b: zeroSkip, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(skip, op: StdOp.condBranch(entryEnded, thenBlockId: scan.id, elseBlockId: skip.id))
+
+	// The entry is a plain NUL-terminated cstring, so the shared copy-out measures and publishes it.
+	let foundCursor = emitLoadField(module, block: found, record: state, offset: EnvCursor, ids: ids)
+	let record = ids.mint()
+	var afterCopy = emitCStringToManaged(module, func: func, cur: found, cstr: foundCursor, record: record, ids: ids)
+	let blockToFree = emitLoadField(module, block: afterCopy, record: state, offset: EnvBlock, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.osEnvBlockFree(blockToFree))
+	module.setTerminator(afterCopy, op: StdOp.ret(record))
+
+	let endRecord = emitSubpEmptyManaged(module, block: pastEnd, ids: ids)
+	let endBlock = emitLoadField(module, block: pastEnd, record: state, offset: EnvBlock, ids: ids)
+	module.appendOp(pastEnd, op: StdOp.osEnvBlockFree(endBlock))
+	module.setTerminator(pastEnd, op: StdOp.ret(endRecord))
+
+	module.functions.push(func)
+end 'buildSubpEnvEntryFromBlock'
 
 // ⭐⭐ `__gt_subp_resolve_path(name) -> ownedManagedMemory` — `__Builtins.subprocessResolveOnPath()`: the
 // `PATH` + `PATHEXT` walk that turns a bare tool name into something `CreateProcessA` can launch.
@@ -2009,6 +2253,7 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpResultBufferReader(module, name: SubpResultStderrName, bufOffset: ResErrBuf, lenOffset: ResErrLen)
 	buildSubpResultRelease(module)
 	buildSubpLastError(module)
+	buildSubpEnvEntry(module, shape: environmentSnapshotShape(target))
 	buildSubpResolvePath(module)
 end 'installSubprocessRuntime'
 

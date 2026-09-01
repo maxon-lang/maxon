@@ -1506,6 +1506,40 @@ export enum ErrorCode
 	// second consume that this half cannot see -- across a loop back edge, where one lexical `await`
 	// consumes one thread on every iteration.
 	semanticPromiseAlreadyConsumed = "E3142"
+	// A module-level `var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function a message
+	// reaches through the call graph. A message runs on a green thread the scheduler may put on any OS
+	// thread, and a module `var` is one word every one of them shares.
+	// THE TWO DIRECTIONS FAIL DIFFERENTLY AND BOTH ARE REFUSED BY THIS ONE CODE, because they are one rule
+	// with one cure and one reachability question; only the diagnostic's subject clause differs.
+	// A WRITE is an arithmetic failure rather than a crash, which is why it cannot be a run-time check:
+	// `total = total + by` is a load, an add and a store two Ms can interleave, nothing traps, nothing
+	// leaks, and the program merely answers a number that is sometimes too small. MEASURED at
+	// MAXON_MAX_PROCS=16 over 1200 sends, ten runs: five lost an update and every one exited 0.
+	// A READ is worse. The write that changes the slot RELEASES the record it was holding, so a green
+	// thread that has already loaded the pointer reads on into freed memory -- a use-after-free, not a
+	// stale word. MEASURED: 12 services spinning on `label.count()` while `main` reassigned an
+	// INTERPOLATED string 4000 times read 8 of 8 clean at one processor and 20 of 20 EXIT 139 at sixteen,
+	// several panicking inside `utf8DecodeAt` with "value outside typealias 'Codepoint'".
+	// THE RULE IS ABOUT WHO TOUCHES IT, not about globals as such. A write to `self.<field>` is legal -- a
+	// service's fields are reached by one green thread, which is the whole point of putting state there. A
+	// read of a module-level `let` is legal and is the escape hatch every configuration constant takes: it
+	// is written once before any green thread exists, so no store can free anything under a reader. And a
+	// plain function no message reaches may read and write a module `var` all it likes: a `spawn` somewhere
+	// does not make the rest of the program concurrent.
+	// REACHABILITY IS TRANSITIVE, exactly as a service's blocking edge (E3139) is, and that is what makes
+	// the rule worth having -- a rule keyed on writes syntactically inside a handler body would refuse only
+	// the shape an author would have spotted anyway, while the race does not care which frame the store
+	// instruction sits in.
+	// An INDIRECT or WITNESS dispatch reached from a message is followed by treating every function in the
+	// program as message-reachable, which is this rule's refusing direction: unlike E3139 -- where a missed
+	// edge costs a guarantee -- a missed edge here costs a silently wrong answer at run time.
+	// The cure is always available and is always the same for both directions: keep the value in a field of
+	// `self` and hand it back through a reply, or make the global a `let`. A reply is a Promise the awaiter
+	// owns, so the value is handled by one green thread at every instant.
+	// The diagnostic anchors at the ACCESS -- which is where the program can be repaired -- names the message
+	// that reaches it, and carries the `spawn` that made the type a service as a note, because whether a
+	// type is a service is a whole-program property whose cause may be in another file.
+	semanticSharedGlobalAccessFromGreenThread = "E3143"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

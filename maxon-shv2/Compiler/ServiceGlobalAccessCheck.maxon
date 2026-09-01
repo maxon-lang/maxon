@@ -1,0 +1,395 @@
+// ServiceGlobalAccessCheck.maxon — A SHARED WORD BELONGS TO ONE GREEN THREAD (E3143), the message-reachability closure.
+//
+// ⭐⭐ **A MODULE-LEVEL `var` IS ONE WORD, AND A MESSAGE IS A GREEN THREAD THE SCHEDULER MAY PUT ON ANY OS
+// THREAD.** Those two facts cannot both hold in a program that compiles, so one of them is refused, and it
+// is the ACCESS: ⚖ a message — and anything reachable from one — may neither WRITE nor READ module storage.
+// A module-level `let` stays fully legal, and that is the whole of the escape hatch: an immortal,
+// written-once word has no second writer for anybody to race.
+//
+// ⭐⭐⭐ **NEITHER HALF CAN BE A RUN-TIME CHECK, BECAUSE THERE IS NO MOMENT AT WHICH THE RUNTIME COULD
+// NOTICE.** `done = done + 1` is a load, an add and a store; two Ms that interleave those six steps each
+// write the other's stale value back. Nothing traps, nothing leaks, no allocation is lost — the program
+// simply answers a number that is too small, sometimes. MEASURED at `MAXON_MAX_PROCS=16` on the committed
+// `sched-runqueue.nothing-is-stolen-on-one-processor`, driven to a fixed total of 1200 sends, ten runs:
+// 1200, 1200, **1199**, **1199**, **1198**, **1199**, **1199**, 1200, **1199**, 1200 — **five of ten runs
+// lost an update, and every one exited 0.** `specs-shv2/sched-processor.md` records the same class one
+// order of magnitude larger. ⇒ the compiler is the only place that can stand, and the ACCESS is the only
+// site it can stand at.
+//
+// ⚠ **AND THE SAME PROGRAM IS PERFECTLY CORRECT AT ONE PROCESSOR**, which is why this rule arrives beside
+// the `DefaultMaxProcs` flip and not before it. Every green thread ran on the one M, so the six steps could
+// not interleave — which is exactly what several committed cases relied on, in as many words. The refusal is
+// what makes that reliance expire at the source instead of in a tally that is occasionally short.
+//
+// ⛔⛔ **THE READ IS REFUSED TOO, AND IT IS THE HALF WITH TEETH — A USE-AFTER-FREE RATHER THAN A LOST
+// UPDATE.** ⚖ Ruled after the write rule landed, on this measurement: a global's assignment DECREFS the
+// record the slot was holding (`Parser.emitCheckedGlobalStore`), so a reader that has already loaded the
+// pointer reads on into freed memory. Twelve services spinning on `label.count()` while `main` ran
+// `label = "bravo-{r}"` four thousand times, with an INTERPOLATED value so each store frees a real heap
+// record rather than an immortal `.rdata` one:
+//
+//   | `MAXON_MAX_PROCS=1`  | **8 of 8 clean** |
+//   | `MAXON_MAX_PROCS=16` | **20 of 20 exit 139**, several panicking inside `String.count` → `utf8DecodeAt`
+//                            with *"Range check failed: value outside typealias 'Codepoint'"* — decoding a
+//                            record that had been freed under them |
+//
+// ⚠ A cheaper probe answers CLEANLY and is worth knowing about, because it is what a first attempt writes: a
+// handler that reads the global ONCE, with `main`'s single store either side of it, exits normally every
+// time. It never holds the pointer across a store. The hazard needs the reader to be IN the load and the
+// writer to be freeing, which is what the spin and the 4,000 stores buy.
+//
+// ⭐⭐ **THE RULE IS ABOUT WHO TOUCHES IT, NOT ABOUT GLOBALS AS SUCH.** A write to `self.<field>` is legal — a
+// service's fields are reached by ONE green thread, which is the whole point of putting state there. A READ
+// of a module-level `let` is legal, and is the escape hatch every configuration constant takes: it is
+// written once before any green thread exists and never again, so no store can free anything under a reader.
+// And a plain function no message reaches may read and write a module `var` all it likes: a `spawn`
+// somewhere does not make the rest of the program concurrent, and the tempting cheap implementation — refuse
+// every global access in any program that spawns — inherits the whole-program shape of "is this type a
+// service?" where it does not belong.
+//
+// ⭐⭐ **IT OWNS NO CLOSURE OF ITS OWN, AND ITS DIRECTION IS THE OPPOSITE OF EVERY OTHER SUMMARY'S.** The
+// four whole-program summaries in `SemanticCheck` and the blocking graph in `ServiceCallCycleCheck` all ask
+// which functions are AFFECTED BY a fact, which travels UP into callers (`markSeededCallers`). This one asks
+// *"what does a message RUN?"*, which travels DOWN into callees — the same engine, rowed by the other column,
+// spelled once in `markSeededCallees`. The seed predicate (`messageOwnerNameOf`) and the edge predicate
+// (`opIsACallGraphEdge`) are the cycle check's own, shared rather than restated, so the two rules cannot come
+// to disagree about what a message is or about which op is a call.
+//
+// ⭐ **AND THE WALK IS SHARED TOO, NOW.** The predicates were single-sourced while the SWEEP was not: this
+// rule and E3139 each built their own `CallGraphEdges` and their own `ownerPerFunc`, back to back, out of two
+// identical passes over every function's every op. `ServiceProgramSurvey` is that pass, written once; both
+// rules read the same object, so a future change to "the ops of a function" cannot reach one and not the
+// other.
+//
+// ⛔⛔ **AN UNNAMEABLE DISPATCH REACHED FROM A MESSAGE MAKES EVERY FUNCTION MESSAGE-REACHABLE, AND THAT IS
+// THIS FILE'S REFUSING DIRECTION — THE EXACT OPPOSITE OF `ServiceCallCycleCheck`'s.** An `indirectCall`
+// through a closure and a `witnessDispatch` both choose their target at run time, so neither contributes an
+// edge; the two rules then have to decide what that silence MEANS, and they decide it oppositely because
+// they fail oppositely. A missed edge THERE costs a deadlock-freedom guarantee for a program shape nobody
+// writes, while a false refusal is unworkaroundable — so it accepts. A missed edge HERE costs a **silently
+// wrong answer at run time**, the one failure this project has no instrument for; a false refusal costs an
+// author a restructuring the language already prescribes. So it refuses, and it says so in the diagnostic
+// rather than pretending it found a call path (`SharedGlobalAccessRoute.throughAnUnnameableDispatch`).
+//
+// ⭐ **BOTH VERDICTS ARE RUN, ONE INDIRECT CALL APART.**
+// `green-thread-globals.error.a-dispatch-the-compiler-cannot-follow-widens-the-rule` and
+// `green-thread-globals.a-plain-function-may-write-a-module-global` are the SAME program except that the
+// first routes its handler through a closure value; they answer refused and accepted respectively. Delete
+// the `indirectCall gives true` arm below and the first goes green, which is the sabotage this paragraph is
+// proved by.
+//
+// ⚠ **AN UNRESOLVABLE *NAMED* CALLEE IS NOT ONE OF THOSE, AND TREATING IT AS ONE WOULD MAKE THE RULE
+// VACUOUS-BY-REFUSAL.** A name no `IrFunction` declares is a Std-tier runtime entry point or an extern —
+// `__mm_retain`, `__write_stdout`, the `__mf_*` band — installed after lowering and declared in no source at
+// all. None of them has a body that could write a user's module slot, and none calls back into user code, so
+// following them buys nothing. Counting them would mark every handler that prints or allocates as blind and
+// refuse essentially every service program in the corpus.
+
+// ⭐⭐ **WHAT A MESSAGE CAN RUN — the named closure, WIDENED WHEN A FUNCTION INSIDE IT DISPATCHES SOMEWHERE
+// THE EDGES CANNOT EXPRESS.** See this file's header for why the widening is the safe direction here and the
+// wrong one next door, and why it is a single step rather than a fixpoint.
+//
+// ⛔⛔ **THE WIDENING IS TO THE FUNCTIONS A DISPATCH COULD ACTUALLY LAND ON, AND IT USED TO BE TO EVERY
+// FUNCTION IN THE PROGRAM — WHICH MADE THE RULE UNUSABLE.** A function value in this language comes from a
+// `functionRef` or a witness slot and from nowhere else, so a function that is neither address-taken nor a
+// conformance member has no address anywhere in the image and no `indirectCall` or `witnessDispatch` can
+// reach it. Marking it anyway was not conservatism, it was a wrong answer in the refusing direction:
+// MEASURED, a service whose handler called ONE ordinary interface method and then `Log.trace` was refused
+// with *"`Log.startCapture` writes the module-level `capturing` … make `capturing` a `let`"* — a cure in
+// `stdlib/Log.maxon`, which the author does not own, and `stdlib/Testing.maxon` has the same shape. Every
+// service program using an interface was refused.
+//
+// ⚠ **THE SAFE DIRECTION IS KEPT WITHIN THE NARROWED SET, and it is still a WIDENING**: the possible targets
+// are added to the seeds and the closure then runs FORWARD over the named graph, so everything one of them
+// calls is marked too. `possibleIndirectCallTargets` is where the enumeration's completeness is argued.
+//
+// ⭐ **SABOTAGE-PROVED.** With `possibleIndirectCallTargets` replaced by a column of all-`true` — the old
+// behaviour — `green-thread-globals.an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib` goes RED
+// with exactly the sentence above (`Log.startCapture` writes `capturing`), and the other seven cases in that
+// file, `error.a-dispatch-the-compiler-cannot-follow-widens-the-rule` included, stay green. The narrowing is
+// the only thing that case is measuring, and it does not weaken the refusal beside it.
+function functionsAMessageCanRun(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns BoolArray
+	let named = markSeededCallees(survey.edges, seeds: survey.messageSeeds, nodeCount: survey.funcCount())
+	if not aReachedFunctionDispatchesBlindly(survey, reached: named) 'everyTargetIsNamed'
+		return named
+	end 'everyTargetIsNamed'
+
+	var widened = BoolArray.create()
+	let targets = survey.possibleIndirectCallTargets(project, funcNames: funcNames)
+	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
+		let alreadyNamed = try named.get(funcIndex) otherwise panic("functionsAMessageCanRun: named.get OOB at {funcIndex} below count {named.count()}")
+		let reachableByADispatch = try targets.get(funcIndex) otherwise panic("functionsAMessageCanRun: targets.get OOB at {funcIndex} below count {targets.count()}")
+		widened.push(alreadyNamed or reachableByADispatch)
+	end 'eachFunc'
+
+	return markSeededCallees(survey.edges, seeds: widened, nodeCount: survey.funcCount())
+end 'functionsAMessageCanRun'
+
+// Does any function a message can run choose a callee at run time? Asked of the NAMED-path answer, which is
+// why the widening above is one step rather than a fixpoint: the widened seed set is fixed and the closure
+// over it settles in one pass.
+function aReachedFunctionDispatchesBlindly(survey ServiceProgramSurvey, reached BoolArray) returns bool
+	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
+		let messageRunsIt = try reached.get(funcIndex) otherwise panic("aReachedFunctionDispatchesBlindly: reached.get OOB at {funcIndex} below count {reached.count()}")
+		let blind = try survey.dispatchesBlindly.get(funcIndex) otherwise panic("aReachedFunctionDispatchesBlindly: dispatchesBlindly.get OOB at {funcIndex} below count {survey.funcCount()}")
+		if messageRunsIt and blind 'aTargetThisWalkCannotName'
+			return true
+		end 'aTargetThisWalkCannotName'
+	end 'eachFunc'
+
+	return false
+end 'aReachedFunctionDispatchesBlindly'
+
+// What ONE function can run. Error path only — the widened answer above says a message reaches a run-time
+// dispatch without saying whose, and this is what asks each message in turn.
+function coneOf(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
+	return markSeededCallees(survey.edges, seeds: oneHotSeeds(survey, funcIndex: funcIndex), nodeCount: survey.funcCount())
+end 'coneOf'
+
+// Who can run ONE function — the same graph rowed the way every other summary in the compiler rows it.
+// Error path only, for `blameForSharedGlobalAccess`'s stated reason.
+function callersReaching(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
+	return markSeededCallers(survey.edges, seeds: oneHotSeeds(survey, funcIndex: funcIndex), nodeCount: survey.funcCount())
+end 'callersReaching'
+
+// A seed column holding exactly one function. Written once because both error-path closures need one and a
+// second spelling would be free to size it differently — which is the single thing the mark walk panics on.
+function oneHotSeeds(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
+	var seeds = BoolArray.create()
+	for candidate in 0 upto survey.funcCount() 'eachFunc'
+		seeds.push(candidate == funcIndex)
+	end 'eachFunc'
+	return seeds
+end 'oneHotSeeds'
+
+// ⭐⭐ **THE EARLIEST ACCESS OF ONE DIRECTION THAT A MESSAGE CAN RUN, REPORTED — OR `false` IF THERE IS
+// NONE.** Answering rather than reporting-and-hoping is what lets the caller run it twice, which is the
+// whole of the ranking rule below.
+function reportEarliest(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray, wanted ModuleVarAccess) returns bool
+	for row in 0 upto survey.accessRowCount() 'eachAccess'
+		let site = survey.accessSiteAt(row)
+		if not sameModuleVarAccess(site.access, other: wanted) 'theOtherDirection'
+			continue
+		end 'theOtherDirection'
+
+		let funcIndex = survey.accessFuncAt(row)
+		if not (try reached.get(funcIndex) otherwise panic("reportEarliest: reached.get OOB at {funcIndex} below count {reached.count()}")) 'noMessageRunsIt'
+			continue
+		end 'noMessageRunsIt'
+
+		reportSharedGlobalAccess(project, signatures: signatures, funcNames: funcNames, survey: survey, funcIndex: funcIndex, site: site)
+		return true
+	end 'eachAccess'
+
+	return false
+end 'reportEarliest'
+
+// A `union` carries no `==`, and these two arms are compared in exactly one place. `TypeCycleCheck`'s rule:
+// a two-arm test written as a `match` covers the union exhaustively, so a third direction fails to compile
+// here rather than silently reading as "not the one I wanted".
+function sameModuleVarAccess(access ModuleVarAccess, other ModuleVarAccess) returns bool
+	return match access 'access'
+		read gives match other 'other'
+			read gives true
+			write gives false
+		end 'other'
+		write gives match other 'other'
+			read gives false
+			write gives true
+		end 'other'
+	end 'access'
+end 'sameModuleVarAccess'
+
+// ⭐ **THE E3143 CHECK.** Close the message seeds forward over the shared call graph and refuse the first
+// write a message can run.
+//
+// ⚠ **THE TWO GATES ARE ASKED BY `checkServiceRules`**, which owns the survey this rule shares with E3139 —
+// `moduleVarAccessSites` is empty for every program that never names a module `var` (the parser records a
+// site only at `storeToGlobal` and at an author's `emitGlobalLoad`), and the service roster is empty for
+// every program that spawns nothing.
+//
+// A survey with no access ROW is a different answer from an empty site MAP: every recorded access belonged
+// to a body dead-code elimination dropped, so there is nothing to close over.
+module function checkServiceGlobalAccesses(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
+	if survey.accessRowCount() == 0 'everyRecordedAccessBelongsToADroppedBody'
+		return
+	end 'everyRecordedAccessBelongsToADroppedBody'
+
+	reportFirstAccessAMessageCanRun(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: functionsAMessageCanRun(project, funcNames: funcNames, survey: survey))
+end 'checkServiceGlobalAccesses'
+
+// ⭐ **THE FIRST OFFENDING ACCESS, AND ONLY THE FIRST.** One statement is one defect and the cure is the same
+// for every other access to the same global; reporting each would bury the one the author has to change
+// under its own consequences, exactly as `blameForTypeCycles` refuses to double-diagnose one ring.
+//
+// ⛔⛔ **A WRITE OUT-RANKS A READ, AND THAT IS NOT A TIE-BREAK — IT IS WHAT KEEPS ONE DEFECT FROM HAVING TWO
+// SENTENCES.** `total = total + by` emits the RHS's LOAD before the store, so in op order the READ of `total`
+// comes first; `total = 5` has no load at all. Reported in program order, one read-modify-write would be
+// diagnosed as *"the message reads the module-level `total`"* anchored at the right-hand occurrence, while
+// the identical defect one character shorter would be diagnosed as a write — the same fault, two subjects,
+// decided by whether the statement happens to mention its own target. **MEASURED as exactly that**, on this
+// file's own three committed write cases, the moment the read half landed.
+//
+// ⇒ the ranking is by DIRECTION first and position second, and the direction it prefers is the write: a
+// read-modify-write IS a write, and a function that writes a shared word is the reason every reader of that
+// word is unsafe. Naming the root rather than the consequence is the same call `blameForTypeCycles` makes.
+function reportFirstAccessAMessageCanRun(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray)
+	if reportEarliest(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached, wanted: ModuleVarAccess.write) 'aWriteWasReported'
+		return
+	end 'aWriteWasReported'
+
+	_ = reportEarliest(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached, wanted: ModuleVarAccess.read)
+end 'reportFirstAccessAMessageCanRun'
+
+// The diagnostic: anchored at the WRITE, which is where the program can be repaired, naming the message that
+// reaches it and carrying the `spawn` that made the type a service as a NOTE — `SERVICES_DESIGN.md`'s
+// standing requirement for every whole-program service rule, because the cause may be in another file.
+function reportSharedGlobalAccess(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, funcIndex FuncIndex, site ModuleVarAccessSite)
+	let blame = blameForSharedGlobalAccess(survey, funcIndex: funcIndex)
+	let writer = try funcNames.functions.get(funcIndex) otherwise panic("reportSharedGlobalAccess: functions.get OOB at {funcIndex}")
+	let message = try funcNames.functions.get(blame.messageIndex) otherwise panic("reportSharedGlobalAccess: functions.get OOB at {blame.messageIndex}")
+	let serviceName = survey.serviceOf(blame.messageIndex)
+	let spawn = serviceSpawnSiteOf(signatures, typeName: serviceName)
+	reportPositionedWithNote(project, code: ErrorCode.semanticSharedGlobalAccessFromGreenThread, message: sharedGlobalAccessRefusal(blame.route, access: site.access, writer: writer.name, message: message.name, storageName: site.storageName), line: site.line, column: site.column, filePath: site.declFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
+end 'reportSharedGlobalAccess'
+
+// ⭐ **WHICH MESSAGE RUNS THE WRITER, AND BY WHICH ROAD.** The road is part of the answer and not a detail:
+// the sentence may not claim a call path when the only thing that reached the writer was the widening, or
+// the author goes looking for a call that is not in their program.
+type SharedGlobalAccessBlame
+	export let messageIndex as FuncIndex
+	export let route as SharedGlobalAccessRoute
+
+	static function create(messageIndex FuncIndex, route SharedGlobalAccessRoute) returns SharedGlobalAccessBlame
+		return Self{messageIndex: messageIndex, route: route}
+	end 'create'
+end 'SharedGlobalAccessBlame'
+
+union SharedGlobalAccessRoute
+	// The writer IS the message — the direct shape, and the one an author would have spotted.
+	itself
+	// A chain of NAMED calls runs from the message to the writer.
+	throughCalls
+	// No named chain does. The message reaches a dispatch whose target is chosen at run time, so this writer
+	// is a function that dispatch could land in — the header's refusing direction, said out loud.
+	throughAnUnnameableDispatch
+end 'SharedGlobalAccessRoute'
+
+// ⭐ **THE SECOND — AND ONLY OTHER — CLOSURE, AND IT RUNS ON THE ERROR PATH ONLY**, on
+// `ServiceCallCycleCheck.reportServiceCallCycle`'s discipline: a program that compiles never pays for it.
+// The forward closure above proves SOME message reaches this writer without saying which, so the reverse one
+// asks the question the other way round — who can reach the writer? — and the earliest message in that set
+// is the answer. Earliest by function index, which is declaration order, so it is the one the author wrote
+// first rather than whatever a worklist happened to drain first.
+function blameForSharedGlobalAccess(survey ServiceProgramSurvey, funcIndex FuncIndex) returns SharedGlobalAccessBlame
+	if survey.isAMessage(funcIndex) 'theWriterIsTheMessage'
+		return SharedGlobalAccessBlame.create(funcIndex, route: SharedGlobalAccessRoute.itself)
+	end 'theWriterIsTheMessage'
+
+	let callers = callersReaching(survey, funcIndex: funcIndex)
+	for candidate in 0 upto survey.funcCount() 'eachCaller'
+		let reachesTheWriter = try callers.get(candidate) otherwise panic("blameForSharedGlobalAccess: callers.get OOB at {candidate} below count {callers.count()}")
+		if reachesTheWriter and survey.isAMessage(candidate) 'aMessageCallsIt'
+			return SharedGlobalAccessBlame.create(candidate, route: SharedGlobalAccessRoute.throughCalls)
+		end 'aMessageCallsIt'
+	end 'eachCaller'
+
+	return SharedGlobalAccessBlame.create(messageReachingAnUnnameableDispatch(survey), route: SharedGlobalAccessRoute.throughAnUnnameableDispatch)
+end 'blameForSharedGlobalAccess'
+
+// ⭐ **THE MESSAGE THE WIDENING CAME FROM.** Reached only when no named chain explains the access, which means
+// the widening is what marked it — and the widening fires exactly because some message's own cone holds a
+// run-time dispatch. One forward closure per MESSAGE, on the error path of a program with one or two
+// services; the earliest such message is the one named, for `blameForSharedGlobalAccess`'s ordering reason.
+function messageReachingAnUnnameableDispatch(survey ServiceProgramSurvey) returns FuncIndex
+	for candidate in 0 upto survey.funcCount() 'eachMessage'
+		if not survey.isAMessage(candidate) 'notAMessage'
+			continue
+		end 'notAMessage'
+
+		if aReachedFunctionDispatchesBlindly(survey, reached: coneOf(survey, funcIndex: candidate)) 'itsConeHoldsOne'
+			return candidate
+		end 'itsConeHoldsOne'
+	end 'eachMessage'
+
+	panic("messageReachingAnUnnameableDispatch: no message's own cone holds a run-time dispatch, yet the widening marked a writer no named chain reaches — the widening fires only from `aReachedFunctionDispatchesBlindly` over the seeds this walk re-closes one message at a time")
+end 'messageReachingAnUnnameableDispatch'
+
+// ⭐⭐ **THE WHOLE SENTENCE: who writes, why one word cannot have two writers, and the cure.** The rule and
+// the cure are written ONCE and the ROUTE supplies only the subject clause — three copies of the race
+// paragraph would be three chances to describe the same defect differently.
+//
+// ⚠ **IT IS A `String` LITERAL BUILT INSIDE THE FUNCTION**, on `ServiceCallCycleCheck.serviceCallCycleMessage`'s
+// finding: a module-level `String` constant seeded into an accumulator is a lazily-initialized static that a
+// `var` binding CO-OWNS, and `append` then writes through into the static — MEASURED there as a message that
+// accumulated across compiles.
+function sharedGlobalAccessRefusal(route SharedGlobalAccessRoute, access ModuleVarAccess, writer ByteArray, message ByteArray, storageName ByteArray) returns String
+	let global = String.from(storageName)
+	var refusal = sharedGlobalAccessSubject(route, access: access, writer: writer, message: message, global: global)
+	refusal.append(" — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. ")
+	refusal.append(sharedGlobalAccessHazard(access, global: global))
+	refusal.append(" Keep it in a field of `self` and hand it back through a reply, or make `{global}` a `let`")
+	return refusal
+end 'sharedGlobalAccessRefusal'
+
+// ⭐⭐ **THE TWO DIRECTIONS FAIL DIFFERENTLY, AND ONLY THE HAZARD SENTENCE KNOWS IT.** A racing WRITE loses an
+// update and answers a number that is too small; a racing READ can be worse, because the write that changes
+// the slot RELEASES the record it was holding (`Parser.emitCheckedGlobalStore`) — so the reader is not
+// looking at a stale word, it is following a pointer into freed memory. Saying "the program answers a number
+// that is too small" about a read would understate a use-after-free, and one sentence covering both would be
+// true of neither.
+//
+// ⚠ **THE READ SENTENCE SAYS "WHEN IT HOLDS A String, AN ARRAY OR A STRUCT", AND THE HEDGE IS LOAD-BEARING
+// RATHER THAN CAUTIOUS.** A SCALAR global's slot holds no record and frees nothing; racing it yields a stale
+// word and no more. The site this diagnostic is built from carries the slot's NAME and not its TYPE, so the
+// sentence states the ladder instead of picking a rung — which is honest for both, where naming a released
+// record would be simply FALSE about `var n = 0`.
+function sharedGlobalAccessHazard(access ModuleVarAccess, global String) returns String
+	return match access 'access'
+		read gives "A reader gets whichever side of a concurrent write the scheduler happened to interleave — and when `{global}` holds a String, an array or a struct that is not a stale word but a FREED ONE, because the write RELEASES the record the slot was holding while the reader is still following the pointer it already loaded. Nothing traps at the store."
+		write gives "So `{global} = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small."
+	end 'access'
+end 'sharedGlobalAccessHazard'
+
+// The subject clause, one arm per road. The direct shape leads with the MESSAGE because that is the whole
+// sentence; the two indirect ones lead with the WRITER, because that is the line the caret sits on and the
+// reader needs to know why an ordinary function — which may write a global all it likes — is being refused.
+function sharedGlobalAccessSubject(route SharedGlobalAccessRoute, access ModuleVarAccess, writer ByteArray, message ByteArray, global String) returns String
+	let verb = sharedGlobalAccessVerb(access)
+	return match route 'road'
+		itself gives "the message `{String.from(message)}` {verb} the module-level `{global}`"
+		throughCalls gives "`{String.from(writer)}` {verb} the module-level `{global}`, and the message `{String.from(message)}` reaches it"
+		throughAnUnnameableDispatch gives "`{String.from(writer)}` {verb} the module-level `{global}`, and the message `{String.from(message)}` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here"
+	end 'road'
+end 'sharedGlobalAccessSubject'
+
+// The one word the two directions differ by. Present tense and third person, because every subject clause
+// above puts a single actor in front of it.
+function sharedGlobalAccessVerb(access ModuleVarAccess) returns String
+	return match access 'access'
+		read gives "reads"
+		write gives "writes"
+	end 'access'
+end 'sharedGlobalAccessVerb'
+
+// Does this op hand control somewhere no NAME can be recovered for? The bands are `opYields`', so a newly
+// appended op fails to compile here rather than silently reading as followable — which is this rule's
+// accepting direction and the one it must never take by accident.
+module function opChoosesItsTargetAtRunTime(op MaxonOp) returns bool
+	return match op 'op'
+		call to branch gives false
+		globalAddr to tryCall gives false
+		throwError to panicAbort gives false
+		// Taking a function's ADDRESS runs nothing; the `indirectCall` that eventually runs it is the op below.
+		functionRef gives false
+		indirectCall gives true
+		asyncCall gives false
+		await to switch gives false
+		witnessDispatch to witnessTryDispatch gives true
+		panicAbortValue gives false
+		errorFlagEncode gives false
+		// A `spawn` names a TYPE and a send names a MESSAGE — both are names, and a send's handler is a seed
+		// of this walk in its own right.
+		serviceSpawn to serviceReplyCell gives false
+	end 'op'
+end 'opChoosesItsTargetAtRunTime'

@@ -393,6 +393,92 @@ let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 // section of every green-thread golden in the corpus.
 let POffPendingPark = POffStealCount + (PointerSlotBytes as ByteOffset)
 
+// ⭐⭐⭐ **"THIS P's M HAS NOTHING TO RUN AND IS WAITING FOR SOMEBODY ELSE TO PRODUCE SOMETHING" — the word
+// that turns the deadlock detector from a single-M one into a real one (A1).**
+//
+// ⛔⛔ **THE DETECTOR IT REPLACES ASKED WHETHER AN M WAS *ALIVE*, AND A PARKED M IS ALIVE.** The
+// `nothingLeft` arm of `__gt_drive_until` used to abort only when `__sched_active_workers <= 1`, which is a
+// count of Ms that have ENTERED the worker loop and not yet left it — a number that never falls while the
+// program runs. **MEASURED on `services/a-blocking-cycle-through-an-indirect-call-aborts`, one binary:** at
+// `MAXON_MAX_PROCS=1` it aborts 92 in under 320 ms every time, and at `MAXON_MAX_PROCS=4` it aborts on some
+// runs and **HANGS FOR EVER on others** (5 of 11 still running at a 10 s cap) — the coin flip being purely
+// whether a worker M happened to be spawned at all. *A deadlock detector that only fires at one processor
+// stops being a detector on the day the default stops being one processor.*
+//
+// ⭐⭐ **THE DISTINCTION IT DRAWS IS *EXECUTING*, NOT *ALIVE*, AND THAT IS NOT THE SAME AS "RUNNING A GREEN
+// THREAD".** The obvious cure — count the Ms that have context-switched into a green thread — does not work
+// here, and the reason is `__gt_drive_until`'s own shape: an **awaiting green thread does not park**. Its
+// await calls the driver ON ITS OWN STACK, so its M is still inside `emitGtRunOne`'s context switch with
+// `P->currentGt` naming it, for as long as the await lasts. In the cycle above all three Ms are "running a
+// green thread" and none of them can ever finish. The property that actually separates the two states is the
+// one this word carries: **has this M concluded, this pass, that there is nothing runnable anywhere?**
+//
+// ⛔ **IT IS NOT `POffIdleFlag` AND MUST NOT BE FOLDED INTO IT.** That flag means *"this M is about to block
+// on `wakeEvent`"* and an ENQUEUER clears it and signals that event. A driver in `awaitOtherM` blocks on a
+// SLEEP, not on the event, so publishing itself through that flag would send a wakeup to a party that is not
+// listening — a lost wakeup, which is the one failure the Dekker pair exists to prevent.
+//
+// ⚠ **IT IS STICKY ACROSS THE POLL, WHICH IS WHAT MAKES THE READ DETERMINISTIC RATHER THAN A COIN FLIP.**
+// It is set when a driver reaches `otherMs` (or a worker reaches its park) and cleared ONLY where that M
+// finds something to do — `run`/`haveWork` — or leaves the loop — `done`/`exitBlock`. A cleared-and-reset
+// flag around the 1 ms sleep alone would leave every reader racing the microseconds each M spends polling,
+// and three Ms polling in a cycle could in principle never observe each other quiescent at once. Sticky, a
+// deadlocked M's flag goes to 1 and STAYS 1, because the only two things that clear it are the two things a
+// deadlocked M can never reach.
+//
+// ⚠ **A STALE 1 CANNOT CAUSE A SPURIOUS ABORT, AND THAT IS THE DIRECTION THAT MATTERS.** An M blocked in
+// `procInfinite`/`sleepwait`/`ioBounded` may still carry a 1 from an earlier pass — but the three conditions
+// that put it there (`__gt_proc_count`, `__gt_timer_earliest`, `__io_pending`) are GLOBAL words, read fresh
+// at the top of every netpoll, so no other M can reach `otherMs` at all while one of them is non-zero. A
+// stale 0, conversely, only DELAYS an abort by one 1 ms poll.
+//
+// A per-P word rather than a `.data` counter, for `POffStealCount`'s reason (a `.data` slot shows up in the
+// `data {` section of every green-thread golden) and for a better one: a global count needs a per-party bit
+// to stay idempotent anyway, and the bit alone answers the question with nothing to drift against.
+// ⚠ **NOT EXPORTED, AND NEITHER ARE ITS TWO STATES — the writers go through `emitSchedSetQuiesced`.** This
+// is the opposite call from `POffCurrentGt`'s, and the reason is the number of sites: `currentGt` has ONE
+// writer, while this word is written at EIGHT (three in this file's worker loop, five in `GtRuntime`'s
+// driver), and eight copies of `emitStoreField(…, POffQuiesced, emitConst(…))` is one fact written eight
+// times. The door takes the state as a named constant so a site says WHICH it means.
+let POffQuiesced = POffPendingPark + (PointerSlotBytes as ByteOffset)
+let PQuiescedRunning = 0 as ParsedInt
+let PQuiescedWaiting = 1 as ParsedInt
+
+// ⭐⭐⭐ **THE VALUE OF `__sched_progress` THIS M SAW WHEN IT WENT QUIET — the second half of the detector,
+// and the half whose absence produced a MEASURED FALSE ABORT (A1).**
+//
+// ⛔⛔ **"NO M IS EXECUTING" IS NOT "NOTHING CAN RUN", AND THE COUNTEREXAMPLE IS A COROUTINE.** A coroutine
+// is published to its OWNER's queue and can be driven by exactly one party: a driver running on that owner.
+// So when a timer fires on M-a and wakes a coroutine belonging to green thread S, the work becomes runnable
+// **and no scan of the P array can see it** — S's M will find it on its very next poll, but until then S's M
+// is still carrying the `PQuiescedWaiting` it published one pass ago. Every P reads quiescent, nothing reads
+// executing, and the program is accused of a deadlock it is one millisecond from leaving.
+//
+// **MEASURED, one service, forty `kick`s whose handler awaits a 50 ms coroutine:** exit **92 on 4 of 4 runs
+// at `MAXON_MAX_PROCS=4`**, 42 at 1, and **42 in ~2.6 s on 3 of 3 with the abort disabled** — a program that
+// was making perfectly ordinary progress.
+//
+// ⇒ **THE CURE IS A GENERATION, NOT A LONGER TIMEOUT.** `__sched_progress` counts publishes. An M records it
+// at the instant it goes quiet, and `__sched_any_executing` counts a quiescent P as EXECUTING while its
+// recorded generation is behind the current one — *"this M went quiet before that work appeared and has not
+// had its look yet"*. A deadlocked system publishes nothing, so every M converges on the same generation
+// and the abort fires; a live one keeps bumping it, and every bump buys every quiet M another look.
+let POffQuiescedGen = POffQuiesced + (PointerSlotBytes as ByteOffset)
+
+// ⭐⭐⭐ **HOW MANY CONSECUTIVE POLLS THIS M HAS CONFIRMED THE SAME DEAD STATE — the detector's CORROBORATION
+// term (A1).** Reset to 0 whenever this M stops being quiescent; bumped once per `otherMs` poll that finds
+// nobody executing AND the progress generation unmoved. The abort fires only at `DeadlockConfirmPolls`.
+//
+// ⛔⛔ **A SAMPLED CENSUS NEEDS CORROBORATION, AND GO'S DOES NOT — that difference is the whole reason this
+// word exists.** Go's `checkdead` holds `sched.lock` across its entire census, so its answer is a snapshot of
+// a world that cannot move underneath it. shv2's netpoll cannot: it may not hold `__sched_lock` across a
+// blocking wait (`MailboxRuntime.maxon:17-23` — the lock is recursive on the wrong identity), so every M
+// reads the other Ms' published state while they are free to change it. A single such reading is evidence,
+// not proof. Requiring the same reading `DeadlockConfirmPolls` times, with a millisecond between them and
+// with ANY publish anywhere resetting the count, is what turns evidence into proof — and it fails in the
+// SAFE direction: an unattributed transient makes the abort late, never wrong.
+let POffQuietPolls = POffQuiescedGen + (PointerSlotBytes as ByteOffset)
+
 // ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`), the same
 // count v1's arm64 backend uses (`Arm64MacosGreenThread.maxon:163`, `GtMaxLocalQueueLen = 256`) and the same
 // the bootstrap caps its linked local queue at. FIXED rather than grown: the overflow has somewhere to go
@@ -415,16 +501,17 @@ let RunqIndexMask = RunqSlots - 1
 // would be the same fact converted four times.
 let RunqHalfSlots = RunqSlots shr 1
 
-let POffRunqBase = POffPendingPark + (PointerSlotBytes as ByteOffset)
+let POffRunqBase = POffQuietPolls + (PointerSlotBytes as ByteOffset)
 
-// 0x9B8 = 2488 bytes: the bootstrap's header, shv2's bigger inline GT, four tail scalars and the ring. See
-// the layout header for why this is not the bootstrap's 376.
+// The bootstrap's header, shv2's bigger inline GT, the tail scalars and the ring. See the layout header for
+// why this is not the bootstrap's 376.
 //
-// ⚠ **THIS NUMBER IS DERIVED AND THE COMMENT IS NOT, WHICH IS WHY IT HAD DRIFTED.** It read *"0x990 = 2448"*
-// from the day shv2's GT struct was 0xF8; EC10 grew that struct to 0x118 and nothing here moved, so the
-// comment described a layout no build had produced for two rungs. Every offset above is derived from
-// `GtStructSize`, so the CODE was right the whole time — a prose number beside a derived one is the same
-// fact written twice, and this is the copy that rots.
+// ⚠⚠ **AND THE BYTE COUNT THAT USED TO BE WRITTEN HERE IS GONE ON PURPOSE — IT HAD DRIFTED TWICE.** It read
+// *"0x990 = 2448"* from the day shv2's GT struct was 0xF8, EC10 grew that struct to 0x118 and nothing here
+// moved, and it was corrected to *"0x9B8 = 2488"* — which `POffQuiesced` then falsified one rung later.
+// Every offset above is derived from `GtStructSize`, so the CODE has been right the whole time: a prose
+// number beside a derived one is the same fact written twice, and this is the copy that rots. It is not
+// written down again.
 let PStructSize = ((POffRunqBase as ParsedInt) + RunqSlots * PointerSlotBytes) as ParsedInt
 
 // ⭐ **HOW OFTEN THE GLOBAL QUEUE IS CONSULTED FIRST — Go's 61 (`proc.go:3457`), and v1's
@@ -485,13 +572,58 @@ let SchedProcsLabel = b"__sched_procs"
 // the array; shv2 keeps ONE, because nothing retires a P and a second word with no writer is a variable's
 // clothes on a constant — the same argument `CpuParallelRuntime` made against a `.data` slot for a `ret 1`.
 // The day a P is retired, the pair splits here, in one place.
-let SchedNumProcsLabel = b"__sched_num_procs"
+//
+// ⭐⭐ **IT IS ALSO THE ANSWER `__Builtins.schedProcessorCount()` GIVES, WHICH IS WHY IT IS EXPORTED.** That
+// query is `MAXON_MAX_PROCS`'s only observable consequence that does not depend on how the work happened to
+// be scheduled: `emitResolveMaxProcs` settles this word to `min(requested, osCpuCount)` before a single
+// green thread runs, so reading it is reading the marker itself. `CpuParallelRuntime` owns the query's body.
+export let SchedNumProcsLabel = b"__sched_num_procs"
 
 // ⭐ **HOW MANY Ms ARE LIVE, AND THE HIGH-WATER MARK OF THAT COUNT.** The mark is what
 // `__Builtins.schedMaxActiveWorkers()` answers, which is the only way a program can observe that more than
 // one M ever ran. Both are seeded to **1** in `.data` rather than by an initializer — see
 // `schedRuntimeGlobals`.
-export let SchedActiveWorkersLabel = b"__sched_active_workers"
+//
+// ⚠ **THE COUNT LOST ITS ONLY CROSS-FILE READER IN A1 AND IS FILE-LOCAL AGAIN — WHICH IS THE POINT, NOT AN
+// ACCIDENT.** `GtRuntime`'s deadlock arm used to read it to ask *"am I the only M?"*, and the whole of A1 is
+// that **LIVE is not the question** — a parked M is live. That arm now asks `__sched_any_executing`, and
+// this word is back to answering only the high-water mark's own question. The self-compile's E3092 is what
+// noticed; see `POffQuiesced`.
+// ⭐⭐ **HOW MANY TIMES ANYTHING HAS BEEN MADE RUNNABLE — the deadlock detector's liveness term (A1).**
+// Monotone, bumped once per publish by `emitSchedNoteProgress`. It is never read for its VALUE, only for
+// whether it has CHANGED since a given M went quiet, which is why it may wrap without meaning anything:
+// two readings taken 2^64 publishes apart comparing equal is not a state this process can reach.
+// `POffQuiescedGen` carries what it is for and the false abort that its absence produced.
+let SchedProgressLabel = b"__sched_progress"
+
+// ⭐⭐ **HOW MANY CONSECUTIVE POLLS MUST AGREE BEFORE A DEADLOCK IS DECLARED — MEASURED, NOT CHOSEN (A1).**
+// `POffQuietPolls` argues why one reading cannot be trusted; this is the number that makes the argument a
+// gate, and it was bisected against a program that goes quiet TRANSIENTLY and one that is genuinely dead.
+//
+// **THE LADDER, same box, same binary, `MAXON_MAX_PROCS=4`** — the live program is one service taking forty
+// `kick`s whose handler awaits a 50 ms coroutine (it reads 92 on 4 of 4 with NO confirmation term at all);
+// the dead one is `services/a-blocking-cycle-through-an-indirect-call-aborts`:
+//
+// | polls | the live program | the real deadlock |
+// |-------|------------------|-------------------|
+// | 1     | **92, 4 of 4** — accused while working | 92, prompt |
+// | 4     | 42, 6 of 6 | 92 in 133-141 ms |
+// | 8     | 42, 6 of 6 | 92 in 200-207 ms |
+// | 16    | 42, 6 of 6 | 92 in 327-530 ms |
+// | 1000  | 42, 8 of 8 | 92 in ~15.7 s |
+//
+// ⇒ **the transient is under FOUR polls, and 16 is that with a 4x margin.** The cost of the margin is the
+// only thing it buys against — how long a genuinely wedged program takes to say so — and ~330 ms is the same
+// order as the 35 ms this arm took at one processor before the term existed, against a harness timeout of
+// 120 s. The margin is deliberately generous because the two errors are not symmetric: a late abort costs a
+// third of a second, and an early one kills a correct program.
+//
+// ⚠ **A POLL IS NOT A MILLISECOND, AND THE TABLE IS THE ONLY HONEST UNIT.** `OtherWorkerPollMs` is 1, but
+// Windows' `Sleep(1)` returns on the scheduler's tick — the readings above work out at ~35 ms per poll — so
+// this constant may not be reasoned about as a duration. Re-bisect it if the poll changes.
+let DeadlockConfirmPolls = 16 as ParsedInt
+
+let SchedActiveWorkersLabel = b"__sched_active_workers"
 export let SchedMaxActiveWorkersLabel = b"__sched_max_active_workers"
 
 // Set at teardown so a parked worker leaves its loop instead of blocking for ever. ⚠ The worker loop reads
@@ -615,6 +747,26 @@ export let SchedSweepDroppedName = b"__sched_sweep_dropped"
 // `usesGt` — asking it installs the scheduler, because asking it is a question ABOUT the scheduler.
 export let SchedStealCountName = b"__sched_steal_count"
 
+// ⭐⭐ **`__sched_any_executing() -> 0|1` — "IS ANY M STILL DOING SOMETHING?", THE DEADLOCK DETECTOR'S ONE
+// QUESTION (A1).** It answers 1 as soon as it finds a P that is CLAIMED by an M (`PStatusActive`) whose M is
+// not quiesced. See `POffQuiesced` for what the flag means, why it is not `POffIdleFlag`, and why it is
+// sticky.
+//
+// ⭐ **THE P ARRAY *IS* THE ROSTER OF LIVE Ms, WHICH IS WHY NO COUNTER IS CONSULTED.** P[0] is claimed by
+// `__sched_init_procs` on the main OS thread and a worker claims P[i] by CAS before its `CreateThread` and
+// releases it on exit, so `status == PStatusActive` and "an M is on this P" are the same fact. Asking the
+// array removes the second one — `__sched_active_workers`, which the arm this replaces used to read and
+// which cannot answer the question because it counts a PARKED M as live.
+//
+// ⚠ **THE CALLER COUNTS ITSELF IN, DELIBERATELY.** `otherMs` sets its own P's flag BEFORE calling, so this
+// walk needs no "except me" arm: a solitary M asks the question with every active P quiesced and gets 0,
+// which is the abort, and that is exactly the single-M behaviour the arm had before.
+//
+// ⚠ It walks the same array `__sched_steal_count` does, through the same `emitLoadProc` addressing, but it is
+// an ANY and not a SUM: the loop carries no accumulator and leaves early on the first hit, so there is no
+// shared body to factor out — only the addressing, which is already shared.
+export let SchedAnyExecutingName = b"__sched_any_executing"
+
 // ==========================================================================
 // The TLS read — the one door to "which P am I on"
 // ==========================================================================
@@ -717,7 +869,13 @@ let DefaultMaxProcs = 1 as ParsedInt
 // variable only LOWER it; shv2 defaults to 1, so a variable that could only lower would have nothing to
 // lower to and the structure below could never be exercised at all. The ceiling neither may exceed is the
 // same: the machine's own processor count, because a P nothing can ever run on is a P nobody can schedule.
-let MaxProcsEnvName = b"MAXON_MAX_PROCS"
+//
+// ⭐ **EXPORTED BECAUSE THE SPEC HARNESS NOW WRITES IT.** `<!-- procs: N -->` puts this variable into the
+// environment of one case's program (`SpecParser.ProcsMarker`, `SpecTestRunner.runEnvironmentFor`), and the
+// name the harness SETS has to be the name the emitted scheduler READS. Written down twice, the marker would
+// go on being accepted, the child would go on resolving the default, and every case that named a count would
+// report the answer as though the count had been honoured.
+export let MaxProcsEnvName = b"MAXON_MAX_PROCS"
 
 // The scratch a `GetEnvironmentVariableA` for a decimal count needs. Far more than any processor count
 // spells, so the "buffer too small" answer is unreachable for a well-formed value; a value that overflows it
@@ -774,9 +932,10 @@ let DarwinTsdArrayBase = 0 as ParsedInt
 let ParkTimeoutWithTimersMs = 2 as ParsedInt
 let ParkTimeoutIdleMs = 100 as ParsedInt
 
-// The scheduler's `.data` slots. TWO gates rather than one: the worker COUNTERS are readable by a program
-// that never spawns a green thread (`__Builtins.schedMaxActiveWorkers()`), while the P machinery is
-// meaningless without one.
+// The scheduler's `.data` slots. THREE gates rather than one, and the split is always the same question —
+// *can a program that never spawns a green thread read this word?* The worker COUNTERS can
+// (`__Builtins.schedMaxActiveWorkers()`) and so can the processor count
+// (`__Builtins.schedProcessorCount()`); the P machinery itself is meaningless without a scheduler.
 export function schedRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
@@ -785,21 +944,38 @@ export function schedRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntry
 	// question a runtime seed would create: `__Builtins.schedMaxActiveWorkers()` may be called before the
 	// first `async`, i.e. before `__gt_init` has run at all.
 	if usage.usesSchedMaxActiveWorkers or usage.usesGt 'workerCounters'
+		// Every mutation is the one `atomicRmw(add 1)` in `emitSchedNoteProgress`; nothing ever stores it.
+		pushRuntimeGlobal(out, label: SchedProgressLabel, sharing: MultiMSharing.atomicStep)
 		pushRuntimeGlobal(out, label: SchedActiveWorkersLabel, sharing: MultiMSharing.atomicStep, seed: 1)
 		pushRuntimeGlobal(out, label: SchedMaxActiveWorkersLabel, sharing: MultiMSharing.monotoneApproximation, seed: 1)
 	end 'workerCounters'
 
 	if usage.usesGt 'procs'
-		// Five of these six are written by `__sched_init_procs` and by nothing else. The exception is
-		// `__sched_shutdown_flag`, whose one writer is the teardown and therefore runs AFTER the workers —
-		// see its own declaration for why that makes it `lastWriterWins` rather than sealed.
+		// Written by `__sched_init_procs` and by nothing else.
 		pushRuntimeGlobal(out, label: SchedTlsIndexLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 		pushRuntimeGlobal(out, label: SchedProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	end 'procs'
+
+	// ⭐⭐ **THE THIRD GATE, AND IT IS THE ARRAY'S LENGTH WEARING A QUERY'S SECOND HAT.**
+	// `__sched_num_procs` is P machinery — the bound `__sched_steal_count` and `__sched_any_executing` walk
+	// to — AND the whole answer `__Builtins.schedProcessorCount()` gives, which a program may ask having
+	// spawned nothing. So it rides the query's bit exactly as the worker counters ride theirs, rather than
+	// dragging the TLS slot, the `P*` array and the run-queue lock in behind a load.
+	//
+	// ⚠ It is pushed HERE, between the array it measures and the teardown flag, because the layout order is
+	// the `.data` order: moving it would re-lay every green-thread program's section to say nothing new.
+	if usage.usesSchedProcessorCount or usage.usesGt 'processorCount'
 		pushRuntimeGlobal(out, label: SchedNumProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	end 'processorCount'
+
+	if usage.usesGt 'procsTeardown'
+		// ⚠ `__sched_shutdown_flag`'s one writer is the teardown and therefore runs AFTER the workers — see
+		// its own declaration for why that makes it `lastWriterWins` rather than sealed. The lock is
+		// `__sched_init_procs`'s like the three above.
 		pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins)
 		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	end 'procs'
+	end 'procsTeardown'
 
 	return out
 end 'schedRuntimeGlobals'
@@ -821,6 +997,7 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedFindRunnable(module)
 	buildSchedSweepDropped(module)
 	buildSchedStealCount(module)
+	buildSchedAnyExecuting(module)
 	buildSchedWorkerLoop(module)
 	buildSchedWakeOrSpawn(module)
 	buildSchedStopWorkers(module)
@@ -900,6 +1077,7 @@ function buildSchedPublish(module StdModule, name ByteArray, greenEnd SchedGreen
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
+	emitSchedNoteProgress(module, block: entry, ids: ids)
 	let isGreen = emitGtIsGreenThread(module, block: entry, gt: gt, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isGreen, thenBlockId: greenArm.id, elseBlockId: coroArm.id))
 
@@ -931,6 +1109,7 @@ function buildSchedPublishLocked(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
+	emitSchedNoteProgress(module, block: entry, ids: ids)
 	let isGreen = emitGtIsGreenThread(module, block: entry, gt: gt, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isGreen, thenBlockId: greenArm.id, elseBlockId: coroArm.id))
 
@@ -1484,9 +1663,10 @@ function emitRunqPublishTail(module StdModule, block IrBlock, p ValueId, delta V
 	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: tailAddr, operandId: delta, opcode: StdAtomicRmwOpcode.add))
 end 'emitRunqPublishTail'
 
-// `1` if this CAS lost. Both ring CASes and the grab's read it the same way, and `AtomicCasFailed` is the
-// contract's own spelling of the answer (`StdDialect`), not a literal 0 restated three times.
-function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
+// `1` if this CAS lost. Both ring CASes, the grab's and the process-poller claim (`GtRuntime.emitProcWait`)
+// read it the same way, and `AtomicCasFailed` is the contract's own spelling of the answer (`StdDialect`),
+// not a literal 0 restated four times.
+export function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
 	let failed = emitConst(module, block: block, value: AtomicCasFailed, ids: ids)
 	return emitCmp(module, block: block, a: result, b: failed, pred: StdCmpPred.eq, ids: ids)
 end 'emitCasLost'
@@ -2059,6 +2239,20 @@ function buildSchedFindRunnable(module StdModule)
 	// body, so a change to what "dropped" means cannot reach one consumer and miss the other. ⚠ `localPop`
 	// rather than `entry` is the retry, so a reclaimed thread costs no second fairness tick; that is the only
 	// argument this emitter takes, and the only thing the two consumers differ in.
+	//
+	// ⚠⚠ **THE REFUSAL IS VACUOUS FROM *THIS* CALLER TODAY, AND SAYING SO IS THE POINT (W226/A5).** This walk
+	// only ever hands back GREEN THREADS, and no green thread can be a tombstone: `emitGtIsDropped` needs the
+	// consumer's teardown ticket, which only an `await` or a `__gt_promise_drop` adds, and both need a
+	// **Promise** — while `spawn` yields a `<T>.handle`, an `async` frame is a coroutine on its owner's queue,
+	// and a reply cell is swept as a coroutine. So the compare below is a constant `false` on every program
+	// this tree can build, and a reader must not take its presence as evidence that a producer exists.
+	//
+	// ⭐ **IT IS KEPT, NOT DELETED, AND THAT IS A DIFFERENT JUDGEMENT FROM THE ONE `__sched_sweep_dropped`
+	// GOT.** The sweep's ring half was deleted because its peek DEREFERENCED AN UNCLAIMED THREAD — a fault,
+	// not merely dead weight. This one asks the same question of a candidate it has already popped, so it is
+	// safe at any processor count, it is two loads on a path that just took a lock, and it is the reaper the
+	// deleted half's own note points a future producer at. Dead weight with a live sibling is worth keeping;
+	// a latent access violation is not.
 	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: localPop, ids: ids)
 
 	module.functions.push(func)
@@ -2080,67 +2274,54 @@ end 'buildSchedFindRunnable'
 // Sweeping the FRONT at the drop reclaims them in that shape immediately: the thread just marked is normally
 // the newest AND the only one, so the ring is empty again by the time the loop comes round.
 //
-// ⚠ **THE FRONT ONLY, AND THE BOUND IS WHAT MAKES THAT RIGHT.** It stops at the first live thread rather
-// than scanning, so the work is O(threads actually reclaimed) and each thread is reclaimed at most once ever
-// — a drop can never be more than amortised O(1). A dropped thread sitting BEHIND a live one is left for
-// `__sched_find_runnable` to refuse and reclaim, or for the ring OVERFLOW to reclaim in passing, and those
-// two are what bound the pathological shape (a live thread pinned at the head while a loop drops behind it).
+// ⛔⛔⛔ **THE RING HALF IS GONE (A3), AND THE REASON IS THAT IT WAS THE ONLY PLACE IN THIS RUNTIME THAT
+// DEREFERENCED A GREEN THREAD IT HAD NOT CLAIMED.** What stood here was a PEEK-then-CAS: it loaded
+// `slot[head]`, followed that pointer to read `GtOffTeardown` and `GtOffWaiter` — deciding whether it was a
+// tombstone — and only then CAS'd the head to take it. Every other slot read in this file discards a lost
+// race without following what it read (`__sched_runq_get` uses `g` only after winning, `__sched_steal`
+// copies pointers without dereferencing them), and `__sched_find_runnable` asks the very same tombstone
+// question of a thread it has ALREADY popped.
 //
-// ⛔ **THE PEEK-THEN-CAS IS NOT `__sched_runq_get`, AND MUST NOT BECOME IT.** `runqget` pops whatever is at
-// the head; this must pop ONLY a dropped thread, because popping a live one would consume a thread nobody
-// asked it to schedule. The peek is safe against the CAS window for a reason worth stating: slot `h` is
-// rewritten only by a push at tail counter `h + 256k`, which requires the head to have already passed `h` —
-// so a WON CAS on `head: h -> h+1` proves the slot still holds the thread that was peeked.
+// **THE HAZARD, STATED SO IT IS NOT REDISCOVERED:** between the slot load and the deref a thief can take the
+// thread, run it to completion and have its awaiter hand the struct back to the slab. A stale READ was
+// harmless — a word that happened to look like the consumer ticket still lost the CAS, because the head had
+// moved — but S6's scavenger DECOMMITS (`SlabArena.__slab_arena_scavenge` → `osDecommitPages`, which drops
+// the backing and keeps the reservation), so a concurrent `__Builtins.scavengeMemory()` that frees the last
+// chunk in that 64 KiB granule turns the deref into an access violation rather than a stale answer.
 //
-// ⚠⚠ **THAT ARGUMENT COVERS THE ACTION AND NOT THE READ, AND THE READ IS THE ONE PLACE IN THIS FILE THAT
-// DEREFERENCES A THREAD IT HAS NOT YET CLAIMED.** Every other slot read here discards a lost race without
-// touching what it read (`__sched_runq_get` uses `g` only after winning; `__sched_steal` copies pointers
-// without following them); this one loads `GtOffTeardown` and `GtOffWaiter` THROUGH the peeked pointer
-// first, because it may only claim a thread it has already identified as a tombstone. Both words are in the
-// same 256-byte struct and therefore the same granule, so the two loads share one exposure, not two. Between the head load and that load a thief can
-// take the thread, run it to completion, and its awaiter can hand the struct back to the slab — so the load
-// can land on a freed slot. It cannot produce a wrong ACTION (a stale word that happens to read the consumer
-// ticket alone loses the CAS, because the head has moved) and, while the slab keeps its granules committed,
-// it cannot fault either.
-// ⛔ **BUT S6's SCAVENGER DECOMMITS** (`SlabArena.__slab_arena_scavenge` → `osDecommitPages`), so a
-// concurrent `__Builtins.scavengeMemory()` that drops the granule between the two loads turns this into an
-// access violation. The window is a handful of instructions and needs a same-instant explicit scavenge, so
-// it has never been observed — it is written down because the invariant that makes it rare is the
-// ALLOCATOR'S, not this function's, and nothing here would notice the day that changes.
+// ⭐⭐ **AND DELETING IT COSTS NOTHING, WHICH IS WHY IT IS A DELETION AND NOT A LOCK-FREE REWRITE.** Three
+// facts, each checkable at the code:
+//
+//   1. **NO PRODUCER CAN PUT A TOMBSTONE IN A RING.** `emitGtIsDropped` is `teardown == consumerTicket and
+//      waiter == 0`, and the consumer ticket is added only by `__gt_owner_done` — reached only from an
+//      `await` or a `__gt_promise_drop`, both of which need a **Promise**. A `spawn` yields a `<T>.handle`
+//      and never a promise (SV1 verified this at the code); an `async` frame is a COROUTINE and is published
+//      to its owner's queue, never to a ring; and a reply cell has `owner != cell`, so
+//      `__gt_promise_drop` sends it down `sweepCoro`. ⇒ nothing that a ring can hold is a thing a promise
+//      can name, so this walk could only ever have found a live thread and stopped.
+//   2. **THE SHAPE IT WAS BUILT FOR NO LONGER ROUTES HERE.** Its motivating program was
+//      `async-promise-drop.spawn-drop-loop-bounded` — spawn and drop in a loop, schedule nothing — and since
+//      `EC10` those spawns are coroutines on the owner's FIFO. The GLOBAL half below, which is
+//      `__gt_coro_sweep_dropped`'s body, is what actually bounds that program, and it holds `__sched_lock`
+//      across its peek, under which the head cannot move and the thread therefore cannot be popped, run,
+//      reclaimed or scavenged. **That half is safe and stays.**
+//   3. **A RING TOMBSTONE STILL HAS A REAPER THE DAY ONE CAN EXIST.** `__sched_find_runnable` pops the
+//      candidate and THEN asks `emitGtIsDropped` of it (`emitGtTombstoneHandback`), which is the same
+//      question asked of a thread the asker owns — the safe spelling, and the one this file should have had
+//      only one of. The bound the front-sweep bought was latency on one shape, never correctness.
+//
+// ⇒ **IF A LATER RUNG GIVES A GREEN THREAD A PROMISE, DO NOT RESTORE THE PEEK.** Claim first — CAS the head,
+// then dereference what you own, exactly as `__sched_find_runnable` does — or leave the reclamation to it.
+//
+// ⚠ This function is therefore the GLOBAL walk alone, and it is still worth its call: it is what reclaims a
+// dropped coroutine that reached the global queue, and its caller (`__gt_promise_drop`'s `sweepGreen` arm)
+// is what puts one there.
 function buildSchedSweepDropped(module StdModule)
 	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry")
-	var ringHdr = module.addBlock(func, label: b"swringhdr")
-	var ringPeek = module.addBlock(func, label: b"swringpeek")
-	var ringTake = module.addBlock(func, label: b"swringtake")
-	var ringFree = module.addBlock(func, label: b"swringfree")
 	var globalStart = module.addBlock(func, label: b"swglobalstart")
 	var doneBlock = module.addBlock(func, label: b"swdone")
-
-	let p = emitLoadCurrentP(module, block: entry, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(ringHdr.id))
-
-	let head = emitLoadField(module, block: ringHdr, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: ringHdr, record: p, offset: POffRunqTail, ids: ids)
-	let ringEmpty = emitCmp(module, block: ringHdr, a: head, b: tail, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(ringHdr, op: StdOp.condBranch(ringEmpty, thenBlockId: globalStart.id, elseBlockId: ringPeek.id))
-
-	let peeked = emitLoadField(module, block: ringPeek, record: emitRunqSlotAddr(module, block: ringPeek, p: p, counter: head, ids: ids), offset: 0, ids: ids)
-	let peekedDropped = emitGtIsDropped(module, block: ringPeek, gt: peeked, ids: ids)
-	module.setTerminator(ringPeek, op: StdOp.condBranch(peekedDropped, thenBlockId: ringTake.id, elseBlockId: globalStart.id))
-
-	let headAddr = emitFieldAddr(module, block: ringTake, record: p, offset: POffRunqHead, ids: ids)
-	let ringStep = emitConst(module, block: ringTake, value: 1, ids: ids)
-	let nextHead = emitBin(module, block: ringTake, a: head, b: ringStep, opcode: StdBinOpcode.add, ids: ids)
-	let claimed = ids.mint()
-	module.appendOp(ringTake, op: StdOp.atomicCas(claimed, addrId: headAddr, expectedId: head, replacementId: nextHead))
-	let lostRing = emitCasLost(module, block: ringTake, result: claimed, ids: ids)
-	module.setTerminator(ringTake, op: StdOp.condBranch(lostRing, thenBlockId: ringHdr.id, elseBlockId: ringFree.id))
-
-	module.appendOp(ringFree, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(peeked)))
-	module.setTerminator(ringFree, op: StdOp.branch(ringHdr.id))
 
 	// The global half — the SAME walk `GtRuntime.__gt_coro_sweep_dropped` is, off the two `.data` ends
 	// instead of an owner's two fields. Under the lock the head cannot move, so the peek and the dequeue
@@ -2209,6 +2390,75 @@ function buildSchedStealCount(module StdModule)
 
 	module.functions.push(func)
 end 'buildSchedStealCount'
+
+// ==========================================================================
+// `__sched_any_executing`
+// ==========================================================================
+
+// The walk `SchedAnyExecutingName` describes: answer 1 at the first active, non-quiesced P; 0 if the walk
+// completes without finding one.
+//
+// ⚠ **NEITHER LOAD IS ATOMIC AND NEITHER NEEDS TO BE.** Each is one aligned machine word written whole by
+// the P's own M, so every value read is a value some M really wrote; what a concurrent transition costs is
+// FRESHNESS. Freshness in the safe direction is all this needs — a stale "executing" only delays the abort
+// by one poll, and a stale "quiesced" cannot be produced by an M that is about to make progress, because the
+// only two things that clear the flag are the two things such an M is on its way to.
+function buildSchedAnyExecuting(module StdModule)
+	var func = IrFunction.createFromStd(SchedAnyExecutingName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopHdr = module.addBlock(func, label: b"aehdr")
+	var loopBody = module.addBlock(func, label: b"aebody")
+	var testQuiesced = module.addBlock(func, label: b"aequiesced")
+	var testGeneration = module.addBlock(func, label: b"aegen")
+	var nextProc = module.addBlock(func, label: b"aenext")
+	var foundBlock = module.addBlock(func, label: b"aefound")
+	var noneBlock = module.addBlock(func, label: b"aenone")
+
+	let numProcs = emitLoadGlobalWord(module, block: entry, label: SchedNumProcsLabel, ids: ids)
+	// Read ONCE, in the block that dominates the walk: a generation re-read per P would let an early P be
+	// judged against an older reading than a late one, so two Ps could both look caught-up to a value
+	// neither had actually seen.
+	let currentGen = emitLoadGlobalWord(module, block: entry, label: SchedProgressLabel, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let index = ids.mint()
+	loopHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(zero)))
+
+	// `__sched_num_procs` is 0 before `__sched_init_procs` has run, so an un-initialized scheduler walks
+	// nothing and answers 0 — `__sched_steal_count` rests on the same zero for the same reason.
+	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: noneBlock.id, elseBlockId: loopBody.id))
+
+	// An UNUSED P carries no M, so its quiesced word is meaningless and is not consulted.
+	let p = emitLoadProc(module, block: loopBody, index: index, ids: ids)
+	let active = emitConst(module, block: loopBody, value: PStatusActive, ids: ids)
+	let isActive = emitCmp(module, block: loopBody, a: emitLoadField(module, block: loopBody, record: p, offset: POffStatus, ids: ids), b: active, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loopBody, op: StdOp.condBranch(isActive, thenBlockId: testQuiesced.id, elseBlockId: nextProc.id))
+
+	let running = emitConst(module, block: testQuiesced, value: PQuiescedRunning, ids: ids)
+	let isRunning = emitCmp(module, block: testQuiesced, a: emitLoadField(module, block: testQuiesced, record: p, offset: POffQuiesced, ids: ids), b: running, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(testQuiesced, op: StdOp.condBranch(isRunning, thenBlockId: foundBlock.id, elseBlockId: testGeneration.id))
+
+	// ⭐⭐ **A QUIET M THAT WENT QUIET BEFORE THE LATEST PUBLISH COUNTS AS EXECUTING (A1).** It has work it
+	// cannot yet know about — a coroutine on the queue of the green thread it drives is reachable by no other
+	// party and by no scan — so the honest answer is *"not finished looking"*, and it will clear its own flag
+	// on its next poll. `POffQuiescedGen` carries the measured false abort this closes.
+	let caughtUp = emitCmp(module, block: testGeneration, a: emitLoadField(module, block: testGeneration, record: p, offset: POffQuiescedGen, ids: ids), b: currentGen, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(testGeneration, op: StdOp.condBranch(caughtUp, thenBlockId: nextProc.id, elseBlockId: foundBlock.id))
+
+	let step = emitConst(module, block: nextProc, value: 1, ids: ids)
+	let nextIndex = emitBin(module, block: nextProc, a: index, b: step, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nextProc, op: StdOp.branch(loopHdr.id))
+	nextProc.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(nextIndex)))
+
+	module.setTerminator(foundBlock, op: StdOp.ret(emitConst(module, block: foundBlock, value: 1, ids: ids)))
+	module.setTerminator(noneBlock, op: StdOp.ret(emitConst(module, block: noneBlock, value: 0, ids: ids)))
+
+	module.functions.push(func)
+end 'buildSchedAnyExecuting'
 
 // ==========================================================================
 // `__sched_worker_loop`
@@ -2291,6 +2541,11 @@ function buildSchedWorkerLoop(module StdModule)
 
 	// Run it, on this M's own scheduler context. The GT's waiter is this P's inline scheduler GT, so when it
 	// completes or parks the trampoline switches straight back to the block below the switch.
+	//
+	// ⭐ **THIS M IS DEMONSTRABLY NOT QUIESCENT — it is holding a green thread — so the deadlock detector's
+	// flag is cleared here (A1).** Both roads into this block are "found work" (the loop-top dequeue and the
+	// park's re-search), which is exactly the event the flag's stickiness is defined against.
+	emitSchedSetQuiesced(module, block: haveWork, p: p, waiting: false, ids: ids)
 	let mainThread = emitFieldAddr(module, block: haveWork, record: p, offset: POffMainThread, ids: ids)
 	emitGtRunOne(module, run: haveWork, handOff: handOff, g: runGt, selfGt: mainThread, p: p, continuation: loopTop, ids: ids)
 
@@ -2309,6 +2564,12 @@ function buildSchedWorkerLoop(module StdModule)
 	// is 1 afterwards either way, since 1 is the only other value it can hold and this M is its only writer
 	// of 1. Spelling it as a CAS rather than adding an `xchg` opcode to `StdAtomicRmwOpcode` keeps the Std
 	// vocabulary to what a consumer needs — the rule that band's own header states.
+	// ⭐ **AND THE DEADLOCK DETECTOR'S FLAG GOES UP HERE (A1), one field over and for a different reader.**
+	// `__sched_find_runnable` has just answered "nothing anywhere" — this M's ring, the global queue and four
+	// rounds of stealing — which is precisely the state `POffQuiesced` names. It is published BEFORE the
+	// re-search below rather than after the wait, so an M that spends the whole cycle finding nothing carries
+	// the flag continuously; `reDequeued` and `haveWork` are what take it down again.
+	emitSchedSetQuiesced(module, block: park, p: p, waiting: true, ids: ids)
 	let idleAddr = emitFieldAddr(module, block: park, record: p, offset: POffIdleFlag, ids: ids)
 	let idleExpected = emitConst(module, block: park, value: 0, ids: ids)
 	let idleSet = emitConst(module, block: park, value: 1, ids: ids)
@@ -2373,6 +2634,11 @@ function buildSchedWorkerLoop(module StdModule)
 	// claim is the stronger one: main's own netpoll and `__gt_drain_at_exit` both poll the timer store, so
 	// the deadline is noticed at the latest when main next enters a driver. What this removes is the
 	// unbounded-looking gap in between, which is as long as the user code happens to run.
+	// ⭐ **AND THE DEADLOCK FLAG COMES DOWN BEFORE THOSE TWO POLLS, NOT AFTER (A1).** Both of them can
+	// PUBLISH — a fired timer and a reaped child each wake a thread — and a publisher that is still flagged
+	// `PQuiescedWaiting` is an M doing work while advertising that it has none. `emitSchedSetQuiesced`
+	// carries why that direction is the one that accuses an innocent program.
+	emitSchedSetQuiesced(module, block: doWait, p: p, waiting: false, ids: ids)
 	let workerNow = ids.mint()
 	module.appendOp(doWait, op: StdOp.call(workerNow, callee: GtNowNsName, args: ValueIdArray.create()))
 	module.appendOp(doWait, op: StdOp.call(ids.mint(), callee: GtTimerCheckName, args: argsOf(workerNow)))
@@ -2392,12 +2658,95 @@ function buildSchedWorkerLoop(module StdModule)
 	let unused = emitConst(module, block: exitBlock, value: PStatusUnused, ids: ids)
 	emitStoreField(module, block: exitBlock, record: p, offset: POffStatus, value: unused)
 	emitSchedClearIdle(module, block: exitBlock, p: p, ids: ids)
+	// ⭐ **AND THE QUIESCED FLAG, for the same reason one field up (A1) plus one of its own.** `PStatusUnused`
+	// already takes this P out of `__sched_any_executing`'s roster, so leaving the flag set could not mislead
+	// that walk — but the P is RECLAIMABLE by a later `__sched_wake_or_spawn`, and a P adopted with a stale
+	// `PQuiescedWaiting` would read as a quiesced M from the instant it is claimed until its first park.
+	emitSchedSetQuiesced(module, block: exitBlock, p: p, waiting: false, ids: ids)
 	// A `CreateThread` callback returns a DWORD nobody reads; 0 is the conventional success.
 	let exitCode = emitConst(module, block: exitBlock, value: 0, ids: ids)
 	module.setTerminator(exitBlock, op: StdOp.ret(exitCode))
 
 	module.functions.push(func)
 end 'buildSchedWorkerLoop'
+
+// ⭐⭐⭐ **PUBLISH WHETHER THIS M HAS ANYTHING LEFT TO DO — the ONE door to `POffQuiesced` (A1).** See that
+// field for what the word means and why it is not `POffIdleFlag`.
+//
+// ⛔⛔ **THE RULE, AND IT IS A RULE ABOUT *WHERE*, NOT ABOUT *WHAT*.** `PQuiescedWaiting` is published at
+// exactly the two points an M has established there is nothing runnable anywhere, no timer, no parked child
+// and no read in flight — the driver's `otherMs` and the worker's `park`. `PQuiescedRunning` is published at
+// **every** point either loop finds work, leaves, or discovers a real wakeup source to wait on. Those are
+// `run`/`haveWork` (found a thread), `done`/`exitBlock` (left the loop), and the netpoll's three
+// non-`otherMs` dominators — `timerDecide` (a timer exists, so this M is about to fire it or sleep on it),
+// `haveProcs` (a child is parked) and `ioPending` (an overlapped read is in flight).
+//
+// ⛔ **THE NETPOLL ARMS ARE THE HALF THAT WAS MISSING, AND OMITTING THEM IS A *SPURIOUS ABORT* — MEASURED,
+// NOT PREDICTED.** The first cut of A1 cleared the flag only at `run` and `done`, reasoning that no other M
+// could reach `otherMs` while a timer or child was pending because those stores are global. That argument is
+// false in one direction: an M sitting in `sleepwait`, or one passing through `firenow` HAVING JUST
+// PUBLISHED a woken coroutine, still carried `PQuiescedWaiting` from an earlier pass — so a second M could
+// see every P quiesced while the first was making progress. **A twenty-round service program whose handlers
+// `await` a sleeping coroutine exited 92 on 3 of 3 runs at `MAXON_MAX_PROCS=4` and 42 at 1, and completes in
+// ~1.1 s with the abort disabled.** ⇒ a stale `PQuiescedWaiting` is the ONE direction that accuses an
+// innocent program, and every arm that is not `otherMs` must therefore take it down.
+//
+// ⚠ **WHAT SURVIVES IS THE STICKINESS THAT MATTERS.** In a REAL deadlock none of the clearing sites is
+// reachable — there is no timer, no child, no read, nothing runnable and the exit condition is unmet — so a
+// deadlocked M's flag goes to 1 and stays 1 across every poll, which is what makes the detector
+// deterministic rather than a race between three Ms' polling windows.
+export function emitSchedSetQuiesced(module StdModule, block IrBlock, p ValueId, waiting bool, ids ValueMinter)
+	// ⭐ **THE GENERATION IS RECORDED BEFORE THE FLAG GOES UP, AND THE ORDER IS THE POINT.** A scanner that
+	// sees `PQuiescedWaiting` must see a generation this M really observed; recorded after, it could read the
+	// flag beside a stale zero and count an M as caught-up that had not looked at all. On the clearing road
+	// the generation is left where it lies — nothing reads it while the flag is down.
+	if waiting 'recordWhatThisMHasSeen'
+		emitStoreField(module, block: block, record: p, offset: POffQuiescedGen, value: emitLoadGlobalWord(module, block: block, label: SchedProgressLabel, ids: ids))
+	end 'recordWhatThisMHasSeen'
+
+	if not waiting 'aRunningMHasConfirmedNothing'
+		emitStoreField(module, block: block, record: p, offset: POffQuietPolls, value: emitConst(module, block: block, value: 0, ids: ids))
+	end 'aRunningMHasConfirmedNothing'
+
+	let state = PQuiescedWaiting if waiting else PQuiescedRunning
+	emitStoreField(module, block: block, record: p, offset: POffQuiesced, value: emitConst(module, block: block, value: state, ids: ids))
+end 'emitSchedSetQuiesced'
+
+// ⭐⭐ **COUNT ONE MORE CONFIRMATION OF THE DEAD STATE AND ANSWER "IS IT PROVED YET?" (A1).** Called from
+// `GtRuntime`'s `otherMs` only after `__sched_any_executing` has answered 0. See `POffQuietPolls` for why a
+// single reading is not enough and why this errs late rather than wrongly.
+//
+// ⚠ **THE COUNTER IS PER-P AND PLAIN, WHICH IS THE HONEST CLASS FOR IT.** It is written only by the M that
+// owns the P — a P's own confirmation run is nobody else's business — and read only by that same M, so there
+// is nothing here for an atomic to serialise. What makes the count MEAN something across Ms is
+// `__sched_progress`, which is atomic, and `POffQuiesced`, which every M publishes for the others.
+export function emitSchedConfirmQuiet(module StdModule, cur IrBlock, p ValueId, ids ValueMinter) returns ValueId
+	let confirmed = emitBin(module, block: cur, a: emitLoadField(module, block: cur, record: p, offset: POffQuietPolls, ids: ids), b: emitConst(module, block: cur, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: cur, record: p, offset: POffQuietPolls, value: confirmed)
+	return emitCmp(module, block: cur, a: confirmed, b: emitConst(module, block: cur, value: DeadlockConfirmPolls, ids: ids), pred: StdCmpPred.ge, ids: ids)
+end 'emitSchedConfirmQuiet'
+
+// ⭐⭐ **"SOMETHING BECAME RUNNABLE" — the one bump of `__sched_progress` (A1).** Called at the entry of
+// every door that publishes a green thread or a coroutine, so that a quiet M's recorded generation goes
+// stale and `__sched_any_executing` gives it another look. See `POffQuiescedGen`.
+//
+// ⚠ **A COROUTINE PUBLISHED THROUGH `__sched_publish_locked` BUMPS IT TWICE — once here and once inside
+// `__gt_coro_enqueue` — AND THAT IS DELIBERATELY NOT DEDUPLICATED.** The counter is never read for its value,
+// only for whether it has CHANGED, so an extra bump costs one `lock xadd` and makes a quiet M look one
+// generation further behind, which is the SAFE direction (a later abort, never a wrong one). Removing either
+// bump would mean reasoning about which of the two doors a given publish came through, and the green arm of
+// `__sched_publish_locked` reaches `__sched_runq_put`, which bumps nothing at all.
+//
+// ⚠ **IT IS AN ATOMIC ADD AND NOT A PLAIN ONE, and that is not over-caution.** Two Ms publish concurrently
+// on any program with a worker; a lost increment leaves two Ms' recorded generations agreeing with a
+// current value that a publish should have moved past, which is exactly the false abort this whole term
+// exists to prevent. It is one `lock xadd` on a path that has just taken a lock or done a CAS.
+export function emitSchedNoteProgress(module StdModule, block IrBlock, ids ValueMinter)
+	let progressAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(progressAddr, label: SchedProgressLabel))
+	let step = emitConst(module, block: block, value: 1, ids: ids)
+	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: progressAddr, operandId: step, opcode: StdAtomicRmwOpcode.add))
+end 'emitSchedNoteProgress'
 
 // `p.idleFlag = 0` — the three paths that leave a park all clear it, so it is spelled once.
 function emitSchedClearIdle(module StdModule, block IrBlock, p ValueId, ids ValueMinter)

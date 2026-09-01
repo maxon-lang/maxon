@@ -5136,6 +5136,25 @@ let BuiltinsSchedStealCountName = b"__Builtins.schedStealCount"
 // rule: the number is a fact about THIS intrinsic's contract, and the two only happen to agree.
 let SchedStealCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedProcessorCount()` — THE FOURTH SCHEDULER QUERY, AND THE ONLY ONE WHOSE ANSWER IS
+// NOT AN OUTCOME.** It reports how many Ps `MAXON_MAX_PROCS` resolved to — `min(requested, cpuCount())`,
+// settled once in `__sched_init_procs` before any green thread runs. Its two SCHEDULER band-mates both
+// report what the scheduler DID (how many Ms it built, how much it stole), which a short program can finish
+// before making true; this reports what it was CONFIGURED to do, which no workload can move. (`cpuCount`
+// is the third of the family and asks a different party altogether — the MACHINE.)
+//
+// ⇒ **IT IS WHAT A CASE ABOUT THE `procs:` MARKER MUST ASSERT.** `specs-shv2/sched-default-procs.md` asserted
+// the worker-M mark instead and was flaky under a loaded suite for exactly that reason — the marker promises
+// processors, not workers.
+//
+// ⚠ **NEITHER REFERENCE DECLARES IT**, like `schedStealCount` and unlike the two above it: the surface is
+// invented here on the argumentless-integer shape the family already has.
+// `CpuParallelRuntime.SchedProcessorCountName` owns what it costs; this file only routes the name.
+let BuiltinsSchedProcessorCountName = b"__Builtins.schedProcessorCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedProcessorCountArity = 0 as ParamCount
+
 // ⭐⭐ **THE SIX MEMORY-TRAFFIC COUNTERS — THE FLOOR OF THE INSTRUMENT THIS COMPILER MEASURES ITSELF WITH.**
 // `Compiler/PhaseProbe.maxon` reads all six to answer what one compile phase cost in allocations and bytes,
 // and `docs/optimization-log.md` is the trend those answers feed — so `scale-test` bottoms out here. The
@@ -5593,6 +5612,12 @@ let BuiltinsSubprocessReadStderrLineName = b"__Builtins.subprocessReadStderrLine
 let BuiltinsSubprocessCloseStdinName = b"__Builtins.subprocessCloseStdin"
 let BuiltinsSubprocessWaitExitName = b"__Builtins.subprocessWaitExit"
 let BuiltinsManagedIsNullName = b"__Builtins.managedIsNull"
+// ⭐ **THE ENVIRONMENT READER, WHICH IS IN THIS BAND BECAUSE ITS ONLY CALLER IS.** It is not a subprocess
+// entry any more than `managedIsNull` is, and it is here for that member's stated reason: this is where its
+// one caller lives. `stdlib/Subprocess.maxon` walks it to assemble the block an `Environment.inheritUpdating`
+// child is given, so it lowers into the `__gt_subp_` family and inherits that family's E3104 target gate
+// whole — see `SubprocessRuntime.SubpEnvEntryName`.
+let BuiltinsOsEnvironmentEntryName = b"__Builtins.osEnvironmentEntry"
 
 // ⭐ **WHICH POSITIONS OF A SUBPROCESS INTRINSIC'S ARGUMENT LIST CARRY A `__ManagedMemory`.** A closed
 // three-case shape rather than a list of indices passed around, because the set is a property of the
@@ -30320,6 +30345,29 @@ export type Parser
 		// the same door.
 		let stored = try self.assignableValue(nameTok, value: value, declared: maxonTypeTag(valueType), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global, placeOwner: EmptySourceText, voice: SlotMismatchVoice.assignedPlace)
 
+		// ⭐⭐ **E3143's WRITE HALF IS MINTED HERE, AND THIS IS THE ONLY DOOR THAT CAN MINT IT.** The rule refuses
+		// an AUTHOR-WRITTEN assignment to a shared word from a green thread, and by the time the ops exist there
+		// is nothing left to tell one from the compiler's own: a lazy static's first-access fill and
+		// `ModuleInit`'s initializing store emit the same `globalAddr` + `storeIndirect` pair, and the label the
+		// op carries is mangled rather than the name the author wrote. This door has both facts and neither is
+		// recoverable downstream — `storeToGlobal` has already refused the immutable case, so every write
+		// reaching here is to a `var`, and `nameTok` is the author's own spelling and position. The READ half is
+		// `emitGlobalLoad`'s. See `Project.moduleVarAccessSites`.
+		//
+		// ⛔⛔ **AND IT IS RECORDED HERE RATHER THAN AT `storeToGlobal`, BECAUSE THE RIGHT-HAND SIDE'S OWN READ
+		// CLAIMS THE SAME OP INDEX.** A site is keyed by the op its door is ABOUT to emit, and at `storeToGlobal`
+		// that op is the first one the RHS emits — which for `total = total + by` is the `globalAddr` of the
+		// READ of `total`. Both doors then `upsert` key N and the read, running second, WON: the direct case's
+		// diagnostic said *"the message `Counter.add` READS the module-level `total`"* about an assignment.
+		// Recording past the RHS keys the store's own `globalAddr` instead, so the two accesses in one statement
+		// occupy two rows and neither has to out-rank the other.
+		//
+		// ⚠ The name is `nameTok.value` and NOT `moduleStorageSubjectName`'s answer, which is empty for
+		// everything but a MANAGED top-level binding (that predicate exists for the borrow rule, where only a
+		// managed slot can free an element). `staticMemberNameToken` has already fused `Counter.count` into one
+		// token, so this spelling is the author's for both shapes.
+		self.artifact.recordModuleVarAccessSite(ModuleVarAccessSite.create(nameTok.value, access: ModuleVarAccess.write, line: nameTok.line, column: nameTok.column, declFilePath: self.filePath))
+
 		let range = SourceRange.ofToken(nameTok)
 		// `from:` names the interner `valueType`'s ids would live in — this file's own. A global's type comes
 		// from its INITIALIZER (`constantValueType` / `managedConstValueType` / `constArrayValueType`), none of
@@ -30339,7 +30387,7 @@ export type Parser
 		// to leak the temporary or double-free the source.
 		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsByteRecord(maxonTypeTag(valueType)), range: range)
 
-		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range), range: range)
+		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range, reader: ModuleSlotReader.notASharedAccess), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
 	end 'emitCheckedGlobalStore'
 
@@ -35634,6 +35682,26 @@ export type Parser
 		return result
 	end 'emitRuntimeCallInto'
 
+	// ⭐⭐⭐ **WHICH RUNTIME ENTRY TAKES A SECOND OWNER OF THIS VALUE — the retain side of
+	// `SignatureIndex.managedNameDropCallee`, and it did not exist until W232.** Almost every managed value
+	// answers `__mm_incref`, which is why the door below spelled that name directly for so long; a
+	// `<T>.handle` does not, because its box stands for a share of a mailbox's `handles`/`refs` pair that its
+	// DROP steps down. A retain that only increfed the box left one share owned by two references, and the
+	// second release freed a live mailbox — exit 89, or a segfault above one processor.
+	//
+	// ⚠ **THE TAG IS TESTED FIRST AND IT IS NOT A MICRO-OPTIMIZATION.** `valueNameId` is only meaningful for
+	// a value that HAS a declared nominal type; asking it of an integer or a String would be reading a field
+	// that means nothing there. Every handle value is `structRef`-tagged with its companion's name (that is
+	// what `emitOwnedRuntimeResult` stamps at the spawn and at the clone), so the guard costs one dense array
+	// read on the overwhelmingly common path and is exact on the one that matters.
+	function retainCalleeForValue(value ValueId) returns ByteArray
+		if self.tagOf(value) != ValueTypeTag.structRef 'notNominal'
+			return MmIncrefName
+		end 'notNominal'
+
+		return managedNameRetainCallee(self.signatures, declaredName: self.internedName(self.valueNameId(value)))
+	end 'retainCalleeForValue'
+
 	// ⭐ **EMIT A VOID `__mm_incref` OF `value`** — the one spelling of "take a second owner of this box,
 	// discarding the returned nothing". Single-sources every site that increfs a managed box in place:
 	// `retainThrownField` (#64 — a thrown borrowed-container field), `retainBorrowedPayload` (D1b — a managed
@@ -35644,7 +35712,7 @@ export type Parser
 	// (`retainBorrowedAggregate`) for when a FRESH SSA name is needed; this void form is for when the box is
 	// increfed in place and the caller already holds the ValueId it means.
 	function emitIncref(value ValueId, range SourceRange)
-		self.emitOwnershipRuntimeCall(MmIncrefName, args: singletonArgs(value), range: range)
+		self.emitOwnershipRuntimeCall(self.retainCalleeForValue(value), args: singletonArgs(value), range: range)
 		// ⭐ **AND THE OP IS THE FACT: after this line `value`'s allocation has two owners.** The mark rides
 		// here rather than at the named doors above because that is what makes it unforgettable — see
 		// `markValueCoOwnsHeap`. It matters even for a value that was FRESH: `writeBackPayload` increfs a
@@ -53161,7 +53229,7 @@ export type Parser
 		if self.memberCallFollows(self.pos + 1) 'aMethodOnTheMember'
 			match self.managedReceiverBindingOf(nameTok) 'binding'
 				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: nameTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(nameTok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed)
-				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: nameTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(nameTok)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
+				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: nameTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(nameTok), reader: self.moduleSlotReaderOf(nameTok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
 				none then break 'binding'
 			end 'binding'
 		end 'aMethodOnTheMember'
@@ -55427,7 +55495,7 @@ export type Parser
 		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelBase'
 			match self.managedReceiverBindingOf(baseTok) 'binding'
 				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed)
-				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
+				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok), reader: self.moduleSlotReaderOf(baseTok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
 				none then break 'binding'
 			end 'binding'
 		end 'managedTopLevelBase'
@@ -66960,7 +67028,7 @@ export type Parser
 	// line and the synthetic binding is built once — `VarInfo.createValueBinding` is the same constructor
 	// `dispatchOnManagedReceiver` uses, and the two must not come to describe one global differently.
 	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws ParseError
-		let binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)))
+		let binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok), reader: self.moduleSlotReaderOf(baseTok, mutable: mutable)))
 		let base = try self.requireStructBase(binding, baseTok: baseTok)
 		// No `baseBindingOf` here, and it would be a no-op if there were: `createValueBinding` cannot mint a
 		// self-field alias, so a global base always holds its own value.
@@ -69538,7 +69606,7 @@ export type Parser
 			// A read itself does not care whether the slot may be WRITTEN — it borrows the occupant either
 			// way. What the MUTABILITY decides is whether the borrowed value may later become a mutable
 			// ALIAS, which is `recordGlobalReadValue`'s business (P1.7 slice 2b).
-			found(label, valueType, mutable) then return self.recordGlobalReadValue(tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok)), mutable: mutable)
+			found(label, valueType, mutable) then return self.recordGlobalReadValue(tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok), reader: self.moduleSlotReaderOf(tok, mutable: mutable)), mutable: mutable)
 			notFound then return try self.emitFunctionRef(tok)
 		end 'global'
 	end 'topLevelGlobalRead'
@@ -70983,7 +71051,28 @@ export type Parser
 	// doors the note lists — `ModuleInit`'s synthesized store and the cleanup's load — take
 	// `declaredAggregateSlotWidth()` directly, which is the same answer reached from a stronger fact: a
 	// MANAGED global's slot is a pointer whatever it points at.
-	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange) returns ValueId
+	// ⭐⭐ **E3143's READ HALF IS MINTED HERE, AND `reader` IS WHAT KEEPS OUT EVERYTHING THAT IS NOT ONE.**
+	// Four of this function's five callers are an author naming a module slot in an expression — a bare name,
+	// a method receiver, a receiver bound to a local — and each asks `moduleSlotReaderOf` above, which drops
+	// a read of a `let`. The fifth is `emitCheckedGlobalStore`'s decref of the value the slot is LOSING,
+	// which is half of a write and has no read in the statement at all; recording it would file a READ
+	// against `total = 5`. The exclusion is a PARAMETER rather than a flag somebody has to remember, so a
+	// sixth caller cannot inherit the wrong answer by saying nothing. See `Project.moduleVarAccessSites`.
+	// ⭐ **THE `let` EXEMPTION, STATED ONCE FOR ALL FOUR READ SITES.** A module-level `let` is written once
+	// before any green thread exists and never again, so no store can free anything under a reader — which is
+	// E3143's own escape hatch and the reason `a-handler-may-read-an-immutable-global` is a passing case. The
+	// four sites each hold the `mutable` flag `globalDeclFor` handed them; deciding here rather than at each
+	// of them is what keeps the exemption one fact.
+	function moduleSlotReaderOf(nameTok Token, mutable bool) returns ModuleSlotReader
+		return ModuleSlotReader.source(nameTok) if mutable else ModuleSlotReader.notASharedAccess
+	end 'moduleSlotReaderOf'
+
+	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange, reader ModuleSlotReader) returns ValueId
+		match reader 'reader'
+			notASharedAccess then break 'reader'
+			source(nameTok) then self.artifact.recordModuleVarAccessSite(ModuleVarAccessSite.create(nameTok.value, access: ModuleVarAccess.read, line: nameTok.line, column: nameTok.column, declFilePath: self.filePath))
+		end 'reader'
+
 		let addr = self.emitGlobalAddr(label, range: range)
 		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: self.fieldStorageType(valueType), range: range)
 	end 'emitGlobalLoad'
@@ -73803,6 +73892,15 @@ export type Parser
 				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedStealCountName, runtimeName: SchedStealCountName, arity: SchedStealCountArity, calleeTok: anchor)
 			end 'schedStealCount'
 
+			// ⭐ **THE FOURTH SCHEDULER QUERY**, and the only one that asks about the SETTING rather than about
+			// the outcome: how many Ps `MAXON_MAX_PROCS` resolved to. Same door again — an `int` answer, no
+			// arguments, nothing to own. What differs is not visible here and is not this file's: unlike the
+			// steal count it does NOT set `usesGt`, because one `.data` word is all it reads. See
+			// `CpuParallelRuntime.SchedProcessorCountName`.
+			if callee.equals(BuiltinsSchedProcessorCountName) 'schedProcessorCount'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedProcessorCountName, runtimeName: SchedProcessorCountName, arity: SchedProcessorCountArity, calleeTok: anchor)
+			end 'schedProcessorCount'
+
 			// ⭐ **THE SIX MEMORY-TRAFFIC COUNTERS.** Every one answers an `int` and takes nothing, so every one
 			// takes the argumentless-integer emit — the same door the pid and the two CPU-parallel queries take,
 			// and the reason that door exists. Six arms rather than a table for the band's reason: the
@@ -73962,6 +74060,12 @@ export type Parser
 			if callee.equals(BuiltinsSubprocessLastErrorMessageName) 'subprocessLastErrorMessage'
 				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpLastErrorName, arity: SubprocessNoArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessLastErrorMessage'
+
+			// The index is an ordinary machine word, so the argument carries no buffer — the RESULT is the owned
+			// `__ManagedMemory`, which is what puts this beside the two readers above rather than in the scalar band.
+			if callee.equals(BuiltinsOsEnvironmentEntryName) 'osEnvironmentEntry'
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpEnvEntryName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
+			end 'osEnvironmentEntry'
 		end 'builtinsIntrinsic'
 
 		// ⭐⭐ **THE `__DebugStream` MEMBERS THAT REACH THE RING (Workstream O3)** — the second builtin TYPE's

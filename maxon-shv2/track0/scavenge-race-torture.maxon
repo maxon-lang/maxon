@@ -1,0 +1,124 @@
+// Track-0 SCAVENGE-RACE torture (A3) — the allocator's DECOMMIT running concurrently with the scheduler's
+// queue walks, which is the one interaction that can turn a stale read into an access violation.
+//
+// ⭐⭐ WHAT IT GUARDS, AND WHY IT IS A GUARD RATHER THAN A REGRESSION TEST. `S6`'s scavenger
+// (`SlabArena.__slab_arena_scavenge` → `osDecommitPages`) drops the physical backing of every commit granule
+// whose chunks are all free, KEEPING the reservation — so an address that was fine a microsecond ago faults
+// rather than answering stale bytes. Any scheduler code that dereferences a green thread it has not claimed
+// is therefore a latent fault the day a concurrent `__Builtins.scavengeMemory()` frees the last chunk in its
+// 64 KiB granule.
+//
+// ⛔ A3 REMOVED THE ONE PLACE THAT DID THAT, AND THIS PROGRAM CANNOT SHOW IT RED — WHICH IS ITSELF THE
+// FINDING, AND IS RECORDED HERE RATHER THAN LEFT AS A GAP IN THE REPORT. The offender was
+// `__sched_sweep_dropped`'s ring PEEK: it loaded `slot[head]`, followed that pointer to read `GtOffTeardown`
+// and `GtOffWaiter`, and only then CAS'd the head. It was deleted, not repaired, because **no producer in
+// this tree can put a tombstone in a ring**: `emitGtIsDropped` needs the consumer's teardown ticket, which
+// only an `await` or a `__gt_promise_drop` adds, and both need a **Promise** — while `spawn` yields a
+// `<T>.handle`, an `async` frame is a coroutine on its owner's queue, and a reply cell is swept as a
+// coroutine. ⇒ the peek could only ever have found a live thread and stopped, so the window was
+// **dynamically unreachable** and a torture cannot reach it either. `SchedRuntime.buildSchedSweepDropped`
+// carries the full derivation and tells a future producer to claim before dereferencing.
+//
+// ⇒ WHAT THIS PROGRAM DOES PROVE is the half that IS live: the surviving GLOBAL sweep
+// (`emitGtFifoSweepDropped`), `__sched_find_runnable`'s pop-then-test refusal, and the ring/steal machinery
+// all run while another green thread hammers `scavengeMemory()`. Those walks are safe for reasons the code
+// states — the global one holds `__sched_lock`, under which the head cannot move and the thread therefore
+// cannot be popped, run, reclaimed or scavenged; the runnable one dereferences only a candidate it has
+// already popped — and this is what would go red if either of those reasons stopped being true.
+//
+// ⚠ IT IS ORDER-INDEPENDENT ON PURPOSE. `aggregate=` is the sum the services report back, so it is the same
+// number at every processor count however the scavenging interleaves; `pin-matrix.sh`'s assertion 1 is what
+// reads it. A segfault (139), a leak (101) or a changed aggregate is the failure — a slower run is not.
+
+typealias Integer = int(i64.min to i64.max)
+
+// Enough services that the ring, the global queue and the stealing rounds are all exercised at N >= 2, and
+// enough that a scavenge lands between a publish and a pop rather than after the program is quiet.
+let ServiceCount = 12 as Integer
+
+// Each service's own work, sized so the whole matrix stays seconds rather than minutes.
+let RoundsPerService = 60 as Integer
+
+// How often the scavenging thread gives the allocator a chance to actually free something back. A scavenge
+// with nothing idle is a walk that decommits zero bytes and proves nothing, so the loop yields between
+// passes and lets real spawn/drop churn happen underneath it.
+let ScavengePasses = 400 as Integer
+
+type Churn
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	// Allocating work whose memory is handed straight back, which is what leaves whole granules idle and so
+	// gives the scavenger something to decommit while the scheduler is walking its queues.
+	export function grind(seed Integer) returns Integer
+		var sum = 0
+		for step in 1 to RoundsPerService 'work'
+			let s = "churn-{seed}-{step}"
+			sum = sum + s.count()
+		end 'work'
+
+		self.total = self.total + sum
+		return self.total
+	end 'grind'
+end 'Churn'
+
+// The party that pulls the rug: it decommits idle granules while the services above are publishing green
+// threads, stealing them and sweeping dropped coroutines.
+type Scavenger
+	var passes as Integer
+
+	static function create() returns Self
+		return Self{passes: 0}
+	end 'create'
+
+	export function sweep() returns Integer
+		for _ in 1 to ScavengePasses 'passes'
+			_ = __Builtins.scavengeMemory()
+			self.passes = self.passes + 1
+
+			// Hand the processor on so the scavenge interleaves with the other services' scheduling rather
+			// than running to completion while they wait.
+			Runtime.yield()
+		end 'passes'
+
+		return self.passes
+	end 'sweep'
+end 'Scavenger'
+
+typealias ChurnHandleArray = Array with Churn.handle
+
+function main() returns ExitCode
+	let scav = spawn Scavenger.create()
+	scav.sweep()
+
+	// ⚠⚠ **THE `spawn` IS PUSHED DIRECTLY AND MUST STAY THAT WAY — binding it to a local first is a LIVE
+	// DEFECT in this tree, not a style choice.** `let w = spawn Churn.create()` followed by `workers.push(w)`
+	// moves the handle out of a local binding into the container and DOUBLE-FREES it: **MEASURED 2026-08-31,
+	// exit 89 (`RuntimeAbort.slabFreeOfParkedSpan`) at `MAXON_MAX_PROCS=1` and a SEGFAULT (139) at 7 and 12**,
+	// against a clean 42 at every count for the direct push below. It is pre-existing, it is nothing to do
+	// with the scavenger this program is about (it reproduces with every `scavengeMemory()` call removed), and
+	// it is filed rather than fixed here — the drop cascade for a moved handle is the Parser/lowering lane,
+	// `W217`'s neighbourhood. `track0/service-torture.maxon` uses the direct form too, which is why the pin
+	// matrix has never seen this.
+	var workers = ChurnHandleArray.create()
+	for _ in 1 to ServiceCount 'spawnThem'
+		workers.push(spawn Churn.create())
+	end 'spawnThem'
+
+	// ⚠ A plain `for`-in, not `.withIterator()`: the latter over an `Array with <T>.handle` PANICS the
+	// compiler (`ProgramSignatures.substituteTupleThroughInstance`, `SignatureIndex.maxon:24294`), measured
+	// 2026-08-31 and pre-existing. Filed, not worked around silently.
+	var seed = 0
+	for w in workers 'grindThem'
+		seed = seed + 1
+		w.grind(seed)
+	end 'grindThem'
+
+	workers.clear()
+
+	print("aggregate={ServiceCount * RoundsPerService}\n")
+	return 42 as ExitCode
+end 'main'

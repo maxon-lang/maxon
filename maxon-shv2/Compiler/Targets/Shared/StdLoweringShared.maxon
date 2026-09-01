@@ -642,6 +642,8 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osReadFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileOpenWrite(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileOpenWriteExecutable(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osEnvBlock(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osEnvBlockFree then break 'result'
 		osFileSize(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileDelete(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileRename(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -1091,6 +1093,7 @@ export type ScaledIndexFolds
 			storeIndirect(addrId, _, _, _) then self.fuseAddressIntoMemoryOp(addrId, blockRef: blockRef)
 			osAllocPages to osEnterBackgroundPriority then break 'mem'
 			osFileOpenWriteExecutable then break 'mem'
+			osEnvBlock to osEnvBlockFree then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 
