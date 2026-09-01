@@ -1,0 +1,36 @@
+// Test: error.impl-throws-under-a-non-throwing-requirement
+typealias Payload = int(0 to u64.max)
+
+union MakeError implements Error
+	tooBig(limit Payload)
+end 'MakeError'
+
+interface ChunkMaker
+	function plain(seed Payload) returns Payload
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let cap as Payload
+
+	static function create(cap Payload) returns Backend
+		return Self{cap: cap}
+	end 'create'
+
+	function plain(seed Payload) returns Payload throws MakeError
+		if seed > self.cap 'reject'
+			throw MakeError.tooBig(self.cap)
+		end 'reject'
+		return seed
+	end 'plain'
+end 'Backend'
+
+function main() returns ExitCode
+	let backend = Backend.create(100)
+	return backend.cap as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/witness-managed-return-throws/error.impl-throws-under-a-non-throwing-requirement.test:12:6: Method 'Backend.plain' throws 'MakeError' but interface 'ChunkMaker' declares it non-throwing — a dispatch through a non-throwing interface method reads no error flag, so the error would be silently dropped
+```
+---
+---

@@ -1,0 +1,268 @@
+// Test: a-byte-operand-with-a-proven-count-is-still-64-bit
+typealias Num = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bits = int(0 to 63)
+
+function shlLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shl n
+end 'shlLowByte'
+
+function shlTopByte(n Bits) returns Num
+	let b = 255 as Byte
+	return b shl n
+end 'shlTopByte'
+
+function shrLowByte(n Bits) returns Num
+	let b = 200 as Byte
+	return b shr n
+end 'shrLowByte'
+
+function bits(step Num) returns Bits
+	return step as Bits
+end 'bits'
+
+function main() returns ExitCode
+	if shlLowByte(bits(10)) != 204800 'tenBits'
+		return 1
+	end 'tenBits'
+	if shlTopByte(bits(56)) != 0 - 72057594037927936 'topByte'
+		return 2
+	end 'topByte'
+	if shrLowByte(bits(3)) != 25 'shrByte'
+		return 3
+	end 'shrByte'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shlLowByte(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #63
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne shlLowByte.__range_panic_0
+    arm64.b shlLowByte.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_39
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #200
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shlLowByte.__shift_count_panic_0
+    arm64.b shlLowByte.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_40
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lslv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @shlTopByte(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #63
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne shlTopByte.__range_panic_0
+    arm64.b shlTopByte.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_41
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #255
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shlTopByte.__shift_count_panic_0
+    arm64.b shlTopByte.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_42
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lslv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @shrLowByte(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #63
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne shrLowByte.__range_panic_0
+    arm64.b shrLowByte.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_43
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #200
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shrLowByte.__shift_count_panic_0
+    arm64.b shrLowByte.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_44
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lsrv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @bits(step: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #63
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne bits.__range_panic_0
+    arm64.b bits.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_45
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #63
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne bits.__range_panic_1
+    arm64.b bits.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_45
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #10
+    arm64.bl bits
+    arm64.bl shlLowByte
+    arm64.mov x1, #204800
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.tenBits_0
+    arm64.b main.tenBits_0.after
+  tenBits_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  tenBits_0.after:
+    arm64.mov x0, #56
+    arm64.bl bits
+    arm64.bl shlTopByte
+    arm64.mov x1, #0
+    arm64.mov x2, #72057594037927936
+    arm64.sub x3, x1, x2
+    arm64.cmp x0, x3
+    arm64.cset x1, ne
+    arm64.cmp x1, #0
+    arm64.b.ne main.topByte_0
+    arm64.b main.topByte_0.after
+  topByte_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  topByte_0.after:
+    arm64.mov x0, #3
+    arm64.bl bits
+    arm64.bl shrLowByte
+    arm64.mov x1, #25
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.shrByte_0
+    arm64.b main.shrByte_0.after
+  shrByte_0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=16
+    arm64.ret
+  shrByte_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

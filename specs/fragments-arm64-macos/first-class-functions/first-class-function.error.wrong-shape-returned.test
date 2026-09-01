@@ -1,0 +1,39 @@
+// Test: first-class-function.error.wrong-shape-returned
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+function pick() returns ColorFn
+	return shadeIt
+end 'pick'
+
+function main() returns ExitCode
+	let f = pick()
+	return f(Color.create(3)).v
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-returned.test:27:2: Cannot return 'fn(Shade) returns Shade' from function declared to return 'fn(Color) returns Color'
+```
+---
+---

@@ -1,0 +1,131 @@
+// Test: a-static-reads-the-count
+typealias Int = int(i64.min to i64.max)
+typealias Box3 = Box with 3 Int
+
+var trips = 0
+
+type Box uses T
+	export var value as T
+
+	export static function counted(value T) returns Self
+		var i = 0
+		while i < countof(Self) 'each'
+			trips = trips + 1
+			i = i + 1
+		end 'each'
+		return Self{value: value}
+	end 'counted'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box3.counted(1)
+	return (b.value + trips) as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.bl Box3.counted
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.global_load x2, [trips]
+    arm64.add x3, x1, x2
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #255
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #0
+    arm64.cmp x3, x0
+    arm64.cset x1, lt
+    arm64.mov x2, #255
+    arm64.cmp x3, x2
+    arm64.cset x0, gt
+    arm64.orr x2, x1, x0
+    arm64.cmp x2, #0
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x3, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_26
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Box3.counted(value: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b Box3.counted.each_0.header
+  each_0.header:
+    arm64.mov x0, #3
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne Box3.counted.each_0
+    arm64.b Box3.counted.each_0.exit
+  each_0:
+    arm64.global_load x0, [trips]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.global_store [trips], x2
+    arm64.mov x3, #1
+    arm64.ldr x4, [x29, #-16]
+    arm64.add x5, x4, x3
+    arm64.str x5, [x29, #-16]
+    arm64.b Box3.counted.each_0.header
+  each_0.exit:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-24]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_Box3(ptr: i64) {
+  entry:
+    arm64.b __destruct_Box3.done
+  done:
+    arm64.ret
+  }
+}
+---

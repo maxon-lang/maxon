@@ -1,0 +1,173 @@
+// Test: match-string.pattern-decodes-escapes
+typealias Choice = int(0 to 9)
+
+function pick(s String) returns Choice
+	match s 'pick'
+		"a\nb" then return 4
+		"\{" then return 2
+		default then return 1
+	end 'pick'
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick("a\nb")
+	let b = pick("\{")
+	return a + b
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @pick(s: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.b pick.pick_0.cmp0
+  pick_0.cmp0:
+    arm64.adrp_add_global x0, __static_lit_3
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-16]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x6, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl stdlib.String.equals
+    arm64.ldr x7, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.cmp x7, #0
+    arm64.b.eq pick.__skip_guarded_16
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label pick.__skip_guarded_16
+    arm64.ldr x8, [x29, #-32]
+    arm64.cmp x8, #0
+    arm64.b.ne pick.pick_0.case0
+    arm64.b pick.pick_0.cmp1
+  pick_0.case0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq pick.__skip_guarded_20
+    arm64.bl mm_decref
+    arm64.label pick.__skip_guarded_20
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=80
+    arm64.ret
+  pick_0.cmp1:
+    arm64.adrp_add_global x0, __static_lit_4
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-24]
+    arm64.ldr x4, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl stdlib.String.equals
+    arm64.ldr x7, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.cmp x7, #0
+    arm64.b.eq pick.__skip_guarded_33
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label pick.__skip_guarded_33
+    arm64.ldr x8, [x29, #-32]
+    arm64.cmp x8, #0
+    arm64.b.ne pick.pick_0.case1
+    arm64.b pick.pick_0.case2
+  pick_0.case1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq pick.__skip_guarded_37
+    arm64.bl mm_decref
+    arm64.label pick.__skip_guarded_37
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=80
+    arm64.ret
+  pick_0.case2:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq pick.__skip_guarded_41
+    arm64.bl mm_decref
+    arm64.label pick.__skip_guarded_41
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=80
+    arm64.ret
+  pick_0.merge:
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp_add_global x0, __static_lit_3
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl pick
+    arm64.adrp_add_global x6, __static_lit_4
+    arm64.mov x7, x6
+    arm64.mov x8, #32
+    arm64.add x9, x7, x8
+    arm64.str x9, [x29, #-16]
+    arm64.ldr x10, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x11, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl pick
+    arm64.ldr x12, [x29, #-24]
+    arm64.mov x14, x12
+    arm64.mov x15, x0
+    arm64.add x0, x14, x15
+    arm64.mov x1, #0
+    arm64.mov x2, x0
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.mov x1, #255
+    arm64.mov x2, x0
+    arm64.cmp x2, x1
+    arm64.cset x4, gt
+    arm64.orr x1, x3, x4
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_24
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_33
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_33
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_35
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_35
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,26 @@
+// Test: error.unneeded.through-a-try-otherwise-result
+typealias Narrow = int(0 to 63)
+typealias Mid = int(0 to 1000)
+
+enum PickError implements Error
+	nope
+end 'PickError'
+
+function pick(ok bool) returns Narrow throws PickError
+	if not ok 'bad'
+		throw PickError.nope
+	end 'bad'
+	return 5
+end 'pick'
+
+function main() returns ExitCode
+	let w = (try pick(true) otherwise 0) as Mid
+	print("w={w}")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:17:39: unneeded cast: 'Narrow' already fits in 'Mid'
+```
+---
+---

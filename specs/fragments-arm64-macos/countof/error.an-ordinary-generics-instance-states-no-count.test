@@ -1,0 +1,26 @@
+// Test: error.an-ordinary-generics-instance-states-no-count
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+type Box uses T
+	export var value as T
+
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function slots() returns Int
+		return countof(Self)
+	end 'slots'
+end 'Box'
+
+function main() returns ExitCode
+	let b = IntBox.create(1)
+	return b.slots()
+end 'main'
+---
+MaxoncStderr: ```
+error E2071: specs/fragments/countof/error.an-ordinary-generics-instance-states-no-count.test:13:18: countof of the enclosing generic, in a body compiled for 'IntBox' — that instance states no element count. A count is a coordinate of the INSTANCE, and this one was applied to type arguments only: instantiate it with a count (`Box with 3 Int`) or read a runtime length instead
+```
+---
+---

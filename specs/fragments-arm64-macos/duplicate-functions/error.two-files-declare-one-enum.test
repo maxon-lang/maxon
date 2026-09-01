@@ -1,0 +1,33 @@
+// Test: error.two-files-declare-one-enum
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Shape
+	circle
+	square
+end 'Shape'
+
+export function fromA() returns Integer
+	return match Shape.circle 'm'
+		circle gives 1
+		square gives 2
+	end 'm'
+end 'fromA'
+
+// --- file: b.maxon
+enum Shape
+	dot
+	line
+end 'Shape'
+
+function main() returns ExitCode
+	let t = Shape.dot
+	print("{t.name} {fromA()}\n")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3006: Duplicate function 'Shape.hash'
+```
+---
+---

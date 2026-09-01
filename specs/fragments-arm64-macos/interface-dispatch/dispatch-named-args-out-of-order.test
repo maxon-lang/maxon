@@ -1,0 +1,119 @@
+// Test: dispatch-named-args-out-of-order
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Subtractor
+	function subtract(minuend Integer, subtrahend Integer) returns Integer
+end 'Subtractor'
+
+type Difference implements Subtractor
+	let bias as Integer
+
+	function subtract(minuend Integer, subtrahend Integer) returns Integer
+		return minuend - subtrahend + bias
+	end 'subtract'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Difference'
+
+function subtractVia(s Subtractor) returns Integer
+	return s.subtract(subtrahend: 2, minuend: 10)
+end 'subtractVia'
+
+function main() returns ExitCode
+	let d = Difference.create(0)
+	return subtractVia(d)
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @Difference.subtract(__self_ptr: i64, minuend: i64, subtrahend: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x3, [x0, #0]
+    arm64.sub x0, x1, x2
+    arm64.add x1, x0, x3
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Difference.create(bias: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #8
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.bl Difference.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl subtractVia$Difference
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_15
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_15
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @subtractVia$Difference(s: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #10
+    arm64.mov x2, #2
+    arm64.bl Difference.subtract
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Difference(ptr: i64) {
+  entry:
+    arm64.b __destruct_Difference.done
+  done:
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,132 @@
+// Test: synthesized-clone-crosses-an-exported-type-s-file-boundary
+// --- file: holder.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Holder
+	export var count as Integer
+	export var scale as Integer
+
+	export static function make(c Integer, s Integer) returns Holder
+		return Holder{count: c, scale: s}
+	end 'make'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = Holder.make(3, s: 4)
+	let c = h.clone()
+	return c.count + c.scale
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Holder.make(c: i64, s: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-24]
+    arm64.str x3, [x2, #8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.mov x0, x5
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @Holder.clone(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x1, [x29, #-24]
+    arm64.str x3, [x29, #-32]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x29, #-24]
+    arm64.str x5, [x4, #0]
+    arm64.ldr x6, [x29, #-16]
+    arm64.ldr x7, [x29, #-32]
+    arm64.str x7, [x6, #8]
+    arm64.ldr x8, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x9, [x29, #-16]
+    arm64.mov x0, x9
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #3
+    arm64.mov x1, #4
+    arm64.bl Holder.make
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Holder.clone
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #0]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x4, [x3, #8]
+    arm64.add x5, x2, x4
+    arm64.mov x6, #0
+    arm64.cmp x5, x6
+    arm64.cset x7, lt
+    arm64.mov x8, #255
+    arm64.cmp x5, x8
+    arm64.cset x9, gt
+    arm64.orr x10, x7, x9
+    arm64.cmp x10, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x5, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_22
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_22
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_24
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_24
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.ret
+  }
+}
+---

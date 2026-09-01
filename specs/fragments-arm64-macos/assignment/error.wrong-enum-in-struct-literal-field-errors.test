@@ -1,0 +1,30 @@
+// Test: error.wrong-enum-in-struct-literal-field-errors
+
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Holder
+	export var c as Color
+
+	static function create() returns Self
+		return Self{c: Shade.light}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.c.ordinal
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/assignment/error.wrong-enum-in-struct-literal-field-errors.test:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+```
+---
+---

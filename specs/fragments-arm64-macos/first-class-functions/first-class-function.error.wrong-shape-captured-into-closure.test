@@ -1,0 +1,46 @@
+// Test: first-class-function.error.wrong-shape-captured-into-closure
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+typealias Thunk = function() returns Integer
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+function apply(f ColorFn, c Color) returns Color
+	return f(c)
+end 'apply'
+
+function runThunk(t Thunk) returns Integer
+	return t()
+end 'runThunk'
+
+function main() returns ExitCode
+	let g = shadeIt
+	let t = function() gives apply(g, c: Color.create(3)).v
+
+	return runThunk(t)
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-captured-into-closure.test:37:27: argument type mismatch for 'f': expected 'fn(Color) returns Color', got 'fn(Shade) returns Shade'
+```
+---
+---

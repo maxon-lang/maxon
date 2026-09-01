@@ -1,0 +1,132 @@
+// Test: non-exported-struct-values-compare-across-a-file-boundary
+// --- file: rec.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rec implements Equatable
+	export let n as Integer
+
+	export static function create(n Integer) returns Rec
+		return Self{n: n}
+	end 'create'
+
+	export function equals(other Rec) returns bool
+		return self.n == other.n
+	end 'equals'
+end 'Rec'
+
+export function build(n Integer) returns Rec
+	return Rec.create(n)
+end 'build'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = build(1)
+	let b = build(2)
+	if a == b 'same'
+		return 1
+	end 'same'
+	return 9
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @Rec.create(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Rec.equals(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.cmp x1, x3
+    arm64.cset x4, eq
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @build(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl Rec.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.bl build
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #2
+    arm64.bl build
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl Rec.equals
+    arm64.cmp x0, #0
+    arm64.b.ne main.same_0
+    arm64.b main.same_0.after
+  same_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_12
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_12
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_14
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_14
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  same_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_18
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_18
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_20
+    arm64.mov x0, #9
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Rec(ptr: i64) {
+  entry:
+    arm64.b __destruct_Rec.done
+  done:
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,245 @@
+// Test: lazy-static.struct-literal-field-from-constant
+typealias Count = int(0 to u64.max)
+
+let SEED = 5
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: SEED, b: 2}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+5 2
+```
+---
+// CompiledIR
+module {
+  func @Pair.get() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.global_load x0, [Pair.origin.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne Pair.get.__lazy_merge_0
+    arm64.b Pair.get.__lazy_init_0
+  __lazy_merge_0:
+    arm64.global_load x0, [Pair.origin]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  __lazy_init_0:
+    arm64.bl Pair.origin.__lazy_init
+    arm64.b Pair.get.__lazy_merge_0
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=304
+    arm64.bl Pair.get
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x1, [x29, #-112]
+    arm64.str x3, [x29, #-120]
+    arm64.mov x0, #21
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-112]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl maxon_i64_to_string
+    arm64.ldr x4, [x29, #-16]
+    arm64.adrp_add_rdata x5, __interp_lit_0
+    arm64.mov x6, x5
+    arm64.mov x7, #1
+    arm64.str x0, [x29, #-128]
+    arm64.str x6, [x29, #-136]
+    arm64.mov x0, #21
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-120]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl maxon_i64_to_string
+    arm64.ldr x8, [x29, #-24]
+    arm64.mov x9, #1
+    arm64.ldr x10, [x29, #-128]
+    arm64.add x11, x10, x9
+    arm64.add x12, x11, x0
+    arm64.mov x14, #49
+    arm64.add x15, x12, x14
+    arm64.adrp_add_func x1, __destruct_String
+    arm64.mov x2, x1
+    arm64.str x0, [x29, #-144]
+    arm64.str x12, [x29, #-152]
+    arm64.mov x0, x15
+    arm64.mov x1, x2
+    arm64.mov x2, #7
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #48
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-40]
+    arm64.str x2, [x29, #-48]
+    arm64.ldr x0, [x29, #-152]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-128]
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x0, [x29, #-136]
+    arm64.str x0, [x29, #-80]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-88]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-96]
+    arm64.ldr x0, [x29, #-144]
+    arm64.str x0, [x29, #-104]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-72]
+    arm64.str x2, [x29, #-160]
+    arm64.ldr x0, [x29, #-160]
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x2, [x29, #-72]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-72]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-40]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x1, [x29, #-88]
+    arm64.str x2, [x29, #-168]
+    arm64.ldr x0, [x29, #-168]
+    arm64.ldr x1, [x29, #-80]
+    arm64.ldr x2, [x29, #-88]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-88]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-40]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-96]
+    arm64.ldr x1, [x29, #-104]
+    arm64.str x2, [x29, #-176]
+    arm64.ldr x0, [x29, #-176]
+    arm64.ldr x1, [x29, #-96]
+    arm64.ldr x2, [x29, #-104]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-56]
+    arm64.add x2, x0, x1
+    arm64.mov x0, #0
+    arm64.strb x0, [x2, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_raw_free
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_raw_free
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-56]
+    arm64.mov x2, #1
+    arm64.mov x3, #-3
+    arm64.ldr x4, [x29, #-32]
+    arm64.str x0, [x4, #0]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x2, [x0, #24]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x3, [x0, #32]
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-32]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_99
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_99
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_101
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_101
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=304
+    arm64.ret
+  }
+  func @Pair.origin.__lazy_init() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.global_store [Pair.origin.__initialized], x0
+    arm64.mov x1, #5
+    arm64.mov x2, #2
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #14
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #5
+    arm64.str x4, [x3, #0]
+    arm64.ldr x5, [x29, #-8]
+    arm64.mov x6, #2
+    arm64.str x6, [x5, #8]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-8]
+    arm64.global_load x8, [Pair.origin]
+    arm64.str x8, [x29, #-16]
+    arm64.cmp x8, #0
+    arm64.b.eq Pair.origin.__lazy_init.__skip_guarded_16
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label Pair.origin.__lazy_init.__skip_guarded_16
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x9, [x29, #-8]
+    arm64.global_store [Pair.origin], x9
+    arm64.ldr x10, [x29, #-8]
+    arm64.cmp x10, #0
+    arm64.b.eq Pair.origin.__lazy_init.__skip_guarded_20
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label Pair.origin.__lazy_init.__skip_guarded_20
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Pair(ptr: i64) {
+  entry:
+    arm64.b __destruct_Pair.done
+  done:
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,27 @@
+// Test: error.if-try-discards-a-non-bool-result
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	if try mayFail(true) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3124: specs/fragments/if-try/error.if-try-discards-a-non-bool-result.test:17:5: 'if try' discards the result of 'mayFail': only a call that returns nothing may be tested bare — bind the result with 'if let'
+```
+---
+---

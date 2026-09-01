@@ -1,0 +1,36 @@
+// Test: error.abstract-requirement-narrowed-to-a-boxed-union
+typealias Payload = int(0 to u64.max)
+
+union ParseFailure implements Error
+	badDigit(at Payload)
+end 'ParseFailure'
+
+interface Reader
+	function read(seed Payload) returns Payload throws Error
+end 'Reader'
+
+type Digits implements Reader
+	export let cap as Payload
+
+	static function create(cap Payload) returns Digits
+		return Self{cap: cap}
+	end 'create'
+
+	function read(seed Payload) returns Payload throws ParseFailure
+		if seed > self.cap 'reject'
+			throw ParseFailure.badDigit(seed)
+		end 'reject'
+		return seed
+	end 'read'
+end 'Digits'
+
+function main() returns ExitCode
+	let digits = Digits.create(100)
+	return digits.cap as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/witness-managed-return-throws/error.abstract-requirement-narrowed-to-a-boxed-union.test:12:6: Method 'Digits.read' throws 'ParseFailure' but interface 'Reader' declares it 'throws Error', which declares no case to decode — a dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as 'ParseFailure' itself
+```
+---
+---

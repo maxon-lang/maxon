@@ -1,0 +1,25 @@
+// Test: error.if-try-discards-a-result
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function answer(succeed bool) returns bool throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return false
+end 'answer'
+
+function main() returns ExitCode
+	if try answer(true) 'check'
+		return 7
+	end 'check'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3124: specs/fragments/if-try/error.if-try-discards-a-result.test:15:5: 'if try' discards the result of 'answer': only a call that returns nothing may be tested bare — bind the result with 'if let'
+```
+---
+---

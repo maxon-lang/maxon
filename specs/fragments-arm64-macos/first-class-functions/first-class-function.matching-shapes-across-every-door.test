@@ -1,0 +1,340 @@
+// Test: first-class-function.matching-shapes-across-every-door
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+typealias ColorFn = function(Color) returns Color
+
+function bump(x Color) returns Color
+	return Color.create(x.v + 1)
+end 'bump'
+
+function bumpTwice(x Color) returns Color
+	return Color.create(x.v + 2)
+end 'bumpTwice'
+
+type Holder
+	export var op as ColorFn
+
+	export static function create() returns Self
+		return Self{op: bump}
+	end 'create'
+end 'Holder'
+
+union Task
+	run(op ColorFn)
+end 'Task'
+
+function pick() returns ColorFn
+	return bump
+end 'pick'
+
+function apply(f ColorFn, c Color) returns Color
+	return f(c)
+end 'apply'
+
+function main() returns ExitCode
+	var f = bump
+	f = bumpTwice
+	var h = Holder.create()
+	h.op = bump
+	let t = Task.run(bump)
+	let c = Color.create(0)
+	let viaLocal = apply(f, c: c).v
+	let viaField = h.op(c).v
+	let viaReturn = pick()(c).v
+	match t 'go'
+		run(op) then return viaLocal + viaField + viaReturn + op(c).v
+	end 'go'
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Color.create(v: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #12
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @bump(x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #1
+    arm64.add x3, x1, x2
+    arm64.mov x0, x3
+    arm64.bl Color.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x4, [x29, #-16]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @bumpTwice(x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #2
+    arm64.add x3, x1, x2
+    arm64.mov x0, x3
+    arm64.bl Color.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x4, [x29, #-16]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Holder.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_func x0, bump
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #13
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @pick() -> fn(Color) returns Color {
+  entry:
+    arm64.adrp_add_func x0, bump
+    arm64.ret
+  }
+  func @apply(f: i64, __env_f: i64, c: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x2, [x29, #-8]
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x9, x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.blr x9
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=256
+    arm64.adrp_add_func x0, bumpTwice
+    arm64.str x0, [x29, #-104]
+    arm64.bl Holder.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x1, bump
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x1, [x2, #0]
+    arm64.adrp_add_func x3, bump
+    arm64.str x3, [x29, #-112]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #14
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x4, #0
+    arm64.str x4, [x0, #0]
+    arm64.ldr x5, [x29, #-112]
+    arm64.str x5, [x0, #8]
+    arm64.ldr x6, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.bl Color.create
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x7, [x29, #-24]
+    arm64.ldr x0, [x29, #-104]
+    arm64.ldr x2, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.bl apply
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x8, [x29, #-32]
+    arm64.ldr x9, [x8, #0]
+    arm64.str x9, [x29, #-40]
+    arm64.ldr x10, [x29, #-8]
+    arm64.ldr x11, [x10, #0]
+    arm64.ldr x12, [x29, #-24]
+    arm64.mov x14, #0
+    arm64.str x11, [x29, #-120]
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, x14
+    arm64.blr x11
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x15, [x29, #-48]
+    arm64.ldr x0, [x15, #0]
+    arm64.str x0, [x29, #-56]
+    arm64.bl pick
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x2, #0
+    arm64.str x0, [x29, #-128]
+    arm64.mov x9, x0
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, x2
+    arm64.blr x9
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-72]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-80]
+    arm64.ldr x0, [x29, #-80]
+    arm64.str x1, [x29, #-136]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-136]
+    arm64.str x0, [x29, #-88]
+    arm64.ldr x0, [x29, #-88]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.go_0.dispatch0
+    arm64.b main.go_0.case0
+  go_0.dispatch0:
+    arm64.b main.go_0.merge
+  go_0.case0:
+    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x1, [x0, #8]
+    arm64.ldr x2, [x29, #-40]
+    arm64.ldr x3, [x29, #-56]
+    arm64.add x4, x2, x3
+    arm64.ldr x5, [x29, #-72]
+    arm64.add x6, x4, x5
+    arm64.ldr x7, [x29, #-24]
+    arm64.mov x8, #0
+    arm64.str x1, [x29, #-104]
+    arm64.str x6, [x29, #-112]
+    arm64.mov x9, x1
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, x8
+    arm64.blr x9
+    arm64.str x0, [x29, #-96]
+    arm64.ldr x9, [x29, #-96]
+    arm64.ldr x10, [x9, #0]
+    arm64.ldr x11, [x29, #-112]
+    arm64.add x12, x11, x10
+    arm64.mov x14, #0
+    arm64.cmp x12, x14
+    arm64.cset x15, lt
+    arm64.mov x0, #255
+    arm64.cmp x12, x0
+    arm64.cset x1, gt
+    arm64.orr x0, x15, x1
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_34
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-80]
+    arm64.str x12, [x29, #-120]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_79
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_79
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_81
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_81
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_83
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_83
+    arm64.ldr x3, [x29, #-8]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_85
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_85
+    arm64.ldr x4, [x29, #-16]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_87
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_87
+    arm64.ldr x5, [x29, #-48]
+    arm64.cmp x5, #0
+    arm64.b.eq main.__skip_guarded_89
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_89
+    arm64.ldr x6, [x29, #-64]
+    arm64.cmp x6, #0
+    arm64.b.eq main.__skip_guarded_91
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_91
+    arm64.ldr x7, [x29, #-96]
+    arm64.cmp x7, #0
+    arm64.b.eq main.__skip_guarded_93
+    arm64.ldr x0, [x29, #-96]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_93
+    arm64.ldr x0, [x29, #-120]
+    arm64.epilogue stack_size=256
+    arm64.ret
+  go_0.merge:
+  }
+  func @__destruct_Color(ptr: i64) {
+  entry:
+    arm64.b __destruct_Color.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Task(ptr: i64) {
+  entry:
+    arm64.b __destruct_Task.done
+  done:
+    arm64.ret
+  }
+}
+---

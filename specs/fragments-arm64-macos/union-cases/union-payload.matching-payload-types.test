@@ -1,0 +1,256 @@
+// Test: union-payload.matching-payload-types
+typealias Integer = int(i64.min to i64.max)
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+union Paint
+	tint(c Color)
+	wash(s Shade)
+end 'Paint'
+
+function readOne(p Paint) returns Integer
+	match p 'go'
+		tint(c) then return c.v
+		wash(s) then return s.ordinal
+	end 'go'
+end 'readOne'
+
+function main() returns ExitCode
+	return readOne(Paint.tint(Color.create(4))) + readOne(Paint.wash(Shade.light))
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Color.create(v: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @readOne(p: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x2, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-24]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne readOne.go_0.dispatch0
+    arm64.b readOne.go_0.case0
+  go_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne readOne.go_0.dispatch1
+    arm64.b readOne.go_0.case1
+  go_0.dispatch1:
+    arm64.b readOne.go_0.merge
+  go_0.case0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-32]
+    arm64.ldr x4, [x3, #0]
+    arm64.ldr x5, [x29, #-16]
+    arm64.str x4, [x29, #-48]
+    arm64.cmp x5, #0
+    arm64.b.eq readOne.__skip_guarded_24
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label readOne.__skip_guarded_24
+    arm64.ldr x6, [x29, #-32]
+    arm64.cmp x6, #0
+    arm64.b.eq readOne.__skip_guarded_26
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label readOne.__skip_guarded_26
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  go_0.case1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-40]
+    arm64.ldr x2, [x29, #-40]
+    arm64.mov x3, #0
+    arm64.mov x4, #0
+    arm64.cmp x2, x4
+    arm64.cset x5, eq
+    arm64.mov x6, #0
+    arm64.cmp x5, #0
+    arm64.csel x7, x6, x3, ne
+    arm64.mov x8, #1
+    arm64.cmp x2, x8
+    arm64.cset x9, eq
+    arm64.mov x10, #1
+    arm64.cmp x9, #0
+    arm64.csel x11, x10, x7, ne
+    arm64.ldr x12, [x29, #-16]
+    arm64.str x11, [x29, #-48]
+    arm64.cmp x12, #0
+    arm64.b.eq readOne.__skip_guarded_42
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label readOne.__skip_guarded_42
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  go_0.merge:
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.mov x0, #4
+    arm64.bl Color.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x0, __destruct_Paint
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.str x2, [x0, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.str x3, [x0, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl readOne
+    arm64.mov x5, #1
+    arm64.adrp_add_func x6, __destruct_Paint
+    arm64.mov x7, x6
+    arm64.str x0, [x29, #-32]
+    arm64.mov x1, x7
+    arm64.mov x0, #16
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x8, #1
+    arm64.str x8, [x0, #0]
+    arm64.mov x9, #1
+    arm64.str x9, [x0, #8]
+    arm64.bl mm_incref
+    arm64.ldr x10, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl readOne
+    arm64.ldr x11, [x29, #-32]
+    arm64.add x12, x11, x0
+    arm64.mov x14, #0
+    arm64.cmp x12, x14
+    arm64.cset x15, lt
+    arm64.mov x0, #255
+    arm64.cmp x12, x0
+    arm64.cset x1, gt
+    arm64.orr x0, x15, x1
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x12, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_41
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_41
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_43
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_43
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_45
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_45
+    arm64.ldr x0, [x29, #-40]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @__destruct_Color(ptr: i64) {
+  entry:
+    arm64.b __destruct_Color.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Paint(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_Paint.case_0
+    arm64.b __destruct_Paint.check_0
+  case_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Paint.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Paint.__skip_guarded_9
+    arm64.b __destruct_Paint.done
+  check_0:
+    arm64.b __destruct_Paint.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

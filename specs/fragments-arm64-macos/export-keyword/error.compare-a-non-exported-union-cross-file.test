@@ -1,0 +1,31 @@
+// Test: error.compare-a-non-exported-union-cross-file
+// --- file: answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = classify(11)
+	let b = classify(42)
+	if a == b 'same'
+		return 1
+	end 'same'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3066: specs/fragments/export-keyword/error.compare-a-non-exported-union-cross-file.test:21:7: cannot compare union values using '==', use 'match' instead
+```
+---
+---

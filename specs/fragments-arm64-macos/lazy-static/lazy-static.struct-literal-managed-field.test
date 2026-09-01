@@ -1,0 +1,222 @@
+// Test: lazy-static.struct-literal-managed-field
+type Holder
+	export var name as String
+
+	static var greeting = Holder{name: "hi"}
+
+	export static function get() returns Holder
+		return Holder.greeting
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.get()
+	print("{h.name}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+hi
+```
+---
+// CompiledIR
+module {
+  func @Holder.get() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.global_load x0, [Holder.greeting.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne Holder.get.__lazy_merge_0
+    arm64.b Holder.get.__lazy_init_0
+  __lazy_merge_0:
+    arm64.global_load x0, [Holder.greeting]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  __lazy_init_0:
+    arm64.bl Holder.greeting.__lazy_init
+    arm64.b Holder.get.__lazy_merge_0
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=176
+    arm64.bl Holder.get
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x4, #8]
+    arm64.mov x6, #49
+    arm64.add x7, x5, x6
+    arm64.adrp_add_func x8, __destruct_String
+    arm64.mov x9, x8
+    arm64.str x3, [x29, #-72]
+    arm64.str x5, [x29, #-80]
+    arm64.mov x0, x7
+    arm64.mov x1, x9
+    arm64.mov x2, #7
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x10, #48
+    arm64.ldr x11, [x29, #-24]
+    arm64.add x12, x11, x10
+    arm64.mov x14, #0
+    arm64.str x14, [x29, #-32]
+    arm64.str x12, [x29, #-40]
+    arm64.ldr x15, [x29, #-80]
+    arm64.str x15, [x29, #-48]
+    arm64.ldr x0, [x29, #-72]
+    arm64.str x0, [x29, #-56]
+    arm64.str x15, [x29, #-64]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-64]
+    arm64.str x2, [x29, #-88]
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x2, [x29, #-64]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.add x2, x0, x1
+    arm64.mov x0, #0
+    arm64.strb x0, [x2, #0]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.mov x2, #1
+    arm64.mov x3, #-3
+    arm64.ldr x4, [x29, #-24]
+    arm64.str x0, [x4, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x2, [x0, #24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x3, [x0, #32]
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_59
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_59
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_61
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_61
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=176
+    arm64.ret
+  }
+  func @Holder.greeting.__lazy_init() {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #1
+    arm64.global_store [Holder.greeting.__initialized], x0
+    arm64.adrp_add_rdata x1, __str_52
+    arm64.mov x2, x1
+    arm64.mov x3, #2
+    arm64.adrp_add_func x4, __destruct_String
+    arm64.mov x5, x4
+    arm64.str x2, [x29, #-24]
+    arm64.mov x1, x5
+    arm64.mov x0, #48
+    arm64.mov x2, #7
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x6, #-2
+    arm64.mov x7, #1
+    arm64.mov x8, #0
+    arm64.ldr x9, [x29, #-8]
+    arm64.ldr x10, [x29, #-24]
+    arm64.str x10, [x9, #0]
+    arm64.ldr x11, [x29, #-8]
+    arm64.mov x12, #2
+    arm64.str x12, [x11, #8]
+    arm64.ldr x14, [x29, #-8]
+    arm64.str x6, [x14, #16]
+    arm64.ldr x15, [x29, #-8]
+    arm64.str x7, [x15, #24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x8, [x0, #32]
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.adrp_add_func x0, __destruct_Holder
+    arm64.mov x1, x0
+    arm64.mov x0, #8
+    arm64.mov x2, #13
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
+    arm64.str x1, [x2, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.global_load x1, [Holder.greeting]
+    arm64.str x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq Holder.greeting.__lazy_init.__skip_guarded_42
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label Holder.greeting.__lazy_init.__skip_guarded_42
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.global_store [Holder.greeting], x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq Holder.greeting.__lazy_init.__skip_guarded_46
+    arm64.bl mm_decref
+    arm64.label Holder.greeting.__lazy_init.__skip_guarded_46
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq Holder.greeting.__lazy_init.__skip_guarded_48
+    arm64.bl mm_decref
+    arm64.label Holder.greeting.__lazy_init.__skip_guarded_48
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Holder.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Holder.__skip_guarded_4
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

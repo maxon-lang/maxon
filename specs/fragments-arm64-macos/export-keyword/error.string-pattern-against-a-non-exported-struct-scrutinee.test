@@ -1,0 +1,30 @@
+// Test: error.string-pattern-against-a-non-exported-struct-scrutinee
+// --- file: rec.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rec
+	export let n as Integer
+
+	export static function create(n Integer) returns Rec
+		return Self{n: n}
+	end 'create'
+end 'Rec'
+
+export function build(n Integer) returns Rec
+	return Rec.create(n)
+end 'build'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let r = build(1)
+	match r 'x'
+		"hi" then return 1
+		default panic("no")
+	end 'x'
+end 'main'
+---
+MaxoncStderr: ```
+error E2028: specs/fragments/export-keyword/error.string-pattern-against-a-non-exported-struct-scrutinee.test:21:3: pattern type 'String' does not match scrutinee type 'Rec'
+```
+---
+---

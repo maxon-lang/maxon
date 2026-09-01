@@ -1,0 +1,194 @@
+// Test: a-proven-count-through-a-cast-site
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto 8 'lowBits'
+		let n = i as Bits
+		acc = acc + (1 shl n)
+	end 'lowBits'
+	if acc != 255 'sum'
+		return 1
+	end 'sum'
+
+	var top = 0
+	for i in 0 upto 2 'boundary'
+		let n = (i * 63) as Bits
+		top = top + (1 shl n)
+	end 'boundary'
+	if top != 0 - 9223372036854775807 'topSum'
+		return 2
+	end 'topSum'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.mov x2, #8
+    arm64.str x2, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.b main.lowBits_0.header
+  lowBits_0.header:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne main.lowBits_0
+    arm64.b main.lowBits_0.exit
+  lowBits_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #63
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_46
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne main.__shift_count_panic_0
+    arm64.b main.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_47
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x0, x2
+    arm64.cset x3, lo
+    arm64.lslv x2, x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.ldr x2, [x29, #-8]
+    arm64.add x3, x2, x1
+    arm64.str x3, [x29, #-8]
+    arm64.b main.lowBits_0.incr
+  lowBits_0.incr:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-24]
+    arm64.b main.lowBits_0.header
+  lowBits_0.exit:
+    arm64.mov x0, #255
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.sum_0
+    arm64.b main.sum_0.after
+  sum_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=112
+    arm64.ret
+  sum_0.after:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.mov x2, #2
+    arm64.str x2, [x29, #-40]
+    arm64.str x1, [x29, #-48]
+    arm64.b main.boundary_0.header
+  boundary_0.header:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne main.boundary_0
+    arm64.b main.boundary_0.exit
+  boundary_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.mov x1, #63
+    arm64.mul x2, x0, x1
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #63
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_48
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.mov x0, #1
+    arm64.mov x1, #0
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne main.__shift_count_panic_1
+    arm64.b main.__shift_count_ok_1
+  __shift_count_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_49
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_1:
+    arm64.mov x1, #64
+    arm64.cmp x2, x1
+    arm64.cset x3, lo
+    arm64.lslv x1, x0, x2
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x2, x1, x0, ne
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x0, x1, x2
+    arm64.str x0, [x29, #-32]
+    arm64.b main.boundary_0.incr
+  boundary_0.incr:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-48]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-48]
+    arm64.b main.boundary_0.header
+  boundary_0.exit:
+    arm64.mov x0, #0
+    arm64.mov x1, #9223372036854775807
+    arm64.sub x2, x0, x1
+    arm64.ldr x3, [x29, #-32]
+    arm64.cmp x3, x2
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne main.topSum_0
+    arm64.b main.topSum_0.after
+  topSum_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=112
+    arm64.ret
+  topSum_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+}
+---

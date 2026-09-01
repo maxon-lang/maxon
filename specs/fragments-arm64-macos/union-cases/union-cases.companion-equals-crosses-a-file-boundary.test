@@ -1,0 +1,211 @@
+// Test: union-cases.companion-equals-crosses-a-file-boundary
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+// --- file: b.maxon
+export function tagOf(s Shape) returns Shape.unionCases
+	return match s 'm'
+		circle gives Shape.unionCases.circle
+		square gives Shape.unionCases.square
+	end 'm'
+end 'tagOf'
+
+// --- file: c.maxon
+function main() returns ExitCode
+	let a = tagOf(Shape.circle(1))
+	let b = tagOf(Shape.square(2))
+	if a.equals(b) 'same'
+		return 1
+	end 'same'
+	if not a.equals(tagOf(Shape.circle(9))) 'differs'
+		return 2
+	end 'differs'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Shape.unionCases.equals(self: i64, other: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl stdlib.int.equals
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @tagOf(s: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne tagOf.m_0.dispatch0
+    arm64.b tagOf.m_0.case0
+  m_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne tagOf.m_0.dispatch1
+    arm64.b tagOf.m_0.case1
+  m_0.dispatch1:
+    arm64.b tagOf.m_0.merge
+  m_0.case0:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b tagOf.m_0.merge
+  m_0.case1:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-16]
+    arm64.b tagOf.m_0.merge
+  m_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x0, #1
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.mov x2, #1
+    arm64.str x2, [x0, #8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl tagOf
+    arm64.str x0, [x29, #-16]
+    arm64.mov x4, #2
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x5, #1
+    arm64.str x5, [x0, #0]
+    arm64.mov x6, #2
+    arm64.str x6, [x0, #8]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl tagOf
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x8, [x29, #-16]
+    arm64.ldr x9, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl Shape.unionCases.equals
+    arm64.cmp x0, #0
+    arm64.b.ne main.same_0
+    arm64.b main.same_0.after
+  same_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_32
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_32
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_34
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_34
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=112
+    arm64.ret
+  same_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #9
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.mov x2, #0
+    arm64.str x2, [x0, #0]
+    arm64.mov x3, #9
+    arm64.str x3, [x0, #8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl tagOf
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl Shape.unionCases.equals
+    arm64.mov x5, #1
+    arm64.eor x6, x0, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.differs_0
+    arm64.b main.differs_0.after
+  differs_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_55
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_55
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_57
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_57
+    arm64.ldr x2, [x29, #-40]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_59
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_59
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=112
+    arm64.ret
+  differs_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_63
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_63
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_65
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_65
+    arm64.ldr x2, [x29, #-40]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_67
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_67
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @__destruct_Shape(ptr: i64) {
+  entry:
+    arm64.b __destruct_Shape.done
+  done:
+    arm64.ret
+  }
+}
+---

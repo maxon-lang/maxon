@@ -1,0 +1,183 @@
+// Test: a-merged-count-is-not-proven-around-a-loop
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Bits = int(0 to 63)
+
+function main() returns ExitCode
+	var n = 1 as Bits
+	var i = 0 as Num
+	while i < 7 'step'
+		n = n + 10
+		i = i + 1
+	end 'step'
+
+	// The premise, asserted before it is spent: the merge really does hold a value its alias cannot.
+	if n != 71 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = 0 - 4
+	if negative shr n != 0 - 1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	let w = u64.max as Word
+	if w shr n != 0 'shrZeroFill'
+		return 4
+	end 'shrZeroFill'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.b main.step_0.header
+  step_0.header:
+    arm64.mov x0, #7
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne main.step_0
+    arm64.b main.step_0.exit
+  step_0:
+    arm64.mov x0, #10
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #1
+    arm64.ldr x4, [x29, #-16]
+    arm64.add x5, x4, x3
+    arm64.str x5, [x29, #-16]
+    arm64.b main.step_0.header
+  step_0.exit:
+    arm64.mov x0, #71
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.reached_0
+    arm64.b main.reached_0.after
+  reached_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  reached_0.after:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne main.__shift_count_panic_0
+    arm64.b main.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_50
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lslv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.shl_0
+    arm64.b main.shl_0.after
+  shl_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shl_0.after:
+    arm64.mov x0, #0
+    arm64.mov x1, #4
+    arm64.sub x2, x0, x1
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.cmp x5, #0
+    arm64.b.ne main.__shift_count_panic_1
+    arm64.b main.__shift_count_ok_1
+  __shift_count_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_51
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_1:
+    arm64.mov x0, #64
+    arm64.cmp x3, x0
+    arm64.cset x1, lo
+    arm64.mov x0, #63
+    arm64.cmp x1, #0
+    arm64.csel x4, x3, x0, ne
+    arm64.asrv x0, x2, x4
+    arm64.mov x2, #0
+    arm64.mov x3, #1
+    arm64.sub x4, x2, x3
+    arm64.cmp x0, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne main.shrSign_0
+    arm64.b main.shrSign_0.after
+  shrSign_0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shrSign_0.after:
+    arm64.mov x0, #-1
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne main.__shift_count_panic_2
+    arm64.b main.__shift_count_ok_2
+  __shift_count_panic_2:
+    arm64.adrp_add_symdata x0, __panic_msg_52
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_2:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lsrv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.shrZeroFill_0
+    arm64.b main.shrZeroFill_0.after
+  shrZeroFill_0:
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shrZeroFill_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

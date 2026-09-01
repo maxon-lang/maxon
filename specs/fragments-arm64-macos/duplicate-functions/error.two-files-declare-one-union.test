@@ -1,0 +1,33 @@
+// Test: error.two-files-declare-one-union
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+export function fromA() returns Integer
+	return match Shape.circle(1) 'm'
+		circle(r) gives r
+		square(s) gives s
+	end 'm'
+end 'fromA'
+
+// --- file: b.maxon
+union Shape
+	dot
+	line
+end 'Shape'
+
+function main() returns ExitCode
+	let t = Shape.dot
+	print("{t.name} {fromA()}\n")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3006: Duplicate function 'Shape.unionCases.hash'
+```
+---
+---

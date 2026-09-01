@@ -1,0 +1,154 @@
+// Test: the-typealias-rhs-admits-the-keyword
+typealias Small = int(0 to 100)
+typealias IntOp = function(n int) returns int
+typealias Pair = (int, int)
+
+function dbl(n Small) returns Small
+	return n + n
+end 'dbl'
+
+function apply(f IntOp, p Pair, flag bool) returns Small
+	return f(p.0) + p.1 if flag else 0
+end 'apply'
+
+function main() returns ExitCode
+	let p = (3, 4)
+	return apply(dbl, p: p, flag: true)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @dbl(n: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne dbl.__range_panic_0
+    arm64.b dbl.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x0, x1
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #100
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne dbl.__range_panic_1
+    arm64.b dbl.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @apply(f: i64, __env_f: i64, p: i64, flag: i1) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x2, [x29, #-8]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x4, [x2, #0]
+    arm64.str x0, [x29, #-24]
+    arm64.str x3, [x29, #-32]
+    arm64.mov x9, x0
+    arm64.mov x0, x4
+    arm64.blr x9
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.str x0, [x29, #-40]
+    arm64.b.ne apply.ternary_0.true
+    arm64.b apply.ternary_0.false
+  ternary_0.true:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.b apply.ternary_0.merge
+  ternary_0.false:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b apply.ternary_0.merge
+  ternary_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x1, x0
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #100
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne apply.__range_panic_0
+    arm64.b apply.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #3
+    arm64.mov x1, #4
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-16]
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-8]
+    arm64.adrp_add_func x4, dbl
+    arm64.add x5, x29, #-16
+    arm64.mov x6, x5
+    arm64.mov x0, x4
+    arm64.mov x2, x6
+    arm64.mov x1, #0
+    arm64.mov x3, #1
+    arm64.bl apply
+    arm64.mov x7, #0
+    arm64.cmp x0, x7
+    arm64.cset x8, lt
+    arm64.mov x9, #255
+    arm64.cmp x0, x9
+    arm64.cset x10, gt
+    arm64.orr x11, x8, x10
+    arm64.cmp x11, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

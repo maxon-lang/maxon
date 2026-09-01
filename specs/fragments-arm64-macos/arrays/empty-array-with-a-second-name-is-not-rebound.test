@@ -1,0 +1,134 @@
+// Test: empty-array-with-a-second-name-is-not-rebound
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var b = a
+	a.push(1)
+	if a is not b 'aliased'
+		return 99
+	end 'aliased'
+	return a.count() * 10 + b.count()
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.bl IntArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.bl IntArray.push
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.aliased_0
+    arm64.b main.aliased_0.after
+  aliased_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_12
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_12
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=64
+    arm64.ret
+  aliased_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl IntArray.count
+    arm64.mov x1, #10
+    arm64.mul x2, x0, x1
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x2, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl IntArray.count
+    arm64.ldr x4, [x29, #-24]
+    arm64.add x5, x4, x0
+    arm64.mov x6, #0
+    arm64.cmp x5, x6
+    arm64.cset x7, lt
+    arm64.mov x8, #255
+    arm64.cmp x5, x8
+    arm64.cset x9, gt
+    arm64.orr x10, x7, x9
+    arm64.cmp x10, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_33
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x5, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_31
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_31
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_IntArray.slice_cleanup_0
+    arm64.b __destruct_IntArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntArray.__skip_guarded_9
+    arm64.b __destruct_IntArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_IntArray.free_buf_0
+    arm64.b __destruct_IntArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_IntArray.raw_free_0
+    arm64.b __destruct_IntArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_IntArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_IntArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

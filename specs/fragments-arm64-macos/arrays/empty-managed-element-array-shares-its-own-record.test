@@ -1,0 +1,360 @@
+// Test: empty-managed-element-array-shares-its-own-record
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias StrArray = Array with String
+
+function main() returns ExitCode
+	let si = IntArray.create()
+	let sj = IntArray.create()
+	let ss = StrArray.create()
+	let st = StrArray.create()
+	var owned = StrArray.create()
+	owned.push("x")
+	if si is not sj 'ints'
+		return 1
+	end 'ints'
+	if ss is not st 'strs'
+		return 2
+	end 'strs'
+	return 40 + ss.count() + si.count() + owned.count()
+end 'main'
+---
+ExitCode: 41
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=144
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.adrp_add_global x4, __static_lit_9
+    arm64.mov x5, x4
+    arm64.mov x6, #32
+    arm64.add x7, x5, x6
+    arm64.str x7, [x29, #-16]
+    arm64.adrp_add_global x8, __static_lit_10
+    arm64.mov x9, x8
+    arm64.mov x10, #32
+    arm64.add x11, x9, x10
+    arm64.str x11, [x29, #-24]
+    arm64.adrp_add_global x12, __static_lit_10
+    arm64.mov x14, x12
+    arm64.mov x15, #32
+    arm64.add x0, x14, x15
+    arm64.str x0, [x29, #-32]
+    arm64.bl StrArray.create
+    arm64.str x0, [x29, #-40]
+    arm64.adrp_add_rdata x0, __str_6
+    arm64.mov x1, x0
+    arm64.mov x0, #1
+    arm64.adrp_add_func x2, __destruct_String
+    arm64.mov x3, x2
+    arm64.str x1, [x29, #-56]
+    arm64.mov x1, x3
+    arm64.mov x0, #48
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.mov x0, #-2
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.ldr x3, [x29, #-48]
+    arm64.ldr x4, [x29, #-56]
+    arm64.str x4, [x3, #0]
+    arm64.ldr x3, [x29, #-48]
+    arm64.mov x4, #1
+    arm64.str x4, [x3, #8]
+    arm64.ldr x3, [x29, #-48]
+    arm64.str x0, [x3, #16]
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x1, [x0, #24]
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x2, [x0, #32]
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.bl StrArray.push
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.ints_0
+    arm64.b main.ints_0.after
+  ints_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_58
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_58
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_60
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_60
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_62
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_62
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_64
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_64
+    arm64.ldr x4, [x29, #-16]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_66
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_66
+    arm64.ldr x5, [x29, #-8]
+    arm64.cmp x5, #0
+    arm64.b.eq main.__skip_guarded_68
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_68
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=144
+    arm64.ret
+  ints_0.after:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.strs_0
+    arm64.b main.strs_0.after
+  strs_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_76
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_76
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_78
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_78
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_80
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_80
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_82
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_82
+    arm64.ldr x4, [x29, #-16]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_84
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_84
+    arm64.ldr x5, [x29, #-8]
+    arm64.cmp x5, #0
+    arm64.b.eq main.__skip_guarded_86
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_86
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=144
+    arm64.ret
+  strs_0.after:
+    arm64.mov x0, #40
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl StrArray.count
+    arm64.mov x2, #40
+    arm64.add x3, x2, x0
+    arm64.ldr x4, [x29, #-8]
+    arm64.str x3, [x29, #-56]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl IntArray.count
+    arm64.ldr x5, [x29, #-56]
+    arm64.add x6, x5, x0
+    arm64.ldr x7, [x29, #-40]
+    arm64.str x6, [x29, #-64]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl StrArray.count
+    arm64.ldr x8, [x29, #-64]
+    arm64.add x9, x8, x0
+    arm64.mov x10, #0
+    arm64.cmp x9, x10
+    arm64.cset x11, lt
+    arm64.mov x12, #255
+    arm64.cmp x9, x12
+    arm64.cset x14, gt
+    arm64.orr x15, x11, x14
+    arm64.cmp x15, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_28
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x9, [x29, #-72]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_108
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_108
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_110
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_110
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_112
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_112
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_114
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_114
+    arm64.ldr x4, [x29, #-16]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_116
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_116
+    arm64.ldr x5, [x29, #-8]
+    arm64.cmp x5, #0
+    arm64.b.eq main.__skip_guarded_118
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_118
+    arm64.ldr x0, [x29, #-72]
+    arm64.epilogue stack_size=144
+    arm64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_IntArray.slice_cleanup_0
+    arm64.b __destruct_IntArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntArray.__skip_guarded_9
+    arm64.b __destruct_IntArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_IntArray.free_buf_0
+    arm64.b __destruct_IntArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_IntArray.raw_free_0
+    arm64.b __destruct_IntArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_IntArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_IntArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_StrArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_StrArray.slice_cleanup_0
+    arm64.b __destruct_StrArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_StrArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_StrArray.__skip_guarded_9
+    arm64.b __destruct_StrArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_StrArray.free_buf_0
+    arm64.b __destruct_StrArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_StrArray.raw_free_0
+    arm64.b __destruct_StrArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_StrArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_StrArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

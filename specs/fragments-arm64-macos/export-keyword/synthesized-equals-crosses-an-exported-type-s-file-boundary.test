@@ -1,0 +1,177 @@
+// Test: synthesized-equals-crosses-an-exported-type-s-file-boundary
+// --- file: holder.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type Holder
+	export var count as Integer
+	export var scale as Integer
+
+	export static function make(c Integer, s Integer) returns Holder
+		return Holder{count: c, scale: s}
+	end 'make'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = Holder.make(3, s: 4)
+	let b = Holder.make(3, s: 4)
+	let c = Holder.make(9, s: 9)
+	if a.equals(b) 'same'
+		if a.equals(c) 'differs'
+			return 1
+		end 'differs'
+		return 7
+	end 'same'
+	return 2
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Holder.make(c: i64, s: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-24]
+    arm64.str x3, [x2, #8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.mov x0, x5
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @Holder.equals(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.cmp x1, x3
+    arm64.cset x4, eq
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x6, [x5, #8]
+    arm64.ldr x7, [x29, #-16]
+    arm64.ldr x8, [x7, #8]
+    arm64.cmp x6, x8
+    arm64.cset x9, eq
+    arm64.and x10, x4, x9
+    arm64.mov x0, x10
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #3
+    arm64.mov x1, #4
+    arm64.bl Holder.make
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #3
+    arm64.mov x1, #4
+    arm64.bl Holder.make
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #9
+    arm64.mov x1, #9
+    arm64.bl Holder.make
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl Holder.equals
+    arm64.cmp x0, #0
+    arm64.b.ne main.same_0
+    arm64.b main.same_0.after
+  same_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl Holder.equals
+    arm64.cmp x0, #0
+    arm64.b.ne main.differs_0
+    arm64.b main.differs_0.after
+  differs_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_22
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_22
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_24
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_24
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_26
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=80
+    arm64.ret
+  differs_0.after:
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_30
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_30
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_32
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_32
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_34
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_34
+    arm64.mov x0, #7
+    arm64.epilogue stack_size=80
+    arm64.ret
+  same_0.after:
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_38
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_38
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_40
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_40
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_42
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_42
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,360 @@
+// Test: interface-param-managed-list-cursor-survives-specialization
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = __ManagedList with Integer
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value as Integer
+
+	function greet() returns Integer
+		return value + 1
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function firstVia(g Greeter, list IntList) returns Integer
+	list.cursorReset()
+	try list.cursorStart() otherwise return -1
+	return g.greet() + list.cursorValue()
+end 'firstVia'
+
+function main() returns ExitCode
+	let h = Hello.create(0)
+	var list = IntList.create()
+	list.insertLast(42)
+	print("{firstVia(h, list: list)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+43
+```
+---
+// CompiledIR
+module {
+  func @Hello.greet(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #1
+    arm64.add x3, x1, x2
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Hello.create(value: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=256
+    arm64.mov x0, #0
+    arm64.bl Hello.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x0, __destruct_IntList
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.mov x2, #0
+    arm64.str x2, [x0, #0]
+    arm64.str x2, [x0, #8]
+    arm64.str x2, [x0, #16]
+    arm64.str x2, [x0, #24]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x4, #42
+    arm64.mov x0, #32
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.mov x5, #0
+    arm64.str x5, [x0, #0]
+    arm64.str x5, [x0, #8]
+    arm64.str x5, [x0, #16]
+    arm64.mov x6, #42
+    arm64.str x6, [x0, #24]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x7, [x29, #-16]
+    arm64.ldr x8, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl maxon_managed_list_insert_last
+    arm64.ldr x9, [x29, #-8]
+    arm64.ldr x10, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl firstVia$Hello
+    arm64.str x0, [x29, #-104]
+    arm64.mov x0, #21
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-104]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl maxon_i64_to_string
+    arm64.ldr x11, [x29, #-32]
+    arm64.adrp_add_rdata x12, __interp_lit_0
+    arm64.mov x14, x12
+    arm64.mov x15, #1
+    arm64.add x1, x0, x15
+    arm64.mov x2, #49
+    arm64.add x3, x1, x2
+    arm64.adrp_add_func x2, __destruct_String
+    arm64.mov x4, x2
+    arm64.str x0, [x29, #-112]
+    arm64.str x1, [x29, #-120]
+    arm64.str x14, [x29, #-128]
+    arm64.mov x0, x3
+    arm64.mov x1, x4
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.mov x0, #48
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-48]
+    arm64.str x2, [x29, #-56]
+    arm64.ldr x0, [x29, #-120]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x0, [x29, #-112]
+    arm64.str x0, [x29, #-80]
+    arm64.ldr x0, [x29, #-128]
+    arm64.str x0, [x29, #-88]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-96]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-48]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-80]
+    arm64.str x2, [x29, #-136]
+    arm64.ldr x0, [x29, #-136]
+    arm64.ldr x1, [x29, #-72]
+    arm64.ldr x2, [x29, #-80]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-80]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-48]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-48]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x1, [x29, #-96]
+    arm64.str x2, [x29, #-144]
+    arm64.ldr x0, [x29, #-144]
+    arm64.ldr x1, [x29, #-88]
+    arm64.ldr x2, [x29, #-96]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-64]
+    arm64.add x2, x0, x1
+    arm64.mov x0, #0
+    arm64.strb x0, [x2, #0]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_raw_free
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-64]
+    arm64.mov x2, #1
+    arm64.mov x3, #-3
+    arm64.ldr x4, [x29, #-40]
+    arm64.str x0, [x4, #0]
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x2, [x0, #24]
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x3, [x0, #32]
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-40]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_106
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_106
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_108
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_108
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_110
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_110
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=256
+    arm64.ret
+  }
+  func @firstVia$Hello(g: i64, list: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #24]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-16]
+    arm64.str x3, [x4, #24]
+    arm64.mov x5, #0
+    arm64.cmp x3, x5
+    arm64.cset x6, eq
+    arm64.mov x7, #1
+    arm64.mov x8, #0
+    arm64.cmp x6, #0
+    arm64.csel x9, x7, x8, ne
+    arm64.mov x10, #0
+    arm64.cmp x9, x10
+    arm64.cset x11, ne
+    arm64.cmp x11, #0
+    arm64.b.ne firstVia$Hello.otherwise_stmt_0
+    arm64.b firstVia$Hello.otherwise_continue_1
+  otherwise_stmt_0:
+    arm64.mov x0, #-1
+    arm64.epilogue stack_size=64
+    arm64.ret
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Hello.greet
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #24]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, eq
+    arm64.mov x5, #1
+    arm64.mov x6, #0
+    arm64.cmp x4, #0
+    arm64.csel x7, x5, x6, ne
+    arm64.adrp_add_symdata x8, __mm_panic_list_empty
+    arm64.mov x9, x8
+    arm64.str x0, [x29, #-24]
+    arm64.str x2, [x29, #-32]
+    arm64.mov x0, x7
+    arm64.mov x1, x5
+    arm64.mov x2, x9
+    arm64.bl maxon_bounds_check
+    arm64.ldr x10, [x29, #-32]
+    arm64.ldr x11, [x10, #24]
+    arm64.ldr x12, [x29, #-24]
+    arm64.add x14, x12, x11
+    arm64.mov x0, x14
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Hello(ptr: i64) {
+  entry:
+    arm64.b __destruct_Hello.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_IntList(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl maxon_managed_list_clear
+    arm64.b __destruct_IntList.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___ManagedListNode(ptr: i64) {
+  entry:
+    arm64.b __destruct___ManagedListNode.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.slice_cleanup_0
+    arm64.b __destruct_String.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_String.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_String.__skip_guarded_9
+    arm64.b __destruct_String.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.free_buf_0
+    arm64.b __destruct_String.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.raw_free_0
+    arm64.b __destruct_String.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_String.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_String.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

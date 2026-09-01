@@ -1,0 +1,172 @@
+// Test: a-merged-count-is-not-proven-through-a-fallback
+typealias Num = int(i64.min to i64.max)
+typealias Bits = int(0 to 63)
+
+union Missing implements Error
+	nothing
+end 'Missing'
+
+function firstBit(ok bool) returns Bits throws Missing
+	if not ok 'absent'
+		throw Missing.nothing
+	end 'absent'
+
+	return 3
+end 'firstBit'
+
+function main() returns ExitCode
+	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
+	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
+	var wide = 90 as Num
+	wide = wide + 10
+
+	let n = try firstBit(false) otherwise wide
+
+	if n != 100 'reached'
+		return 1
+	end 'reached'
+
+	if 1 shl n != 0 'shl'
+		return 2
+	end 'shl'
+	let negative = 0 - 4
+	if negative shr n != 0 - 1 'shrSign'
+		return 3
+	end 'shrSign'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @firstBit(ok: i1) -> u8 {
+  entry:
+    arm64.mov x1, #1
+    arm64.eor x2, x0, x1
+    arm64.cmp x2, #0
+    arm64.b.ne firstBit.absent_0
+    arm64.b firstBit.absent_0.after
+  absent_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  absent_0.after:
+    arm64.mov x0, #3
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #90
+    arm64.mov x1, #10
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.bl firstBit
+    arm64.ldr x3, [x29, #-32]
+    arm64.str x3, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.reached_0
+    arm64.b main.reached_0.after
+  reached_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=80
+    arm64.ret
+  reached_0.after:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne main.__shift_count_panic_0
+    arm64.b main.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_53
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lslv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.shl_0
+    arm64.b main.shl_0.after
+  shl_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=80
+    arm64.ret
+  shl_0.after:
+    arm64.mov x0, #0
+    arm64.mov x1, #4
+    arm64.sub x2, x0, x1
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.cmp x5, #0
+    arm64.b.ne main.__shift_count_panic_1
+    arm64.b main.__shift_count_ok_1
+  __shift_count_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_54
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_1:
+    arm64.mov x0, #64
+    arm64.cmp x3, x0
+    arm64.cset x1, lo
+    arm64.mov x0, #63
+    arm64.cmp x1, #0
+    arm64.csel x4, x3, x0, ne
+    arm64.asrv x0, x2, x4
+    arm64.mov x2, #0
+    arm64.mov x3, #1
+    arm64.sub x4, x2, x3
+    arm64.cmp x0, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne main.shrSign_0
+    arm64.b main.shrSign_0.after
+  shrSign_0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=80
+    arm64.ret
+  shrSign_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

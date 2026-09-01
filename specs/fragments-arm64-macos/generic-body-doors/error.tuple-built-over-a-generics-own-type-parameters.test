@@ -1,0 +1,24 @@
+// Test: error.tuple-built-over-a-generics-own-type-parameters
+typealias Num = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export let both as (A, B)
+
+	static function make(a A, b B) returns Self
+		return Pair{both: (a, b)}
+	end 'make'
+end 'Pair'
+
+typealias NumPair = Pair with (Num, Num)
+
+function main() returns ExitCode
+	let p = NumPair.make(3, b: 4)
+	let t = p.both
+	return (t._0 + t._1) as ExitCode
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/generic-body-doors/error.tuple-built-over-a-generics-own-type-parameters.test:8:15: a tuple value is named by its elements' storage types, and a tuple declared over a generic's type parameters is named by those parameters, so no tuple value can meet field 'both' of 'Pair', declared '(A, B)'
+```
+---
+---

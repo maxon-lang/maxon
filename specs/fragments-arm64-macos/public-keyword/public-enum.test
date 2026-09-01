@@ -1,0 +1,66 @@
+// Test: public-enum
+public enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.blue
+	match c 'check'
+		blue then return 7
+		red then return 0
+		green then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.check_0.dispatch0
+    arm64.b main.check_0.case1
+  check_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.dispatch1
+    arm64.b main.check_0.case2
+  check_0.dispatch1:
+    arm64.mov x0, #2
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.dispatch2
+    arm64.b main.check_0.case0
+  check_0.dispatch2:
+    arm64.b main.check_0.merge
+  check_0.case0:
+    arm64.mov x0, #7
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.case1:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.case2:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.merge:
+  }
+}
+---

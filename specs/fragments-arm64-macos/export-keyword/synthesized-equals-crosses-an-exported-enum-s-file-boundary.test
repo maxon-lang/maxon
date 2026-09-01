@@ -1,0 +1,78 @@
+// Test: synthesized-equals-crosses-an-exported-enum-s-file-boundary
+// --- file: shade.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum Shade
+	dim
+	bright
+end 'Shade'
+
+export function pick(n Integer) returns Shade
+	if n > 1 'b'
+		return Shade.bright
+	end 'b'
+	return Shade.dim
+end 'pick'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = pick(0)
+	let b = pick(5)
+	if a.equals(b) 'same'
+		return 1
+	end 'same'
+	return 7
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Shade.equals(self: i64, other: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl stdlib.int.equals
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @pick(n: i64) -> i64 {
+  entry:
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne pick.b_0
+    arm64.b pick.b_0.after
+  b_0:
+    arm64.mov x0, #1
+    arm64.ret
+  b_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.bl pick
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #5
+    arm64.bl pick
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl Shade.equals
+    arm64.cmp x0, #0
+    arm64.b.ne main.same_0
+    arm64.b main.same_0.after
+  same_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  same_0.after:
+    arm64.mov x0, #7
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

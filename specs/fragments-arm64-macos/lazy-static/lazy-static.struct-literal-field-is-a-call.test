@@ -1,0 +1,212 @@
+// Test: lazy-static.struct-literal-field-is-a-call
+typealias Count = int(0 to u64.max)
+
+type Inner
+	export var n as Count
+
+	export static function create(n Count) returns Inner
+		return Inner{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static var base = Outer{inner: Inner.create(7)}
+
+	export static function get() returns Outer
+		return Outer.base
+	end 'get'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.get()
+	print("{o.inner.n}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+7
+```
+---
+// CompiledIR
+module {
+  func @Inner.create(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #10
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Outer.get() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.global_load x0, [Outer.base.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne Outer.get.__lazy_merge_0
+    arm64.b Outer.get.__lazy_init_0
+  __lazy_merge_0:
+    arm64.global_load x0, [Outer.base]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  __lazy_init_0:
+    arm64.bl Outer.base.__lazy_init
+    arm64.b Outer.get.__lazy_merge_0
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl Outer.get
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.adrp_add_func x4, __destruct_String
+    arm64.mov x5, x4
+    arm64.str x3, [x29, #-32]
+    arm64.mov x1, x5
+    arm64.mov x0, #70
+    arm64.mov x2, #7
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x6, #48
+    arm64.ldr x7, [x29, #-24]
+    arm64.add x8, x7, x6
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, x8
+    arm64.bl maxon_i64_to_string
+    arm64.mov x9, #48
+    arm64.ldr x10, [x29, #-24]
+    arm64.add x11, x10, x9
+    arm64.add x12, x11, x0
+    arm64.mov x14, #0
+    arm64.strb x14, [x12, #0]
+    arm64.mov x15, #1
+    arm64.mov x1, #-3
+    arm64.ldr x2, [x29, #-24]
+    arm64.str x11, [x2, #0]
+    arm64.ldr x2, [x29, #-24]
+    arm64.str x0, [x2, #8]
+    arm64.ldr x2, [x29, #-24]
+    arm64.str x0, [x2, #16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x15, [x0, #24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x1, [x0, #32]
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_44
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_44
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_46
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_46
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @Outer.base.__lazy_init() {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #1
+    arm64.global_store [Outer.base.__initialized], x0
+    arm64.mov x0, #7
+    arm64.bl Inner.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x1, __destruct_Outer
+    arm64.mov x2, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #8
+    arm64.mov x2, #17
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-16]
+    arm64.str x3, [x4, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-16]
+    arm64.global_load x6, [Outer.base]
+    arm64.str x6, [x29, #-24]
+    arm64.cmp x6, #0
+    arm64.b.eq Outer.base.__lazy_init.__skip_guarded_18
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label Outer.base.__lazy_init.__skip_guarded_18
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-16]
+    arm64.global_store [Outer.base], x7
+    arm64.ldr x8, [x29, #-8]
+    arm64.cmp x8, #0
+    arm64.b.eq Outer.base.__lazy_init.__skip_guarded_22
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label Outer.base.__lazy_init.__skip_guarded_22
+    arm64.ldr x9, [x29, #-16]
+    arm64.cmp x9, #0
+    arm64.b.eq Outer.base.__lazy_init.__skip_guarded_24
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label Outer.base.__lazy_init.__skip_guarded_24
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Inner(ptr: i64) {
+  entry:
+    arm64.b __destruct_Inner.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Outer(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Outer.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Outer.__skip_guarded_4
+    arm64.b __destruct_Outer.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

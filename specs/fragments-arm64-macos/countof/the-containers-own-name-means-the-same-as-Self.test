@@ -1,0 +1,168 @@
+// Test: the-containers-own-name-means-the-same-as-Self
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function byName() returns Int
+		return countof(Vector)
+	end 'byName'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.byName()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl Vec3.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Vec3.byName
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_14
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_14
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Vec3.byName(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #3
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Int.slice_cleanup_0
+    arm64.b __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___ManagedMemory_Int.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___ManagedMemory_Int.__skip_guarded_9
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Int.free_buf_0
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Int.raw_free_0
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Int.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Vec3(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_Vec3.slice_cleanup_0
+    arm64.b __destruct_Vec3.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Vec3.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Vec3.__skip_guarded_9
+    arm64.b __destruct_Vec3.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_Vec3.free_buf_0
+    arm64.b __destruct_Vec3.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_Vec3.raw_free_0
+    arm64.b __destruct_Vec3.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_Vec3.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_Vec3.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

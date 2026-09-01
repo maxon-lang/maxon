@@ -1,0 +1,331 @@
+// Test: try-block.union-member-names-join-injectively
+// --- file: errors.maxon
+typealias Score = int(0 to 100)
+
+enum A_B implements Error
+    kaboom
+end 'A_B'
+
+enum C implements Error
+    splat
+end 'C'
+
+enum A implements Error
+    zonk
+end 'A'
+
+enum B_C implements Error
+    whap
+end 'B_C'
+
+export function callAB(x bool) returns Score throws A_B
+    if x 'c'
+        throw A_B.kaboom
+    end 'c'
+    return 5
+end 'callAB'
+
+export function callC(x bool) returns Score throws C
+    if x 'c'
+        throw C.splat
+    end 'c'
+    return 6
+end 'callC'
+
+export function callA(x bool) returns Score throws A
+    if x 'c'
+        throw A.zonk
+    end 'c'
+    return 7
+end 'callA'
+
+export function callBC(x bool) returns Score throws B_C
+    if x 'c'
+        throw B_C.whap
+    end 'c'
+    return 8
+end 'callBC'
+
+// --- file: main.maxon
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callAB(true)
+        let b = callC(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        try 'inner'
+            let p = callA(false)
+            let q = callBC(false)
+            sum = p + q
+        end 'inner'
+        otherwise (f) 'ih'
+            match f 'ik'
+                A.zonk then sum = 1
+                B_C.whap then sum = 2
+            end 'ik'
+        end 'ih'
+        match e 'k'
+            A_B.kaboom then sum = 11
+            C.splat then sum = 22
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @callAB(x: i1) -> u8 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne callAB.c_0
+    arm64.b callAB.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #5
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @callC(x: i1) -> u8 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne callC.c_0
+    arm64.b callC.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #6
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @callA(x: i1) -> u8 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne callA.c_0
+    arm64.b callA.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #7
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @callBC(x: i1) -> u8 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne callBC.c_0
+    arm64.b callBC.c_0.after
+  c_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  c_0.after:
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=240
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #1
+    arm64.bl callAB
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_0
+    arm64.b main.try_block_throw_0
+  try_block_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-40]
+    arm64.mov x0, #0
+    arm64.bl callC
+    arm64.str x0, [x29, #-48]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_1
+    arm64.b main.try_block_throw_1
+  try_block_continue_1:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.b main.try_block_after_1
+  try_block_throw_0:
+    arm64.b main.try_block_err_0
+  try_block_throw_1:
+    arm64.b main.try_block_err_0
+  try_block_err_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-56]
+    arm64.mov x0, #0
+    arm64.bl callA
+    arm64.str x0, [x29, #-64]
+    arm64.str x1, [x29, #-72]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-80]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_2
+    arm64.b main.try_block_throw_2
+  try_block_continue_2:
+    arm64.ldr x0, [x29, #-64]
+    arm64.str x0, [x29, #-88]
+    arm64.mov x0, #0
+    arm64.bl callBC
+    arm64.str x0, [x29, #-96]
+    arm64.str x1, [x29, #-72]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-80]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.try_block_continue_3
+    arm64.b main.try_block_throw_3
+  try_block_continue_3:
+    arm64.ldr x0, [x29, #-96]
+    arm64.ldr x1, [x29, #-88]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.b main.try_block_after_0
+  try_block_throw_2:
+    arm64.b main.try_block_err_1
+  try_block_throw_3:
+    arm64.b main.try_block_err_1
+  try_block_err_1:
+    arm64.ldr x0, [x29, #-72]
+    arm64.str x0, [x29, #-104]
+    arm64.b main.ik_0.cmp0
+  ik_0.cmp0:
+    arm64.ldr x0, [x29, #-80]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.ldr x3, [x29, #-104]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.ik_0.case0
+    arm64.b main.ik_0.cmp1
+  ik_0.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.b main.ik_0.merge
+  ik_0.cmp1:
+    arm64.ldr x0, [x29, #-80]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.ldr x3, [x29, #-104]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.ik_0.case1
+    arm64.b main.ik_0.merge
+  ik_0.case1:
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-8]
+    arm64.b main.ik_0.merge
+  ik_0.merge:
+    arm64.b main.try_block_after_0
+  try_block_after_0:
+    arm64.b main.k_0.cmp0
+  k_0.cmp0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.ldr x3, [x29, #-56]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.k_0.case0
+    arm64.b main.k_0.cmp1
+  k_0.case0:
+    arm64.mov x0, #11
+    arm64.str x0, [x29, #-8]
+    arm64.b main.k_0.merge
+  k_0.cmp1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.ldr x3, [x29, #-56]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.k_0.case1
+    arm64.b main.k_0.merge
+  k_0.case1:
+    arm64.mov x0, #22
+    arm64.str x0, [x29, #-8]
+    arm64.b main.k_0.merge
+  k_0.merge:
+    arm64.b main.try_block_after_1
+  try_block_after_1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=240
+    arm64.ret
+  }
+}
+---

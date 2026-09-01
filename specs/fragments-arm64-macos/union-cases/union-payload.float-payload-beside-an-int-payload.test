@@ -1,0 +1,196 @@
+// Test: union-payload.float-payload-beside-an-int-payload
+typealias Fraction = float(0.0 to 1000.0)
+typealias Integer = int(i64.min to i64.max)
+
+union Sample
+	counted(n Integer)
+	measured(d Fraction)
+end 'Sample'
+
+function main() returns ExitCode
+	let a = Sample.counted(5)
+	let b = Sample.measured(0.25)
+	let n = match a 'ma'
+		counted(v) gives v
+		measured gives 0
+	end 'ma'
+	let d = match b 'mb'
+		counted gives 0.0
+		measured(v) gives v
+	end 'mb'
+	if d == 0.25 'exact'
+		return n + 2
+	end 'exact'
+	return 1
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=176
+    arm64.mov x0, #5
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #7
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.mov x2, #5
+    arm64.str x2, [x0, #8]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.fldr d0, [__float_0.25]
+    arm64.fstr d0, [x29, #-80]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #7
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x4, #1
+    arm64.str x4, [x0, #0]
+    arm64.fldr d0, [x29, #-80]
+    arm64.fstr d0, [x0, #8]
+    arm64.ldr x5, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-8]
+    arm64.ldr x7, [x6, #0]
+    arm64.ldr x8, [x29, #-8]
+    arm64.str x8, [x29, #-24]
+    arm64.mov x9, #0
+    arm64.str x9, [x29, #-32]
+    arm64.str x7, [x29, #-40]
+    arm64.ldr x10, [x29, #-40]
+    arm64.mov x11, #0
+    arm64.cmp x10, x11
+    arm64.cset x12, ne
+    arm64.cmp x12, #0
+    arm64.b.ne main.ma_0.dispatch0
+    arm64.b main.ma_0.case0
+  ma_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.ma_0.dispatch1
+    arm64.b main.ma_0.case1
+  ma_0.dispatch1:
+    arm64.b main.ma_0.merge
+  ma_0.case0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-32]
+    arm64.b main.ma_0.merge
+  ma_0.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-32]
+    arm64.b main.ma_0.merge
+  ma_0.merge:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #0]
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x3, [x29, #-56]
+    arm64.fldr d0, [__float_0]
+    arm64.fstr d0, [x29, #-64]
+    arm64.str x2, [x29, #-72]
+    arm64.ldr x4, [x29, #-72]
+    arm64.mov x5, #0
+    arm64.cmp x4, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne main.mb_0.dispatch0
+    arm64.b main.mb_0.case0
+  mb_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-72]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.mb_0.dispatch1
+    arm64.b main.mb_0.case1
+  mb_0.dispatch1:
+    arm64.b main.mb_0.merge
+  mb_0.case0:
+    arm64.fldr d0, [__float_0]
+    arm64.fstr d0, [x29, #-64]
+    arm64.b main.mb_0.merge
+  mb_0.case1:
+    arm64.ldr x0, [x29, #-56]
+    arm64.fldr d0, [x0, #8]
+    arm64.fstr d0, [x29, #-64]
+    arm64.b main.mb_0.merge
+  mb_0.merge:
+    arm64.fldr d0, [x29, #-64]
+    arm64.fldr d1, [__float_0.25]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cmp x0, #0
+    arm64.b.ne main.exact_0
+    arm64.b main.exact_0.after
+  exact_0:
+    arm64.mov x0, #2
+    arm64.ldr x1, [x29, #-48]
+    arm64.add x2, x1, x0
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #255
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x2, [x29, #-80]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_84
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_84
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_86
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_86
+    arm64.ldr x0, [x29, #-80]
+    arm64.epilogue stack_size=176
+    arm64.ret
+  exact_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_90
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_90
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_92
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_92
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=176
+    arm64.ret
+  }
+  func @__destruct_Sample(ptr: i64) {
+  entry:
+    arm64.b __destruct_Sample.done
+  done:
+    arm64.ret
+  }
+}
+---

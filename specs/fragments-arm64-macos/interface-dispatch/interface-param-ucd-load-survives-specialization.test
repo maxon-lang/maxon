@@ -1,0 +1,317 @@
+// Test: interface-param-ucd-load-survives-specialization
+typealias Integer = int(i64.min to i64.max)
+typealias Codepoint = int(0 to 65535)
+typealias SuppIndex = int(0 to 805)
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value as Integer
+
+	function greet() returns Integer
+		return value + 1
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function categoryVia(g Greeter, cp Codepoint, idx SuppIndex) returns Integer
+	let bmp = __Builtins.ucdByteAt("__ucd_bmp", offset: cp)
+	let supp = __Builtins.ucdI64At("__ucd_supp", index: idx)
+	return g.greet() + bmp * 1000 + supp - (supp / 1000) * 1000
+end 'categoryVia'
+
+function main() returns ExitCode
+	let h = Hello.create(0)
+	print("{categoryVia(h, cp: 65, idx: 0)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1201
+```
+---
+// CompiledIR
+module {
+  func @Hello.greet(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #1
+    arm64.add x3, x1, x2
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Hello.create(value: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=224
+    arm64.mov x0, #0
+    arm64.bl Hello.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #65
+    arm64.mov x2, #0
+    arm64.bl categoryVia$Hello
+    arm64.str x0, [x29, #-88]
+    arm64.mov x0, #21
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-88]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl maxon_i64_to_string
+    arm64.ldr x1, [x29, #-16]
+    arm64.adrp_add_rdata x2, __interp_lit_0
+    arm64.mov x3, x2
+    arm64.mov x4, #1
+    arm64.add x5, x0, x4
+    arm64.mov x6, #49
+    arm64.add x7, x5, x6
+    arm64.adrp_add_func x8, __destruct_String
+    arm64.mov x9, x8
+    arm64.str x0, [x29, #-96]
+    arm64.str x3, [x29, #-104]
+    arm64.str x5, [x29, #-112]
+    arm64.mov x0, x7
+    arm64.mov x1, x9
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x10, #48
+    arm64.ldr x11, [x29, #-24]
+    arm64.add x12, x11, x10
+    arm64.mov x14, #0
+    arm64.str x14, [x29, #-32]
+    arm64.str x12, [x29, #-40]
+    arm64.ldr x15, [x29, #-112]
+    arm64.str x15, [x29, #-48]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x0, [x29, #-96]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-104]
+    arm64.str x0, [x29, #-72]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-80]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-64]
+    arm64.str x2, [x29, #-120]
+    arm64.ldr x0, [x29, #-120]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x2, [x29, #-64]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-64]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-80]
+    arm64.str x2, [x29, #-128]
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x1, [x29, #-72]
+    arm64.ldr x2, [x29, #-80]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.add x2, x0, x1
+    arm64.mov x0, #0
+    arm64.strb x0, [x2, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_raw_free
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.mov x2, #1
+    arm64.mov x3, #-3
+    arm64.ldr x4, [x29, #-24]
+    arm64.str x0, [x4, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x2, [x0, #24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x3, [x0, #32]
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_80
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_80
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_82
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_82
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=224
+    arm64.ret
+  }
+  func @categoryVia$Hello(g: i64, cp: i64, idx: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.str x2, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x3, lt
+    arm64.mov x0, #65535
+    arm64.cmp x1, x0
+    arm64.cset x4, gt
+    arm64.orr x1, x3, x4
+    arm64.cmp x1, #0
+    arm64.b.ne categoryVia$Hello.__range_panic_0
+    arm64.b categoryVia$Hello.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #805
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x2, x1, x3
+    arm64.cmp x2, #0
+    arm64.b.ne categoryVia$Hello.__range_panic_1
+    arm64.b categoryVia$Hello.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.adrp_add_ucddata x1, __ucd_bmp
+    arm64.mov x2, x1
+    arm64.add x3, x2, x0
+    arm64.ldrb x4, [x3, #0]
+    arm64.ldr x5, [x29, #-24]
+    arm64.adrp_add_ucddata x6, __ucd_supp
+    arm64.mov x7, x6
+    arm64.mov x8, #8
+    arm64.mul x9, x5, x8
+    arm64.add x10, x7, x9
+    arm64.ldr x11, [x10, #0]
+    arm64.ldr x12, [x29, #-8]
+    arm64.str x4, [x29, #-32]
+    arm64.str x11, [x29, #-40]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Hello.greet
+    arm64.mov x14, #1000
+    arm64.ldr x15, [x29, #-32]
+    arm64.mul x1, x15, x14
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-40]
+    arm64.add x1, x2, x0
+    arm64.mov x2, #1000
+    arm64.sdiv x3, x0, x2
+    arm64.mov x0, #1000
+    arm64.mul x2, x3, x0
+    arm64.sub x0, x1, x2
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @__destruct_Hello(ptr: i64) {
+  entry:
+    arm64.b __destruct_Hello.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.slice_cleanup_0
+    arm64.b __destruct_String.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_String.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_String.__skip_guarded_9
+    arm64.b __destruct_String.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.free_buf_0
+    arm64.b __destruct_String.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.raw_free_0
+    arm64.b __destruct_String.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_String.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_String.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

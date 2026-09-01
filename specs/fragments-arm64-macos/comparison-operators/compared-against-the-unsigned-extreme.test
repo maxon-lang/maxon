@@ -1,0 +1,46 @@
+// Test: compared-against-the-unsigned-extreme
+typealias Wide = int(0 to u64.max)
+
+function wide(n Wide) returns Wide
+	return n
+end 'wide'
+
+function main() returns ExitCode
+	let three = wide(3 as Wide)
+
+	if three > u64.max 'impossible'
+		return 1
+	end 'impossible'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @wide(n: i64) -> u64 {
+  entry:
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #3
+    arm64.bl wide
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x2, hi
+    arm64.cmp x2, #0
+    arm64.b.ne main.impossible_0
+    arm64.b main.impossible_0.after
+  impossible_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  impossible_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,43 @@
+// Test: first-class-function.error.wrong-shape-into-struct-literal-field
+typealias Integer = int(i64.min to i64.max)
+
+type Color
+	export var v as Integer
+
+	export static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Color'
+
+type Shade
+	export var s as Integer
+
+	export static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+function shadeIt(x Shade) returns Shade
+	return Shade.create(x.s + 1)
+end 'shadeIt'
+
+type Holder
+	export var op as ColorFn
+
+	export static function create() returns Self
+		return Self{op: shadeIt}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.op(Color.create(3)).v
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/first-class-functions/first-class-function.error.wrong-shape-into-struct-literal-field.test:30:15: cannot assign a value of type 'fn(Shade) returns Shade' to field 'op' of 'Holder', which holds 'fn(Color) returns Color'
+```
+---
+---

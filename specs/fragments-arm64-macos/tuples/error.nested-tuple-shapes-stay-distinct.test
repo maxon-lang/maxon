@@ -1,0 +1,17 @@
+// Test: error.nested-tuple-shapes-stay-distinct
+typealias Num = int(0 to 1000)
+
+function takeLeft(t ((Num, Num), Num)) returns Num
+	let inner = t._0
+	return inner._0 + inner._1 + t._1
+end 'takeLeft'
+
+function main() returns ExitCode
+	return takeLeft((5, (1, 7)))
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/tuples/error.nested-tuple-shapes-stay-distinct.test:10:9: argument type mismatch for 't': expected '__Tuple2-__Tuple2-i64-i64-i64', got '__Tuple2-i64-__Tuple2-i64-i64'
+```
+---
+---

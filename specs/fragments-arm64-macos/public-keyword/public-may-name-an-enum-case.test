@@ -1,0 +1,52 @@
+// Test: public-may-name-an-enum-case
+enum Access
+	public
+	private
+end 'Access'
+
+function main() returns ExitCode
+	let a = Access.public
+	match a 'which'
+		public then return 3
+		private then return 0
+	end 'which'
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.which_0.dispatch0
+    arm64.b main.which_0.case0
+  which_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.which_0.dispatch1
+    arm64.b main.which_0.case1
+  which_0.dispatch1:
+    arm64.b main.which_0.merge
+  which_0.case0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  which_0.case1:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  which_0.merge:
+  }
+}
+---

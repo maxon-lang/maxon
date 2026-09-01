@@ -1,0 +1,248 @@
+// Test: laundered-negative-index-panics-at-the-door
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function launder(n Integer) returns Integer
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.reserve(2)
+	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	try arr.get(launder(-1)) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at Array.maxon:249: Range check failed: value outside typealias 'ElementIndex'
+Stack trace:
+  in SlotArray.get
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @launder(n: i64) -> i64 {
+  entry:
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.bl SlotArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #2
+    arm64.bl SlotArray.reserve
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #2
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #16]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.cmp x5, #0
+    arm64.csel x6, x4, x3, ne
+    arm64.mov x7, #1
+    arm64.add x8, x6, x7
+    arm64.cmp x1, x8
+    arm64.cset x9, hs
+    arm64.mov x10, #3
+    arm64.mov x11, #0
+    arm64.cmp x9, #0
+    arm64.csel x12, x10, x11, ne
+    arm64.cmp x9, #0
+    arm64.str x12, [x29, #-48]
+    arm64.b.ne main.__setlen_err_0
+    arm64.b main.__setlen_ok_0
+  __setlen_err_0:
+    arm64.b main.__setlen_merge_0
+  __setlen_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.mov x2, #2
+    arm64.cmp x2, x1
+    arm64.cset x3, lo
+    arm64.cmp x3, #0
+    arm64.str x1, [x29, #-56]
+    arm64.b.ne main.__setlen_shrink_0
+    arm64.b main.__setlen_store_0
+  __setlen_shrink_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-56]
+    arm64.mov x1, #2
+    arm64.bl mm_vacate_managed_elements
+    arm64.b main.__setlen_store_0
+  __setlen_store_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #2
+    arm64.str x1, [x0, #8]
+    arm64.b main.__setlen_merge_0
+  __setlen_merge_0:
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_panic_0
+    arm64.b main.otherwise_continue_0
+  otherwise_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_0:
+    arm64.mov x0, #-1
+    arm64.bl launder
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl SlotArray.get
+    arm64.str x1, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_1
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.sub x2, x0, x1
+    arm64.str x2, [x29, #-40]
+    arm64.ldr x3, [x29, #-40]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne main.check_0.dispatch0
+    arm64.b main.check_0.case1
+  check_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.dispatch1
+    arm64.b main.check_0.case0
+  check_0.dispatch1:
+    arm64.b main.check_0.merge
+  check_0.case0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_59
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_59
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_61
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_61
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=128
+    arm64.ret
+  check_0.case1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_65
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_65
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_67
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_67
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=128
+    arm64.ret
+  check_0.merge:
+  otherwise_continue_1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_71
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_71
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_73
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=128
+    arm64.ret
+  }
+  func @__destruct_SlotArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_SlotArray.slice_cleanup_0
+    arm64.b __destruct_SlotArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_SlotArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_SlotArray.__skip_guarded_9
+    arm64.b __destruct_SlotArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_SlotArray.free_buf_0
+    arm64.b __destruct_SlotArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_SlotArray.raw_free_0
+    arm64.b __destruct_SlotArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_SlotArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_SlotArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,29 @@
+// Test: error.match-on-a-non-exported-union-cross-file
+// --- file: answer.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Answer
+	small
+	big(n Integer)
+end 'Answer'
+
+export function classify(n Integer) returns Answer
+	if n > 10 'big'
+		return Answer.big(n)
+	end 'big'
+	return Answer.small
+end 'classify'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return match classify(42) 'a'
+		small gives 1
+		big(n) gives n
+	end 'a'
+end 'main'
+---
+MaxoncStderr: ```
+error E4006: specs/fragments/export-keyword/error.match-on-a-non-exported-union-cross-file.test:19:9: Unknown type 'Answer' in match scrutinee
+```
+---
+---

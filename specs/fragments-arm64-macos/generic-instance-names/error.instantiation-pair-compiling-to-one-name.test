@@ -1,0 +1,72 @@
+// Test: error.instantiation-pair-compiling-to-one-name
+typealias Num = int(i64.min to i64.max)
+
+type A_B implements Hashable, Equatable
+	var k as Num
+
+	function hash() returns HashValue
+		return k
+	end 'hash'
+
+	function equals(other Self) returns bool
+		return k == other.k
+	end 'equals'
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+end 'A_B'
+
+type A implements Hashable, Equatable
+	var k as Num
+
+	function hash() returns HashValue
+		return k
+	end 'hash'
+
+	function equals(other Self) returns bool
+		return k == other.k
+	end 'equals'
+
+	static function create(k Num) returns Self
+		return Self{k: k}
+	end 'create'
+end 'A'
+
+type C
+	export var pad as Num
+	export var only as Num
+
+	static function create(pad Num, only Num) returns Self
+		return Self{pad: pad, only: only}
+	end 'create'
+end 'C'
+
+type B_C
+	export var only as Num
+
+	static function create(only Num) returns Self
+		return Self{only: only}
+	end 'create'
+end 'B_C'
+
+function main() returns ExitCode
+	let first = [A_B.create(1): C.create(10, only: 20)]
+	let second = [A.create(2): B_C.create(77)]
+	var a = 0
+	var b = 0
+	for (_, v) in first 'one'
+		a = v.only
+	end 'one'
+	for (_, v) in second 'two'
+		b = v.only
+	end 'two'
+	print("{a} {b}\n")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3006: specs/fragments/generic-instance-names/error.instantiation-pair-compiling-to-one-name.test:55:15: duplicate definition of '__Map_A_B_C' - the generic instantiations `Map with (A_B, C)` and `Map with (A, B_C)` compile to that same name
+```
+---
+---

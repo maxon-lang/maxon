@@ -1,0 +1,44 @@
+// Test: unsigned-full-alias-admits-a-bit-63-hex-literal
+typealias Slot = int(0 to u64.max)
+
+function take(s Slot) returns Slot
+	return s
+end 'take'
+
+function main() returns ExitCode
+	if take(0xFFFFFFFFFFFFFFFE) == 0xFFFFFFFFFFFFFFFE 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @take(s: i64) -> u64 {
+  entry:
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #-2
+    arm64.bl take
+    arm64.mov x1, #-2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.ok_0
+    arm64.b main.ok_0.after
+  ok_0:
+    arm64.mov x0, #7
+    arm64.epilogue stack_size=16
+    arm64.ret
+  ok_0.after:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

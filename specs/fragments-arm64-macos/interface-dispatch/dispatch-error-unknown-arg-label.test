@@ -1,0 +1,34 @@
+// Test: dispatch-error-unknown-arg-label
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Combiner
+	function combine(first Integer, second Integer) returns Integer
+end 'Combiner'
+
+type Summer implements Combiner
+	let bias as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return bias + first + second
+	end 'combine'
+
+	static function create(bias Integer) returns Self
+		return Self{bias: bias}
+	end 'create'
+end 'Summer'
+
+function combineVia(c Combiner) returns Integer
+	return c.combine(12, bogus: 30)
+end 'combineVia'
+
+function main() returns ExitCode
+	let s = Summer.create(0)
+	return combineVia(s)
+end 'main'
+---
+MaxoncStderr: ```
+error E3003: specs/fragments/interface-dispatch/dispatch-error-unknown-arg-label.test:22:23: unknown parameter name: 'bogus'
+```
+---
+---

@@ -1,0 +1,47 @@
+// Test: error.propagates-a-different-error-type-than-the-enclosing-clause
+typealias Payload = int(0 to u64.max)
+
+union MakeError implements Error
+	tooBig(limit Payload)
+end 'MakeError'
+
+enum FlatError implements Error
+	nope
+end 'FlatError'
+
+interface ChunkMaker
+	function check(seed Payload) throws MakeError
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let cap as Payload
+
+	static function create(cap Payload) returns Backend
+		return Self{cap: cap}
+	end 'create'
+
+	function check(seed Payload) throws MakeError
+		if seed > self.cap 'reject'
+			throw MakeError.tooBig(self.cap)
+		end 'reject'
+	end 'check'
+end 'Backend'
+
+function obtainMaker(cap Payload) returns ChunkMaker
+	return Backend.create(cap)
+end 'obtainMaker'
+
+function attempt(maker ChunkMaker, seed Payload) throws FlatError
+	try maker.check(seed)
+end 'attempt'
+
+function main() returns ExitCode
+	try attempt(obtainMaker(100), seed: 200) otherwise ignore
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3059: specs/fragments/witness-managed-return-throws/error.propagates-a-different-error-type-than-the-enclosing-clause.test:35:2: try propagates 'MakeError' but enclosing function throws 'FlatError' — add 'otherwise' to convert
+```
+---
+---

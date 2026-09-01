@@ -1,69 +1,39 @@
-// Test: lazy-static.struct-literal
+// Test: lazy-static.struct-literal-field-default
 typealias Count = int(0 to u64.max)
 
-type Point
-	export var x as Count
-	export var y as Count
+type Pair
+	export var a as Count
+	export var b as Count = 7
 
-	static function create(x Count, y Count) returns Self
-		return Self{x: x, y: y}
-	end 'create'
-end 'Point'
+	static var origin = Pair{a: 1}
 
-type Defaults
-	static var origin = Point.create(0, y: 0)
-
-	export static function getOrigin() returns Point
-		return Defaults.origin
-	end 'getOrigin'
-end 'Defaults'
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
 
 function main() returns ExitCode
-	let p = Defaults.getOrigin()
-	print("{p.x} {p.y}")
+	let p = Pair.get()
+	print("{p.a} {p.b}")
 	return 0
 end 'main'
 ---
 ExitCode: 0
 Stdout: ```
-0 0
+1 7
 ```
 ---
 // CompiledIR
 module {
-  func @Point.create(x: i64, y: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.str x0, [x29, #-16]
-    arm64.str x1, [x29, #-24]
-    arm64.mov x0, #16
-    arm64.mov x1, #0
-    arm64.mov x2, #6
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
-    arm64.str x1, [x0, #0]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-24]
-    arm64.str x3, [x2, #8]
-    arm64.ldr x4, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.ldr x5, [x29, #-8]
-    arm64.mov x0, x5
-    arm64.epilogue stack_size=64
-    arm64.ret
-  }
-  func @Defaults.getOrigin() -> i64 {
+  func @Pair.get() -> i64 {
   entry:
     arm64.prologue stack_size=48
-    arm64.global_load x0, [Defaults.origin.__initialized]
+    arm64.global_load x0, [Pair.origin.__initialized]
     arm64.cmp x0, #0
-    arm64.b.ne Defaults.getOrigin.__lazy_merge_0
-    arm64.b Defaults.getOrigin.__lazy_init_0
+    arm64.b.ne Pair.get.__lazy_merge_0
+    arm64.b Pair.get.__lazy_init_0
   __lazy_merge_0:
-    arm64.global_load x0, [Defaults.origin]
+    arm64.global_load x0, [Pair.origin]
     arm64.str x0, [x29, #-8]
     arm64.ldr x1, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
@@ -73,13 +43,13 @@ module {
     arm64.epilogue stack_size=48
     arm64.ret
   __lazy_init_0:
-    arm64.bl Defaults.origin.__lazy_init
-    arm64.b Defaults.getOrigin.__lazy_merge_0
+    arm64.bl Pair.origin.__lazy_init
+    arm64.b Pair.get.__lazy_merge_0
   }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=304
-    arm64.bl Defaults.getOrigin
+    arm64.bl Pair.get
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #0]
@@ -223,39 +193,49 @@ module {
     arm64.epilogue stack_size=304
     arm64.ret
   }
-  func @Defaults.origin.__lazy_init() {
+  func @Pair.origin.__lazy_init() {
   entry:
     arm64.prologue stack_size=48
     arm64.mov x0, #1
-    arm64.global_store [Defaults.origin.__initialized], x0
-    arm64.mov x0, #0
+    arm64.global_store [Pair.origin.__initialized], x0
+    arm64.mov x1, #1
+    arm64.mov x2, #7
+    arm64.mov x0, #16
     arm64.mov x1, #0
-    arm64.bl Point.create
+    arm64.mov x2, #18
+    arm64.bl mm_alloc
     arm64.str x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-8]
-    arm64.global_load x2, [Defaults.origin]
-    arm64.str x2, [x29, #-16]
-    arm64.cmp x2, #0
-    arm64.b.eq Defaults.origin.__lazy_init.__skip_guarded_8
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #1
+    arm64.str x4, [x3, #0]
+    arm64.ldr x5, [x29, #-8]
+    arm64.mov x6, #7
+    arm64.str x6, [x5, #8]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-8]
+    arm64.global_load x8, [Pair.origin]
+    arm64.str x8, [x29, #-16]
+    arm64.cmp x8, #0
+    arm64.b.eq Pair.origin.__lazy_init.__skip_guarded_16
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label Defaults.origin.__lazy_init.__skip_guarded_8
+    arm64.label Pair.origin.__lazy_init.__skip_guarded_16
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.global_store [Defaults.origin], x3
-    arm64.ldr x4, [x29, #-8]
-    arm64.cmp x4, #0
-    arm64.b.eq Defaults.origin.__lazy_init.__skip_guarded_12
+    arm64.ldr x9, [x29, #-8]
+    arm64.global_store [Pair.origin], x9
+    arm64.ldr x10, [x29, #-8]
+    arm64.cmp x10, #0
+    arm64.b.eq Pair.origin.__lazy_init.__skip_guarded_20
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label Defaults.origin.__lazy_init.__skip_guarded_12
+    arm64.label Pair.origin.__lazy_init.__skip_guarded_20
     arm64.epilogue stack_size=48
     arm64.ret
   }
-  func @__destruct_Point(ptr: i64) {
+  func @__destruct_Pair(ptr: i64) {
   entry:
-    arm64.b __destruct_Point.done
+    arm64.b __destruct_Pair.done
   done:
     arm64.ret
   }

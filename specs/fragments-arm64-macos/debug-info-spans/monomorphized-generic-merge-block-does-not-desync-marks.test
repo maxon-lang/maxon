@@ -1,0 +1,423 @@
+// Test: monomorphized-generic-merge-block-does-not-desync-marks
+typealias Num = int(0 to 1000)
+
+type Cell
+	export var v as Num
+
+	static function init(v Num) returns Self
+		return Self{v: v}
+	end 'init'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Chain uses T
+	export var seed as T
+
+	export static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function churn(d Num) returns Num
+		print("churn\n")
+		let pad = 1
+		var arr = CellArray.create()
+		arr.push(Cell.init(pad))
+		let missed = try arr.get(7) otherwise Cell.init(3)
+		return try (missed.v / d) otherwise 9
+	end 'churn'
+end 'Chain'
+
+typealias NumChain = Chain with Num
+
+function main() returns ExitCode
+	let ch = NumChain.create(1)
+	return ch.churn(0)
+end 'main'
+---
+DebugInfo: true
+ExitCode: 9
+Stdout: ```
+churn
+```
+---
+// CompiledIR
+module {
+  func @Cell.init(v: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #1000
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne Cell.init.__range_panic_0
+    arm64.b Cell.init.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #1000
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne Cell.init.__range_panic_1
+    arm64.b Cell.init.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-16]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.bl NumChain.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.bl NumChain.churn
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_16
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_16
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @NumChain.create(seed: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @NumChain.churn(__self_ptr: i64, d: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=224
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.mov x2, #1000
+    arm64.cmp x1, x2
+    arm64.cset x4, gt
+    arm64.orr x1, x3, x4
+    arm64.cmp x1, #0
+    arm64.b.ne NumChain.churn.__range_panic_0
+    arm64.b NumChain.churn.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.adrp_add_global x1, __static_lit_0
+    arm64.mov x2, x1
+    arm64.mov x1, #32
+    arm64.add x3, x2, x1
+    arm64.str x3, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x29, #-104]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl stdlib.print
+    arm64.bl CellArray.create
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #1
+    arm64.bl Cell.init
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-40]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-40]
+    arm64.bl CellArray.push
+    arm64.ldr x3, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #7
+    arm64.bl CellArray.get
+    arm64.str x0, [x29, #-48]
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne NumChain.churn.otherwise_default_error_0
+    arm64.b NumChain.churn.otherwise_default_success_0
+  otherwise_default_error_0:
+    arm64.mov x0, #3
+    arm64.bl Cell.init
+    arm64.str x0, [x29, #-8]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.b NumChain.churn.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x0, [x29, #-56]
+    arm64.b NumChain.churn.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-64]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-16]
+    arm64.mov x5, #0
+    arm64.cmp x4, x5
+    arm64.cset x6, eq
+    arm64.mov x7, #1
+    arm64.mov x8, #0
+    arm64.cmp x6, #0
+    arm64.csel x9, x7, x8, ne
+    arm64.str x9, [x29, #-72]
+    arm64.mov x10, #0
+    arm64.str x10, [x29, #-80]
+    arm64.cmp x6, #0
+    arm64.str x3, [x29, #-104]
+    arm64.b.ne NumChain.churn.__div_zero_0
+    arm64.b NumChain.churn.__div_ok_0
+  __div_zero_0:
+    arm64.b NumChain.churn.__div_merge_0
+  __div_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-104]
+    arm64.cmp x0, #0
+    arm64.b.ne NumChain.churn.__div_ok_0
+    arm64.bl mrt_div_by_zero
+    arm64.label NumChain.churn.__div_ok_0
+    arm64.udiv x2, x1, x0
+    arm64.str x2, [x29, #-80]
+    arm64.b NumChain.churn.__div_merge_0
+  __div_merge_0:
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-80]
+    arm64.mov x2, #9
+    arm64.str x2, [x29, #-88]
+    arm64.str x1, [x29, #-96]
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne NumChain.churn.otherwise_default_error_1
+    arm64.b NumChain.churn.otherwise_default_continue_1
+  otherwise_default_error_1:
+    arm64.ldr x0, [x29, #-88]
+    arm64.str x0, [x29, #-96]
+    arm64.b NumChain.churn.otherwise_default_continue_1
+  otherwise_default_continue_1:
+    arm64.ldr x0, [x29, #-96]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #1000
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne NumChain.churn.__range_panic_1
+    arm64.b NumChain.churn.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.ldr x1, [x29, #-56]
+    arm64.cmp x1, #0
+    arm64.b.eq NumChain.churn.__skip_guarded_90
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_decref
+    arm64.label NumChain.churn.__skip_guarded_90
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq NumChain.churn.__skip_guarded_92
+    arm64.bl mm_decref
+    arm64.label NumChain.churn.__skip_guarded_92
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq NumChain.churn.__skip_guarded_94
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label NumChain.churn.__skip_guarded_94
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq NumChain.churn.__skip_guarded_96
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label NumChain.churn.__skip_guarded_96
+    arm64.ldr x3, [x29, #-64]
+    arm64.cmp x3, #0
+    arm64.b.eq NumChain.churn.__skip_guarded_98
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label NumChain.churn.__skip_guarded_98
+    arm64.ldr x4, [x29, #-32]
+    arm64.cmp x4, #0
+    arm64.b.eq NumChain.churn.__skip_guarded_100
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label NumChain.churn.__skip_guarded_100
+    arm64.ldr x0, [x29, #-96]
+    arm64.epilogue stack_size=224
+    arm64.ret
+  }
+  func @__module_init() {
+  entry:
+    arm64.adrp_add_global x0, __static_lit_0
+    arm64.mov x1, x0
+    arm64.mov x2, #80
+    arm64.str x2, [x1, #0]
+    arm64.mov x3, #4
+    arm64.str x3, [x1, #8]
+    arm64.mov x4, #0
+    arm64.str x4, [x1, #16]
+    arm64.mov x5, #4611686018427387904
+    arm64.str x5, [x1, #24]
+    arm64.adrp_add_rdata x6, __str_0
+    arm64.mov x7, x6
+    arm64.str x7, [x1, #32]
+    arm64.mov x8, #6
+    arm64.str x8, [x1, #40]
+    arm64.mov x9, #-2
+    arm64.str x9, [x1, #48]
+    arm64.mov x10, #1
+    arm64.str x10, [x1, #56]
+    arm64.mov x11, #0
+    arm64.str x11, [x1, #64]
+    arm64.mov x12, #1
+    arm64.str x12, [x1, #72]
+    arm64.ret
+  }
+  func @__destruct_Cell(ptr: i64) {
+  entry:
+    arm64.b __destruct_Cell.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_CellArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_CellArray.slice_cleanup_0
+    arm64.b __destruct_CellArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_CellArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_CellArray.__skip_guarded_9
+    arm64.b __destruct_CellArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_CellArray.free_buf_0
+    arm64.b __destruct_CellArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_CellArray.raw_free_0
+    arm64.b __destruct_CellArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_CellArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_CellArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_NumChain(ptr: i64) {
+  entry:
+    arm64.b __destruct_NumChain.done
+  done:
+    arm64.ret
+  }
+}
+---

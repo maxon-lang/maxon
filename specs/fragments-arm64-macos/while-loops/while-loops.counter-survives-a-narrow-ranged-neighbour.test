@@ -1,0 +1,542 @@
+// Test: while-loops.counter-survives-a-narrow-ranged-neighbour
+typealias SlotTally = int(0 to 16)
+
+enum Pair
+	first
+	second
+end 'Pair'
+
+function liveCount(both bool) returns SlotTally
+	var n = 0
+	for c in Pair.allCases 'walk'
+		if c == Pair.first or both 'live'
+			n = n + 1
+		end 'live'
+	end 'walk'
+	return n
+end 'liveCount'
+
+function main() returns ExitCode
+	let scaled = 20 * (liveCount(false) + 1)
+	let seed = 100 + scaled
+
+	var guard = 0
+	var pass = 0
+	while pass < 2 'passes'
+		var running = seed
+		for c in Pair.allCases 'inner'
+			if c == Pair.first 'one'
+				running = running + 1
+			end 'one'
+		end 'inner'
+		// ⚠ `running` is NARROW-typed, so it takes a 4-byte store while this read is 8 bytes wide — the
+		// high half is slot padding. Checking it here means that padding can never be depended on
+		// SILENTLY: if it is ever non-zero this case says 98 instead of quietly computing the right
+		// answer. (Measured: exactly one variable in the whole bootstrap suite has this store/load
+		// width pair, and it is this one.)
+		if running != 141 'paddingLeakedIn'
+			return 98
+		end 'paddingLeakedIn'
+
+		guard = guard + running
+		pass = pass + 1
+		if guard > 2000 'runaway'
+			return 99
+		end 'runaway'
+	end 'passes'
+
+	return pass
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @liveCount(both: i1) -> u8 {
+  entry:
+    arm64.prologue stack_size=192
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.str x2, [x29, #-24]
+    arm64.str x1, [x29, #-32]
+    arm64.mov x3, #0
+    arm64.mov x4, #2
+    arm64.mov x5, #0
+    arm64.mov x6, #8
+    arm64.mov x7, #0
+    arm64.adrp_add_func x8, __destruct___Array_Pair
+    arm64.mov x9, x8
+    arm64.mov x1, x9
+    arm64.mov x0, #56
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x10, [x29, #-40]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-40]
+    arm64.mov x14, #2
+    arm64.str x14, [x12, #8]
+    arm64.ldr x15, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.str x1, [x15, #16]
+    arm64.ldr x1, [x29, #-40]
+    arm64.mov x2, #8
+    arm64.str x2, [x1, #24]
+    arm64.ldr x1, [x29, #-40]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #32]
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x2, [x1, #24]
+    arm64.adrp_add_symdata x1, __mm_panic_element_size_zero
+    arm64.mov x3, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.add x0, x29, #-32
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x2, [x0, #24]
+    arm64.mov x0, #2
+    arm64.mul x3, x0, x2
+    arm64.mov x0, #40
+    arm64.ldr x2, [x29, #-40]
+    arm64.add x4, x2, x0
+    arm64.str x4, [x29, #-80]
+    arm64.ldr x0, [x29, #-80]
+    arm64.mov x2, x3
+    arm64.bl maxon_memcpy
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x2, [x29, #-80]
+    arm64.str x2, [x1, #0]
+    arm64.mov x1, #2
+    arm64.ldr x2, [x29, #-40]
+    arm64.str x1, [x2, #16]
+    arm64.mov x1, #-3
+    arm64.ldr x2, [x29, #-40]
+    arm64.str x1, [x2, #32]
+    arm64.str x0, [x29, #-88]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-56]
+    arm64.b liveCount.walk_0.header
+  walk_0.header:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x0, #8]
+    arm64.ldr x2, [x29, #-56]
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne liveCount.walk_0
+    arm64.b liveCount.walk_0.exit
+  walk_0:
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-48]
+    arm64.ldr x2, [x1, #24]
+    arm64.ldr x3, [x29, #-48]
+    arm64.ldr x4, [x3, #0]
+    arm64.mul x5, x0, x2
+    arm64.add x6, x4, x5
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-64]
+    arm64.mov x8, #0
+    arm64.ldr x9, [x29, #-64]
+    arm64.cmp x9, x8
+    arm64.cset x10, eq
+    arm64.mov x11, #1
+    arm64.str x11, [x29, #-72]
+    arm64.mov x12, #1
+    arm64.eor x14, x10, x12
+    arm64.cmp x14, #0
+    arm64.b.ne liveCount.shortOr_0.rhs
+    arm64.b liveCount.shortOr_0.merge
+  shortOr_0.rhs:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-72]
+    arm64.b liveCount.shortOr_0.merge
+  shortOr_0.merge:
+    arm64.ldr x0, [x29, #-72]
+    arm64.cmp x0, #0
+    arm64.b.ne liveCount.live_0
+    arm64.b liveCount.live_0.merge
+  live_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.ldr x3, [x29, #-40]
+    arm64.cmp x3, #0
+    arm64.b.eq liveCount.__skip_guarded_92
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label liveCount.__skip_guarded_92
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-40]
+    arm64.b liveCount.live_0.merge
+  live_0.merge:
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq liveCount.__skip_guarded_97
+    arm64.bl mm_decref
+    arm64.label liveCount.__skip_guarded_97
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-40]
+    arm64.b liveCount.walk_0.incr
+  walk_0.incr:
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-56]
+    arm64.b liveCount.walk_0.header
+  walk_0.exit:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #16
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne liveCount.__range_panic_0
+    arm64.b liveCount.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq liveCount.__skip_guarded_117
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label liveCount.__skip_guarded_117
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq liveCount.__skip_guarded_119
+    arm64.bl mm_decref
+    arm64.label liveCount.__skip_guarded_119
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=192
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=192
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #20
+    arm64.mov x0, #0
+    arm64.bl liveCount
+    arm64.mov x2, #1
+    arm64.add x3, x0, x2
+    arm64.mov x4, #20
+    arm64.mul x5, x4, x3
+    arm64.mov x6, #100
+    arm64.mov x7, x6
+    arm64.mov x8, x5
+    arm64.add x9, x7, x8
+    arm64.mov x10, x9
+    arm64.str x10, [x29, #-16]
+    arm64.mov x11, #0
+    arm64.str x11, [x29, #-24]
+    arm64.mov x12, #0
+    arm64.str x12, [x29, #-32]
+    arm64.b main.passes_0.header
+  passes_0.header:
+    arm64.mov x0, #2
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne main.passes_0
+    arm64.b main.passes_0.exit
+  passes_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.str x2, [x29, #-48]
+    arm64.str x1, [x29, #-56]
+    arm64.mov x3, #0
+    arm64.mov x4, #2
+    arm64.mov x5, #0
+    arm64.mov x6, #8
+    arm64.mov x7, #0
+    arm64.adrp_add_func x8, __destruct___Array_Pair
+    arm64.mov x9, x8
+    arm64.mov x1, x9
+    arm64.mov x0, #56
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x10, [x29, #-8]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-8]
+    arm64.mov x14, #2
+    arm64.str x14, [x12, #8]
+    arm64.ldr x15, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x15, #16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #8
+    arm64.str x2, [x1, #24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #32]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #24]
+    arm64.adrp_add_symdata x1, __mm_panic_element_size_zero
+    arm64.mov x3, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.add x0, x29, #-56
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x2, [x0, #24]
+    arm64.mov x0, #2
+    arm64.mul x3, x0, x2
+    arm64.mov x0, #40
+    arm64.ldr x2, [x29, #-8]
+    arm64.add x4, x2, x0
+    arm64.str x4, [x29, #-88]
+    arm64.ldr x0, [x29, #-88]
+    arm64.mov x2, x3
+    arm64.bl maxon_memcpy
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-88]
+    arm64.str x2, [x1, #0]
+    arm64.mov x1, #2
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x1, [x2, #16]
+    arm64.mov x1, #-3
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x1, [x2, #32]
+    arm64.str x0, [x29, #-96]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-72]
+    arm64.b main.inner_0.header
+  inner_0.header:
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x0, #8]
+    arm64.ldr x2, [x29, #-72]
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne main.inner_0
+    arm64.b main.inner_0.exit
+  inner_0:
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x2, [x1, #24]
+    arm64.ldr x3, [x29, #-64]
+    arm64.ldr x4, [x3, #0]
+    arm64.mul x5, x0, x2
+    arm64.add x6, x4, x5
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-80]
+    arm64.mov x8, #0
+    arm64.ldr x9, [x29, #-80]
+    arm64.cmp x9, x8
+    arm64.cset x10, eq
+    arm64.cmp x10, #0
+    arm64.b.ne main.one_0
+    arm64.b main.one_0.merge
+  one_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-40]
+    arm64.ldr x3, [x29, #-8]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_104
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_104
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-8]
+    arm64.b main.one_0.merge
+  one_0.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_109
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_109
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.b main.inner_0.incr
+  inner_0.incr:
+    arm64.ldr x0, [x29, #-72]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-72]
+    arm64.b main.inner_0.header
+  inner_0.exit:
+    arm64.mov x0, #141
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.paddingLeakedIn_0
+    arm64.b main.paddingLeakedIn_0.after
+  paddingLeakedIn_0:
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_124
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_124
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_126
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_126
+    arm64.mov x0, #98
+    arm64.epilogue stack_size=192
+    arm64.ret
+  paddingLeakedIn_0.after:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-24]
+    arm64.mov x3, #1
+    arm64.ldr x4, [x29, #-32]
+    arm64.add x5, x4, x3
+    arm64.str x5, [x29, #-32]
+    arm64.mov x6, #2000
+    arm64.cmp x2, x6
+    arm64.cset x7, gt
+    arm64.cmp x7, #0
+    arm64.b.ne main.runaway_0
+    arm64.b main.runaway_0.after
+  runaway_0:
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_141
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_141
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_143
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_143
+    arm64.mov x0, #99
+    arm64.epilogue stack_size=192
+    arm64.ret
+  runaway_0.after:
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_146
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_146
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_148
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_148
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.b main.passes_0.header
+  passes_0.exit:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_6
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_163
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_163
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=192
+    arm64.ret
+  }
+  func @__destruct___Array_Pair(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___Array_Pair.slice_cleanup_0
+    arm64.b __destruct___Array_Pair.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___Array_Pair.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___Array_Pair.__skip_guarded_9
+    arm64.b __destruct___Array_Pair.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___Array_Pair.free_buf_0
+    arm64.b __destruct___Array_Pair.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___Array_Pair.raw_free_0
+    arm64.b __destruct___Array_Pair.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___Array_Pair.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___Array_Pair.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

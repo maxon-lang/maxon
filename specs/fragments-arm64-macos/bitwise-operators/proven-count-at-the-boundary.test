@@ -1,0 +1,348 @@
+// Test: proven-count-at-the-boundary
+typealias Num = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+typealias Bits = int(0 to 63)
+
+function shlBy(value Num, n Bits) returns Num
+	return value shl n
+end 'shlBy'
+
+function shrBy(value Num, n Bits) returns Num
+	return value shr n
+end 'shrBy'
+
+function shrWordBy(value Word, n Bits) returns Word
+	return value shr n
+end 'shrWordBy'
+
+function boundary(step Num) returns Bits
+	return (step * 63) as Bits
+end 'boundary'
+
+function main() returns ExitCode
+	let low = boundary(0)
+	let high = boundary(1)
+
+	if shlBy(1, n: low) != 1 'shlZero'
+		return 1
+	end 'shlZero'
+	if shlBy(1, n: high) != 0 - 9223372036854775807 - 1 'shlTop'
+		return 2
+	end 'shlTop'
+	if shrBy(0 - 8, n: low) != 0 - 8 'shrZero'
+		return 3
+	end 'shrZero'
+	if shrBy(0 - 8, n: high) != 0 - 1 'shrTop'
+		return 4
+	end 'shrTop'
+	if shrWordBy(u64.max, n: low) != u64.max 'shrWordZero'
+		return 5
+	end 'shrWordZero'
+	if shrWordBy(u64.max, n: high) != 1 'shrWordTop'
+		return 6
+	end 'shrWordTop'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shlBy(value: i64, n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #63
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne shlBy.__range_panic_0
+    arm64.b shlBy.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_23
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shlBy.__shift_count_panic_0
+    arm64.b shlBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_24
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lslv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @shrBy(value: i64, n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #63
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne shrBy.__range_panic_0
+    arm64.b shrBy.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_25
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shrBy.__shift_count_panic_0
+    arm64.b shrBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.mov x2, #63
+    arm64.cmp x3, #0
+    arm64.csel x4, x1, x2, ne
+    arm64.asrv x1, x0, x4
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @shrWordBy(value: i64, n: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #63
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne shrWordBy.__range_panic_0
+    arm64.b shrWordBy.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_27
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shrWordBy.__shift_count_panic_0
+    arm64.b shrWordBy.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_28
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lsrv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @boundary(step: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x1, #63
+    arm64.mul x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #63
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne boundary.__range_panic_0
+    arm64.b boundary.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_29
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #63
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne boundary.__range_panic_1
+    arm64.b boundary.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_29
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.bl boundary
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #1
+    arm64.bl boundary
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x0, #1
+    arm64.bl shlBy
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.shlZero_0
+    arm64.b main.shlZero_0.after
+  shlZero_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shlZero_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x0, #1
+    arm64.bl shlBy
+    arm64.mov x1, #0
+    arm64.mov x2, #9223372036854775807
+    arm64.sub x3, x1, x2
+    arm64.mov x4, #1
+    arm64.sub x5, x3, x4
+    arm64.cmp x0, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne main.shlTop_0
+    arm64.b main.shlTop_0.after
+  shlTop_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shlTop_0.after:
+    arm64.mov x0, #0
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x2
+    arm64.ldr x1, [x29, #-8]
+    arm64.bl shrBy
+    arm64.mov x4, #0
+    arm64.mov x5, #8
+    arm64.sub x6, x4, x5
+    arm64.cmp x0, x6
+    arm64.cset x7, ne
+    arm64.cmp x7, #0
+    arm64.b.ne main.shrZero_0
+    arm64.b main.shrZero_0.after
+  shrZero_0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shrZero_0.after:
+    arm64.mov x0, #0
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.ldr x3, [x29, #-16]
+    arm64.mov x0, x2
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl shrBy
+    arm64.mov x4, #0
+    arm64.mov x5, #1
+    arm64.sub x6, x4, x5
+    arm64.cmp x0, x6
+    arm64.cset x7, ne
+    arm64.cmp x7, #0
+    arm64.b.ne main.shrTop_0
+    arm64.b main.shrTop_0.after
+  shrTop_0:
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shrTop_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x0, #-1
+    arm64.bl shrWordBy
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.shrWordZero_0
+    arm64.b main.shrWordZero_0.after
+  shrWordZero_0:
+    arm64.mov x0, #5
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shrWordZero_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x0, #-1
+    arm64.bl shrWordBy
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.shrWordTop_0
+    arm64.b main.shrWordTop_0.after
+  shrWordTop_0:
+    arm64.mov x0, #6
+    arm64.epilogue stack_size=48
+    arm64.ret
+  shrWordTop_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

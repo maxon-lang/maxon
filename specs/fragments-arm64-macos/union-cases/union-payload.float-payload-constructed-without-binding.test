@@ -1,0 +1,131 @@
+// Test: union-payload.float-payload-constructed-without-binding
+typealias Fraction = float(0.0 to 1000.0)
+typealias Reading = int(0 to 255)
+
+union Sample
+	blank
+	measured(d Fraction)
+end 'Sample'
+
+function take(s Sample) returns Reading
+	return match s 'm'
+		blank gives 1
+		measured gives 2
+	end 'm'
+end 'take'
+
+function main() returns ExitCode
+	return take(Sample.measured(0.5))
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @take(s: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne take.m_0.dispatch0
+    arm64.b take.m_0.case0
+  m_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne take.m_0.dispatch1
+    arm64.b take.m_0.case1
+  m_0.dispatch1:
+    arm64.b take.m_0.merge
+  m_0.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-16]
+    arm64.b take.m_0.merge
+  m_0.case1:
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-16]
+    arm64.b take.m_0.merge
+  m_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne take.__range_panic_0
+    arm64.b take.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.fldr d0, [__float_0.5]
+    arm64.fstr d0, [x29, #-16]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.str x1, [x0, #0]
+    arm64.fldr d0, [x29, #-16]
+    arm64.fstr d0, [x0, #8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl take
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_22
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_22
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Sample(ptr: i64) {
+  entry:
+    arm64.b __destruct_Sample.done
+  done:
+    arm64.ret
+  }
+}
+---

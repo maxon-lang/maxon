@@ -1,0 +1,89 @@
+// Test: divide-by-zero-premise-enforced-at-the-callee-entry
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function divide(n Integer, d NonZero) returns Integer
+	return n / d
+end 'divide'
+
+function main() returns ExitCode
+	let z = ident(0)
+	return divide(10, d: z)
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at divide-by-zero-premise-enforced-at-the-callee-entry.test:9: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in divide
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @ident(v: i64) -> i64 {
+  entry:
+    arm64.ret
+  }
+  func @divide(n: i64, d: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x0, #1
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne divide.__range_panic_0
+    arm64.b divide.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.ne divide.__div_ok_0
+    arm64.bl mrt_div_by_zero
+    arm64.label divide.__div_ok_0
+    arm64.sdiv x2, x0, x1
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.bl ident
+    arm64.mov x1, x0
+    arm64.mov x0, #10
+    arm64.bl divide
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

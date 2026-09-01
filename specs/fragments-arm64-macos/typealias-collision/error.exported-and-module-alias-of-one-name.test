@@ -1,0 +1,39 @@
+// Test: error.exported-and-module-alias-of-one-name
+// --- file: dirA/a.maxon
+export typealias Cell = int(0 to 255)
+export typealias Cells = Array with Cell
+
+export type Alpha
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(200)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Alpha'
+
+// --- file: dirB/z.maxon
+module typealias Cell = int(-100 to 100)
+module typealias Cells = Array with Cell
+
+export type Beta
+	export static function stash() returns Cell
+		var xs = Cells.create()
+		xs.push(-50)
+		let v = try xs.get(0) otherwise 0
+		return v
+	end 'stash'
+end 'Beta'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("a={Alpha.stash()} b={Beta.stash()}\n")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3063: dirA/specs/fragments/typealias-collision/error.exported-and-module-alias-of-one-name.test:4:37: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell, dirB.Cell
+error E3063: dirB/specs/fragments/typealias-collision/error.exported-and-module-alias-of-one-name.test:17:37: Ambiguous typealias 'Cell': multiple visible definitions found. Qualify with a directory name. Candidates: dirA.Cell, dirB.Cell
+```
+---
+---
