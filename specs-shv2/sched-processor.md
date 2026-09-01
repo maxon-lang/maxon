@@ -17,10 +17,36 @@ green thread alone cannot express:
 | | |
 |---|---|
 | **M** | the OS thread that is running a green thread right now |
-| **P** | the per-processor state that OS thread owns while it does |
+| **P** | the per-processor state that OS thread HOLDS while it does |
 
 Go's model, and both reference compilers': the bootstrap's layout is `GtLayout.cs:360-402` and v1's
 Win32 mechanics are `X64Backend.maxon:8990-9340`.
+
+### The M and the P are TWO STRUCTS, and TLS points at the M
+
+⭐⭐ **UNTIL W213-C1 THEY WERE ONE.** A single struct carried both halves and the thread's TLS slot pointed
+at it, because an M took a P at birth and held it for life — so "the processor" and "the thread of
+execution" named the same object and neither reference compiler distinguishes them either. The rule that
+separates them is one question asked of every field: ***if this thread's P were taken away while it is
+blocked in a kernel call, would this field still be true of it?***
+
+| on the **M** | on the **P** |
+|---|---|
+| `currentP` — the processor it holds, **or 0** | `id`, the shard index and the run-queue ring |
+| `currentGt` — the green thread it is executing | the steal count, the idle/quiesced flags, the wake event |
+| `systemStackSP` — its own 64 KB syscall stack | the deferred re-enqueue slots and the remote-free queue |
+| its inline scheduler green thread (Go's `g0`) | `status`, which is what OFFERS the P to a waker |
+
+⚠ **`M->currentP` IS THE FIELD THE SPLIT EXISTS TO CREATE, AND IT IS THE ONLY NEW STATE.** *"This thread
+holds no processor"* is now one load and one compare; before the split the runtime had no way to write it
+down at all, because TLS pointed at the processor. ⛔ **NO SCHEDULING CHANGED**: an M still takes one P at
+birth and holds it until it dies, so a `currentP` of 0 is a state the code can EXPRESS and that nothing
+today PRODUCES. `entersyscall`/`handoffp`/`sysmon` — the rung that produces it — are still ahead.
+
+⚠ **THE HOT READS DID NOT GET LONGER.** The syscall shim and the prologue stack guard want `currentGt` and
+the syscall stack, and both are the M's, so they are the same two loads through the same TLS slot they were
+before. Only a reader that wants the PROCESSOR pays the extra field load — the allocator's shard read, and
+the scheduler's own per-schedule walks.
 
 ### The process is single-M BY CONSTRUCTION for everything `async` creates — and multi-M for what `spawn` creates
 
@@ -45,8 +71,8 @@ before the pin, on the same box, it read `workers=8 steals=3996` at N=12. The tw
 the other way, which is the same script's other family.
 
 ⚠ **WHAT AN `async`-ONLY PROGRAM EXERCISES IS STILL LESS OF THE STRUCTURE.** Two of the four pieces run in
-one and are covered by the cases below: the **P indirection** (every green thread reaches `currentGt`
-through TLS, which is every async case in the corpus) and the **per-P syscall stack**
+one and are covered by the cases below: the **TLS indirection** (every green thread reaches `currentGt`
+through the M its TLS slot names, which is every async case in the corpus) and the **per-M syscall stack**
 (`a-green-thread-kernel-call-round-trips-its-processor-stack`). The **CAS claim**, the **Dekker park** and
 the run-queue hierarchy behind them are code no thread in such a program enters — dead-code elimination
 takes `__sched_runq_put`, `__sched_find_runnable`, `__sched_steal`, `__sched_worker_loop`,
@@ -90,19 +116,28 @@ the case". **No case in this file has ever carried one**, and a reader who trust
 gone looking for a marker that was not there. `pin-matrix.sh` remains the instrument for the counts a spec
 case has no reason to name.
 
-### What the P replaced, and why a `.data` word could not stay
+### What the M and the P replaced, and why a `.data` word could not stay
 
-Two `.data` globals were retired outright when the P landed, and neither could have been kept:
+Two `.data` globals were retired outright when the P landed, and neither could have been kept. **Both
+belong to the M rather than to the P**, which is the correction W213-C1 made — they are properties of the
+thread that is EXECUTING, and the argument for each is the same argument one level up:
 
 - **`__gt_current_gt`** — the running green thread. Two Ms run two different green threads at the
-  same instant, so a single word answers whichever wrote last. It is `P->currentGt`, read through
+  same instant, so a single word answers whichever wrote last. It is `M->currentGt`, read through
   two loads and no call: `mov reg, [__sched_tls_teb_offset]` then `mov reg, gs:[reg]`, which IS
-  `TlsGetValue` for a slot in the TEB's inline 64.
+  `TlsGetValue` for a slot in the TEB's inline 64, and then one field load. The thread executing inside a
+  kernel call belongs to the M blocked there, not to the processor a handoff can take away — and the
+  syscall shim reads this word again AFTER the call, to restore the TIB.
 - **`__gt_system_stack_top`** — the 64 KB scratch stack a green thread's Win32 calls run on. Its
   safety invariant was written down as prose in one comment (*"single-M runs one thing at a time"*),
   which multi-M falsifies by definition: two Ms inside kernel calls would set RSP to the same top and
   write the same region, as silent interleaved corruption rather than a fault. It is
-  `P->systemStackSP`, so an M can only reach its own.
+  `M->systemStackSP` — one region per OS thread that runs Maxon code, committed as that thread becomes
+  an M. ⛔ **The per-P spelling it had first made the invariant *"an M can only reach its own P"*, and that
+  is exactly the sentence P migration falsifies**: a P handed to a second M while the first is still
+  inside a kernel call puts two Ms back on one region, with the `.data` global's failure shape restored
+  in full. *"One OS thread runs one thing at a time"* is true unconditionally, which is why the region is
+  the M's.
 
 ### A spawned green thread is PUBLISHED LAST, and that ordering is load-bearing
 
@@ -152,7 +187,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- targets: x64-windows, arm64-macos -->
 Thirty-two green threads spawned before any is awaited, so all thirty-two are on the run queue at
 once and one P drives every one of them: the scheduler's `currentGt` is written and restored around
-each switch, and a P that lost track of which thread it was running would return one thread's result
+each switch, and an M that lost track of which thread it was running would return one thread's result
 for another. The sum is index-derived, so any mis-pairing lands on a different number.
 ```maxon
 function step(n Counted) returns Counted
@@ -189,12 +224,15 @@ end 'main'
 
 <!-- test: sched-processor.a-green-thread-kernel-call-round-trips-its-processor-stack -->
 <!-- targets: x64-windows, arm64-macos -->
-**THE PER-P SYSCALL STACK, END TO END.** A green thread's `sleep` is a Win32 call, which the syscall
+**THE PER-M SYSCALL STACK, END TO END.** A green thread's `sleep` is a Win32 call, which the syscall
 shim runs on a scratch stack instead of the thread's own 2 KB one — and since the P landed, that
-scratch stack is reached through `P->systemStackSP` rather than a global. The shim must find this
-thread's P, switch RSP to its stack, repoint the TIB, call, restore the TIB from the green thread and
-switch back; a wrong offset anywhere in that chain corrupts the return path rather than producing a
-wrong number, so the assertion is that the thread returns AT ALL with its own value intact.
+scratch stack is reached through a struct field rather than a global: `P->systemStackSP` at first, and
+`M->systemStackSP` since W213-C1. ⚠ The case's NAME still says *processor*, and it is left alone
+deliberately: renaming it churns a golden and buys nothing, and what it exercises — the shim's whole
+chain — has not changed. The shim must find this thread's M, switch RSP to its stack, repoint the TIB,
+call, restore the TIB from the green thread and switch back; a wrong offset anywhere in that chain
+corrupts the return path rather than producing a wrong number, so the assertion is that the thread
+returns AT ALL with its own value intact.
 ```maxon
 function napper(n Integer) returns Integer
 	__Builtins.sleep(2)
@@ -216,13 +254,13 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: sched-processor.a-scalar-program-still-runs-with-no-processor-at-all -->
 The negative control, and it is target-neutral on purpose: a program with no green thread installs no
-scheduler, so it has no P, no TLS slot and no `__sched_*` `.data` word — and the prologue stack guard
-every function in a green-thread image carries is not emitted for it either.
+scheduler, so it has no M, no P, no TLS slot and no `__sched_*` `.data` word — and the prologue stack
+guard every function in a green-thread image carries is not emitted for it either.
 
 ⚠ **ITS FAILURE MODE IS A COMPILE-TIME PANIC, NOT A RUNTIME FAULT**, and that is worth stating because
 it changes what the case is for: a `globalAddr __sched_tls_teb_offset` in an image whose `.data` never
 laid that slot out is a BACKEND RELOCATION PANIC (the trap `DebugStreamRuntime` records for `__ds_base`
-in an untraced build). So this asserts that the P indirection stayed behind `usesGt` — a property every
+in an untraced build). So this asserts that the M/P indirection stayed behind `usesGt` — a property every
 other scalar spec in the suite also happens to assert, which is why this one is a control rather than a
 discovery.
 ```maxon

@@ -128,12 +128,13 @@ log_phase_end compile unit=7
 <!-- targets: x64-windows -->
 ⛔⛔ **THE CASE THAT CATCHES A PRE-INITIALIZED SCHEDULER READ, AND IT WAS A SEGFAULT.** Every log
 entry stamps the green thread that authored it, which since the P landed (`sched-processor.md`) is
-`P->currentGt` — reached through this OS thread's TLS slot, at a byte offset `__sched_init_procs`
+`M->currentGt` — reached through this OS thread's TLS slot, at a byte offset `__sched_init_procs`
 computes. A program may log BEFORE its first `async`, i.e. before that offset exists, and this is the
 shape that does: three events, then a spawn.
 
 The offset's uninitialized value is 0, and `gs:[0]` on Win64 is `NT_TIB.ExceptionList` — a **non-null
-pointer**, not a null slot — so an unguarded read follows it and loads `ExceptionList + 0x18`.
+pointer**, not a null slot — so an unguarded read follows it and loads `ExceptionList + 0x08`
+(`SchedRuntime.MOffCurrentGt`; it was `+ 0x18` while the field was the P's).
 MEASURED under `maxon monitor`: exit 42 became a **SEGMENTATION FAULT**, reported by the monitor as
 `1 abandoned (producer died mid-entry)`. The `.data` word the P replaced read 0 before init and could
 not fail this way, which is why the discipline had never needed writing down.

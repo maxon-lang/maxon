@@ -217,6 +217,46 @@
 # changed is that a green run of the two service rows IS a cross-P allocation
 # reading, where before SV1 nothing in this directory was.
 #
+# ⭐⭐ syscall-stack-torture IS THE ONLY ONE THAT PUTS TWO Ms INSIDE THE SYSCALL
+# SHIM AT ONCE, WHICH IS WHY W213-C1 ADDED IT. Every other program here computes;
+# this one has twelve services making ~24,000 real kernel calls between them — the
+# attribute query (`GetFileAttributesA`, no stack args) at high frequency and the
+# widest stack-arg copy in the shim's table (`CreateFileA`, seven arguments, three
+# copied words) 600 times. The shim parks the green thread's own RSP in the first
+# word of the 64 KB scratch region it switches to, so two Ms on ONE region
+# overwrite each other's parked RSP and the first one out returns onto the other's
+# stack. Its own header carries the mechanism and the sabotage.
+#
+# ⭐ THE SABOTAGE READING, and note WHAT it changes — MEASURED at W213-C1, this
+# box, `emitSchedStartM` altered to hand every M ONE shared 64 KB region allocated
+# once in `__sched_init_procs` (three lines, nothing else touched): the program
+# SEGFAULTS (139) on 9 of 9 runs at MAXON_MAX_PROCS 2, 7 and 12, and exits 42 with
+# `aggregate=30952` on 3 of 3 at 1.
+#
+# ⚠⚠ AND THE SPEC SUITE IS *NOT* BLIND TO IT — THE FIRST DRAFT OF THIS PARAGRAPH
+# SAID IT WAS, AND MEASURING KILLED THAT CLAIM. On the same sabotaged compiler the
+# full suite goes RED, at **3 cases in one run and 4 in another** out of 7,097:
+# `sched-syscall-handoff/more-blocking-file-reads-than-processors-still-finish`,
+# `sched-syscall-handoff/a-blocking-subprocess-wait-does-not-stall-a-sibling` and
+# `services/a-service-shut-down-with-async-work-in-flight`, each with
+# **0xC0000005** (an access violation, not a golden diff). All three are cases
+# that make REAL blocking kernel calls from concurrent green threads, which is
+# exactly the shape this program generalises.
+#
+# ⇒ WHAT THIS ROW BUYS IS DETERMINISM, NOT COVERAGE THAT DID NOT EXIST. Three
+# cases that crash on some runs and a count that varies between runs is evidence;
+# 9 of 9 at three processor counts with a byte-identical aggregate at the fourth
+# is a gate. The suite's three are also silent about WHICH mechanism broke — an
+# access violation in a subprocess case reads as a subprocess bug.
+#
+# ⚠ THE SABOTAGE IS "SHARE THE REGION", NOT "PUT IT BACK ON THE P", AND THE
+# DIFFERENCE IS THE HONEST BOUND ON WHAT THIS ROW CAN SEE. Until handoff lands an
+# M holds one P for its whole life, so per-P and per-M are the SAME PARTITION and
+# no run can tell them apart. What this row pins is the property both spellings
+# must have — the region is not shared between Ms — which is the property the
+# `.data` global did not have and which handoff would take away from the per-P
+# spelling.
+#
 # ⭐⭐ park-torture IS THE ONLY ONE THAT PARKS, WHICH IS WHY SV1 ADDED IT. Every
 # other program here spins and returns, so not one of them walks the deferred-park
 # path (W218) at all — the window between registering on the store that will wake
@@ -285,13 +325,13 @@ effective_count() {
 		echo "$HOST_CPUS"
 	fi
 }
-PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture}"
+PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture syscall-stack-torture}"
 
 # ⭐⭐ WHICH PROGRAMS CREATE REAL GREEN THREADS — the one fact assertion 4 is keyed
 # by, written down once so a program added to either family cannot inherit the
 # other's expectation by being appended to the wrong list. A `spawn` publishes to a
 # P RING; an `async` publishes to its caller's own coroutine queue.
-SPAWNING_PROGRAMS="${SPAWNING_PROGRAMS:-service-torture service-fanin-torture}"
+SPAWNING_PROGRAMS="${SPAWNING_PROGRAMS:-service-torture service-fanin-torture syscall-stack-torture}"
 
 spawns_green_threads() {
 	case " $SPAWNING_PROGRAMS " in

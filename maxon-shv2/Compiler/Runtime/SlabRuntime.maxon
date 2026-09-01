@@ -13,6 +13,17 @@
 // ONE unsharded mcache row. At 7 it segfaulted outright. The allocator naming its own invariant is what
 // localised that to this file rather than leaving a mystery fault in the scheduler.
 //
+// ⭐⭐⭐ **THE INVARIANT THE SHARDING RESTS ON, RESTATED AT W213-C1 AND WEAKER THAN THE ONE S5 WROTE:**
+//
+// > **A P HAS AT MOST ONE M AT ANY INSTANT, AND ONLY THE M *HOLDING* A P ALLOCATES FROM THAT P's ROW. AN M
+// > THAT HOLDS NO P TAKES `SlabRawShardRow`, WHICH IS SERIALISED UNDER THE LOCK.**
+//
+// S5 wrote *"a P is bound to exactly one M for the M's life"*, which was true and is about to stop being:
+// W213 hands a P from an M blocked in a kernel call to another M. The row does not care about the M's LIFE —
+// it cares that at any instant one thread writes it, which the sentence above says and the stronger one only
+// implied. `SlabRawShardRow` carries how the P-less arm is made true rather than assumed, and
+// `SchedRuntime`'s header carries the scheduler's half.
+//
 // **THE SHAPE, IN FOUR SENTENCES.** Each P owns its own mcache ROW (`emitSlabCurrentP` answers the P, the row
 // is its clamped `id`) and is the SOLE WRITER of every span cached there, so the pop is lockless. A span
 // carries the P that owns it (`MspanOwningPOffset`), and a cached span whose owner is not me is a MISS — not
@@ -196,6 +207,36 @@ let SlabMaxShards = 256
 // consequence of the other choice: a raw OS thread sharing row 0 with P[0] races that P's LOCKLESS pop and
 // hands one slab slot to both, which is heap corruption with no diagnostic. The reservation costs one row
 // in 256 and it is what makes "no live P" a state of its own rather than an alias for the first one.
+//
+// ⭐⭐⭐ **ITS PREMISE USED TO BE *"shv2's ONLY P-LESS THREAD IS THE IOCP COMPLETION LOOP, WHICH NEVER
+// ALLOCATES"*, AND W213-C1 REPLACED THAT WITH A RULE THAT DOES NOT DEPEND ON A ROSTER OF THREADS.**
+//
+// > **A THREAD WITH NO P TAKES THIS ROW, WHETHER IT IS NOT YET AN M OR IS AN M HOLDING NO PROCESSOR.**
+//
+// ⚠⚠ **THE TWO HALVES OF THAT RULE HAVE VERY DIFFERENT COVERAGE, AND CONFLATING THEM WOULD BE CLAIMING A
+// GATE NOBODY HAS WATCHED MOVE.**
+//   * **A THREAD THAT IS NOT YET AN M IS EXERCISED CONSTANTLY.** `emitSchedStartM` publishes its TLS slot
+//     LAST, so its own `__slab_alloc` for the M struct runs with the slot still 0 and lands here — once on
+//     the main thread at bring-up and once per worker M. Every green-thread program in the suite drives it,
+//     and it is the arm that keeps the ROW itself honest.
+//   * **AN M HOLDING NO P IS UNEXERCISED, AND WILL BE UNTIL `handoffp` LANDS.** Every M takes a P at birth
+//     and holds it until it dies, so nothing in this rung can produce one. It is written down here because
+//     the predicate below already ABSORBS it by construction — not because anything has been seen taking it.
+//     It is the arm a HANDOFF will reach in bulk, when an M that has given its P away and is sitting in a
+//     kernel call allocates on its way back out.
+//
+// ⚠ **THE MECHANISM COSTS NOTHING NEW, WHICH IS WHY THE SECOND HALF IS TRUE BY CONSTRUCTION RATHER THAN BY
+// TEST.** `emitSlabShardRow` maps every `myP <= MspanOwningPNone` to this row, and `emitSlabCurrentP`
+// answers `MspanOwningPNone` for *"no scheduler"* and *"no M"* and answers `M->currentP` — which is 0 for an
+// M holding nothing — for the rest. One predicate, already total, covering all three; the third needs no
+// arm of its own and so cannot be forgotten when it first becomes reachable.
+//
+// ⭐ **AND WHAT THE ROW BUYS IS THE ALLOCATOR'S HALF OF THE RESTATED SHARD INVARIANT.** `emitSlabShardRow`
+// keys `mcache[row]` on `P->id` and every span carries `MspanOwningPOffset`, and that used to rest on *"a P
+// is bound to one M for life"*. It now rests on the weaker and truer **"a P has at most one M at any
+// instant, and only the M HOLDING a P allocates from that P's row"** — which is what the lockless pop
+// actually needs. A thread between Ps has no row of its own to race; it comes here, where the rule is the
+// LOCK rather than single ownership.
 let SlabRawShardRow = SlabMaxShards - 1
 
 // --- The `.rdata` tables ---
@@ -632,12 +673,12 @@ end 'emitMcacheSlotAddr'
 // shared emitter exists to make impossible.
 
 // ⭐ **THE ONE DOOR TO "WHICH P IS RUNNING ME" — a P pointer, or `MspanOwningPNone` for an OS thread that
-// owns none.** It answers in `pId`, the merge block's single argument. ⚠ In an UNSHARDED build it is a
+// holds none.** It answers in `pId`, the merge block's single argument. ⚠ In an UNSHARDED build it is a
 // CONSTANT and no block at all: there is no `__sched_procs`, no `__sched_tls_teb_offset` `.data` word to
 // read (`schedRuntimeGlobals` gates it on the same bit) and no second thread, so the honest answer is known
 // at build time and the hot path pays nothing to be told it.
 //
-// ⭐⭐ **TWO LOADS AND NO CALL INTO THE SCHEDULER: `gs:[__sched_tls_teb_offset]` IS `TlsGetValue`.**
+// ⭐⭐ **NO CALL INTO THE SCHEDULER: `gs:[__sched_tls_teb_offset]` IS `TlsGetValue`.**
 // `SchedRuntime.SchedTlsTebOffsetLabel` carries the derivation of that precomputed offset in full.
 //
 // ⭐⭐ **IT WAS `__slab_shard_p`, A FUNCTION, UNTIL EC8.** Six ops behind a `call`/`ret` pair and a frame,
@@ -645,39 +686,53 @@ end 'emitMcacheSlotAddr'
 // compiler itself is (its spec runner drives a worker pool over `async`). The ops are unchanged; what went
 // is the frame. Its two callers were both in this file, so no name outside it could depend on the symbol.
 //
-// ⛔⛔ **THE ZERO TEST IS NOT DEFENSIVE — IT IS THE DIFFERENCE BETWEEN A P AND A WILD LOAD.** Before
-// `__sched_init_procs` runs, the offset word reads 0, and `gs:[0]` is `NT_TIB.ExceptionList` — a NON-NULL
-// pointer on Windows — so reading through it hands back a garbage "P" whose `POffId` load faults. The
-// allocator reaches this path on the very first allocation of every program, which is long before any
-// `async`, so that is the COMMON case rather than an edge. `SchedRuntime.emitLoadCurrentGtAndProcIdOrZero` and
-// `X64GtRuntime.emitLoadCurrentGtOrBail` make the identical two-zero argument for the identical read.
+// ⭐⭐⭐ **SINCE W213-C1 THE SLOT HOLDS AN **M**, AND THE P IS ONE FIELD FURTHER — WHICH IS WHY THERE ARE
+// THREE ARMS HERE AND NOT TWO.** The allocator is the one hot path this rung made longer, by exactly one
+// compare and one load, and it is the honest price of the split: TLS names the thread of execution, and
+// *"which processor is that thread holding right now"* is a question with a real answer that can change.
 //
-// ⚠ **BOTH ZEROS ANSWER THE SAME THING HERE, AND THAT IS DELIBERATE.** *"No scheduler yet"* and *"an OS
-// thread that owns no P"* (the IOCP completion thread, for its whole life) are different facts, but the
-// allocator's question is only *"is there a P whose row I may own"* — and for both the answer is no. The one
-// place the difference matters is whether another thread can EXIST, which is a separate predicate
-// (`emitSlabSchedulerExists`) asked only where the lock decision needs it.
-function emitSlabCurrentP(module StdModule, func IrFunction, cur IrBlock, sharded bool, pId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
+// ⛔⛔ **NEITHER ZERO TEST IS DEFENSIVE — EACH IS THE DIFFERENCE BETWEEN A P AND A WILD LOAD — AND NEITHER IS
+// SPELLED HERE.** Both belong to `SchedRuntime.emitLoadCurrentMOrBail`, the one walk all three readers of
+// *"which M am I"* share, so this file cannot come to disagree with the scheduler's own two callers about
+// which nulls to ask about. The arguments, in that function's words:
+//   * Before `__sched_init_procs` runs, the offset word reads 0, and `gs:[0]` is `NT_TIB.ExceptionList` — a
+//     NON-NULL pointer on Windows — so reading through it hands back a garbage pointer whose next field load
+//     faults. The allocator reaches this path on the very first allocation of every program, long before any
+//     `async`, so that is the COMMON case rather than an edge.
+//   * A zero SLOT is an OS thread with no M — the IOCP completion thread for its whole life, and the main
+//     thread and every worker for the few instructions between the offset being published and their own
+//     `emitSchedStartM` finishing. **That window contains the `__slab_alloc` for the M struct itself**, so
+//     this arm is not hypothetical either: it is taken at every worker spawn.
+//
+// ⚠ **ALL THREE ANSWERS COLLAPSE TO THE SAME ONE HERE, AND THAT IS DELIBERATE.** *"No scheduler yet"*, *"an
+// OS thread with no M"* and *"an M holding no P"* are three different facts, but the allocator's question is
+// only *"is there a P whose row I may own"* — and for all three the answer is no. ⚠ The third needs NO ARM
+// at all: `emitSlabShardRow` already tests `<= MspanOwningPNone`, so a `currentP` of 0 falls into the raw
+// row through a predicate that was total before this rung and stayed total. That is why this caller adds
+// nothing to the shared walk — it is the only one of the three that does not. The one place the difference
+// matters is whether another thread can EXIST, which is a separate predicate (`emitSlabSchedulerExists`)
+// asked only where the lock decision needs it.
+function emitSlabCurrentP(module StdModule, func IrFunction, cur IrBlock, sharded bool, pId ValueId, ids ValueMinter) returns IrBlock
 	if not sharded 'noScheduler'
 		module.appendOp(cur, op: StdOp.const(pId, value: MspanOwningPNone, valueType: StdType.i64))
 		return cur
 	end 'noScheduler'
 
-	var haveOffset = module.addBlock(func, label: label)
-	var merge = module.addBlock(func, label: label)
+	// ⚠ Three DISTINCT labels: they used to share one caller-supplied name, which put three identically
+	// named blocks in every IR dump of an allocation. The name was the same at both call sites anyway, so
+	// there was never a parameter's worth of information in it.
+	var haveOffset = module.addBlock(func, label: b"mypoffset")
+	var haveMachine = module.addBlock(func, label: b"mypmachine")
+	var merge = module.addBlock(func, label: b"myp")
 	merge.blockArgs.push(IrBlockArg.create(pId, argType: StdType.i64))
 
-	let tebOffset = emitLoadGlobalWord(module, block: cur, label: SchedTlsTebOffsetLabel, ids: ids)
-	let never = emitConst(module, block: cur, value: 0, ids: ids)
-	let noScheduler = emitCmp(module, block: cur, a: tebOffset, b: never, pred: StdCmpPred.eq, ids: ids)
-	let noProc = emitConst(module, block: cur, value: MspanOwningPNone, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(noScheduler, thenBlockId: merge.id, elseBlockId: haveOffset.id))
-	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(noProc)))
+	var noProc = ParsedIntArray.create()
+	noProc.push(MspanOwningPNone as ParsedInt)
+	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: merge, bailValues: noProc, ids: ids)
 
-	let p = ids.mint()
-	module.appendOp(haveOffset, op: StdOp.tlsSlotLoad(p, tebOffsetId: tebOffset))
-	module.setTerminator(haveOffset, op: StdOp.branch(merge.id))
-	haveOffset.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(p)))
+	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
+	module.setTerminator(haveMachine, op: StdOp.branch(merge.id))
+	haveMachine.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(p)))
 
 	return merge
 end 'emitSlabCurrentP'
@@ -1470,7 +1525,7 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, countRaw bool, ze
 	var classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
 
 	let myP = ids.mint()
-	var pReady = emitSlabCurrentP(module, func: func, cur: classReady, sharded: sharded, pId: myP, ids: ids, label: b"myp")
+	var pReady = emitSlabCurrentP(module, func: func, cur: classReady, sharded: sharded, pId: myP, ids: ids)
 
 	let row = ids.mint()
 	var rowReady = emitSlabShardRow(module, func: func, cur: pReady, myP: myP, sharded: sharded, rowId: row, ids: ids, label: b"row")
@@ -2004,7 +2059,7 @@ function buildSlabFree(module StdModule, sharded bool)
 	emitRuntimeAbort(module, func: func, block: parked, abort: RuntimeAbort.slabFreeOfParkedSpan, ids: ids)
 
 	let myP = ids.mint()
-	var pKnown = emitSlabCurrentP(module, func: func, cur: mine, sharded: sharded, pId: myP, ids: ids, label: b"myp")
+	var pKnown = emitSlabCurrentP(module, func: func, cur: mine, sharded: sharded, pId: myP, ids: ids)
 	let isMine = emitCmp(module, block: pKnown, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(pKnown, op: StdOp.condBranch(isMine, thenBlockId: local.id, elseBlockId: remote.id))
 

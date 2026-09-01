@@ -1,0 +1,178 @@
+// Track-0 SYSCALL-STACK torture (W213-C1) — the ONE program in this directory
+// whose subject is the 64 KB SCRATCH STACK a green thread's kernel calls run on,
+// and the only one that puts more than one M inside the syscall shim at once.
+//
+// ⭐⭐ WHAT IT IS FOR. Every Win32 / libSystem call a green thread makes is
+// wrapped by the syscall shim (`X64GtRuntime.emitGtShimmedIatCall`,
+// `Arm64GtRuntime.emitArm64GtGatedImportCall`): the shim switches RSP to a 64 KB
+// scratch region, PARKS THE GREEN THREAD'S OWN RSP IN THE FIRST WORD OF IT,
+// reserves an outgoing-arg frame, copies the call's 5th+ stack arguments into
+// that frame, repoints the NT_TIB at the region, calls, and reads the parked RSP
+// back afterwards. Two Ms doing that on ONE region overwrite each other's parked
+// RSP, so the first one out `mov rsp`s onto the other's green-thread stack.
+//
+// ⛔⛔ THE FAILURE IS SILENT INTERLEAVED CORRUPTION, NOT A FAULT AT THE POINT OF
+// THE BUG, which is exactly why this program has to exist. Nothing in the spec
+// suite makes two green threads on two different Ms call the kernel at the same
+// instant: a spec case is a small deterministic program, and the ones that DO
+// spawn services mostly compute rather than syscall. The suite was green over a
+// shared region for the whole of G1's life and would be green over one again.
+//
+// ⭐⭐ WHOSE STACK IT IS, AND WHY THAT HAS MOVED TWICE.
+//   • Before G1: ONE `.data` region, `__gt_system_stack_top`. Safe under the
+//     prose "single-M runs one thing at a time", which multi-M falsified.
+//   • G1: one region PER P. Safe under "an M can only reach its own P".
+//   • W213-C1: one region PER M (`SchedRuntime.MOffSystemStackSP`), because
+//     W213 falsifies G1's sentence in turn — a P taken from an M blocked inside
+//     a kernel call would hand the region to a second M mid-call.
+//
+// ⚠⚠ AND THAT IS WHY THE SABOTAGE THAT REDDENS THIS PROGRAM IS *SHARING THE
+// REGION*, NOT "PUTTING IT BACK ON THE P". Until handoff lands, an M holds one P
+// for its whole life, so per-P and per-M are the SAME PARTITION and a per-P
+// build is not observably different from this one. What can be seen today is the
+// property both spellings must have and the `.data` global did not: THE REGION
+// IS NOT SHARED BETWEEN Ms. That is what this program measures.
+//
+// MEASURED (W213-C1, this box, 16 processors): with `emitSchedStartM` changed to
+// read one shared 64 KB region allocated once in `__sched_init_procs` — three
+// lines, nothing else touched — this program dies at every MAXON_MAX_PROCS >= 2
+// and is clean at 1. The readings are in the rung's report and in
+// `pin-matrix.sh`'s header; a gate nobody has watched move is not a gate.
+//
+// ⭐ WHAT THE KERNEL CALLS ARE, AND WHY THESE. The shim's cost and its exposure
+// both scale with the STACK-ARGUMENT COPY (`gtShimStackArgWordsOf`), so the
+// program deliberately mixes the widest entry with the cheapest:
+//   • `File.exists` -> `GetFileAttributesA`, ZERO stack args — the pure stack
+//     switch, at the highest frequency this program can reach.
+//   • `File.writeText` / `readText` / `delete` -> `CreateFileA` (SEVEN args,
+//     THREE copied words — the widest copy in the table, tied with
+//     `CreateProcessA` and `CreateNamedPipeW`), plus `WriteFile`/`ReadFile`
+//     (one word) and `CloseHandle` (none).
+// ⚠ `Subprocess.run` is deliberately NOT used, and the omission is a choice
+// rather than a gap: `CreateProcessA` copies exactly the same three words as
+// `CreateFileA` above, so it exercises no shim path this program does not, and
+// it would add a per-call cost measured in milliseconds plus a dependency on
+// some external binary existing on the box.
+//
+// ⚠ IT WRITES SCRATCH FILES INTO THE CURRENT DIRECTORY, one per service, named
+// `.w213-stack-probe-<id>.tmp`, and deletes each one in the same round it made
+// it. A crashing run (which is what the sabotage produces) can leave them.
+
+typealias Integer = int(i64.min to i64.max)
+typealias ProbeHandleArray = Array with StackProbe.handle
+
+// One service per M the scheduler will plausibly build — `service-torture`'s
+// count, for `service-torture`'s reason (12 is the default worker pool size).
+let serviceCount = 12
+
+// Kernel calls per service. Chosen so the whole run is a second or so of real
+// syscall time spread across every M: that is what makes two Ms being inside the
+// shim SIMULTANEOUSLY the common case rather than a coincidence, and it is also
+// what gives `pin-matrix.sh`'s assertion 4 a window in which a worker M can
+// exist at all (`service-torture`'s `rounds` carries that argument in full).
+let rounds = 2000
+
+// A CreateFileA round every this many — the WIDE-copy path. Rarer than the
+// attribute query because it is two orders of magnitude more expensive, and one
+// in forty still gives 600 of them per run.
+let fileEvery = 40
+
+type StackProbe
+	var id as Integer
+	var checksum as Integer
+
+	static function create() returns Self
+		return Self{id: 0, checksum: 0}
+	end 'create'
+
+	export function identify(n Integer)
+		self.id = n
+	end 'identify'
+
+	// ⭐ THE WHOLE RUN IS ONE HANDLER, WHICH IS WHAT MAKES THE Ms OVERLAP. A
+	// mailbox serialises its own messages, so twelve short messages to twelve
+	// services would interleave with the sends; one long message per service
+	// puts twelve green threads into the kernel and leaves them there.
+	export function churn(count Integer)
+		var k = 0
+
+		while k < count 'each'
+			// `GetFileAttributesA` through the shim. The answer is deterministic
+			// (the path is never created), so the checksum is a pure function of
+			// `count` and cannot move with the scheduling.
+			let absent = FilePath from ".w213-absent-{self.id}-{k}"
+
+			if not File.exists(absent) 'missing'
+				self.checksum = self.checksum + 1
+			end 'missing'
+
+			if k mod fileEvery == 0 'wideCopy'
+				let scratch = FilePath from ".w213-stack-probe-{self.id}.tmp"
+				let payload = "probe {self.id}:{k}"
+
+				// ⚠ `otherwise panic` rather than a default, because a swallowed
+				// IO failure would change the checksum SILENTLY — and a torture
+				// whose aggregate can move for a reason that is not its subject
+				// is worse than no torture.
+				try File.writeText(scratch, content: payload) otherwise panic("syscall-stack-torture: writeText failed for service {self.id} at round {k}")
+				let back = try File.readText(scratch) otherwise panic("syscall-stack-torture: readText failed for service {self.id} at round {k}")
+				self.checksum = self.checksum + back.byteLength()
+				try File.delete(scratch) otherwise panic("syscall-stack-torture: delete failed for service {self.id} at round {k}")
+			end 'wideCopy'
+
+			k = k + 1
+		end 'each'
+	end 'churn'
+
+	export function total() returns Integer
+		return self.checksum
+	end 'total'
+end 'StackProbe'
+
+function main() returns ExitCode
+	var probes = ProbeHandleArray.create()
+
+	var i = 0
+
+	while i < serviceCount 'spawnEach'
+		probes.push(spawn StackProbe.create())
+		i = i + 1
+	end 'spawnEach'
+
+	// ⭐ EVERY SERVICE IS KICKED BEFORE ANY REPLY IS AWAITED, WHICH IS THE WHOLE
+	// SHAPE. `churn` is fire-and-forget, so this loop hands twelve long-running
+	// green threads to the scheduler and returns; the await below then blocks
+	// main while the other eleven are still inside the kernel on other Ms.
+	i = 0
+
+	while i < serviceCount 'kick'
+		let probe = try probes.get(i) otherwise panic("syscall-stack-torture: probes.get OOB at {i} — the loop is bounded by the count the pushes above filled")
+		probe.identify(i)
+		probe.churn(rounds)
+		i = i + 1
+	end 'kick'
+
+	// The aggregate: an order-independent sum of twelve deterministic checksums,
+	// so a difference between two processor counts is a handler that ran twice,
+	// not at all, or on top of another one's stack.
+	var total = 0
+
+	i = 0
+
+	while i < serviceCount 'collect'
+		let probe = try probes.get(i) otherwise panic("syscall-stack-torture: probes.get OOB at {i} in the collect loop")
+		total = total + (try await probe.total() otherwise panic("syscall-stack-torture: service {i} did not answer — a shut-down service cannot be the reason, since this frame still holds its handle"))
+		i = i + 1
+	end 'collect'
+
+	// ⚠ READ BEFORE THE HANDLES DROP, for `service-torture`'s reason: these are
+	// cumulative counters, and every worker M was created long before this line.
+	let workers = __Builtins.schedMaxActiveWorkers()
+	let steals = __Builtins.schedStealCount()
+
+	print("aggregate={total}\n")
+	print("workers={workers}\n")
+	print("steals={steals}\n")
+
+	return 42
+end 'main'

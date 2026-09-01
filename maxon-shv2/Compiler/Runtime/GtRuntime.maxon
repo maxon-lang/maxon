@@ -18,7 +18,7 @@
 //
 // `SchedRuntime.maxon` beside this file owns the PROCESSOR (P) each OS thread runs green threads on, the TLS
 // door that finds it, the worker M and its park. This file no longer holds "the currently-running GT" in a
-// `.data` word (it is `P->currentGt`) or its syscall stack in one global region (it is `P->systemStackSP`).
+// `.data` word (it is `M->currentGt`) or its syscall stack in one global region (it is `M->systemStackSP`).
 //
 // ⭐⭐ **THE GREEN-THREAD RUN QUEUE IS GO's THREE-TIER HIERARCHY (W212), AND IT IS BUILT AND UNREACHED.** A
 // 256-slot LOCK-FREE RING per P, the global FIFO behind it (`__gt_enqueue`/`__gt_dequeue` and the head/tail
@@ -53,7 +53,7 @@
 //     Ordinary loads, stores, arithmetic, compares, branches and calls, so they get register allocation,
 //     the frame layout and the leak-safe backend for free — exactly MmRuntime's reasoning one tier up.
 //
-// ⭐ WHY THE HAND CHUNKS NEED NO `.data`. The running GT (`P->currentGt`) is managed ENTIRELY by the
+// ⭐ WHY THE HAND CHUNKS NEED NO `.data`. The running GT (`M->currentGt`) is managed ENTIRELY by the
 // builder-built drivers: `__sched_init_procs` points P[0] at its own inline scheduler GT (which IS GT0, the
 // adopted main thread), and `__gt_await` sets it to the GT it switches INTO and back to itself on resume —
 // the only two places a switch is driven. ⚠ The SHIM and the prologue GUARD are the exceptions this sentence
@@ -488,12 +488,13 @@ end 'gtStackGuardMargin'
 
 let GtStackGuardMarginBytes = 0x3A0 as ParsedInt
 
-// The single global SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB
-// region allocated once PER P by `__sched_init_procs`, its TOP held in `P->systemStackSP`. The syscall shim
-// switches RSP here for a Win32 call so the kernel's deep stack usage (RPC, TIB probes) never touches the
+// The SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB region
+// committed once PER M by `emitSchedStartM`, its TOP held in `M->systemStackSP`. The syscall shim switches
+// RSP here for a Win32 / libSystem call so the kernel's deep stack usage (RPC, TIB probes) never touches the
 // GT's own small stack — the infrastructure that makes slice 2's 2 KB GT stacks safe. 0x10000 is byte-
-// identical to the authoritative layout's `PSystemStackSize` (`GtLayout.cs:178`). EXPORTED because the shim
-// subtracts it from the system-stack top to compute the TIB StackLimit it publishes for the call.
+// identical to the authoritative layout's `PSystemStackSize` (`GtLayout.cs:178`), whose name still says P
+// because a bootstrap P *is* its M. EXPORTED because the shim subtracts it from the system-stack top to
+// compute the TIB StackLimit it publishes for the call.
 export let GtSystemStackSize = 0x10000
 
 // The saved-register frame `__gt_context_switch` builds on a GT stack, and the ONE fact the Std tier and the
@@ -859,7 +860,7 @@ export let GtIsCompleteName = b"__gt_is_complete"
 // word before it publishes anything, so *"nothing will ever run this GT"* and *"this word is zero"* are one
 // fact, where a second field saying `isReplyCell` would be free to disagree with it.
 //
-// ⚠ **A P's INLINE SCHEDULER GT ALSO CARRIES `funcPtr == 0`, AND CANNOT REACH THE PREDICATE.** The one
+// ⚠ **AN M's INLINE SCHEDULER GT ALSO CARRIES `funcPtr == 0`, AND CANNOT REACH THE PREDICATE.** The one
 // reader is `__gt_promise_drop`, which is only ever handed a PROMISE — an `async` coroutine (whose funcPtr
 // the spawn wrote) or a reply cell. A P's scheduler context is named by no promise, so the two populations
 // the predicate must tell apart are exactly the two it can see.
@@ -1308,11 +1309,14 @@ export let IoCompletionLoopName = b"__io_completion_loop"
 // The zero image IS the initial state: no current GT, an empty run queue, init not yet run — exactly as
 // `__slab_state`'s zero means "the allocator has committed no region yet". So there is nothing to run before
 // `main`.
-// ⚠ **THE `__gt_current_gt` `.data` WORD IS GONE (G1) — the running GT is now `P->currentGt`.** A single
-// global cannot express *"the green thread THIS M is running"* once there is more than one M, and neither can
-// the drivers that owned it: two Ms would write the same word and each would read the other's answer. Every
-// reader — the eight in this file, the two hand-assembled ones in `X64GtRuntime`, and the DebugStream event
-// — now goes through `SchedRuntime.emitLoadCurrentGt` / its Target-tier twin.
+// ⚠ **THE `__gt_current_gt` `.data` WORD IS GONE (G1) AND THE RUNNING GT IS `M->currentGt` (W213-C1).** A
+// single global cannot express *"the green thread THIS M is running"* once there is more than one M, and
+// neither can the drivers that owned it: two Ms would write the same word and each would read the other's
+// answer. G1 put it on the P, which was right while a P was bound to one M for life; C1 put it on the M
+// itself, because the thread executing inside a kernel call belongs to the M blocked there and not to the
+// processor a handoff is about to take away. Every reader — the eight in this file, the hand-assembled ones
+// in `X64GtRuntime` and `Arm64GtRuntime`, and the DebugStream event — goes through
+// `SchedRuntime.emitLoadCurrentGt` / its Target-tier twins.
 // EXPORTED since W212: `SchedRuntime`'s `__sched_find_runnable` and `__sched_sweep_dropped` peek this word
 // UNLOCKED to decide whether taking the lock is worth it, which is what Go's `sched.runq.empty()` guard does
 // at the two identical points (`proc.go:3456`, `proc.go:3490`). The peek decides only whether to LOOK; the
@@ -1321,11 +1325,13 @@ export let GtRunQueueHeadLabel = b"__gt_run_queue_head"
 let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 let GtInitDoneLabel = b"__gt_init_done"  // idempotency guard for __gt_init
 
-// ⚠ **THE `__gt_system_stack_top` `.data` WORD IS GONE (G1) — the syscall stack is `P->systemStackSP`.**
-// Its safety invariant was *"single-M runs one thing at a time"*, written down as prose in one comment, and
-// multi-M falsifies it by definition: two Ms inside shimmed calls would set RSP to the same top and write the
-// same 64 KB, as silent interleaved corruption rather than a fault. `SchedRuntime.POffSystemStackSP` carries
-// the argument in full; `GtSystemStackSize` below is unchanged and is now the size of EACH P's region.
+// ⚠ **THE `__gt_system_stack_top` `.data` WORD IS GONE (G1) AND THE SYSCALL STACK IS `M->systemStackSP`
+// (W213-C1).** Its safety invariant was *"single-M runs one thing at a time"*, written down as prose in one
+// comment, and multi-M falsifies it by definition: two Ms inside shimmed calls would set RSP to the same top
+// and write the same 64 KB, as silent interleaved corruption rather than a fault. G1's per-P region replaced
+// that sentence with *"an M can only reach its own P"* — which is the sentence P migration falsifies in
+// turn, so C1 moved the region to the M that is EXECUTING. `SchedRuntime.MOffSystemStackSP` carries the
+// argument in full; `GtSystemStackSize` below is unchanged and is now the size of EACH M's region.
 
 // ⭐ THE FIXED-SIZE STACK FREE-LIST IS GONE (P1.5-B1a′). B1a recycled a completed GT's stack onto a LIFO because
 // every stack was a uniform 1 MiB; the morestack makes stacks VARIABLE-SIZED (2 KB, doubled on demand), so a
@@ -2185,7 +2191,8 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 
 	// ⭐⭐ **THE P/M HALF FIRST, AND IT IS WHAT PROVIDES GT0 (G1).** `__sched_init_procs` reserves the TLS
 	// slot, builds every P — each with its own wake event and its own 64 KB syscall stack — and adopts P[0]
-	// for this OS thread, which includes pointing `P[0].currentGt` at P[0]'s INLINE scheduler GT.
+	// for this OS thread — which since W213-C1 means making that thread an M (with its own syscall stack and
+	// its own inline scheduler GT) and giving that M P[0].
 	//
 	// ⚠ **THAT INLINE GT *IS* GT0, so there is no `__slab_alloc(GtStructSize)` here any more.** It used to be
 	// a separate slab struct published into a `.data` word; a `.data` word cannot express "the green thread
@@ -2232,11 +2239,12 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let procSnapshotBaseAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(procSnapshotBaseAddr, label: GtProcWaitSnapshotLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(procSnapshotBaseAddr, offset: 0, valueId: procSnapshotBase, valueType: StdType.i64))
-	// ⚠ **THE 64 KB SYSCALL STACK IS NO LONGER ALLOCATED HERE (G1).** It used to be ONE global region whose
-	// top was published to a `.data` word, and the invariant that made that safe was the prose *"single-M
-	// runs one thing at a time"* — which multi-M falsifies by definition, as silent interleaved corruption.
-	// `__sched_init_procs` now gives EACH P its own, and the shim reaches it through the P it is already
-	// reading `currentGt` from. See `SchedRuntime.POffSystemStackSP`.
+	// ⚠ **THE 64 KB SYSCALL STACK IS NO LONGER ALLOCATED HERE (G1), NOR PER P (W213-C1).** It used to be ONE
+	// global region whose top was published to a `.data` word, and the invariant that made that safe was the
+	// prose *"single-M runs one thing at a time"* — which multi-M falsifies by definition, as silent
+	// interleaved corruption. Each OS thread that becomes an M now commits its own (`emitSchedStartM`), and
+	// the shim reaches it through the M it is already reading `currentGt` from. See
+	// `SchedRuntime.MOffSystemStackSP`.
 	// ⭐ **NO SUBPROCESS SCRATCH IS TAKEN HERE ANY MORE (S3).** Until this rung, three fixed-size buffers were
 	// allocated at scheduler init and reused by every `__gt_process_run` — the #92 workaround for a slab with
 	// no free path, which every pure-async program that never ran a subprocess paid ~0x88 bytes for. Each call
@@ -2729,7 +2737,7 @@ end 'buildGtDequeue'
 // they hand it. See `GtCoroEnqueueName` for the lock the caller owes.
 //
 // ⛔ **THE OWNER IS READ OFF THE GT AND NOT FROM TLS, AND THAT IS WHAT LETS THE IOCP COMPLETION THREAD CALL
-// IT.** That thread owns no P, so `emitLoadCurrentP` would answer 0 there; the GT it recovered from the
+// IT.** That thread has no M and therefore no P, so `emitLoadCurrentM` would answer 0 there; the GT it recovered from the
 // OVERLAPPED knows which green thread it belongs to, which is the whole reason the owner is a FIELD.
 function buildGtCoroEnqueue(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
@@ -3652,10 +3660,14 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 		anyCompleted then module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create()))
 		statusEquals or liveCountZero then break 'initBeforeTheFirstSchedulerRead'
 	end 'initBeforeTheFirstSchedulerRead'
-	// The P this driver runs on, read ONCE in `entry` — which dominates every block below, so the run/park
-	// arms address `currentGt` through the same pointer rather than re-reading TLS at each of them.
-	let driverProc = emitLoadCurrentP(module, block: entry, ids: ids)
-	let selfGt = emitLoadField(module, block: entry, record: driverProc, offset: POffCurrentGt, ids: ids)
+	// The M this driver runs on and the P that M holds, read ONCE in `entry` — which dominates every block
+	// below, so the run/park arms address both through the same pointers rather than re-reading TLS at each
+	// of them. ⚠ **TWO POINTERS SINCE W213-C1, AND THEY ARE TWO DIFFERENT QUESTIONS**: the running green
+	// thread and the scheduler context belong to the M (`emitGtRunOne`), while the quiescence flags, the
+	// deferred slots and the ring belong to the P.
+	let driverMachine = emitLoadCurrentM(module, block: entry, ids: ids)
+	let driverProc = emitLoadField(module, block: entry, record: driverMachine, offset: MOffCurrentP, ids: ids)
+	let selfGt = emitLoadField(module, block: entry, record: driverMachine, offset: MOffCurrentGt, ids: ids)
 	// ⭐⭐ **THE GREEN THREAD WHOSE COROUTINES THIS DRIVER MAY RUN (EC10)** — read here for the same reason
 	// `selfGt` is: `entry` dominates every block. `selfGt` is a driver in a CHAIN (GT0 for a top-level await, a
 	// coroutine for a nested one) and every link of that chain has the SAME owner, so the queue this loop
@@ -3735,7 +3747,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// the other. Clearing it anywhere else — at the loop top, say — would make the flag a snapshot of the last
 	// few microseconds instead of a state, and the detector a race again.
 	emitSchedSetQuiesced(module, block: run, p: driverProc, waiting: false, ids: ids)
-	emitGtRunOne(module, run: run, handOff: handOff, g: runGt, selfGt: selfGt, p: driverProc, continuation: loopHdr, ids: ids)
+	emitGtRunOne(module, run: run, handOff: handOff, g: runGt, selfGt: selfGt, m: driverMachine, continuation: loopHdr, ids: ids)
 
 	// netpoll: nothing is runnable anywhere. Block this M until something becomes ready — a parked TIMER fires
 	// or a parked CHILD exits. `pc` = parked children, `earliest` = the nearest timer deadline (0 = none). When
@@ -5514,13 +5526,16 @@ end 'buildGtProcCount'
 // and 53-72 at twelve, against 54-96 threads a worker M had taken out of main's ring — and 0 at ONE
 // processor, where nothing can be running underneath the dropper. Invisible to the exit gate, which reads a
 // count the drop had already debited (`maxon-shv2/track0/drop-running-torture.maxon` is that measurement).
-export function emitGtRunOne(module StdModule, run IrBlock, handOff IrBlock, g ValueId, selfGt ValueId, p ValueId, continuation IrBlock, ids ValueMinter)
+// ⚠ **IT TAKES THE M AND NOT THE P (W213-C1).** *"Which green thread is running"* is a fact about the OS
+// THREAD that is executing it — `SchedRuntime.MOffCurrentGt` carries why — and the driver on either side of
+// the context switch below is this M's, whatever processor it happens to hold.
+export function emitGtRunOne(module StdModule, run IrBlock, handOff IrBlock, g ValueId, selfGt ValueId, m ValueId, continuation IrBlock, ids ValueMinter)
 	// run: g.waiter = selfGt; current = g; switch into g; on switch-back restore current, then gate the hand-off.
 	module.appendOp(run, op: StdOp.storeIndirect(g, offset: GtOffWaiter, valueId: selfGt, valueType: StdType.i64))
-	emitStoreField(module, block: run, record: p, offset: POffCurrentGt, value: g)
+	emitStoreField(module, block: run, record: m, offset: MOffCurrentGt, value: g)
 	let switchResult = ids.mint()
 	module.appendOp(run, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: twoArgs(selfGt, second: g)))
-	emitStoreField(module, block: run, record: p, offset: POffCurrentGt, value: selfGt)
+	emitStoreField(module, block: run, record: m, offset: MOffCurrentGt, value: selfGt)
 	let gStatus = emitLoadField(module, block: run, record: g, offset: GtOffStatus, ids: ids)
 	let gCompleted = emitGtStatusEquals(module, block: run, status: gStatus, want: GtStatusCompleted, ids: ids)
 	// ⭐ GIVE UP ONLY A COMPLETED g. A merely-parked (waiting) g keeps its stack — it will resume on it.
@@ -5820,8 +5835,11 @@ function buildGtResched(module StdModule)
 	let initResult = ids.mint()
 	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
 
-	let reschedProc = emitLoadCurrentP(module, block: entry, ids: ids)
-	let selfGt = emitLoadField(module, block: entry, record: reschedProc, offset: POffCurrentGt, ids: ids)
+	// The M and the P it holds, for `__gt_drive_until`'s reason and with `__gt_drive_until`'s split: the
+	// running green thread is the M's, the ring peek below is the P's.
+	let reschedMachine = emitLoadCurrentM(module, block: entry, ids: ids)
+	let reschedProc = emitLoadField(module, block: entry, record: reschedMachine, offset: MOffCurrentP, ids: ids)
+	let selfGt = emitLoadField(module, block: entry, record: reschedMachine, offset: MOffCurrentGt, ids: ids)
 	// The green thread whose coroutine queue is in play — `__gt_drive_until`'s `owner`, read for the same
 	// reason and in the block that dominates every arm below. For a green thread it is SELF, which is what
 	// makes the two arms below read two different queues from one load.
@@ -5891,7 +5909,7 @@ function buildGtResched(module StdModule)
 	module.setTerminator(driveSched, op: StdOp.condBranch(noSchedGt, thenBlockId: pollBlock.id, elseBlockId: runBlock.id))
 	driveSched.branchEdges.push(BranchEdge.create(runBlock.id, argIds: argsOf(schedGt)))
 
-	emitGtRunOne(module, run: runBlock, handOff: completedBlock, g: runGt, selfGt: selfGt, p: reschedProc, continuation: ranBlock, ids: ids)
+	emitGtRunOne(module, run: runBlock, handOff: completedBlock, g: runGt, selfGt: selfGt, m: reschedMachine, continuation: ranBlock, ids: ids)
 
 	// ⭐⭐ **THE DRAIN AFTER THE TURN, AND THIS IS THE ONE DRIVER THAT NEEDS IT SPELLED OUT (W218).** Every
 	// other driver comes back from `emitGtRunOne` into a LOOP whose header drains; this one comes back into

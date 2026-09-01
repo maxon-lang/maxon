@@ -105,6 +105,21 @@ it themselves is separate work nobody has done.
   here. **The exit code is the only discriminator** — the aggregate is
   byte-identical in passing and crashing runs. The three measured builds, and the
   one-line sabotage that reddens it (48 of 96 runs), are tabulated in its header.
+- **`syscall-stack-torture.maxon`** (W213-C1) — the only program here that puts
+  more than one M inside the **syscall shim** at once. Twelve spawned services
+  make ~24,000 real kernel calls between them: `File.exists`
+  (`GetFileAttributesA`, no stack arguments — the pure stack switch, at the
+  highest frequency reachable) and, every fortieth round, a
+  write/read/delete cycle whose `CreateFileA` is the **widest stack-argument copy
+  in the shim's table** (seven arguments, three copied words). The shim parks the
+  green thread's own RSP in the first word of the 64 KB scratch region it
+  switches to, so two Ms on ONE region overwrite each other's parked RSP and the
+  first one out returns onto the other's stack — silent interleaved corruption,
+  not a fault at the point of the bug. Sabotaged to share one region it
+  **segfaults 9 of 9 at `MAXON_MAX_PROCS` 2/7/12 and is clean 3 of 3 at 1**;
+  `pin-matrix.sh`'s header carries that reading, what the same sabotage does to
+  the spec suite (3–4 red of 7,097, intermittently), and why the sabotage is
+  *"share the region"* rather than *"put it back on the P"*.
 - **`validate.sh`** — compiles `alloc-torture` once with the BOOTSTRAP (a plain
   build + a `--debugstream` build), then runs the four checks below.
 
