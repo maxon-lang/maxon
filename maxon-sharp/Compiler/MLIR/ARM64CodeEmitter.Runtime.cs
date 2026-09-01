@@ -7443,7 +7443,7 @@ public partial class ARM64CodeEmitter {
     // wraps it into a String and mm_raw_free's the cstring). No dependency on
     // compiled stdlib symbols. Covers the Subprocess.run contract used by the
     // spec runner (stdin=none → /dev/null, stdout/stderr=collect → pipe).
-    EmitSubpDrain();
+    EmitSubpDrainPass();
     EmitSubpBuildArgv();
     EmitSubpBuildEnvp();
     EmitMaxonSubprocessSpawnPosix();
@@ -7507,7 +7507,62 @@ public partial class ARM64CodeEmitter {
   // result_release frees the raw buffers + the result struct.
   // ==========================================================================
 
-  private const long SubpScratchCap = 8 * 1024 * 1024; // per-stream output capture cap
+  // --- drain-pass tunables and the POSIX constants it names ---
+
+  /// Bytes moved per drain pass, per stream. One macOS pipe buffer's worth, so a
+  /// ready stream empties in a single read and the pass moves on to its sibling
+  /// instead of starving it.
+  private const long SubpDrainChunk = 64 * 1024;
+  /// POLLIN, plus the `struct pollfd` field offsets the drain pass fills in
+  /// ({ int fd; short events; short revents; }).
+  private const long PollInEvent = 0x0001;
+  private const int PollFdOffFd = 0x00;
+  private const int PollFdOffEvents = 0x04;
+  private const int PollFdOffRevents = 0x06;
+  /// EINTR. A poll or read cut short by a signal has neither moved bytes nor seen
+  /// end-of-stream, so it is a no-progress pass and emphatically NOT EOF —
+  /// conflating the two is the one way this loop can truncate a child's output.
+  private const long ErrnoEintr = 4;
+  /// SIGKILL, and the exit code the stdlib's timedOut status carries.
+  private const long SignalKill = 9;
+  private const long SubpTimedOutExitCode = 124;
+  /// WNOHANG.
+  private const long WaitNoHang = 1;
+  /// Once the deadline has SIGKILLed the child, how much longer the loop keeps
+  /// draining what the dead child already wrote before it gives up. Without a
+  /// bound, a grandchild holding the pipe write end open would hang the wait for
+  /// ever; without the grace, the bytes the child managed to write are lost.
+  private const long SubpKillDrainGraceMs = 250;
+
+  /// Per-stream drain state, a 4-quad block in the caller's frame that
+  /// `__subp_drain_pass` reads and updates. `cap` is the caller's capture ceiling;
+  /// the mapping behind `buf` is always `cap + SubpDrainChunk` bytes, the spare
+  /// chunk being the bit bucket that keeps a child draining once the ceiling is hit.
+  private const int SubpStateBuf = 0x00;
+  private const int SubpStateLen = 0x08;
+  private const int SubpStateDone = 0x10;
+  private const int SubpStateCap = 0x18;
+
+  // maxon_subprocess_wait_collect frame slots (arg homes occupy 0x10 and 0x18).
+  private const int SubpWcHandle = 0x20;
+  /// maxon_subprocess_release_handle's frame slot for the handle pointer.
+  private const int SubpRhHandle = 0x18;
+  private const int SubpWcStartMs = 0x28;   // reused for elapsedMs after the loop
+  private const int SubpWcDeadline = 0x30;  // absolute ms; 0 means "wait for ever"
+  private const int SubpWcTimedOut = 0x38;
+  private const int SubpWcReaped = 0x40;
+  private const int SubpWcKilled = 0x48;
+  private const int SubpWcStatus = 0x50;    // waitpid's 4-byte status word
+  private const int SubpWcProgress = 0x58;
+  private const int SubpWcTimespec = 0x60;  // tv_sec @ +0, tv_nsec @ +8
+  private const int SubpWcOutState = 0x70;
+  private const int SubpWcErrState = 0x90;
+  private const int SubpWcOutBuf = 0xB0;
+  private const int SubpWcErrBuf = 0xB8;
+  private const int SubpWcKind = 0xC0;
+  private const int SubpWcCode = 0xC8;
+  private const int SubpWcFrame = 0xD0;
+  private const string SubpCaptureOomMessage = "__subp_msg_capture_oom";
 
   /// Result accessor that copies a captured byte buffer into a fresh
   /// mm_raw_alloc'd, NUL-terminated cstring (RuntimeCallToManaged contract).
@@ -7551,33 +7606,133 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  /// __subp_drain(fd, scratch, cap) -> total. Reads `fd` to EOF (or cap) into
-  /// `scratch`. Sequential (stdout then stderr in the caller); safe for the
-  /// bounded output of spec-test programs (< pipe-buffer of un-drained stream).
-  private void EmitSubpDrain() {
-    EmitRuntimeFunctionStart("__subp_drain", 3, 0x40);
-    // args: fd@0x10, scratch@0x18, cap@0x20 ; local total@0x28
+  /// __subp_drain_pass(fd, state) -> bytesMoved. ONE BOUNDED PASS over a live
+  /// child's pipe: it never waits. `poll(fd, POLLIN, 0)` asks whether the
+  /// descriptor has something for us, and only then does `read` run — so the read
+  /// cannot block, and "nothing ready yet" (poll returns 0) stays distinguishable
+  /// from "end of stream" (read returns 0). That distinction is the whole point:
+  /// conflating them either truncates the capture or spins for ever.
+  ///
+  /// ⚠ THIS REPLACED A READ-TO-EOF DRAIN, AND THE OLD SHAPE COULD NOT BE FIXED IN
+  /// PLACE. Its caller waited for the child before reading anything, so a child
+  /// writing more than one pipe buffer (65,536 bytes on macOS) blocked in write()
+  /// while the parent slept in waitpid() — a deadlock that surfaced as the
+  /// caller's timeout, measured at exactly the pipe-buffer boundary. A bounded
+  /// pass is what lets the caller interleave both streams with the wait.
+  ///
+  /// `poll` rather than O_NONBLOCK because `fcntl(fd, F_SETFL, ...)` is VARIADIC,
+  /// and Apple ARM64 passes variadic arguments on the stack (see
+  /// EmitPushVariadicArg) — a per-call-site frame dance for a flag that `poll`
+  /// gives us with a fixed three-register signature.
+  private void EmitSubpDrainPass() {
+    EmitRuntimeFunctionStart("__subp_drain_pass", 2, 0x50);
+    // args: fd@0x10, state@0x18 ; locals: pollfd@0x20, dst@0x28, count@0x30,
+    //   advance@0x38 (0 = the bytes land in the bit bucket), n@0x40
+    const int slotPollFd = 0x20;
+    const int slotDst = 0x28;
+    const int slotCount = 0x30;
+    const int slotAdvance = 0x38;
+    const int slotRead = 0x40;
     int n = _uniqueLabelCounter++;
-    string loop = $"__subp_drain_loop_{n}";
-    string done = $"__subp_drain_done_{n}";
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToStack(0x28, ARM64Register.X0, 8);       // total = 0
-    DefineLabel(loop);
-    EmitLoadFromStack(ARM64Register.X0, 0x10, 8);      // fd
-    EmitLoadFromStack(ARM64Register.X1, 0x18, 8);      // scratch
-    EmitLoadFromStack(ARM64Register.X9, 0x28, 8);      // total
-    EmitAluRegReg(0x8B000000, ARM64Register.X1, ARM64Register.X1, ARM64Register.X9); // buf = scratch+total
-    EmitLoadFromStack(ARM64Register.X2, 0x20, 8);      // cap
-    EmitAluRegReg(0xCB000000, ARM64Register.X2, ARM64Register.X2, ARM64Register.X9); // count = cap-total
-    EmitCallImport("read");                            // x0 = n (ssize_t)
+    string noProgress = $"__subp_dp_none_{n}";
+    string markDone = $"__subp_dp_done_{n}";
+    string errnoCheck = $"__subp_dp_errno_{n}";
+    string bitBucket = $"__subp_dp_bucket_{n}";
+    string chunkCapped = $"__subp_dp_capped_{n}";
+    string doRead = $"__subp_dp_read_{n}";
+    string kept = $"__subp_dp_kept_{n}";
+
+    // A stream already at EOF, or one that never had a pipe, costs one load.
+    EmitReloadArg(1);                                                // X1 = state
+    EmitLoadIndirect(ARM64Register.X9, ARM64Register.X1, SubpStateDone, 8);
+    EmitCbnz(ARM64Register.X9, noProgress);
+    EmitReloadArg(0);                                                // X0 = fd
     EmitCmpImm(ARM64Register.X0, 0);
-    EmitBranchCond(ARM64ConditionCode.Le, done);       // n <= 0 → EOF/err
-    EmitLoadFromStack(ARM64Register.X9, 0x28, 8);
-    EmitAluRegReg(0x8B000000, ARM64Register.X9, ARM64Register.X9, ARM64Register.X0); // total += n
-    EmitStoreToStack(0x28, ARM64Register.X9, 8);
-    EmitBranch(loop);
-    DefineLabel(done);
-    EmitLoadFromStack(ARM64Register.X0, 0x28, 8);
+    EmitBranchCond(ARM64ConditionCode.Lt, markDone);                 // no pipe on this stream
+
+    // poll({fd, POLLIN}, 1, timeout 0)
+    EmitStoreToStack(slotPollFd + PollFdOffFd, ARM64Register.X0, 4);
+    EmitMovRegImm(ARM64Register.X9, PollInEvent);
+    EmitStoreToStack(slotPollFd + PollFdOffEvents, ARM64Register.X9, 2);
+    EmitStoreToStack(slotPollFd + PollFdOffRevents, ARM64Register.Xzr, 2);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, slotPollFd, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 1);                              // nfds
+    EmitMovRegImm(ARM64Register.X2, 0);                              // timeout: return at once
+    EmitCallImport("poll");
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Eq, noProgress);               // nothing ready yet
+    EmitBranchCond(ARM64ConditionCode.Lt, errnoCheck);
+
+    // Ready. Any revents at all (POLLIN, POLLHUP, POLLERR) means read() returns
+    // without blocking, and the read is what tells EOF from bytes — POLLHUP alone
+    // is not reliable across platforms, so we never branch on revents.
+    EmitReloadArg(1);
+    EmitLoadIndirect(ARM64Register.X9, ARM64Register.X1, SubpStateLen, 8);   // total
+    EmitLoadIndirect(ARM64Register.X10, ARM64Register.X1, SubpStateCap, 8);  // cap
+    EmitLoadIndirect(ARM64Register.X11, ARM64Register.X1, SubpStateBuf, 8);  // buf
+    EmitAluRegReg(0xCB000000, ARM64Register.X12, ARM64Register.X10, ARM64Register.X9); // room
+    EmitCmpImm(ARM64Register.X12, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, bitBucket);
+    EmitMovRegImm(ARM64Register.X13, SubpDrainChunk);
+    EmitCmpRegReg(ARM64Register.X12, ARM64Register.X13);
+    EmitBranchCond(ARM64ConditionCode.Le, chunkCapped);
+    EmitMovRegReg(ARM64Register.X12, ARM64Register.X13);
+    DefineLabel(chunkCapped);
+    EmitStoreToStack(slotCount, ARM64Register.X12, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X14, ARM64Register.X11, ARM64Register.X9); // buf + total
+    EmitStoreToStack(slotDst, ARM64Register.X14, 8);
+    EmitMovRegImm(ARM64Register.X15, 1);
+    EmitStoreToStack(slotAdvance, ARM64Register.X15, 8);
+    EmitBranch(doRead);
+
+    // The capture ceiling caps what is KEPT, never what is READ: a runtime that
+    // stopped reading at the ceiling would leave the child blocked on a full pipe
+    // for ever. Past it the bytes land in the spare chunk mapped beyond `cap` and
+    // the collected length simply does not advance.
+    DefineLabel(bitBucket);
+    EmitMovRegImm(ARM64Register.X12, SubpDrainChunk);
+    EmitStoreToStack(slotCount, ARM64Register.X12, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X14, ARM64Register.X11, ARM64Register.X10); // buf + cap
+    EmitStoreToStack(slotDst, ARM64Register.X14, 8);
+    EmitStoreToStack(slotAdvance, ARM64Register.Xzr, 8);
+
+    DefineLabel(doRead);
+    EmitReloadArg(0);                                                // fd
+    EmitLoadFromStack(ARM64Register.X1, slotDst, 8);
+    EmitLoadFromStack(ARM64Register.X2, slotCount, 8);
+    EmitCallImport("read");
+    EmitStoreToStack(slotRead, ARM64Register.X0, 8);
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Eq, markDone);                 // 0 = end of stream
+    EmitBranchCond(ARM64ConditionCode.Lt, errnoCheck);
+    EmitLoadFromStack(ARM64Register.X9, slotAdvance, 8);
+    EmitCbz(ARM64Register.X9, kept);
+    EmitReloadArg(1);
+    EmitLoadIndirect(ARM64Register.X9, ARM64Register.X1, SubpStateLen, 8);
+    EmitLoadFromStack(ARM64Register.X10, slotRead, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X9, ARM64Register.X9, ARM64Register.X10);
+    EmitStoreIndirect(ARM64Register.X1, SubpStateLen, ARM64Register.X9, 8);
+    DefineLabel(kept);
+    // Discarded bytes still count as progress: they moved, so the caller must come
+    // straight round again rather than sleeping while the child waits on the pipe.
+    EmitLoadFromStack(ARM64Register.X0, slotRead, 8);
+    EmitRuntimeFunctionEnd();
+
+    // A poll or read that failed: EINTR is a no-progress pass, anything else ends
+    // the stream. Shared by both call sites so the rule is written down once.
+    DefineLabel(errnoCheck);
+    EmitCallImport("__error");
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 4);
+    EmitCmpImm(ARM64Register.X0, ErrnoEintr);
+    EmitBranchCond(ARM64ConditionCode.Eq, noProgress);
+
+    DefineLabel(markDone);
+    EmitReloadArg(1);
+    EmitMovRegImm(ARM64Register.X9, 1);
+    EmitStoreIndirect(ARM64Register.X1, SubpStateDone, ARM64Register.X9, 8);
+
+    DefineLabel(noProgress);
+    EmitMovRegImm(ARM64Register.X0, 0);
     EmitRuntimeFunctionEnd();
   }
 
@@ -7844,6 +7999,12 @@ public partial class ARM64CodeEmitter {
     EmitStoreIndirect(ARM64Register.X9, SubpHOffErrFd, ARM64Register.X1, 8);
     EmitLoadFromStack(ARM64Register.X1, 0x78, 8);              // argv
     EmitStoreIndirect(ARM64Register.X9, SubpHOffArgv, ARM64Register.X1, 8);
+    // Capture ceilings (stack args 9 and 12), which wait_collect sizes its capture
+    // buffers from. Non-collect streams carry 0 and never reach the drain anyway.
+    EmitLoadFromStack(ARM64Register.X1, 0x108, 8);             // stdoutLimit
+    EmitStoreIndirect(ARM64Register.X9, SubpHOffOutLimit, ARM64Register.X1, 8);
+    EmitLoadFromStack(ARM64Register.X1, 0x120, 8);             // stderrLimit
+    EmitStoreIndirect(ARM64Register.X9, SubpHOffErrLimit, ARM64Register.X1, 8);
     // Unified-handle tail: sync spawns have no streaming stdin / line buffers,
     // so mark stdinWriteFd closed and zero the line-buffer quads. release_handle
     // then skips them (fd < 0, buffers NULL).
@@ -7882,246 +8043,204 @@ public partial class ARM64CodeEmitter {
   }
 
   /// maxon_subprocess_wait_collect(handle, timeoutMs) -> result | -1.
-  /// Waits for the child (honouring timeoutMs), drains stdout then stderr,
-  /// decodes status, builds the result. timeoutMs > 0 polls with a 1ms nanosleep
-  /// until the child exits or the WALL-CLOCK deadline elapses — the loop tests
-  /// (maxon_current_time_ms() - startMs) >= timeoutMs, not an iteration count, so
-  /// a real timeout returns in ~timeoutMs rather than dilating under load — then
-  /// SIGKILLs the child (status reported as timedOut/124); timeoutMs <= 0 blocks
-  /// until exit. The wait runs BEFORE the drain so a timed-out child is killed —
-  /// its pipe write ends closed — before we read its stdout/stderr to EOF
-  /// (draining a live child would block until it exits). The result's durationMs
-  /// is the wall-clock elapsed (endMs - startMs), matching the x64/Windows twin.
+  ///
+  /// ⭐ ONE INTERLEAVED LOOP: drain stdout, drain stderr, then poll for the child.
+  /// Each of the three is bounded and none of them waits, so no one of them can
+  /// starve the other two. THE WAIT USED TO RUN FIRST, and that was a deadlock:
+  /// a child writing more than a pipe buffer (65,536 bytes on macOS, MEASURED to
+  /// the byte) blocked in write() while this function slept in waitpid(), until
+  /// the caller's timeout SIGKILLed it. `seq 1 20000` — 108,894 bytes — reproduced
+  /// it every time. `maxon-shv2`'s buildSubpWaitCollect drains the same way for the
+  /// same reason; the x64 twin gets there differently, with an OS thread per stream.
+  ///
+  /// ⚠ THE LOOP FINISHES ONLY WHEN BOTH STREAMS ARE AT EOF **AND** THE CHILD IS
+  /// REAPED. Either condition alone is a truncation bug: a child can close its
+  /// pipes and go on running, and a child can exit with bytes still in a pipe.
+  ///
+  /// timeoutMs > 0 arms an absolute wall-clock deadline (not an iteration count, so
+  /// it does not dilate under load). On expiry the child is SIGKILLed and the
+  /// deadline is re-armed SubpKillDrainGraceMs later, so the bytes the child had
+  /// already written are still collected before the timedOut/124 status is
+  /// reported; the second expiry gives up. The kill only ever runs while the child
+  /// is UNREAPED, so the pid cannot have been recycled onto an unrelated process.
+  /// timeoutMs <= 0 waits for ever. durationMs is the wall-clock elapsed
+  /// (endMs - startMs), matching the x64/Windows twin.
   private void EmitMaxonSubprocessWaitCollectPosix() {
-    EmitRuntimeFunctionStart("maxon_subprocess_wait_collect", 2, 0xA0);
+    // mrt_panic prints its argument as a complete line, so the text carries its own
+    // newline (see EmitMaxonDivByZero).
+    DefineSymdata(SubpCaptureOomMessage,
+      System.Text.Encoding.UTF8.GetBytes("subprocess output capture: cannot reserve the requested capture limit\n\0"));
+
+    EmitRuntimeFunctionStart("maxon_subprocess_wait_collect", 2, SubpWcFrame);
     int n = _uniqueLabelCounter++;
     string badHandle = $"__subp_wc_bad_{n}";
-    string skipDrainOut = $"__subp_wc_skdo_{n}";
-    string skipDrainErr = $"__subp_wc_skde_{n}";
-    string skipMunmapOut = $"__subp_wc_skmo_{n}";
-    string skipMunmapErr = $"__subp_wc_skme_{n}";
+    string noDeadline = $"__subp_wc_nodl_{n}";
+    string loopTop = $"__subp_wc_loop_{n}";
+    string afterReap = $"__subp_wc_reapd_{n}";
+    string deadlineCheck = $"__subp_wc_dl_{n}";
+    string idleCheck = $"__subp_wc_idle_{n}";
+    string giveUp = $"__subp_wc_give_{n}";
+    string reapDone = $"__subp_wc_rdone_{n}";
     string signaled = $"__subp_wc_sig_{n}";
     string statusDone = $"__subp_wc_sdone_{n}";
     string timedOutStatus = $"__subp_wc_tos_{n}";
-    string pollLoop = $"__subp_wc_poll_{n}";
-    string pollTimeout = $"__subp_wc_pto_{n}";
-    string pollReaped = $"__subp_wc_prp_{n}";
-    string blockingWait = $"__subp_wc_bw_{n}";
-    string waitDone = $"__subp_wc_wd_{n}";
-    // locals: 0x18 handle 0x28 outScratch 0x30 outLen 0x38 errScratch 0x40 errLen
-    //   0x48 statusSlot 0x58 outMm 0x60 errMm 0x68 kind 0x70 code
-    //   0x78 timeoutMs 0x80 timedOutFlag 0x88 startMs→elapsedMs 0x90/0x98 nanosleep timespec
-    EmitReloadArg(1);                                            // timeoutMs → X1 (read before 0x18 is reused)
-    EmitStoreToStack(0x78, ARM64Register.X1, 8);
+
     EmitReloadArg(0);
     EmitCbz(ARM64Register.X0, badHandle);
-    EmitStoreToStack(0x18, ARM64Register.X0, 8);
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToStack(0x80, ARM64Register.X0, 8);                 // timedOutFlag = 0
-    EmitBranchLink("maxon_current_time_ms");                     // X0 = startMs (wall clock)
-    EmitStoreToStack(0x88, ARM64Register.X0, 8);                 // startMs
+    EmitStoreToStack(SubpWcHandle, ARM64Register.X0, 8);
+    EmitStoreToStack(SubpWcTimedOut, ARM64Register.Xzr, 8);
+    EmitStoreToStack(SubpWcReaped, ARM64Register.Xzr, 8);
+    EmitStoreToStack(SubpWcKilled, ARM64Register.Xzr, 8);
+    EmitSubpInitStreamState(SubpWcOutState, SubpHOffOutFd, SubpHOffOutLimit, n, "o");
+    EmitSubpInitStreamState(SubpWcErrState, SubpHOffErrFd, SubpHOffErrLimit, n, "e");
 
-    // --- wait for the child, honouring timeoutMs ---
-    EmitLoadFromStack(ARM64Register.X0, 0x78, 8);               // timeoutMs
-    EmitCmpImm(ARM64Register.X0, 0);
-    EmitBranchCond(ARM64ConditionCode.Le, blockingWait);
+    // Absolute deadline, so re-arming it after the kill is one add.
+    EmitBranchLink("maxon_current_time_ms");
+    EmitStoreToStack(SubpWcStartMs, ARM64Register.X0, 8);
+    EmitStoreToStack(SubpWcDeadline, ARM64Register.Xzr, 8);
+    EmitReloadArg(1);                                            // timeoutMs
+    EmitCmpImm(ARM64Register.X1, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, noDeadline);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcStartMs, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1);
+    EmitStoreToStack(SubpWcDeadline, ARM64Register.X0, 8);
+    DefineLabel(noDeadline);
 
-    DefineLabel(pollLoop);
-    // Wall-clock deadline: (now - startMs) >= timeoutMs → timed out. Counting poll
-    // iterations would dilate the deadline, since each iteration is a full waitpid
-    // syscall plus a 1ms nanosleep, not a 1ms tick.
-    EmitBranchLink("maxon_current_time_ms");                     // X0 = now
-    EmitLoadFromStack(ARM64Register.X1, 0x88, 8);              // startMs
-    EmitAluRegReg(0xCB000000, ARM64Register.X9, ARM64Register.X0, ARM64Register.X1); // X9 = now - startMs
-    EmitLoadFromStack(ARM64Register.X10, 0x78, 8);             // timeoutMs
-    EmitCmpRegReg(ARM64Register.X9, ARM64Register.X10);
-    EmitBranchCond(ARM64ConditionCode.Ge, pollTimeout);         // wall-clock deadline elapsed
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);  // pid
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 0x48, isAdd: true); // &status
-    EmitMovRegImm(ARM64Register.X2, 1);                          // WNOHANG
+    DefineLabel(loopTop);
+    EmitStoreToStack(SubpWcProgress, ARM64Register.Xzr, 8);
+    EmitSubpDrainPassInto(SubpWcOutState, SubpHOffOutFd);
+    EmitSubpDrainPassInto(SubpWcErrState, SubpHOffErrFd);
+
+    // Reap without waiting, once.
+    EmitLoadFromStack(ARM64Register.X0, SubpWcReaped, 8);
+    EmitCbnz(ARM64Register.X0, afterReap);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcHandle, 8);
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, SubpHOffPid, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, SubpWcStatus, isAdd: true);
+    EmitMovRegImm(ARM64Register.X2, WaitNoHang);
     EmitCallImport("waitpid");
     EmitCmpImm(ARM64Register.X0, 0);
-    EmitBranchCond(ARM64ConditionCode.Gt, pollReaped);          // returned pid → exited
-    // nanosleep(1ms) between polls.
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToStack(0x90, ARM64Register.X0, 8);                 // tv_sec = 0
-    EmitMovRegImm(ARM64Register.X0, 1000000);                    // 1ms in ns
-    EmitStoreToStack(0x98, ARM64Register.X0, 8);                 // tv_nsec
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 0x90, isAdd: true);
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitCallImport("nanosleep");
-    EmitBranch(pollLoop);
+    EmitBranchCond(ARM64ConditionCode.Le, afterReap);
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitStoreToStack(SubpWcReaped, ARM64Register.X0, 8);
+    DefineLabel(afterReap);
 
-    // deadline: SIGKILL the child, flag the timeout, then blocking-reap it.
-    DefineLabel(pollTimeout);
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);  // pid
-    EmitMovRegImm(ARM64Register.X1, 9);                          // SIGKILL
+    EmitLoadFromStack(ARM64Register.X0, SubpWcOutState + SubpStateDone, 8);
+    EmitCbz(ARM64Register.X0, deadlineCheck);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcErrState + SubpStateDone, 8);
+    EmitCbz(ARM64Register.X0, deadlineCheck);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcReaped, 8);
+    EmitCbnz(ARM64Register.X0, reapDone);                        // both EOF and reaped
+
+    DefineLabel(deadlineCheck);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcDeadline, 8);
+    EmitCbz(ARM64Register.X0, idleCheck);                        // 0 = wait for ever
+    EmitBranchLink("maxon_current_time_ms");
+    EmitLoadFromStack(ARM64Register.X1, SubpWcDeadline, 8);
+    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranchCond(ARM64ConditionCode.Lt, idleCheck);
+    EmitLoadFromStack(ARM64Register.X1, SubpWcKilled, 8);
+    EmitCbnz(ARM64Register.X1, giveUp);                          // the post-kill grace ran out
+    EmitLoadFromStack(ARM64Register.X1, SubpWcReaped, 8);
+    EmitCbnz(ARM64Register.X1, giveUp);                          // never signal a reaped pid
+    EmitLoadFromStack(ARM64Register.X1, SubpWcHandle, 8);
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X1, SubpHOffPid, 8);
+    EmitMovRegImm(ARM64Register.X1, SignalKill);
     EmitCallImport("kill");
     EmitMovRegImm(ARM64Register.X0, 1);
-    EmitStoreToStack(0x80, ARM64Register.X0, 8);                 // timedOutFlag = 1
-    EmitBranch(blockingWait);
+    EmitStoreToStack(SubpWcTimedOut, ARM64Register.X0, 8);
+    EmitStoreToStack(SubpWcKilled, ARM64Register.X0, 8);
+    EmitBranchLink("maxon_current_time_ms");
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, SubpKillDrainGraceMs, isAdd: true);
+    EmitStoreToStack(SubpWcDeadline, ARM64Register.X0, 8);
 
-    DefineLabel(pollReaped);                                      // WNOHANG reaped it; status valid
-    EmitBranch(waitDone);
+    // A pass that moved bytes goes straight round again; one that moved none yields.
+    DefineLabel(idleCheck);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcProgress, 8);
+    EmitCbnz(ARM64Register.X0, loopTop);
+    EmitStoreToStack(SubpWcTimespec, ARM64Register.Xzr, 8);      // tv_sec = 0
+    EmitMovRegImm(ARM64Register.X0, 1000000);                    // tv_nsec = 1ms
+    EmitStoreToStack(SubpWcTimespec + 8, ARM64Register.X0, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, SubpWcTimespec, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("nanosleep");
+    EmitBranch(loopTop);
 
-    // blocking waitpid(pid, &status, 0)
-    DefineLabel(blockingWait);
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);  // pid
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 0x48, isAdd: true);
+    // Gave up on a stream some other process still holds open: the child is dead
+    // (we SIGKILLed it) but unreaped, so a blocking waitpid returns at once.
+    DefineLabel(giveUp);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcReaped, 8);
+    EmitCbnz(ARM64Register.X0, reapDone);
+    EmitLoadFromStack(ARM64Register.X0, SubpWcHandle, 8);
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, SubpHOffPid, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, SubpWcStatus, isAdd: true);
     EmitMovRegImm(ARM64Register.X2, 0);
     EmitCallImport("waitpid");
-    DefineLabel(waitDone);
+    DefineLabel(reapDone);
 
-    // defaults: scratch=0, len=0
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToStack(0x28, ARM64Register.X0, 8);
-    EmitStoreToStack(0x30, ARM64Register.X0, 8);
-    EmitStoreToStack(0x38, ARM64Register.X0, 8);
-    EmitStoreToStack(0x40, ARM64Register.X0, 8);
-
-    // drain stdout if outReadFd >= 0
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X0, 8, 8);  // outReadFd
-    EmitCmpImm(ARM64Register.X1, 0);
-    EmitBranchCond(ARM64ConditionCode.Lt, skipDrainOut);
-    EmitMovRegImm(ARM64Register.X1, SubpScratchCap);
-    EmitMmapAnon();                                              // x0 = scratch
-    EmitStoreToStack(0x28, ARM64Register.X0, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 8, 8);  // outReadFd
-    EmitLoadFromStack(ARM64Register.X1, 0x28, 8);
-    EmitMovRegImm(ARM64Register.X2, SubpScratchCap);
-    EmitBranchLink("__subp_drain");
-    EmitStoreToStack(0x30, ARM64Register.X0, 8);                 // outLen
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 8, 8);
-    EmitCallImport("close");
-    DefineLabel(skipDrainOut);
-
-    // drain stderr if errReadFd >= 0
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X0, 16, 8); // errReadFd
-    EmitCmpImm(ARM64Register.X1, 0);
-    EmitBranchCond(ARM64ConditionCode.Lt, skipDrainErr);
-    EmitMovRegImm(ARM64Register.X1, SubpScratchCap);
-    EmitMmapAnon();
-    EmitStoreToStack(0x38, ARM64Register.X0, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 16, 8);
-    EmitLoadFromStack(ARM64Register.X1, 0x38, 8);
-    EmitMovRegImm(ARM64Register.X2, SubpScratchCap);
-    EmitBranchLink("__subp_drain");
-    EmitStoreToStack(0x40, ARM64Register.X0, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
-    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 16, 8);
-    EmitCallImport("close");
-    DefineLabel(skipDrainErr);
-
-    // Null the read-fd fields now that both pipes are drained + closed, so the
-    // shared release_handle (which closes any fd >= 0) can't double-close a
-    // descriptor the OS may have recycled for another concurrent worker's pipe.
-    EmitLoadFromStack(ARM64Register.X9, 0x18, 8);
-    EmitMovRegImm(ARM64Register.X0, -1);
-    EmitStoreIndirect(ARM64Register.X9, SubpHOffOutFd, ARM64Register.X0, 8);
-    EmitStoreIndirect(ARM64Register.X9, SubpHOffErrFd, ARM64Register.X0, 8);
+    // Close both read ends and null the handle fields, so the shared
+    // release_handle (which closes any fd >= 0) can't double-close a descriptor
+    // the OS may have recycled for another concurrent worker's pipe.
+    EmitSubpCloseAndClearFd(SubpHOffOutFd, n, "o");
+    EmitSubpCloseAndClearFd(SubpHOffErrFd, n, "e");
 
     // decode status (timedOutFlag → timedOut(2)/124 sentinel; else POSIX status)
-    EmitLoadFromStack(ARM64Register.X0, 0x80, 8);              // timedOutFlag
+    EmitLoadFromStack(ARM64Register.X0, SubpWcTimedOut, 8);
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Ne, timedOutStatus);
-    EmitLoadFromStack(ARM64Register.X9, 0x48, 4);               // status
+    EmitLoadFromStack(ARM64Register.X9, SubpWcStatus, 4);
     EmitMovRegImm(ARM64Register.X10, 0x7f);
     EmitAluRegReg(0x8A000000, ARM64Register.X11, ARM64Register.X9, ARM64Register.X10); // lowsig
     EmitCmpImm(ARM64Register.X11, 0);
     EmitBranchCond(ARM64ConditionCode.Ne, signaled);
     EmitMovRegImm(ARM64Register.X12, 0);                         // exited kind=0
-    EmitStoreToStack(0x68, ARM64Register.X12, 8);
+    EmitStoreToStack(SubpWcKind, ARM64Register.X12, 8);
     EmitLsrImm(ARM64Register.X12, ARM64Register.X9, 8);
     EmitMovRegImm(ARM64Register.X13, 0xff);
     EmitAluRegReg(0x8A000000, ARM64Register.X12, ARM64Register.X12, ARM64Register.X13); // code = (status>>8)&0xff
-    EmitStoreToStack(0x70, ARM64Register.X12, 8);
+    EmitStoreToStack(SubpWcCode, ARM64Register.X12, 8);
     EmitBranch(statusDone);
     DefineLabel(signaled);
     EmitMovRegImm(ARM64Register.X12, 1);                         // signalled kind=1
-    EmitStoreToStack(0x68, ARM64Register.X12, 8);
-    EmitStoreToStack(0x70, ARM64Register.X11, 8);                // code = lowsig
+    EmitStoreToStack(SubpWcKind, ARM64Register.X12, 8);
+    EmitStoreToStack(SubpWcCode, ARM64Register.X11, 8);          // code = lowsig
     EmitBranch(statusDone);
     DefineLabel(timedOutStatus);
     EmitMovRegImm(ARM64Register.X12, 2);                         // timedOut kind=2
-    EmitStoreToStack(0x68, ARM64Register.X12, 8);
-    EmitMovRegImm(ARM64Register.X12, 124);                       // code = 124 sentinel
-    EmitStoreToStack(0x70, ARM64Register.X12, 8);
+    EmitStoreToStack(SubpWcKind, ARM64Register.X12, 8);
+    EmitMovRegImm(ARM64Register.X12, SubpTimedOutExitCode);
+    EmitStoreToStack(SubpWcCode, ARM64Register.X12, 8);
     DefineLabel(statusDone);
 
-    // copy stdout scratch → right-sized buffer (0x58 = outBuf), then munmap scratch
-    string skipCopyOut = $"__subp_wc_scpo_{n}";
-    string skipCopyErr = $"__subp_wc_scpe_{n}";
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToStack(0x58, ARM64Register.X0, 8);                // outBuf = 0
-    EmitLoadFromStack(ARM64Register.X0, 0x30, 8);              // outLen
-    EmitCbz(ARM64Register.X0, skipCopyOut);
-    EmitLoadFromStack(ARM64Register.X0, 0x30, 8);
-    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);       // outBuf
-    EmitStoreToStack(0x58, ARM64Register.X0, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x58, 8);
-    EmitLoadFromStack(ARM64Register.X1, 0x28, 8);             // scratch
-    EmitLoadFromStack(ARM64Register.X2, 0x30, 8);             // outLen
-    EmitBranchLink("maxon_memcpy");
-    DefineLabel(skipCopyOut);
-    EmitLoadFromStack(ARM64Register.X0, 0x28, 8);
-    EmitCbz(ARM64Register.X0, skipMunmapOut);
-    EmitMovRegImm(ARM64Register.X1, SubpScratchCap);
-    EmitCallImport("munmap");
-    DefineLabel(skipMunmapOut);
-
-    // copy stderr scratch → right-sized buffer (0x60 = errBuf), then munmap
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToStack(0x60, ARM64Register.X0, 8);                // errBuf = 0
-    EmitLoadFromStack(ARM64Register.X0, 0x40, 8);              // errLen
-    EmitCbz(ARM64Register.X0, skipCopyErr);
-    EmitLoadFromStack(ARM64Register.X0, 0x40, 8);
-    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);       // errBuf
-    EmitStoreToStack(0x60, ARM64Register.X0, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x60, 8);
-    EmitLoadFromStack(ARM64Register.X1, 0x38, 8);             // scratch
-    EmitLoadFromStack(ARM64Register.X2, 0x40, 8);             // errLen
-    EmitBranchLink("maxon_memcpy");
-    DefineLabel(skipCopyErr);
-    EmitLoadFromStack(ARM64Register.X0, 0x38, 8);
-    EmitCbz(ARM64Register.X0, skipMunmapErr);
-    EmitMovRegImm(ARM64Register.X1, SubpScratchCap);
-    EmitCallImport("munmap");
-    DefineLabel(skipMunmapErr);
+    EmitSubpFinishStream(SubpWcOutState, SubpWcOutBuf, n, "o");
+    EmitSubpFinishStream(SubpWcErrState, SubpWcErrBuf, n, "e");
 
     // Wall-clock elapsed = now - startMs, computed BEFORE the result alloc: X9
     // holds the result pointer through the store loop with no call between, and
     // maxon_current_time_ms is a call — computing it here and stashing elapsed in
     // the now-dead startMs slot keeps the alloc→store window call-free.
     EmitBranchLink("maxon_current_time_ms");                     // X0 = endMs
-    EmitLoadFromStack(ARM64Register.X1, 0x88, 8);              // startMs
-    EmitAluRegReg(0xCB000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1); // X0 = endMs - startMs
-    EmitStoreToStack(0x88, ARM64Register.X0, 8);                 // elapsedMs (reuses startMs slot)
+    EmitLoadFromStack(ARM64Register.X1, SubpWcStartMs, 8);
+    EmitAluRegReg(0xCB000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1);
+    EmitStoreToStack(SubpWcStartMs, ARM64Register.X0, 8);        // elapsedMs (reuses the slot)
 
     // build result (0x38): kind, code, stdoutBuf, stdoutLen, stderrBuf, stderrLen, duration
     EmitMovRegImm(ARM64Register.X0, 0x38);
     EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
     EmitMovRegReg(ARM64Register.X9, ARM64Register.X0);          // result (no calls follow)
-    EmitLoadFromStack(ARM64Register.X1, 0x68, 8);
+    EmitLoadFromStack(ARM64Register.X1, SubpWcKind, 8);
     EmitStoreIndirect(ARM64Register.X9, 0, ARM64Register.X1, 8);  // statusKind
-    EmitLoadFromStack(ARM64Register.X1, 0x70, 8);
+    EmitLoadFromStack(ARM64Register.X1, SubpWcCode, 8);
     EmitStoreIndirect(ARM64Register.X9, 8, ARM64Register.X1, 8);  // statusCode
-    EmitLoadFromStack(ARM64Register.X1, 0x58, 8);
+    EmitLoadFromStack(ARM64Register.X1, SubpWcOutBuf, 8);
     EmitStoreIndirect(ARM64Register.X9, 16, ARM64Register.X1, 8); // stdoutBuf
-    EmitLoadFromStack(ARM64Register.X1, 0x30, 8);
+    EmitLoadFromStack(ARM64Register.X1, SubpWcOutState + SubpStateLen, 8);
     EmitStoreIndirect(ARM64Register.X9, 24, ARM64Register.X1, 8); // stdoutLen
-    EmitLoadFromStack(ARM64Register.X1, 0x60, 8);
+    EmitLoadFromStack(ARM64Register.X1, SubpWcErrBuf, 8);
     EmitStoreIndirect(ARM64Register.X9, 32, ARM64Register.X1, 8); // stderrBuf
-    EmitLoadFromStack(ARM64Register.X1, 0x40, 8);
+    EmitLoadFromStack(ARM64Register.X1, SubpWcErrState + SubpStateLen, 8);
     EmitStoreIndirect(ARM64Register.X9, 40, ARM64Register.X1, 8); // stderrLen
-    EmitLoadFromStack(ARM64Register.X1, 0x88, 8);              // elapsedMs
+    EmitLoadFromStack(ARM64Register.X1, SubpWcStartMs, 8);       // elapsedMs
     EmitStoreIndirect(ARM64Register.X9, 48, ARM64Register.X1, 8); // durationMs
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
     EmitRuntimeFunctionEnd();
@@ -8129,6 +8248,85 @@ public partial class ARM64CodeEmitter {
     DefineLabel(badHandle);
     EmitMovRegImm(ARM64Register.X0, -1);
     EmitRuntimeFunctionEnd();
+  }
+
+  /// Set up one stream's 4-quad drain state in the wait_collect frame. A stream
+  /// with no pipe (inherit/discard/file leave the fd at -1) is DONE before the
+  /// first pass. A collected one reserves the CALLER'S capture limit — the value
+  /// `OutputDestination.collect(limit)` carried through spawn into the handle —
+  /// plus one chunk of bit bucket past it. The mapping is MAP_ANON, so the pages
+  /// behind a 16 MiB default limit are only committed as the child fills them.
+  private void EmitSubpInitStreamState(int stateSlot, int fdOff, int limitOff, int uniq, string tag) {
+    string skip = $"__subp_wc_nostream_{tag}_{uniq}";
+    string mapped = $"__subp_wc_mapped_{tag}_{uniq}";
+
+    EmitStoreToStack(stateSlot + SubpStateBuf, ARM64Register.Xzr, 8);
+    EmitStoreToStack(stateSlot + SubpStateLen, ARM64Register.Xzr, 8);
+    EmitStoreToStack(stateSlot + SubpStateCap, ARM64Register.Xzr, 8);
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitStoreToStack(stateSlot + SubpStateDone, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X9, SubpWcHandle, 8);
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, fdOff, 8);
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Lt, skip);
+    EmitStoreToStack(stateSlot + SubpStateDone, ARM64Register.Xzr, 8);
+    EmitLoadFromStack(ARM64Register.X9, SubpWcHandle, 8);
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, limitOff, 8);
+    EmitStoreToStack(stateSlot + SubpStateCap, ARM64Register.X0, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X0, SubpDrainChunk, isAdd: true);
+    EmitMmapAnon();                                              // X1 = length
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Gt, mapped);               // MAP_FAILED is -1
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, SubpCaptureOomMessage);
+    EmitBranch("mrt_panic");
+    DefineLabel(mapped);
+    EmitStoreToStack(stateSlot + SubpStateBuf, ARM64Register.X0, 8);
+    DefineLabel(skip);
+  }
+
+  /// One bounded drain pass over `stateSlot`'s stream, accumulating the bytes it
+  /// moved into the loop's progress counter.
+  private void EmitSubpDrainPassInto(int stateSlot, int fdOff) {
+    EmitLoadFromStack(ARM64Register.X9, SubpWcHandle, 8);
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, fdOff, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, stateSlot, isAdd: true);
+    EmitBranchLink("__subp_drain_pass");
+    EmitLoadFromStack(ARM64Register.X9, SubpWcProgress, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X9, ARM64Register.X9, ARM64Register.X0);
+    EmitStoreToStack(SubpWcProgress, ARM64Register.X9, 8);
+  }
+
+  /// Close the handle's read end for one stream and null the field, so the shared
+  /// release_handle cannot close a descriptor the OS has since recycled.
+  private void EmitSubpCloseAndClearFd(int fdOff, int uniq, string tag) {
+    EmitSubpCloseHandleFd(SubpWcHandle, fdOff, uniq, tag);
+    EmitLoadFromStack(ARM64Register.X9, SubpWcHandle, 8);
+    EmitMovRegImm(ARM64Register.X0, -1);
+    EmitStoreIndirect(ARM64Register.X9, fdOff, ARM64Register.X0, 8);
+  }
+
+  /// Copy one stream's captured bytes into a right-sized mm_raw_alloc'd buffer
+  /// (the result struct's shape), then release the scratch mapping — whose length
+  /// is the capture ceiling plus the bit-bucket chunk EmitSubpInitStreamState added.
+  private void EmitSubpFinishStream(int stateSlot, int outSlot, int uniq, string tag) {
+    string skipCopy = $"__subp_wc_skcopy_{tag}_{uniq}";
+    string skipUnmap = $"__subp_wc_skunmap_{tag}_{uniq}";
+
+    EmitStoreToStack(outSlot, ARM64Register.Xzr, 8);
+    EmitLoadFromStack(ARM64Register.X0, stateSlot + SubpStateLen, 8);
+    EmitCbz(ARM64Register.X0, skipCopy);
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
+    EmitStoreToStack(outSlot, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X1, stateSlot + SubpStateBuf, 8);
+    EmitLoadFromStack(ARM64Register.X2, stateSlot + SubpStateLen, 8);
+    EmitBranchLink("maxon_memcpy");                              // X0 is still the destination
+    DefineLabel(skipCopy);
+    EmitLoadFromStack(ARM64Register.X0, stateSlot + SubpStateBuf, 8);
+    EmitCbz(ARM64Register.X0, skipUnmap);
+    EmitLoadFromStack(ARM64Register.X1, stateSlot + SubpStateCap, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, SubpDrainChunk, isAdd: true);
+    EmitCallImport("munmap");
+    DefineLabel(skipUnmap);
   }
 
   private void EmitMaxonSubprocessGetPidPosix() {
@@ -8191,27 +8389,29 @@ public partial class ARM64CodeEmitter {
     string done = $"__subp_rh_done_{n}";
     EmitReloadArg(0);
     EmitCbz(ARM64Register.X0, done);
-    EmitStoreToStack(0x18, ARM64Register.X0, 8);
+    EmitStoreToStack(SubpRhHandle, ARM64Register.X0, 8);
     // Close any still-open descriptor (streaming handles keep stdout/stderr read
     // ends and possibly stdin write end open; sync handles already nulled theirs).
-    EmitSubpReleaseCloseFd(SubpHOffOutFd, n, "ro");
-    EmitSubpReleaseCloseFd(SubpHOffErrFd, n, "re");
-    EmitSubpReleaseCloseFd(SubpHOffStdinFd, n, "ri");
+    EmitSubpCloseHandleFd(SubpRhHandle, SubpHOffOutFd, n, "ro");
+    EmitSubpCloseHandleFd(SubpRhHandle, SubpHOffErrFd, n, "re");
+    EmitSubpCloseHandleFd(SubpRhHandle, SubpHOffStdinFd, n, "ri");
     // Free any streaming line buffers (NULL on sync handles).
     EmitSubpReleaseFreeField(SubpHOffOutBuf + SubpQuadBuf, n, "bo");
     EmitSubpReleaseFreeField(SubpHOffErrBuf + SubpQuadBuf, n, "be");
     // Free argv, then the struct itself.
     EmitSubpReleaseFreeField(SubpHOffArgv, n, "av");
-    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
+    EmitLoadFromStack(ARM64Register.X0, SubpRhHandle, 8);
     EmitBranchLink("mm_raw_free");
     DefineLabel(done);
     EmitRuntimeFunctionEnd();
   }
 
-  /// Close the handle (slot 0x18) descriptor at `fdOff` if it is >= 0.
-  private void EmitSubpReleaseCloseFd(int fdOff, int uniq, string tag) {
-    string skip = $"__subp_rh_skfd_{tag}_{uniq}";
-    EmitLoadFromStack(ARM64Register.X9, 0x18, 8);
+  /// Close the descriptor in handle field `fdOff` if it is >= 0. `handleSlot` is
+  /// the caller's frame slot holding the handle pointer, which differs per
+  /// function; everything else about the close is the same wherever it happens.
+  private void EmitSubpCloseHandleFd(int handleSlot, int fdOff, int uniq, string tag) {
+    string skip = $"__subp_skfd_{tag}_{uniq}";
+    EmitLoadFromStack(ARM64Register.X9, handleSlot, 8);
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, fdOff, 8);
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Lt, skip);
@@ -8219,10 +8419,10 @@ public partial class ARM64CodeEmitter {
     DefineLabel(skip);
   }
 
-  /// mm_raw_free the pointer at handle (slot 0x18) field `off` if non-null.
+  /// mm_raw_free the pointer at release_handle's handle field `off` if non-null.
   private void EmitSubpReleaseFreeField(int off, int uniq, string tag) {
     string skip = $"__subp_rh_skfree_{tag}_{uniq}";
-    EmitLoadFromStack(ARM64Register.X9, 0x18, 8);
+    EmitLoadFromStack(ARM64Register.X9, SubpRhHandle, 8);
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, off, 8);
     EmitCbz(ARM64Register.X0, skip);
     EmitBranchLink("mm_raw_free");
@@ -8269,8 +8469,15 @@ public partial class ARM64CodeEmitter {
   //   +0x20 stdinWriteFd  (-1 for sync spawns / once close_stdin runs)
   //   +0x28 stdoutBuf     +0x30 stdoutLen      +0x38 stdoutCap      +0x40 stdoutEof
   //   +0x48 stderrBuf     +0x50 stderrLen      +0x58 stderrCap      +0x60 stderrEof
+  //   +0x68 stdoutLimit   +0x70 stderrLimit    (the caller's capture ceilings)
   // Sync spawns leave stdinWriteFd=-1 and the line-buffer fields 0; release_handle
   // closes any fd >= 0 and frees any non-null line buffer + argv + the struct.
+  // The two limits carry OutputDestination.collect(limit) from the spawn call
+  // through to wait_collect, which is where the capture buffer is sized. They
+  // mirror the x64 handle's SubpOffStdoutLimit/SubpOffStderrLimit; before they
+  // existed this lane sized every capture from an 8 MiB constant that sat
+  // SILENTLY BELOW the stdlib's own 16 MiB default, so a 10 MiB capture truncated
+  // with no diagnostic.
   // ==========================================================================
 
   private const int SubpHOffPid = 0x00;
@@ -8280,7 +8487,9 @@ public partial class ARM64CodeEmitter {
   private const int SubpHOffStdinFd = 0x20;
   private const int SubpHOffOutBuf = 0x28;
   private const int SubpHOffErrBuf = 0x48;
-  private const int SubpHandleSize = 0x70;
+  private const int SubpHOffOutLimit = 0x68;
+  private const int SubpHOffErrLimit = 0x70;
+  private const int SubpHandleSize = 0x78;
   // Line-buffer quad sub-offsets, relative to OutBuf/ErrBuf base.
   private const int SubpQuadBuf = 0;
   private const int SubpQuadLen = 8;
@@ -8518,6 +8727,12 @@ public partial class ARM64CodeEmitter {
     EmitStoreIndirect(ARM64Register.X9, SubpHOffStdinFd, ARM64Register.X1, 8);
     EmitSubpStreamInitLineBuf(SubpHOffOutBuf);
     EmitSubpStreamInitLineBuf(SubpHOffErrBuf);
+    // A streaming child is read line-by-line, never wait_collect'd, so it has no
+    // capture ceiling — but mm_raw_alloc does not zero, and a garbage limit read
+    // as a buffer size is not a fault this handle should be able to carry.
+    EmitLoadFromStack(ARM64Register.X9, 0x70, 8);
+    EmitStoreIndirect(ARM64Register.X9, SubpHOffOutLimit, ARM64Register.Xzr, 8);
+    EmitStoreIndirect(ARM64Register.X9, SubpHOffErrLimit, ARM64Register.Xzr, 8);
     EmitLoadFromStack(ARM64Register.X0, 0x70, 8);
     EmitRuntimeFunctionEnd();
 

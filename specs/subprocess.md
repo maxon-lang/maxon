@@ -16,16 +16,17 @@ category: stdlib
 stdout/stderr into a `CollectedOutput`. For more control, build a
 `Configuration` and call `.run()`.
 
-These fragments exercise the Windows runtime (the only host the
-bootstrap compiler targets for spec tests). All cases use synchronous
-`Subprocess.run` / `Configuration.run`; the async path is covered
-elsewhere.
+Every fragment below runs on both hosts the bootstrap compiler targets
+(`x64-windows` and `arm64-macos`), branching on `#if os(Windows)` only
+to name the shell. All cases use synchronous `Subprocess.run` /
+`Configuration.run`; the async path is covered elsewhere.
 
 ## Tests
 
-These tests verify the Windows synchronous Subprocess path: spawn,
-working directory, stdin bytes, output capture, timeout, exit code,
-and stderr-only collection.
+These tests verify the synchronous Subprocess path: spawn, working
+directory, stdin bytes, output capture, timeout, exit code,
+stderr-only collection, and capture of a child that outruns the OS
+pipe buffer on both streams at once.
 
 <!-- test: subprocess-run-collect -->
 ```maxon
@@ -422,6 +423,55 @@ function main() returns ExitCode
 	if not result.stdout.trim().isEmpty() 'check-stdout-empty'
 		return 5
 	end 'check-stdout-empty'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-collect-exceeds-pipe-buffer -->
+```maxon
+function main() returns ExitCode
+	// A child writing FAR more than one OS pipe buffer (65,536 bytes on macOS,
+	// ~4 KiB on Windows), on BOTH streams at once. 20,000 numbered lines is
+	// ~108 KB per stream. The child blocks in write() the moment the buffer
+	// fills, so the parent has to be reading both streams WHILE it waits for the
+	// child to exit: a runtime that waits first and drains afterwards deadlocks
+	// here, and one that drains stdout to EOF before touching stderr deadlocks on
+	// whichever stream it left alone. Both were real (arm64-macOS reported the
+	// deadlock as the caller's timeout).
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("(for /L %i in (1,1,20000) do @echo %i) & (for /L %j in (1,1,20000) do @echo %j 1>&2)")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("i=1; while [ $i -le 20000 ]; do echo $i; echo $i 1>&2; i=$((i+1)); done")
+	#endif
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
+	if not result.succeeded() 'check-success'
+		return 3
+	end 'check-success'
+	// Well past the largest pipe buffer either host uses, so neither count can be
+	// satisfied by a single buffer's worth of output.
+	if result.stdout.byteLength() < 100000 'check-stdout-size'
+		return 4
+	end 'check-stdout-size'
+	if result.stderr.byteLength() < 100000 'check-stderr-size'
+		return 5
+	end 'check-stderr-size'
+	// The LAST line, which only arrives if the capture ran to the child's exit
+	// rather than stopping at the first buffer.
+	if not result.stdout.contains("20000") 'check-stdout-tail'
+		return 6
+	end 'check-stdout-tail'
+	if not result.stderr.contains("20000") 'check-stderr-tail'
+		return 7
+	end 'check-stderr-tail'
 	return 0
 end 'main'
 ```
