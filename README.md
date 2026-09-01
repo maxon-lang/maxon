@@ -66,8 +66,6 @@ statically-typed, compiled language:
   bootstrap compiler (work in progress).
 - **First-class tooling** — a Language Server and VS Code extension ship with the language.
 
-See [docs/COMPILER_ARCHITECTURE.md](docs/COMPILER_ARCHITECTURE.md) for the full pipeline.
-
 ## Project components
 
 - **Compiler (`maxon-sharp`)** — the C# bootstrap compiler, which builds to `bin/maxon.exe`.

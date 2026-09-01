@@ -151,10 +151,13 @@ scaled-index address, so the addressing-mode row is the first where shv2 is ahea
   proves redundant. shv2 decides ownership statically in the parser, so the equivalent work is
   **not emitting the pair** — which is the open row `EC2`, not a dominator-based canceller.
 
-⚠ **Stale, do not mine them:** `docs/microarch-optimization-plan.md` and
-`docs/simd-optimization-opportunities.md` both target `maxon-bin/`, a C++ tree that no longer exists.
-`docs/optimization-architecture.md` is an aspirational redesign nothing implements.
-`docs/refcount-optimization-roadmap.md` **is** live, but it is the *bootstrap's* roadmap.
+⚠ **Three of the four documents this note used to warn you off are now DELETED (2026-09-01), which is
+the stronger form of the same warning.** `docs/microarch-optimization-plan.md` and
+`docs/simd-optimization-opportunities.md` both planned work inside `maxon-bin/`, a C++ tree that no
+longer exists, and `docs/optimization-architecture.md` was an aspirational redesign nothing
+implements — a standing "do not mine this" is a file that costs a reader something every time it is
+found, so they went. `docs/refcount-optimization-roadmap.md` **is** live and stays, but it is the
+*bootstrap's* roadmap, not this one's.
 And `PLAN.md`'s "Measured debt" entry citing `JumpTableFormationPass.cs:12,55,59` is **stale** — no
 such file exists; the bootstrap's dispatch is now `MaxonToStandardConversion.SwitchDispatch.cs` and
 it *does* handle range arms, via intervals. That entry's premise needs re-measuring before it is used

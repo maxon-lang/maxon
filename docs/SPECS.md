@@ -8,7 +8,8 @@ Each language feature must have a spec file in the `specs/` directory that serve
 
 1. **YAML Frontmatter** - Metadata about the feature
 2. **Documentation** - User-facing documentation (extracted to HTML)
-3. **Tests** - Test cases (extracted to language-tests/fragments/)
+3. **Tests** - Test cases, generated into per-target fragment trees
+   (`specs/fragments-<target>/<spec>/<test>.test`, and `specs-shv2/fragments/<target>/...`)
 
 ## Spec File Structure
 

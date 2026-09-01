@@ -791,7 +791,12 @@ x64-windows** and **969/986 on wasm32-wasi**, **C# bootstrap parity held at
 
 **Why now**: this is the cheapest moment in the project to commit to this design. After Phase 11 ships with a different model, retrofitting witness tables means tearing apart the type system, the dispatch story, every cached MIR, and every emitted symbol.
 
-**Reference**: see [`docs/hybrid-generics-plan.md`](../docs/hybrid-generics-plan.md) for the full design document.
+⚠ **This section is a SUPERSEDED PROPOSAL, kept for its reasoning and not as a plan.** Its design
+document (`docs/hybrid-generics-plan.md`) was deleted 2026-09-01: it argued for Swift-style witness
+tables against a self-hosted compiler that "passes 3 of ~131 spec tests", and **shv2 ruled the other
+way at P1.6 — dictionary-passing, not witness tables.** v1 is deprecated as a product besides. The
+"Why now" argument above is therefore spent: the moment it was cheapest to choose has passed, and the
+choice went elsewhere.
 
 ### Specs to unlock
 `interfaces`, `interface-conformance`, `interface-extensions`, `equatable`, `primitive-comparable`, `primitive-cloneable`, `primitive-hashable`, `where-clauses`, `conditional-extensions`, `associated-types`, `instance-methods`, `pair`, `parsable-interface`, `ranged-typealias`.
