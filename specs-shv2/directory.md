@@ -111,7 +111,7 @@ end 'main'
 `isDirectory` / `create` / `currentPath` lower to the runtime entries `__md_open_search`, `__md_exists`,
 `__md_create` and `__md_current_path`, and `list-filters-dot-entries` reaches `__mf_*` on top of those.
 None has an x64-linux or wasm32-wasi implementation at this rung — arm64-macOS gained one at MAC4, which is why the markers name it — `E3104`, raised by
-`SemanticCheck.requireTargetSupportsCallee`, not by the marker. MEASURED at the rung that whitelisted
+`SemanticCheck.requireTargetSupportsCallee`, not by the marker. MEASURED at the rung that first loaded
 `stdlib/Directory.maxon`: **9 of 9 cases refused on wasm32-wasi**, each naming its own entry. The reason
 is written down in `file-io.md` and not repeated here; what un-gates the REMAINING lanes is the same POSIX/WASI
 substrate that un-gates that file, plus its directory-enumeration twin — which on arm64-macOS meant

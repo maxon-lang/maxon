@@ -2125,8 +2125,8 @@ error E3113: <fragment>:12:10: 'throws Payload' names no declared enum or union.
 <!-- test: throws-a-stdlib-error-shv2-synthesizes -->
 ⭐ **THE NARROWING THIS CASE ONCE PINNED IS GONE, AND THE FLIP IS THE SIGNAL ITS OWN NOTE PROMISED.** Until
 `StringError` was synthesized, this program was refused `E3113: 'throws StringError' names no declared enum
-or union` — because `StringError` is declared in `stdlib/String.maxon`, which
-`StdlibLoader.whitelistedStdlibModules` does not list and never can: shv2 EMITS its String runtime rather
+or union` — because `StringError` is declared in `stdlib/String.maxon`, which the loader's whitelist
+did not then list: shv2 EMITS its String runtime rather
 than compiling that file. The name resolved to nothing, so the clause was accepted only as an unchecked
 opaque label — `throws Bogus` wearing a real name — and the old note recorded this as **the one place the
 rule read differently from the ORACLE**.
@@ -2137,10 +2137,12 @@ the byte position of the space in `"ab cd"`. A divergence became an agreement, s
 the agreement.
 
 ⚠ **The old note predicted the flip and named the wrong cause**, which is worth keeping rather than quietly
-correcting: it said *"this case flips the day `stdlib/String.maxon` is listed"*. That module is still not
-listed and still cannot be. It flipped because the compiler **synthesizes** the declaration instead —
+correcting: it said *"this case flips the day `stdlib/String.maxon` is listed"*. It had not been listed when
+it flipped, and it flipped because the compiler **synthesizes** the declaration instead —
 `Project.builtinStringErrorEnum`, seeded with `implements Error`, exactly as it has synthesized
-`ArrayError` from the equally-unlistable `stdlib/Array.maxon:6` since R4.4. The old note also argued that
+`ArrayError` from `stdlib/Array.maxon:6` since R4.4. ⚠ **The loader's filter is gone and every file under
+`stdlib/` now loads, so the clause that read "still cannot be" has expired**; the synthesized declaration
+is still what this case's expectation rests on, and the expectation is unchanged. The old note also argued that
 doing so *"would need a hardcoded second copy of the stdlib's declarations inside the compiler — exactly
 what listing a module exists to avoid"*; that argument was already false when written, because
 `ArrayError` is that copy and R4.4 accepted it deliberately.

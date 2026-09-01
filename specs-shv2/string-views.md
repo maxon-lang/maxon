@@ -54,7 +54,7 @@ Four properties are what these tests pin, and each is a decision rather than an 
 The nine `utf16*` FREE functions (`utf16Width`, `utf16IsLeadSurrogate`, `utf16IsTrailSurrogate`,
 `utf16IsSurrogate`, `utf16IsBmp`, `utf16LeadSurrogate`, `utf16TrailSurrogate`, `utf16DecodeSurrogates`,
 `utf16IsValidSurrogatePair`) are NOT compiler builtins: they are `stdlib/helpers/string/utf16.maxon`,
-reached through the stdlib whitelist as ordinary declarations. Their parameter type `Codepoint` is
+reached through the stdlib loader as ordinary declarations. Their parameter type `Codepoint` is
 declared in `stdlib/Character.maxon`, which shv2 cannot load (`Character` is a name the compiler owns),
 so `Codepoint` is a COMPILER-SYNTHESIZED ranged int alias exactly as `HashValue` is — and, like every
 compiler-owned type name, a user declaration may not bind it to a nominal identity.
@@ -314,16 +314,16 @@ gate reporting a stale premise rather than a regression.
 MEASURED, and it is why these carried a target marker at all: the two guards were first written as
 message-only cases with no marker, and the cross-target gate went red on x64-linux and wasm with an
 EMPTY `actual` — which READS exactly like "the guard is missing on this target" and was not. The
-identical program over a USER-declared `typealias Percent = int(0 to 100)`, touching neither the
-whitelist nor `Codepoint`, exited 1 with empty stderr on wasm and 1 with the full message on x64.
+identical program over a USER-declared `typealias Percent = int(0 to 100)`, touching neither
+stdlib nor `Codepoint`, exited 1 with empty stderr on wasm and 1 with the full message on x64.
 `targets: x64-windows, x64-linux, wasm32-wasi` is now the list of lanes with a panic runtime AND a
 runner on this host's gate; arm64 is synced separately by hand and is not named here for that reason.
 
-<!-- test: whitelisted-stdlib-range-panic-names-the-alias -->
+<!-- test: stdlib-range-panic-names-the-alias -->
 <!-- targets: x64-windows, x64-linux, wasm32-wasi -->
-### A REACHABLE whitelisted stdlib function still gets its range guard, and the panic names the alias
-`insertRangeChecks` skips a stdlib function no path from `main` reaches — that skip is what keeps the
-whitelist from renumbering `.rdata` for functions nobody calls. It must not be one word wider than
+### A REACHABLE stdlib function still gets its range guard, and the panic names the alias
+`insertRangeChecks` skips a stdlib function no path from `main` reaches — that skip is what keeps
+stdlib from renumbering `.rdata` for functions nobody calls. It must not be one word wider than
 that: a function the program DOES call keeps every guard it declared. `utf16LeadSurrogate` returns
 through the ranged `CodeUnit16`, and a codepoint far past the supplementary plane overflows it.
 
@@ -335,7 +335,7 @@ guard fired. `targets:` for the reason stated at the head of this group.
 what this case read while a call argument's declared range went unenforced — is now the compile-time
 E3005 `range-check-panic.md` promises at every position ("a literal argument never reaches a runtime
 check because it never builds"), measured identically on the bootstrap. The subject here is the RUNTIME
-guard on the whitelisted stdlib function's ranged `return`, so the codepoint must be a value no constant
+guard on the reachable stdlib function's ranged `return`, so the codepoint must be a value no constant
 folds to; `widen` is the smallest way to say that.
 
 ⭐⭐ **A1f CHANGED WHICH ALIAS THIS NAMES, AND THE NEW ANSWER IS THE VIOLATION THAT ACTUALLY HAPPENED.**

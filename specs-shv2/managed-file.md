@@ -396,9 +396,13 @@ error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'seek' — the
 <!-- targets: x64-windows, arm64-macos -->
 shv2-authored, like the dispatcher case above, and for a reason of the same kind: `rename` is the ONLY one
 of the thirteen methods that NO canonical case reaches. Every `/specs` exercise of it goes through
-`File.rename`, whose signature takes a `FilePath` — and `stdlib/FilePath.maxon` is not whitelisted for shv2
-(it stops at `E2015 String method 'byteAtOrPanic'`, `:56`), so there is no ported case to enable. Shipping
+`File.rename`, whose signature takes a `FilePath` — and `stdlib/FilePath.maxon` did not then load for shv2
+(it stopped at `E2015 String method 'byteAtOrPanic'`, `:56`), so there was no ported case to enable. Shipping
 the method untested is worse than authoring one.
+
+⚠ **THAT REASON'S FIRST HALF HAS EXPIRED: all of `stdlib/` loads now.** Whether a canonical `File.rename`
+exercise is portable today is a question for whoever ports it; the shv2-authored case below is unaffected
+and stays, because what it pins is the builtin-level round trip and nothing about `FilePath`.
 
 What it pins is the ROUND TRIP, at the builtin level: a file written and closed, renamed, and then observed
 to have moved — `exists(old) == 0` AND `exists(new) == 1`. Either half alone would pass against a `rename`
@@ -443,7 +447,8 @@ end 'main'
 <!-- targets: x64-windows, arm64-macos -->
 shv2-authored, and it is the case whose ABSENCE was the R4.2 review's first blocker: not one committed
 case reached a SUCCESSFUL `stat`. Every canonical `stat` exercise goes through `File.info`, and
-`stdlib/FilePath.maxon` is not whitelisted for shv2, so `stat-not-found-variant` — which throws before a
+`stdlib/FilePath.maxon` did not then load for shv2 (all of `stdlib/` loads now), so
+`stat-not-found-variant` — which throws before a
 buffer exists — was the whole of the coverage. `statField` and `statFree` had none at all.
 
 What that hid was total: `__ManagedFile.statFree(buffer)` is VOID and NON-THROWING, so a bare statement is

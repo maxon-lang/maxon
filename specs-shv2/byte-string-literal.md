@@ -537,11 +537,11 @@ A detached literal's `capacity@16` is no longer the rdata sentinel, so its drop 
 the buffer — the one it allocated, never the blob. Five detach-and-drop rounds make either mistake loud:
 a missed free leaks (exit 101) and a freed blob corrupts the allocator.
 
-⚠ **ITS GOLDEN MOVED WHEN `stdlib/File.maxon` WAS WHITELISTED (R4.7), IN A PROGRAM THAT NEVER MENTIONS
+⚠ **ITS GOLDEN MOVED WHEN `stdlib/File.maxon` WAS FIRST LOADED (R4.7), IN A PROGRAM THAT NEVER MENTIONS
 `File` — AND THE MOVE IS A MISSING CHECK NOW EMITTED, NOT A CODEGEN CHANGE.** MEASURED by an A/B with one
 variable, `detachAndRead` textually identical in both: with `Byte` UNDECLARED the slot before `__managed_set`
 holds `movRegReg rcx, r12`; with `typealias Byte = int(0 to u8.max)` declared it holds
-`cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`. Whitelisting `File.maxon` supplies
+`cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`. Loading `File.maxon` supplies
 `export typealias Byte = int(0 to u8.max)` (`:45`), so a `b"…"` literal's element has a DECLARED RANGE for
 the first time and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets the narrowing guard it was
 silently missing. The golden diff is a PURE INSERTION: nothing is removed, nothing reordered, and the

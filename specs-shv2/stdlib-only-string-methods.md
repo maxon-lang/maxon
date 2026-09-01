@@ -93,8 +93,8 @@ names that have left it is served by `stdlib/String.maxon` through the corpus do
 ⚠ The location gate this file used to describe (`livesUnderStdlibDirectory`, deliberately not
 `isStdlibSource`) is now reached only by the two `__ManagedMemory` members that keep synthesized arms.
 Its argument is unchanged and lives with them: gated on `isStdlibSource` instead,
-`maxon-shv2 build stdlib/URL.maxon` — the command that checks whether a module is ready to be
-whitelisted — was told `stdlib\URL.maxon` "is not stdlib source". The spec suite cannot reach that case
+`maxon-shv2 build stdlib/URL.maxon` — the command that checks whether a module compiles standalone
+— was told `stdlib\URL.maxon` "is not stdlib source". The spec suite cannot reach that case
 (it stages every test's sources under `specs-shv2/.spec-tmp/`, and the multi-file marker deliberately
 refuses the `..` that would escape), so the cases below pin the USER half only; the stdlib half is
 pinned by every `url` case, which compiles `stdlib/URL.maxon` through the loader.

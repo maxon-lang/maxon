@@ -1580,8 +1580,10 @@ than probed: `length`, `capacity`, `get`, `set`, `setLength`, `setByte`, `byteAt
 `slice`, `clear` — the roster exactly. The one off-roster member any `/specs` case reaches is
 `elementSize` (`ranged-int-bit-packing.md`, which needs ranged-int bit packing shv2 does not have), and
 `stdlib/Array.maxon` additionally calls `remove`/`swap`/`shiftRight`/`elementSize`/`toCString`/
-`makeCharFromBytes` — a file no whitelisted module imports and which shv2 cannot yet compile at all. Those
-arrive with the rung that gives the buffer those members for real, and the roster is what will say so.
+`makeCharFromBytes`. ⚠ The clause that stood here — *"a file no whitelisted module imports and which shv2
+cannot yet compile at all"* — is a DATED reading taken while the loader still filtered; the filter is gone
+and every file under `stdlib/` now loads. Those members still arrive with the rung that gives the buffer
+those members for real, and the roster is what will say so.
 
 <!-- test: buffer-surface-serves-every-member-its-roster-names -->
 

@@ -1686,7 +1686,7 @@ binary, the two answer identically** — `a member access 'add'/'append' on a 'u
 ⇒ **`Vector` is the subject, and `W189`/`W190` did NOT take it away — which is worth stating,
 because the paragraph that stood here predicted they would.** It read *"`stdlib/Vector.maxon`
 exists and is NOT whitelisted … when `Vector` is listed in its turn, this case moves to whatever
-base is still single-regime or it goes"*. The module IS listed now and every member of a `Vector`
+base is still single-regime or it goes"*. The module IS loaded now and every member of a `Vector`
 is its declaration's, and this case is UNMOVED — because what it turns on is not who serves the
 members but who owns the RECORD, and that is still shv2 (`isBuiltinGenericBaseName`, which decides
 what `Vector with 3 Int` MEANS; taking the name off it is `W114`'s rung). The refusal's own sentence

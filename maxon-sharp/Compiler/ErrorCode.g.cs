@@ -854,7 +854,7 @@ public enum ErrorCode {
   /// the type cannot invent -- `push(value)` appends one, `growFilled(newLength, value:)` grows to
   /// a length in one call -- and shrinking needs no element at all, so `truncate(newLength)` stays
   /// available for every element type. All three are stdlib/Array.maxon's, and BOTH compilers compile
-  /// that file -- shv2 lists it in `StdlibLoader.whitelistedStdlibModules` -- so the cures are the same
+  /// that file -- shv2 loads all of stdlib/ -- so the cures are the same
   /// on both. shv2's message text still names only `push`, which understates the other two.
   /// It is refused only where the element type is KNOWN. An element that is still an unbound
   /// type parameter is not: one generic body serves every instantiation, and the deliberately

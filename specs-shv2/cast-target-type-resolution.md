@@ -147,9 +147,10 @@ reachable here; that fallback exists FOR this property and its header names this
 
 ⚠ **READ THE NEXT TEST WITH THIS ONE — ON ITS OWN THIS PROGRAM PROVES NOTHING, AND THAT IS
 EXACTLY HOW ITS PREDECESSOR CAME TO PASS FOR THE WRONG REASON.** The version of this case ported
-from `/specs` named `ElementCount`, which lives in `stdlib/Array.maxon` — a module the loader's
-whitelist does not list. The name resolved to nothing, the cast evaporated, and the exit code
-came out right anyway. It was green because the lookup FAILED.
+from `/specs` named `ElementCount`, which lives in `stdlib/Array.maxon` — a module the loader
+did not then load. The name resolved to nothing, the cast evaporated, and the exit code
+came out right anyway. It was green because the lookup FAILED. (All of `stdlib/` loads now, so that
+particular lookup would succeed today; what the paragraph records is why the case was rewritten.)
 
 An exit code cannot tell the two apart, and for the CONSTANT operand below neither can a golden:
 the value folds and a folded in-range cast emits nothing either way.
@@ -171,7 +172,7 @@ and the one that would survive `Milliseconds` being re-widened. It works only be
 this file documents: a cast
 target that denotes nothing is now a hard error. So the pair below IS the discrimination — two
 programs identical but for ONE CHARACTER in the name — and if `Milliseconds` ever stopped
-resolving (the module dropped from the whitelist, the bare-name fallback narrowed, the alias
+resolving (the module removed from `stdlib/`, the bare-name fallback narrowed, the alias
 renamed) this test would produce the next test's output and FAIL. Do not delete the negative
 half; it is what makes the positive half mean something.
 ```maxon

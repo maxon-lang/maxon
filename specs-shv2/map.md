@@ -1140,7 +1140,9 @@ them says nothing about which `Map` answered. `stdlib/Map.maxon` declares two me
 never had — `getCapacity()` and `createIterator()` — and a program calling one is refused outright
 (`E2015 … that list IS the surface`) the moment the builtin is the thing serving the type.
 
-⚠ **MEASURED RED, by removing `stdlib/Map.maxon`'s `listWhitelistedModule` line and rebuilding**: all
+⚠ **MEASURED RED — by the A/B available at the time, removing `stdlib/Map.maxon`'s
+`listWhitelistedModule` line from the loader's then-whitelist and rebuilding** (that method is gone with
+the filter; the reading stands): all
 three cases in this section fail to COMPILE against the synthesized record and pass against the
 declaration —
 

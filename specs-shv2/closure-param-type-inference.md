@@ -61,7 +61,7 @@ got 'fn(int, int) returns int'`**, at the ARGUMENT's own column rather than four
 same reason, no capability moved: the arity half and the parameter-TYPE half are both what a function-typed
 argument's own agreement rule already answers.
 
-This is `stdlib-whitelist.md`'s `print` finding one surface over, and the `sleep` precedent before it —
+This is `stdlib-loading.md`'s `print` finding one surface over, and the `sleep` precedent before it —
 *"a builtin's bespoke argument rejection, replaced by the ordinary one"* — and it is the shape a retirement
 takes every time: the bespoke sentence existed because there was no declaration to read.
 

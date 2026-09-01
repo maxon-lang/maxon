@@ -668,7 +668,7 @@ error E3005: specs/fragments/bytearray-element-size/byte-packed-alias-is-not-int
 (`RangedAliasRegistry.storageBytesInEveryFile`, "a record created in one file is pushed, appended, read
 and dropped in another, and they must stride identically"). That fold is correct and it is not enough.
 
-**MEASURED**: with `stdlib/File.maxon` on the whitelist, a program declaring `typealias Byte = int(0 to
+**MEASURED**: with `stdlib/File.maxon` loaded, a program declaring `typealias Byte = int(0 to
 1000)` and **never mentioning `File` at all** was REFUSED — `E3005 stdlib/File.maxon:74:28: argument type
 mismatch for 'managed': expected '__ManagedMemory', got 'Array_Byte'`. The stdlib builds its read buffer
 with `__ManagedMemory.create(size + extraBytes, 1)` (`stdlib/File.maxon:71`), i.e. through the very
@@ -755,7 +755,7 @@ Hello 1
 <!-- test: a-wide-byte-still-reads-a-compiler-synthesized-buffer -->
 <!-- targets: x64-windows, arm64-macos -->
 ### A buffer the COMPILER minted answers to no file's `Byte` — not even the file that asked for it
-The case above proves a WHITELISTED MODULE's buffer survives a wide `Byte`. This one proves the
+The case above proves a STDLIB MODULE's buffer survives a wide `Byte`. This one proves the
 harder half: a buffer that no source line describes at all. `__ManagedDirectory.currentPath()` is a
 `mm_alloc`'d run of bytes whose `element_size@24` is stamped from the literal `ByteStringElementSize`
 (`ManagedDirectoryRuntime.emitCStringToManaged`), so its stride is 1 in every program ever compiled —
@@ -2080,7 +2080,7 @@ it knew the RANGE (`int(0 to u32.max)` here, which is why the old refusal could 
 element the machine-word SLOT of a name no file declares. An element compared against 8 bytes it does not
 occupy fails a test it should never have been given.
 
-⭐ **W5 removed the second answer rather than the check.** `stdlib/Process.maxon` is now a listed module,
+⭐ **W5 removed the second answer rather than the check.** `stdlib/Process.maxon` is now loaded like every other stdlib module,
 so its `export typealias ExitCode` is an ORDINARY declaration in the alias registry and the slot and the
 range come from the one place — the same convergence W3 performed for `Ordering` and `IterationError`. The
 element is `int(0 to u32.max)`, its slot is therefore 4 bytes, it admits every one of them, and the write

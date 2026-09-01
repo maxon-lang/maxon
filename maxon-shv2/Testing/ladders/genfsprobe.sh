@@ -3,9 +3,10 @@
 # program to COMPILE: it measures what one `File.delete` / `File.exists` / `FilePath.changeExtension`
 # COSTS, in nanoseconds and in allocations, so a per-compile cost paid in SYSCALLS can be priced.
 #
-# ⚠ BUILD IT WITH THE BOOTSTRAP (`./bin/maxon.exe build <out>`), NOT with shv2 — shv2 cannot yet
-# compile `stdlib/File.maxon` (its stdlib whitelist is Clock.maxon and no more). That is not a
-# weaker measurement: the shv2 compiler BINARY is emitted by the bootstrap, from this same
+# ⚠ BUILD IT WITH THE BOOTSTRAP (`./bin/maxon.exe build <out>`), NOT with shv2. That was written when
+# shv2 could not compile `stdlib/File.maxon` at all; it now loads every stdlib module, so re-measure
+# before assuming the restriction still binds. Either way it is not a weaker measurement: the shv2
+# compiler BINARY is emitted by the bootstrap, from this same
 # `stdlib/File.maxon` and this same emitted runtime, so a bootstrap-built program calling
 # `File.delete` runs the identical machine code shv2's own `Compiler.discardPreviousOutput` runs.
 #

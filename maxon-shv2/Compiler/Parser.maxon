@@ -5010,7 +5010,7 @@ let BinaryNumericBuiltinArity = 2 as ParamCount
 // `stdlib/Print.maxon`, and v1 deleted its own `parsePrintStatement` and `TokenKind.print` to do the same.
 //
 // It also made `stdlib/Print.maxon` UNLISTABLE, by this file's own rule
-// (`StdlibLoader`'s "do not list a module whose function name a bare builtin claims"): with the builtin
+// (`StdlibLoader`'s "do not put a module whose function name a bare builtin claims under `stdlib/`"): with the builtin
 // live, a `print` call never reached a declaration, so listing the module would have loaded code no call
 // site could get to — MEASURED, and the third time that rule has been applied (after `sleep` and the two
 // UAX #29 classifiers). `print` is now an ordinary call to that module's declaration, `printError` arrives
@@ -5371,8 +5371,10 @@ let BuiltinsExecutablePathName = b"__Builtins.executablePath"
 //
 // ⚠ **THE ROSTER HAS NAMED IT SINCE BEFORE ANYTHING PROVIDED IT.** `specs-shv2/builtins-type.md:37` is a
 // byte-identical port of the canonical spec, so shv2 shipped a documented intrinsic that answered E3004 —
-// which is exactly the "surface without a floor" shape `STDLIB-BRINGUP.md` warns about, one step less
-// harmful (a clean refusal rather than a backend panic). See `ProcessRuntime.ProcessCurrentPidName`.
+// which is exactly the SURFACE-WITHOUT-A-FLOOR shape the socket slice paid for: declaring a name with no
+// runtime behind it turns a clean `E3004` into a backend panic (MEASURED — see
+// `TargetFacilities`'s `panic at StdToWasm.maxon:1634` note, which is that rule made real). This case was
+// one step less harmful, a clean refusal rather than a panic. See `ProcessRuntime.ProcessCurrentPidName`.
 let BuiltinsCurrentProcessIdName = b"__Builtins.currentProcessId"
 
 // ⭐⭐ **`__Builtins.gtIsComplete(gt)` — THE NON-BLOCKING PEEK AT A GREEN THREAD'S STATUS (G17).** `await`
@@ -5450,9 +5452,9 @@ let BuiltinsFloatToBitsName = b"__Builtins.floatToBits"
 // table reads `__ucd_cat` is built from.
 //
 // ⭐⭐ **THEY ARE THE FIRST `__Builtins` INTRINSICS WITH A REAL DECLARATION, AND THAT IS THE POINT OF THE
-// RUNG.** ⚖ USER RULING 2026-08-12, on a measured contradiction: `STDLIB-BRINGUP.md` §F filed the corpus's
-// unlabelled second argument as *"either intrinsic calls are exempt from the named-argument rule, or the
-// corpus is edited"* — but a `name:` label names a PARAMETER OF A DECLARATION, and this pair had no
+// RUNG.** ⚖ USER RULING 2026-08-12, on a measured contradiction: the stdlib bring-up survey had filed the
+// corpus's unlabelled second argument as *"either intrinsic calls are exempt from the named-argument rule,
+// or the corpus is edited"* — but a `name:` label names a PARAMETER OF A DECLARATION, and this pair had no
 // parameter names in the bootstrap at all (a hand-written parse hook, `2-Parser.cs:12178-12201`), so
 // there was no name to write. MEASURED: `offset: cp` answered `E2004 Undefined variable 'offset'`. The
 // answer was neither exemption nor a re-spelling of the call — it was to GIVE THEM A DECLARATION. Each
@@ -6025,7 +6027,7 @@ let ByteViewMethod = b"bytes"
 //
 // ⚠ It never was a slice of the language's String surface: it was the doors `stdlib/URL.maxon`,
 // `stdlib/helpers/url/urlHelpers.maxon` and the `helpers/string/` walks need in order to compile AS
-// WRITTEN — which is the whole point of whitelisting a module rather than transcribing it. Those files
+// WRITTEN — which is the whole point of LOADING a module rather than transcribing it. Those files
 // still compile as written; they simply reach the declaration instead of an arm.
 // The `module` visibility modifier's spelling. It is matched as an IDENTIFIER, never as a keyword — see
 // `Parser.atModuleModifier` for the measurement that forbids a `keywordMap` entry.
@@ -6035,8 +6037,8 @@ let ModuleModifierName = b"module"
 // MEASUREMENT (SV1).** Two live declarations own the word and neither may be retokenized:
 // `specs-shv2/associated-types.md:3493,3500` declares `static function spawn() returns Self` — a
 // byte-identical port of `/specs/associated-types.md`, which the port rule forbids editing — and
-// `stdlib/Subprocess.maxon:658,664` declares `Subprocess.spawn` / `spawnWithCwd` in a module the
-// whitelist loads into EVERY compile. A `keywordMap` row would break both on the day it landed, so
+// `stdlib/Subprocess.maxon:658,664` declares `Subprocess.spawn` / `spawnWithCwd` in a module the loader
+// takes into EVERY compile. A `keywordMap` row would break both on the day it landed, so
 // `filter=associated-types` and `filter=subprocess` staying green IS this decision's gate.
 //
 // The recognition is EXACT rather than heuristic, exactly as `atModuleModifier`'s is: the word is the
@@ -6112,8 +6114,8 @@ export let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 // `p=164 e=true`, from the same source, with both user functions compiled and neither run.
 //
 // It was accepted while it stood because there was no declaration for a call to reach instead — the
-// segmenter is synthesized and reads no stdlib. `stdlib/helpers/string/grapheme.maxon` is now LISTED
-// (`StdlibLoader.whitelistedStdlibModules`), which supplies both declarations, so the builtins were what had
+// segmenter is synthesized and reads no stdlib. `stdlib/helpers/string/grapheme.maxon` is now LOADED
+// (the loader takes all of `stdlib/`), which supplies both declarations, so the builtins were what had
 // to go first, exactly as this block instructed and exactly as `sleep`'s went.
 //
 // ⚠ **THE RUNTIME BODIES `__gr_gbp` / `__gr_ext_pict` STAY.** What was retired is the bare-name PARSER DOOR,
@@ -6121,7 +6123,7 @@ export let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 // from inside its own Std bodies, where `StringRuntime.closeGraphemeNeeds` declares the two bits. So a user's
 // `graphemeBreakProperty(cp)` now reaches the corpus declaration while `s.count()` still reaches the
 // synthesized one — two implementations of one table, which
-// `stdlib-whitelist.the-corpus-segmenter-agrees-with-the-synthesized-one` is the differential over.
+// `stdlib-loading.the-corpus-segmenter-agrees-with-the-synthesized-one` is the differential over.
 
 // ⭐⭐ **THE CORPUS SEGMENTER ENTRY POINT `for c in s` NAMES, AND THE END OF THE "TWO IMPLEMENTATIONS OF ONE
 // TABLE" THE BLOCK ABOVE FILED.** It is an ordinary declaration in `stdlib/helpers/string/grapheme.maxon`,
@@ -6560,8 +6562,8 @@ end 'appendArgParamName'
 // ⭐ **THAT LIST USED TO NAME FIVE, AND FOUR OF THEM ARRIVED BY EXACTLY THE ROUTE IT PREDICTED.**
 // `remove`/`swap`/`shiftLeft`/`shiftRight` were absent because *"the only caller anywhere is
 // `stdlib/Array.maxon`, which is not a whitelisted module"* — which was a statement about the CALLER's
-// availability, not about the member's, and the Array retirement needs the members BEFORE it can list that
-// module. Adding each was one line here plus its arm; nothing else moved, which is the property the header
+// availability, not about the member's, and the Array retirement needs the members BEFORE it can lean on
+// that module. Adding each was one line here plus its arm; nothing else moved, which is the property the header
 // claims and this is the measurement of it.
 //
 // ⚠ **WHAT THE LIST RECORDS IS WHAT THE SURFACE *HAS*, NEVER WHO MAY REACH IT, AND TWO ENTRIES DEPEND ON THAT
@@ -9429,7 +9431,7 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 // emit the other thing and leave the first behind, which cost only a dead `const` the fold's DCE collects:
 // a Character is a `stringLiteral` op, and `LowerMaxonToStd.lowerStringLiteral`
 // registers `.rdata` for one whether or not anything reads it — a blob, a 56-byte record and a fixup off the
-// ONE `GlobalDataTable.nextStringId` counter every rdata prefix shares. A single stray blob in a whitelisted
+// ONE `GlobalDataTable.nextStringId` counter every rdata prefix shares. A single stray blob in a
 // stdlib module therefore renumbers every later `__str_blob_`/`__jumptable_` label in EVERY program.
 // (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED and left the counter — see
 // `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged for the two prefixes that remain.)
@@ -13040,17 +13042,17 @@ export type Parser
 	// each of their own headers calls itself. Decided once per file by `Queries`, the only tier holding the
 	// project, and read by the one choke point every new declaration goes through (`requireUnreservedName`).
 	// See `Queries.TestReportDeclaringModule` for why the set is a LIST of named modules and not the
-	// loader's whitelist, nor "any `__` name no intrinsic claims".
+	// set of modules the loader takes, nor "any `__` name no intrinsic claims".
 	//
 	// ⚠ **IT IS DELIBERATELY NOT `isStdlibSource`, AND THE TWO ANSWER DIFFERENT QUESTIONS.**
 	// `isStdlibSource` decides VISIBILITY, and its root-inside-`stdlib/` arm hands a project rooted under
 	// `stdlib/` its own files back as the USER's — correctly, for visibility. Reused here it would make
 	// `maxon-shv2 build stdlib/Builtins.maxon` — the command `StdlibLoader`'s collision rule prescribes for
-	// checking whether a module is ready to be listed — refuse the very module the loader is about to list.
+	// compiling one stdlib module on its own — refuse the very module the loader is about to load.
 	// Being the compiler's internal bridge is a property of the FILE, not of how a command line spelled it.
 	let declaresCompilerInternalNames as bool
 	// ⭐ **IS THIS FILE PHYSICALLY INSIDE `stdlib/` (BATCH2 slice 1)?** True for every module the loader
-	// lists AND for a module named directly on the command line (`maxon-shv2 build stdlib/URL.maxon`),
+	// takes AND for a module named directly on the command line (`maxon-shv2 build stdlib/URL.maxon`),
 	// because being under `stdlib/` is a property of the FILE. Read by the two remaining stdlib-only doors —
 	// `dispatchStringMethod`'s `setByte` arm and `requireStdlibOnlyBufferMethod` — each of which serves a
 	// `module function` shv2 SYNTHESIZES, and so has no declaration whose visibility could answer instead.
@@ -25207,7 +25209,7 @@ export type Parser
 	// direction is sound and the shape is simply not built yet — a descriptor seed for "forwards a borrowed
 	// opaque value to a storing sibling" is what would let it compile, and the token pre-scan cannot see that
 	// forward (the value is an expression, not a parameter, so the feed-edge scanner does not record it
-	// either). Measured corpus reach: ZERO — the suite is 4771/0 and every case builds the whitelisted stdlib.
+	// either). Measured corpus reach: ZERO — the suite is 4771/0 and every case builds the whole stdlib.
 	// The MESSAGE therefore names both shapes rather than asserting the `static` one as the cause.
 	function requireDescriptorForOpaqueStores(owner ByteArray, line LineNumber, column ColumnNumber) throws ParseError
 		if not self.functionStoredOpaqueWithoutDescriptor 'nothingOwed'
@@ -27355,9 +27357,9 @@ export type Parser
 			// ORDINARY STRUCT REGISTRY, BECAUSE `stdlib/CharacterSet.maxon` IS WHAT PUTS IT THERE.** The arm
 			// answered `structRef(__CharacterSet)` — the reserved spelling the compiler registered its own
 			// layout under — and W17's header called that *"one layout, the compiler's, reachable under the
-			// name the corpus writes"*, recording that it was also what kept the corpus module OFF the
-			// whitelist: two layouts under two keys was the hazard. Listing the module settles it the other
-			// way round, and the arm had to go WITH the listing rather than after it — left in place, every
+			// name the corpus writes"*, recording that it was also what kept the corpus module from being loaded:
+			// two layouts under two keys was the hazard. Loading the module settles it the other
+			// way round, and the arm had to go WITH the load rather than after it — left in place, every
 			// `chars CharacterSet` parameter in `stdlib/String.maxon` kept resolving to `__CharacterSet` while
 			// the corpus statics returned the declared `CharacterSet`, which is **`E3005 expected
 			// 'CharacterSet', got '__CharacterSet'`** on `"  x  ".trim()`.
@@ -30435,20 +30437,19 @@ export type Parser
 		// ⚠ **IT SITS BELOW THE FILE EXEMPTION, ON THE SAME SIDE AS THE `__` RULE** — the reference draws
 		// exactly one boundary in this door (`2-Parser.cs:27418`: the `self` throw is inside the same function
 		// the stdlib-file exemption returns from), and a second boundary here would be one door with two
-		// shapes. Nothing shv2 parses rides on the choice: MEASURED across every module
-		// `whitelistedStdlibModules` lists and the exempt modules besides (`stdlib/Builtins.maxon`, and
-		// `stdlib/Testing.maxon` since W72, which reach the parser as exempt files rather than as listed ones),
-		// ZERO declare a binding named `self`.
+		// shapes. Nothing shv2 parses rides on the choice: MEASURED across every module the loader takes and
+		// the exempt modules besides (`stdlib/Builtins.maxon`, and `stdlib/Testing.maxon` since W72, which
+		// reach the parser as exempt files as well as loaded ones), ZERO declare a binding named `self`.
 		//
 		// ⛔ **AND THE FILE THAT WOULD — `stdlib/Internals.maxon`, 24 of them, `__destruct___ManagedMemory(self
 		// MachineWord)` and its siblings — IS NOT EXEMPT IN shv2 AND MUST NOT BE ASSUMED TO BE.** The bootstrap
 		// exempts three BASENAMES (`2-Parser.cs:27401-27402`: `Builtins.maxon`, `Internals.maxon`,
 		// `Testing.maxon`); shv2's `declaresCompilerInternalNames` is an identity compare against
 		// `Builtins.maxon` and `Testing.maxon` — two of that three, and W72 added the second.
-		// `whitelistedStdlibModules` does not list `Internals.maxon`, so shv2 never
-		// parses it and the gap costs nothing today — but whoever lists it inherits NOTHING from the reference:
-		// it goes red on the `__` rule first (every one of those function NAMES is `__`-prefixed), and widening
-		// the exemption is what that day's work is. This rule rides along with that decision; it does not
+		// `StdlibLoader.SupersededRuntimeModule` names `Internals.maxon` as the ONE file the loader skips, so
+		// shv2 never parses it and the gap costs nothing today — but whoever deletes that exclusion inherits
+		// NOTHING from the reference: the file goes red on the `__` rule first (every one of those function
+		// NAMES is `__`-prefixed), and widening the exemption is what that day's work is. This rule rides along with that decision; it does not
 		// depend on it.
 		if namespaceShadowsTheReceiver(bindsInto) and declaredName.equals(ReceiverSourceSpelling) 'theImplicitReceiversName'
 			throw ParseError.reservedReceiverName(nameTok.line, column: nameTok.column)
@@ -38622,8 +38623,8 @@ export type Parser
 	// `LoopContext` before this rung existed.
 	//
 	// ⭐ **THE COUNTER FORM IS WHAT A SOURCE WITH NO `createIterator` GETS — AND NEITHER CORPUS CONTAINER
-	// IS ONE ANY MORE.** `stdlib/Array.maxon` is listed
-	// (`StdlibLoader.whitelistedStdlibModules`), so `materializeIterableIterationSource` rewrites an
+	// IS ONE ANY MORE.** `stdlib/Array.maxon` is loaded
+	// (`StdlibLoader` takes all of `stdlib/`), so `materializeIterableIterationSource` rewrites an
 	// array source to the `ArrayIterator` its `createIterator()` returns BEFORE the fork below is
 	// reached, and `for x in [10, 20, 30]` emits `Array.createIterator` / `ArrayIterator.current` /
 	// `ArrayIterator.advance` — MEASURED in the emitted IR, not inferred.
@@ -50656,10 +50657,10 @@ export type Parser
 	// ⚠⚠ **THE `.rdata` RECORD IS REWRITTEN, NOT ORPHANED, AND THAT IS NOT A TIDINESS CHOICE.**
 	// `LowerMaxonToStd.lowerStringLiteral` walks `block.opRefs` and registers a blob + a 56-byte record +
 	// a fixup for EVERY `stringLiteral` op it finds, read or not; `foldConstOperands`'s const DCE
-	// deliberately excludes `rdataAddr`, and no general DCE pass is scheduled. One orphan in a whitelisted
+	// deliberately excludes `rdataAddr`, and no general DCE pass is scheduled. One orphan in a
 	// stdlib module would therefore renumber every later `__str_blob_`/`__jumptable_` label in EVERY program
 	// off the single `GlobalDataTable.nextStringId` counter — the measured 317-golden move
-	// that listing `Builtins.maxon` cost. Rewriting the op in place leaves the op stream, the op INDEX, the
+	// `Builtins.maxon` cost when it joined the load. Rewriting the op in place leaves the op stream, the op INDEX, the
 	// ValueId and the source range exactly as an integer literal's always were, so `cp == '-'` emits the
 	// byte-identical code it emitted under the old width rule.
 	function integerizedOperand(value ValueId, expected ValueTypeTag, start TokenIndex, pastEnd TokenIndex) returns ValueId throws ParseError
@@ -57570,10 +57571,10 @@ export type Parser
 	// ⚠⚠ **`parseDecodedView` WAS HERE AND WENT WITH `String.codepoints()`/`String.utf16()` (W49 WAVE 6).**
 	// It kept the two DECODING views off `Codepoint`/`CodeUnit16` and on the plain `integer` instance, for a
 	// reason that outlived it and is restated at `SignatureIndex.SynthesizedByteElementName`: those two
-	// element names are a compiler-synthesized alias and a RANGED typealias in a whitelisted stdlib module, so
-	// an `Array with CodeUnit16` would take its stride from `arrayElementSize`'s registry probe — making the
-	// element size of a compiler-synthesized view a function of which stdlib modules the whitelist lists that
-	// day. The corpus's `CodepointView`/`UTF16View` are structs holding the `String`, so they mint no array
+	// element names are a compiler-synthesized alias and a RANGED typealias in a stdlib module, so an
+	// `Array with CodeUnit16` would take its stride from `arrayElementSize`'s registry probe — making the
+	// element size of a compiler-synthesized view a function of which files `stdlib/` holds that day. The
+	// corpus's `CodepointView`/`UTF16View` are structs holding the `String`, so they mint no array
 	// instance at all and there is nothing left for the rule to decide.
 
 	// ⚠ **`parseMaterializedView` STOOD HERE AND IS FOLDED INTO `parseByteView` (W49 WAVE 6).** It described
@@ -57612,12 +57613,16 @@ export type Parser
 	// ⭐ **`map` IS A COMPILER-OWNED CONTAINER METHOD, NOT AN `Iterable` EXTENSION, AND THAT IS A DEPARTURE
 	// FROM BOTH REFERENCES.** `stdlib/Interfaces.maxon:187` declares `map`/`filter`/`contains` as an
 	// `export extension Iterable` written in Maxon, and v1 serves `arr.map(f)` by synthesizing that extension
-	// onto the conforming type. shv2 cannot: its containers are hand-synthesized builtins with no
-	// `createIterator` and no `implements` clause (`Parser`'s array dispatch header), it admits neither
-	// `stdlib/Interfaces.maxon` nor `stdlib/Array.maxon` (`StdlibLoader.whitelistedStdlibModules`), and the
-	// extension machinery keys off `conformersOf`, which walks DECLARED types. So `map` joins the surface the
-	// same way `push`/`slice`/`count` did — a roster entry and a dispatch arm — which is what shv2's own
-	// refusal has always said that surface IS. What is taken from the reference is the SEMANTICS, read off
+	// onto the conforming type. shv2 does not: `map` joins the container surface the same way
+	// `push`/`slice`/`count` did — a roster entry and a dispatch arm — which is what shv2's own refusal has
+	// always said that surface IS.
+	// ⚠ **THE REASON RECORDED HERE HAS EXPIRED AND THE DECISION HAS NOT.** It read *"its containers are
+	// hand-synthesized builtins with no `createIterator` … it admits neither `stdlib/Interfaces.maxon` nor
+	// `stdlib/Array.maxon`"* — both modules LOAD today (the loader takes all of `stdlib/`) and
+	// `Array.createIterator` is what `for … in` reaches (`materializeIterableIterationSource`). Whether
+	// `map` should therefore move onto the extension machinery — which keys off `conformersOf`, walking
+	// DECLARED types — is a decision for whoever takes it, and must not be inferred from a premise that has
+	// stopped holding. What is taken from the reference is the SEMANTICS, read off
 	// that declaration: a NEW array, in iteration order, one `transform(item)` per element, and
 	// element-type-PRESERVING (`function(Element) returns Element`).
 	function parseContainerMap(func IrFunction, container ValueId, resultGiid GenericInstanceId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
@@ -58255,7 +58260,7 @@ export type Parser
 	// `typealias Byte = int(0 to 1000)`. With `internArrayByteInstance()` here, a user's wide `Byte` made
 	// `String.init(managed)` inside `stdlib/CommandLine.maxon` fail with `E3005 … expected
 	// '__ManagedMemory', got 'Array_Byte'` — in a program that never mentions `CommandLine`, because a
-	// whitelisted module is parsed by every program. `SynthesizedByteElementName` carries the full argument
+	// stdlib module is parsed by every program. `SynthesizedByteElementName` carries the full argument
 	// and the two occasions this exact defect has been measured on.
 	//
 	// ⛔ **AND SCOPING IT TO A *FILE* IS NOT THE WEAKER FORM OF THE SAME CURE — IT IS A SILENT WRONG ANSWER
@@ -61936,8 +61941,11 @@ export type Parser
 	// arm was `set`, emitted through `parseArraySet` — the same container door the `Array` uses — and its
 	// mutation answer fed `noteReceiverWrite` (E3019) and `noteBorrowSubjectWrite` (E3070). Both questions are
 	// the DECLARATION's now: `stdlib/Vector.maxon`'s `set` writes through `self` like any other declared
-	// method, E3019 is a BUILTIN-surface rule a declared type is exempt from (`STDLIB-BRINGUP.md`, the ruling
-	// `Set` paid three cases for), and the borrow reaches a caller through
+	// method, and **E3019 is a BUILTIN-SURFACE rule a DECLARED type is exempt from** — USER RULING,
+	// 2026-08-14: retiring a container onto its corpus declaration DROPS the immutable-receiver refusal BY
+	// DESIGN, which is the ruling arriving and not a regression to file. `Set` paid three cases for it,
+	// rewritten as value-asserting `ok` cases; every later retirement pays the same way. The borrow reaches
+	// a caller through
 	// `noteStorageReachingCall`'s edge instead of through a receiver mask this door supplied.
 
 	// Is the cursor on a `Vector from` construction — the bare `Vector` identifier immediately followed by
@@ -64029,7 +64037,7 @@ export type Parser
 			// 48-byte buffer record ends at `@48`, so serving this member one is an eight-byte read PAST the
 			// record — into the next allocation's header, or off the end of the last one. Before W157 the same
 			// mis-service read `TrivialDestructor` as the flag: a conservative wrong answer rather than a wild
-			// read, which is why the whitelist's census could merely NOTE it.
+			// read, which is why the stdlib bring-up census could merely NOTE it.
 			//
 			// ⚠ **A PANIC, NOT A DIAGNOSTIC, AND `ProgramSignatures.checkFusedWrapperRecordLayouts` IS THE
 			// PRECEDENT.** Nothing a user program can express reaches it — the line above refuses this member

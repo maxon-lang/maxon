@@ -3067,8 +3067,8 @@ export typealias TypeParamPositionArray = Array with TypeParamPosition
 // `type HoldB uses V` ONE key. Two different types, one interned instance, and therefore one entry in the
 // display index that `deriveInstanceDisplayNames` settles by FIRST DECLARATION. MEASURED on a program and
 // its declaration-order twin: a `HoldB` field was cited as `HoldA.Items` in one order — a build-order
-// artifact in a user-visible diagnostic, which the 2026-07-24 user ruling recorded at
-// `StdlibLoader.maxon:39-63` bars. `specs-shv2/generic-types.md`'s
+// artifact in a user-visible diagnostic, which the 2026-07-24 user ruling recorded in `StdlibLoader`'s
+// header (its no-sort rule) bars. `specs-shv2/generic-types.md`'s
 // `error.a-type-parameter-belongs-to-the-type-THAT-DECLARES-IT{,-swapped}` pair pins it: the same program,
 // the declarations exchanged, ONE byte-identical sentence.
 //
@@ -4944,9 +4944,9 @@ let ReservedTypeNamePrefix = b"__"
 // With the three readers retired, the suite was run with this line respelled `b"ArrayProbe"`: **5457 passed,
 // 0 failed**, byte-identical verdicts to the tree with `b"Array"`. That is the seed being REPLACED before
 // anything reads it, on every one of 5,457 compiles, and it follows structurally:
-// `StdlibLoader.whitelistedStdlibModules` lists `Array.maxon` unconditionally and `listWhitelistedModule`
-// hard-errors if the file is absent, so the stdlib half of `discoverWholeProgramTokenFacts` always finds a
-// declaration. ⇒ **The remaining read is dead in every compile that has a corpus, and it may not therefore be
+// `StdlibLoader.loadStdlibSources` loads every module under `stdlib/`, `Array.maxon` among them, so the
+// stdlib half of `discoverWholeProgramTokenFacts` always finds a declaration in a checkout that has the
+// file. ⇒ **The remaining read is dead in every compile that has a corpus, and it may not therefore be
 // replaced by a discovered-or-panic**: the compile it describes is the one with no corpus, which is the only
 // compile in which it is ever read at all. It is an INITIALIZER for a state that exists, not a fallback for a
 // state that does not.
@@ -5194,14 +5194,16 @@ let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 //      above: shv2's forward makes a descriptor the wrong carrier for a fact about the INSTANCE, whatever
 //      the ABI cost of per-size copies would have been.
 //
-// ⚠ **AND LISTING THE MODULE COSTS THREE MECHANISMS BEFORE ANY OF THAT.** `W86` named all three and
+// ⚠ **AND REACHING THE MODULE COST THREE MECHANISMS BEFORE ANY OF THAT.** `W86` named all three and
 // withdrew all three; **`W112` LANDED THE FIRST AND WALKED THE OTHER TWO TO A FIXED POINT**, so what
-// follows is a MEASURED ORDER rather than a list.
+// follows is a MEASURED ORDER rather than a list. It is a reasoning trail from when the loader still
+// carried a whitelist and `stdlib/Vector.maxon` was outside it; the loader takes every file under
+// `stdlib/` now, so there is no line to add and the order below is history, not a plan.
 //
 //   1. **`ProgramSignatures.noteArrayLiteralConformer` — BUILT AND LANDED (`W112`), and not on the stdlib
 //      route's account.** A second STDLIB conformer steals `corpusArrayRecordName` and every program in the
 //      tree fails to compile; `W86` judged the fix untestable while the module stays unlisted and was right
-//      about that route and wrong about the other. **The USER route needs no whitelist line at all** — a
+//      about that route and wrong about the other. **The USER route needs no stdlib module at all** — a
 //      program declaring `type Vector uses Element implements BuiltinArrayLiteral` grew a fixed-size vector
 //      through the array surface on `main`, silently. See that function's header for both measurements.
 //   2. **`firstFieldIsItsOwnBuffer` + `Parser.emitFusedWrapperLiteral` — the identity arm must admit a
@@ -5236,21 +5238,21 @@ let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 // size that is a CONSTANT for a per-loop iterator struct and a call per step.
 //
 // ⇒ **Decide it deliberately, in both directions, and fix that header in the same edit** — it is a third
-// copy of this one fact, and the day the module is listed it goes from true to false with nothing to catch
-// it. The trade may well be worth taking for uniformity with `Array`; what must not happen is its arriving
-// as a side effect of a whitelist line.
+// copy of this one fact, and it went from true to false the day the module became reachable, with nothing
+// to catch it. The trade may well be worth taking for uniformity with `Array`; what must not happen is its
+// arriving as a side effect of a file appearing under `stdlib/`.
 //
-// ⚠ **THE `listWhitelistedModule` LINE IS NOT THE DELIVERABLE AND WAS WITHDRAWN TWICE, `W63`'s `Set` RULE
-// APPLIED BOTH TIMES.** With the entry live and nothing retired the differing-declarations control comes
+// ⚠ **REACHING THE MODULE IS NOT THE DELIVERABLE AND THE ENTRY THAT DID IT WAS WITHDRAWN TWICE, `W63`'s
+// `Set` RULE APPLIED BOTH TIMES.** With the module loaded and nothing retired the differing-declarations control comes
 // back INERT: `stdlib/Vector.maxon`'s `count()` rewritten to `return managed.length() + 100` leaves a
 // `Vec3.create()`+`set`+`get`+`count()` program answering **8**, byte-for-byte identical at **11,795
-// bytes**; an UNDEFINED CALL in that same body compiles clean and still answers 8. The entry is byte-neutral
-// (`return 7` identical at 5,567 bytes) and buys nothing.
+// bytes**; an UNDEFINED CALL in that same body compiles clean and still answers 8. Loading it is
+// byte-neutral (`return 7` identical at 5,567 bytes) and buys nothing.
 //
 // ⭐ **`W112` RE-RAN THAT CONTROL WITH MECHANISMS (1) AND (2) ABOVE IN PLACE — i.e. with the corpus `init`
 // GENUINELY REACHED — and it is still INERT for the members that matter.** Same sabotage, same program
 // answering **8** at an identical **5,650 code bytes**, and the undefined-call injection still compiles
-// clean. So the entry does not become worth taking one door earlier: everything it makes REACHABLE is red on
+// clean. So it does not become worth taking one door earlier: everything it makes REACHABLE is red on
 // the `self` wall, and everything that still PASSES is passing from the synthesized surface.
 //
 // ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ManagedRecordBytes` fused record, the
@@ -5590,7 +5592,7 @@ end 'rangeHoldsEverySlotValue'
 // disagreeing about one instance's stride, which is the two-producer shape `arrayElementSize` exists to end.
 //
 // ⚠⚠ **MEASURED TWICE, THREE RUNGS APART, WITH THE SAME TWO CASES AND THE SAME SENTENCE.** Both times a
-// WHITELISTED STDLIB MODULE — which every program parses — stopped compiling because of a `Byte` alias in a
+// STDLIB MODULE — which every program parses — stopped compiling because of a `Byte` alias in a
 // program that never called it:
 //   • BATCH2 slice 1, with the string view typed `Array with Byte`: `E3005 argument type mismatch for
 //     'managed': expected '__ManagedMemory', got 'Array_Byte'` raised inside `stdlib/URL.maxon`.
@@ -5623,8 +5625,8 @@ end 'rangeHoldsEverySlotValue'
 // ⚠ **THIS PARAGRAPH USED TO CITE `parseDecodedView` AS THE RULE'S OTHER APPLICATION, AND THAT FUNCTION IS
 // GONE (W49 wave 6).** It kept `.codepoints()`/`.utf16()` on the plain `integer` instance rather than on
 // `Codepoint`/`CodeUnit16`, because those two element names are a compiler-synthesized alias and a RANGED
-// typealias in a WHITELISTED module — so the emitted element size of a synthesized view would have been a
-// function of which stdlib modules the whitelist listed that day. Both members retired onto the corpus's
+// typealias in a stdlib module — so the emitted element size of a synthesized view would have been a
+// function of which files `stdlib/` happened to hold that day. Both members retired onto the corpus's
 // lazy `CodepointView`/`UTF16View`, which mint no array at all. The rule survives its second application
 // because it was never about those two members; it is stated here now rather than by reference.
 let SynthesizedByteElementName = b"__ManagedByte"
@@ -6041,10 +6043,14 @@ export let ManagedFileIndexParamName = b"index"
 // `fromCString` and `createCursor` are DELIBERATELY ABSENT** — the reference's member table is 19 deep, this
 // is the other 8 of it plus the `fromCString` static. None has a caller shv2 can reach: `elementSize` has
 // twelve (`specs/ranged-int-bit-packing.md`, whose subject is ranged-int bit packing shv2 does not have) and
-// `remove`/`swap`/`shiftRight`/`elementSize`/`toCString`/`makeCharFromBytes` have `stdlib/Array.maxon`, which
-// no whitelisted module imports and which shv2 cannot compile at all; the four cstring/cursor members need a
-// `cstring` type shv2 has no producer for. A member with no reachable caller is a mechanism handed a consumer
-// that cannot exercise it. `Parser.parseManagedMemoryStaticCall` (the statics) and `Parser.dispatchArrayMethod`
+// `remove`/`swap`/`shiftRight`/`elementSize`/`toCString`/`makeCharFromBytes` have `stdlib/Array.maxon`; the
+// four cstring/cursor members need a `cstring` type shv2 has no producer for. A member with no reachable
+// caller is a mechanism handed a consumer that cannot exercise it.
+// ⚠ **THIS SENTENCE ALSO SAID `stdlib/Array.maxon` IS ONE *"no whitelisted module imports and shv2 cannot
+// compile at all"*, AND THAT HALF IS STALE** — the module was listed long before the whitelist was deleted
+// and the loader takes all of `stdlib/` now, so it is loaded by every compile. What survives is the
+// narrower claim, that nothing REACHES those calls, and it is not re-measured here: measure it before
+// calling any of the eight absent again. `Parser.parseManagedMemoryStaticCall` (the statics) and `Parser.dispatchArrayMethod`
 // (the members) name them in their refusals so the gap is a diagnostic rather than a silence.
 //
 // ⚠ **THE TWO REFUSALS EACH MISFILE ONE NAME, and the reference's own comment is where it came from:**
@@ -6322,7 +6328,7 @@ module let ManagedMemoryErrorTypeName = b"__ManagedMemoryError"
 // `borrow-liveness.md`). Under `__ArrayError` every one of them became
 // `E3059: try propagates '__ArrayError' but enclosing function throws 'ArrayError'` — one error type under two
 // spellings, which is the very confusion the prefix exists to prevent.
-// ⇒ So `ArrayError` is RESERVED PROGRAM-WIDE here, exactly as whitelisting a stdlib module reserves its type
+// ⇒ So `ArrayError` is RESERVED PROGRAM-WIDE here, exactly as a stdlib module reserves its type
 // names (`StdlibLoader`'s collision rule) and as `CharSet` already is — and for the same reason: shv2
 // synthesizes what `stdlib/Array.maxon` declares, so it owes that file's exported names.
 export let ArrayErrorTypeName = b"ArrayError"
@@ -6820,7 +6826,7 @@ end 'tupleTypeNameHeadOf'
 // which tuple alias gave ONE type two names, `__Tuple2.__Tuple2#0.int` in one walk order and
 // `__Tuple2.__Tuple2#2.int` in the other, reaching an `E3005` sentence, an emitted `__destruct_` symbol and
 // (through `mangleTypeArg`) a descriptor label. It sat against the standing 2026-07-24 user ruling recorded
-// at `StdlibLoader.maxon:39-63` — *"the compiler must not depend on file order to work correctly ... the
+// in `StdlibLoader`'s header — *"the compiler must not depend on file order to work correctly ... the
 // repair belongs at the point of emission, deriving the order from something stable"*. A digest of the name
 // IS that stable thing, and `specs-shv2/tuples.md`'s
 // `error.nested-tuple-name-does-not-depend-on-which-file-declares-it{,-swapped}` pair pins it: the same
@@ -10360,7 +10366,7 @@ export type ProgramSignatures
 	// `W86` named it, judged it unreachable while `Vector.maxon` stays unlisted, and withdrew it as a fix no
 	// case could turn red. ⛔ **That judgement was scoped to the STDLIB route and the USER route was open the
 	// whole time**: `noteArrayLiteralConformer` is called for a USER file too, and a user program declaring
-	// `type Vector uses Element implements BuiltinArrayLiteral` needs no whitelist line to reach it. **MEASURED
+	// `type Vector uses Element implements BuiltinArrayLiteral` needs no stdlib module to reach it. **MEASURED
 	// on `main`, no compiler edit**: `Vec3.create()` answered count **0**, four `push`es **4**, `resize(9)`
 	// **9** — the size that is part of the type, gone, with no diagnostic. See
 	// `isBuiltinGenericBaseNameBesidesTheRecord` for the full measurement and for the `List` twin; the two
@@ -10787,12 +10793,12 @@ export type ProgramSignatures
 	// non-reserved prefix would make silent.
 	//
 	// ⚠ **THE STDLIB HALF IS THE ONE NOTHING ELSE WOULD CATCH (A1s wave 2 review).** `stdlib/Builtins.maxon`
-	// already declares `__`-prefixed types of its own, so a listed module declaring `X` while any listed
+	// already declares `__`-prefixed types of its own, so a stdlib module declaring `X` while any stdlib
 	// module declares `__X` would have had the mint for a shadowed `X` land ON that declaration — an E3006
-	// raised inside `stdlib/`, or worse a last-wins upsert of two layouts under one key. It is unreachable
-	// with today's four listed modules and is checked rather than argued, because the thing that would make
-	// it reachable is ADDING A WHITELIST ENTRY, which is a one-line change made by someone reading
-	// `StdlibLoader`'s collision rule and not this function.
+	// raised inside `stdlib/`, or worse a last-wins upsert of two layouts under one key. No pair in
+	// `stdlib/` collides that way today, and it is checked rather than argued, because the thing that would
+	// make it reachable is ADDING A FILE TO `stdlib/`, a change made by someone reading `StdlibLoader`'s
+	// collision rule and not this function.
 	function shadowRenameIsTaken(candidate ByteArray) returns bool
 		if self.userDeclaredTypeNames.contains(candidate) 'aUserDeclarationHoldsIt'
 			return true
@@ -12775,7 +12781,7 @@ export type ProgramSignatures
 		// through this registry then follows the user's declaration while `denotedNamedType` erases the name
 		// to the builtin's own type.
 		//
-		// ⚠ MEASURED, on `type Codepoint … end` with `stdlib/helpers/string/utf16.maxon` whitelisted: the
+		// ⚠ MEASURED, on `type Codepoint … end` against `stdlib/helpers/string/utf16.maxon`: the
 		// E2015 was reported correctly AND `utf16Width`'s `codepoint < 65536` became
 		// **`E3005 cannot compare struct with int`, TWICE, positioned inside a stdlib file the author never
 		// opened** — the user's struct having captured the parameter type of a module they did not write.
@@ -12783,8 +12789,9 @@ export type ProgramSignatures
 		// diagnosed, which is the property the enum registry already has and for the same stated reason.
 		//
 		// ⭐⭐ **THE PROVENANCE BIT IS W16's, AND IT CURES TWO REACHABLE COMPILER PANICS.** This arm used to
-		// drop EVERY declaration of such a name, corpus included, on the stated premise that no listed module
-		// could ever declare one. That premise described the loader's whitelist, not the language — and the
+		// drop EVERY declaration of such a name, corpus included, on the stated premise that no stdlib module
+		// could ever declare one. That premise described which modules the loader happened to be taking at the
+		// time, not the language — and the
 		// two doors over this one rule had parted: `requireTypeNameNotCompilerOwned` ADMITS a stdlib file
 		// (`livesUnderStdlibDirectory`), so the real parse walked into `type String`'s body while this write
 		// had just thrown its layout away. The parser then asked for the layout of the declaration it was
@@ -14944,7 +14951,7 @@ export type ProgramSignatures
 	// `.rdata` byte 0 — the identical pair of symptoms W17 repaired for the witness seed
 	// (`StdlibSource.conformersMintedWithoutTheirOwnMethods`), reached by a second road, and five
 	// `static-variables/data-section-*` pins plus
-	// `stdlib-whitelist.a-listed-modules-literals-cannot-reach-the-rdata-image` read it red.
+	// `stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image` read it red.
 	//
 	// ⇒ **A LAZY STATIC'S CALLEES ARE CREDITED AT THE ACCESS INSTEAD** — `lazyStaticInitCalleesOf`, read by
 	// `StdlibSource.markLazyStaticInitCallees` off the `globalAddr` that IS the call to its `__lazy_init$`.
@@ -17984,7 +17991,7 @@ export type ProgramSignatures
 	// ordinary declaration fold registers it in every program and there is nothing to decide — the whole
 	// probe, its bit, and the second layout it wrote are gone.
 	export function stringIndexLayoutOrPanic() returns StructLayout
-		return try self.structTypes.get(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — it is declared by `stdlib/String.maxon`, which `StdlibLoader` lists in every program, so the declaration fold has not run or has dropped it")
+		return try self.structTypes.get(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — it is declared by `stdlib/String.maxon`, which `StdlibLoader` loads into every program, so the declaration fold has not run or has dropped it")
 	end 'stringIndexLayoutOrPanic'
 
 	// ⭐⭐ **THE ASSERTION `Project.ManagedMemorySlotCount` HAS OWED SINCE THE ENVELOPE COLLAPSE, PAID NOW
@@ -17992,8 +17999,8 @@ export type ProgramSignatures
 	// in so many words: *"the product is not yet checked against the record the runtime reads, because there
 	// is nothing to check it against until `stdlib/String.maxon` is listed … the moment a corpus layout is
 	// registered under that name, it and `StringRuntime`'s six offsets become two descriptions of one record
-	// — and that assertion belongs with the listing"*. Both declaring modules are listed unconditionally now
-	// (`StdlibLoader.whitelistedStdlibModules`), so the two descriptions are always both present, and this is
+	// — and that assertion belongs with the listing"*. Both declaring modules are loaded unconditionally now
+	// (`StdlibLoader` takes all of `stdlib/`), so the two descriptions are always both present, and this is
 	// what holds them together. It is `managedFileLayout`'s check one type over, with the halves swapped:
 	// there the compiler STATES the shape and the runtime writes it, here the CORPUS states it.
 	//
@@ -18052,11 +18059,11 @@ export type ProgramSignatures
 	end 'checkFusedWrapperRecordLayouts'
 
 	// The corpus declaration behind one of the two byte records. Absent, this is not a program that happens
-	// not to use strings — `StdlibLoader` lists both declaring modules unconditionally and
-	// `listWhitelistedModule` throws `fileNotFound` if either is gone — so what reaches here is a declaration
-	// deleted from a listed module. `stringIndexLayoutOrPanic`'s argument, two type names over.
+	// not to use strings — `StdlibLoader` loads every module under `stdlib/`, both declaring modules
+	// included — so what reaches here is that declaration deleted, or its file gone from the checkout.
+	// `stringIndexLayoutOrPanic`'s argument, two type names over.
 	function corpusDeclaredFusedWrapper(typeName ByteArray) returns StructLayout
-		return try self.structTypes.get(typeName) otherwise panic("ProgramSignatures.checkFusedWrapperRecordLayouts: this compile declares no `type {String.from(typeName)}`, and the compiler mints that type's record FROM the corpus's declaration rather than transcribing it — the module declaring it is listed by `StdlibLoader.whitelistedStdlibModules` and must still declare it")
+		return try self.structTypes.get(typeName) otherwise panic("ProgramSignatures.checkFusedWrapperRecordLayouts: this compile declares no `type {String.from(typeName)}`, and the compiler mints that type's record FROM the corpus's declaration rather than transcribing it — the module declaring it must be present under `stdlib/` and must still declare it")
 	end 'corpusDeclaredFusedWrapper'
 
 	// ⚠⚠ **`registerCharacterSetType` AND `characterSetLayout` STOOD HERE AND WENT AT W129, AND THE ONE
@@ -19571,10 +19578,9 @@ export type ProgramSignatures
 	//
 	// ⭐ **IT WAS MEASURED DEAD BEFORE IT WAS REMOVED, WITH BOTH HALVES `W52`'s INSTRUMENT ASKS FOR.** A
 	// `panic` wired into the switch's TRUE arm read **0 hits across the whole 5,890-case suite**; the same
-	// probe with `stdlib/Set.maxon` (resp. `Map.maxon`) struck from `StdlibLoader`'s whitelist fired on the
-	// first `typealias` naming the base, inside `Parser.checkGenericInstance`. The listing is unconditional
-	// and both modules load on every compile, so the arm was unreachable by construction and the probe says
-	// so rather than the reading.
+	// probe with `stdlib/Set.maxon` (resp. `Map.maxon`) kept out of the loader's reach fired on the
+	// first `typealias` naming the base, inside `Parser.checkGenericInstance`. Both modules load on every
+	// compile, so the arm was unreachable by construction and the probe says so rather than the reading.
 	//
 	// ⇒ **THE SHAPE QUESTIONS STAY AND ARE NOW THE ONLY ONES**: `isSetShapedInstance` and
 	// `isMapShapedInstanceAt` ask what the container IS, off the base NAME, which is the question every
@@ -22869,13 +22875,12 @@ export type ProgramSignatures
 	// (`primitiveTypeTagName(ValueTypeTag.character)` is literally `"Character"`), so the two gids compiled to
 	// one symbol.
 	//
-	// ⇒ MEASURED on this tree with `helpers/string/views.maxon` and `Character.maxon` listed:
+	// ⇒ MEASURED on this tree, against `helpers/string/views.maxon` and `Character.maxon`:
 	// `typealias CharArray = Array with Character` plus any `[<identifier>…]` literal was rejected with
 	// **E3006 duplicate definition of 'Array_Character'**, blaming a `typealias` written once against an
 	// instantiation appearing nowhere in the source. `String` is the same collision by the same route and
-	// cannot yet be driven to it only because `stdlib/String.maxon` stops parsing earlier (see
-	// `StdlibLoader.whitelistedStdlibModules`) — so both arms land together rather than leaving the twin for
-	// whoever clears that wall to rediscover.
+	// could not be driven to it at the time only because `stdlib/String.maxon` stopped parsing earlier — so
+	// both arms landed together rather than leaving the twin for whoever cleared that wall to rediscover.
 	//
 	// Ahead of the tuple test because neither name can be a tuple's: `isTupleTypeName` keys on the reserved
 	// `__Tuple` spelling, which E2051 bars a declaration from taking.
@@ -23532,7 +23537,7 @@ export type ProgramSignatures
 		// ⇒ MEASURED, three cases of `array-conditional-conformance-withheld` at once: `Set with (Array with
 		// Opaque)` and `Map with (Array with Opaque, Val)` stopped being refused, and
 		// `Array with (Array with Opaque)` started SERVING `hash()`. A conformance that had been withheld since
-		// the array-hashable rung was granted to every element in the language by a whitelist line.
+		// the array-hashable rung was granted to every element in the language by one module joining the load.
 		//
 		// The distinction the `declaredBase` arm draws is between a base whose `where` clause constrains its
 		// INSTANTIATION — `MapIterator`'s `where Key is Hashable`, which `checkOneInstantiation` rejects at the

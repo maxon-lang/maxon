@@ -40,9 +40,11 @@ The repair parks the pivot in a one-slot storage of its own before the pass begi
 pass names that storage, so no store can reach the pivot — the soundness argument is one sentence
 instead of a per-index case analysis, which is what a borrow this long-lived needs.
 
-**Why these programs are transcriptions.** shv2 does not load `stdlib/helpers/sort/` at all
-(`StdlibLoader.whitelistedStdlibModules` lists neither it nor `stdlib/Array.maxon`; `Array` is
-synthesized and does not serve `sort`). The C# bootstrap does compile that cone, but its refcount
+**Why these programs are transcriptions.** When they were written, shv2 did not load
+`stdlib/helpers/sort/` at all — the loader's whitelist listed neither it nor `stdlib/Array.maxon`, and
+`Array` was synthesized and did not serve `sort`. ⚠ **That half of the reason has expired: the filter is
+gone and every file under `stdlib/` now loads.** What still makes this file the only place the algorithm
+runs under the model the defect lives in is the OTHER half. The C# bootstrap does compile that cone, but its refcount
 model is the opposite one — *"loads take refs, stores release the displaced occupant's"*
 (`MaxonToStandardConversion.ManagedMemory.cs`, the `__managed_mem_swap` arm) — so a get + set
 exchange balances there and the defect **cannot** be reached through it. That leaves this file as

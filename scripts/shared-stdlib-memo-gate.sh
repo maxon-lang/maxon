@@ -48,7 +48,12 @@
 #    fragment and a worker leaks for the whole run. Asserted as `holding == admitted` on every
 #    reported compile: `admitted` is what one compile offered, `holding` is what the process kept, and
 #    the two part company exactly when the bound breaks. Neither number is written down here — the
-#    value is the whitelist's length, and a copy of it would be a second place to update.
+#    value is the number of stdlib modules a compile loads (every `.maxon` under `stdlib/` less the one
+#    `StdlibLoader.SupersededRuntimeModule` names), and a copy of it would be a second place to update.
+#    ⚠ **This sentence used to read "the value is the whitelist's length".** The whitelist was DELETED
+#    2026-08-31 and shv2 now loads all of `stdlib/`; the loaded SET is unchanged by that — every file the
+#    old list named is still loaded and no other is — so this gate's readings do not move. The noun did,
+#    and this check's whole safety argument is that the number is never spelled out anywhere but the log.
 #
 #    ⚠ `holding == admitted` is the invariant for a process that sees ONE stdlib, which is what this
 #    gate's own driver does. A run that also compiles `// --- stdlib-overlay:` cases legitimately

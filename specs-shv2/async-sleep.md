@@ -225,7 +225,7 @@ panic at StdToWasm.maxon:1108: emitBodyOp: `osReadClock` is x64-windows only
 
 The refusal is raised INSIDE `stdlib/Sleep.maxon`'s body and attributed to the crossing call, so it is
 positioned at the line the user wrote and names the stdlib function they called
-(`stdlib-whitelist.md`) — never at a path inside `stdlib/`.
+(`stdlib-loading.md`) — never at a path inside `stdlib/`.
 ```maxon
 function main() returns ExitCode
 	sleep(1)
@@ -283,7 +283,7 @@ reachability-BLIND for user code, so `napper` was refused though `main` never ca
 (`builtins-sleep.rejected-on-wasm-when-unreached`, which pins the property at the spelling that still has
 it). The declaration moved that runtime entry INTO stdlib source, where the gate is reachability-AWARE —
 the same exemption that keeps an unused stdlib module byte-neutral
-(`stdlib-whitelist.unreached-clock-still-compiles-on-wasm`). A `sleep` on a path from `main` is still
+(`stdlib-loading.unreached-clock-still-compiles-on-wasm`). A `sleep` on a path from `main` is still
 refused, as the case above shows.
 ```maxon
 function napper()

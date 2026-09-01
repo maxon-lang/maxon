@@ -146,13 +146,13 @@ end 'requireUnreachableStdlibStayedDead'
 // name index, and the compile would SUCCEED with every emitted call bound to the author's stub.
 //
 // ⚠⚠ **IT CAN NOW, AND THE TWO BARS THAT USED TO CLOSE IT ARE BOTH GONE.** They were: *(1)* E2051 — no
-// LISTED stdlib module may declare a `__` name, and the exempt file was not listed; *(2)* the exempt file is
-// never stdlib SOURCE, since `Builtins.maxon` could only enter a compile as the user's own ROOT, which
-// `registeredPathsWhenTheRootIsInsideStdlib` keeps out of `stdlibSourcePaths`. **A1s listed
-// `stdlib/Builtins.maxon`**, which deletes both at once: it is the E2051-exempt file AND stdlib source, so
+// LOADED stdlib module may declare a `__` name, and the exempt file was not being loaded; *(2)* the exempt
+// file is never stdlib SOURCE, since `Builtins.maxon` could only enter a compile as the user's own ROOT,
+// which `registeredPathsWhenTheRootIsInsideStdlib` keeps out of `stdlibSourcePaths`. **A1s brought
+// `stdlib/Builtins.maxon` into the load**, which deletes both at once: it is the E2051-exempt file AND stdlib source, so
 // its four `__*_fromString` declarations are ordinary members of the space `unreachable` is drawn from. The
 // re-derivation that widening owed is below, and what stands in the bars' place is STRUCTURAL rather than a
-// property of which files happen to be listed:
+// property of which files happen to be loaded:
 //
 //   1. **SUPPRESSION AND EMISSION ARE DECIDED FROM THE SAME BODIES (A1s).** The bad outcome needs an EMITTED
 //      call to `__foo` whose installer was gated off, and a lowered runtime call is emitted only while
@@ -166,9 +166,9 @@ end 'requireUnreachableStdlibStayedDead'
 //   3. MEASURED: no name `Builtins.maxon` declares is a name the compiler INSTALLS.
 //      `__int_fromString`/`__float_fromString`/`__bool_fromString`/`__byte_fromString` are declarations the
 //      compiler CALLS (A1r), never emits — so there is no pair today, and the whole suite is green with the
-//      module listed. If that ever ceases to be true the pair exists and E4015 fires, by (2).
+//      module loaded. If that ever ceases to be true the pair exists and E4015 fires, by (2).
 //
-// ⚠ **WHAT WOULD REOPEN IT** is now (1) or (2), not the whitelist: making that skip DROP a function rather
+// ⚠ **WHAT WOULD REOPEN IT** is now (1) or (2), not which modules load: making that skip DROP a function rather
 // than empty it, or letting any pass decide a runtime INSTALL from a body some other pass still lowers.
 
 // ⭐ **THE ROOT SET — the three reference kinds no Std op in this module spells.** Everything else is an

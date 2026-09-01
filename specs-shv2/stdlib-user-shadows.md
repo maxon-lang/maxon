@@ -1,23 +1,23 @@
 ---
 feature: stdlib-user-shadows
 status: stable
-keywords: [stdlib, whitelist, shadowing, type-name, collision, ParseError, Clock, typealias]
+keywords: [stdlib, loading, shadowing, type-name, collision, ParseError, Clock, typealias]
 category: system
 ---
 
-# A user declaration versus a listed stdlib module's
+# A user declaration versus a stdlib module's
 
 ## Documentation
 
-The stdlib loader lists a growing subset of `stdlib/` and loads each listed module into EVERY compile
-(`stdlib-whitelist.md`). Those modules declare ordinary English type names — `Clock`, `DurationMs`,
+The stdlib loader loads every module under `stdlib/` into EVERY compile
+(`stdlib-loading.md`). Those modules declare ordinary English type names — `Clock`, `DurationMs`,
 `ParseError`, `Promise`, `Parsable` — so the question "what happens when a user program declares one of
-them too?" stops being hypothetical the moment a module is listed.
+them too?" is not hypothetical for any of them.
 
-**THE RULING (user, 2026-07-31): a USER declaration wins over a listed stdlib module's.** It is the rule
+**THE RULING (user, 2026-07-31): a USER declaration wins over a stdlib module's.** It is the rule
 the C# bootstrap already implements, and it is load-bearing rather than cosmetic: `parsable-interface.md`'s
 cases declare their own `enum ParseError` while implementing the stdlib's `interface Parsable`, so a rule
-that refused the pair would refuse the specs the whitelist entry exists to unblock.
+that refused the pair would refuse the specs that stdlib module exists to unblock.
 
 ### What the oracle actually does, measured
 
@@ -49,7 +49,7 @@ MEASURED, on an shv2 built with the obvious rule — "a user declaration displac
 declaration registry:
 
 - a user `type Clock`, `enum CursorError`, `interface Parsable` or ranged `typealias DurationMs` shadowing
-  a listed module's — **all compiled and ran, the user's declaration answering**;
+  a stdlib module's — **all compiled and ran, the user's declaration answering**;
 - a user `enum ParseError { Invalid = 1 }` — **`error E3034: stdlib/Builtins.maxon:222:11: unknown enum
   case: 'invalidFormat'`**, twice, inside a file the author never opened. `Builtins.maxon` REFERENCES the
   name it declares, so displacing its declaration retargeted its own body at the user's enum.
@@ -85,7 +85,7 @@ disagree about one name. Both shapes are token-shaped (an identifier PRECEDED by
 ### ⭐⭐ What the rename must still leave WORKING: the moved declaration's own members
 
 The soundness argument above is about NAMES — *"only the cross-file reachability of the bare name moves"* —
-and a name is not the only thing that crosses that file boundary. A **VALUE** does too. A listed module
+and a name is not the only thing that crosses that file boundary. A **VALUE** does too. A stdlib module
 whose signature mentions the contested type keeps handing user code values of it: `stdlib/Directory.maxon`'s
 `Directory.currentPath()` returns a `FilePath`, and under a user `type FilePath` that result is a
 `__FilePath`. The value is fine; what broke was every operation on it whose callee the compiler spells out
@@ -111,16 +111,21 @@ file is still refused; `c.nowMs()` on a value of the moved declaration is not.
 
 ### What the rule must NOT do
 
-- **A collision between two STDLIB declarations stays a collision.** Two listed modules declaring one type
-  name is a maintainer's bug in the whitelist, not a shadow, and `StdlibLoader.maxon`'s collision rule
-  exists to catch it. It is not pinnable from a fragment — a fragment cannot add a module to `stdlib/` —
-  so it is stated here and enforced by that rule.
+- **A collision between two STDLIB declarations stays a collision.** Two stdlib modules declaring one type
+  name is a maintainer's bug in `stdlib/`, not a shadow, and the whole-program duplicate check exists to
+  catch it. It is not pinnable from a fragment — a fragment cannot add a module to `stdlib/` —
+  so it is stated here and enforced by that check.
 - **A collision between two USER declarations stays a collision**, exactly as `type-name-collision.md`
   pins it. Shadowing is about PROVENANCE, not about tolerating duplicates.
-- **A FREE-FUNCTION-name collision stays a collision.** A user program declaring its own `function sleep`
-  is `E3006` naming `stdlib/Sleep.maxon` — MEASURED. That diagnostic names the real `stdlib/` path, which
-  is machine-dependent, so — like the rest of `stdlib-whitelist.md`'s collision rule — it is documented
-  rather than pinned as a golden.
+- ⛔ **A FREE-FUNCTION-name collision is NOT a collision, and this bullet said the opposite.** It read
+  *"A user program declaring its own `function sleep` is `E3006` naming `stdlib/Sleep.maxon` — MEASURED"*,
+  and no program ever ran it: a user `function sleep` compiles clean and the USER's body is what its own
+  call sites reach, which is the ruling above applied to a free function rather than an exception to it.
+  `stdlib-loading.md`'s `a-user-free-function-outranks-the-stdlib-modules` and
+  `a-value-returning-user-free-function-outranks-a-void-stdlib-one` are the pair that RUN it — the second
+  is the negative control, and it is the one that failed. Where a genuine stdlib-path diagnostic does
+  arise it is documented rather than pinned as a golden, because the path is machine-dependent — the same
+  reason `stdlib-loading.md`'s collision rule gives.
 - ⚠ **A METHOD is NOT a free function, and the shadow reaches it — deliberately.** A user `Clock.nowMs`
   requires a user `type Clock`, which IS a shadow, so the stdlib method has already moved to
   `__Clock.nowMs` by the time the duplicate-function check runs and there is nothing to collide with.
@@ -132,7 +137,7 @@ file is still refused; `c.nowMs()` on a value of the moved declaration is not.
 ### The kind that needs no rename: a `typealias`, in ANY form
 
 A non-exported `typealias` is FILE-LOCAL, and a file-local declaration cannot collide with anything: a
-listed module's alias and a user file's declaration of that name are never both in scope anywhere. So
+stdlib module's alias and a user file's declaration of that name are never both in scope anywhere. So
 the shadow contest does not move an alias, and it does not need to — **precedence settles it instead of
 a rename.** A user's own ranged `typealias DurationMs` coexists with `stdlib/Clock.maxon`'s and answers
 for the user's file, including for its RANGE, which is what
@@ -142,13 +147,13 @@ for the user's file, including for its RANGE, which is what
 answer inside `stdlib/` itself.** The registry's carve-out asked whether the two declarations were the
 same alias FORM, which is a proxy for "neither can see the other" that fails in two directions:
 
-- **A user NOMINAL declaration against a listed module's alias.** `type ParsedInt` against
+- **A user NOMINAL declaration against a stdlib module's alias.** `type ParsedInt` against
   `stdlib/Builtins.maxon:229`'s `typealias ParsedInt` was `E3006` — blamed on the STDLIB line, because
   stdlib merges last and is therefore the "newcomer" — plus `E3009` at `stdlib/Builtins.maxon:427`,
   where the module's own `i64.min as ParsedInt` resolved to the USER's struct. Both diagnostics named a
   file the author never opened. The four nominal keywords all reach it, and `enum`/`union` reach only
   the first: they resolve to `integer` as an alias does, so the module's own uses still type-check.
-- **Two aliases in different FORMS.** A user `typealias DecimalDigit = function(…)` against the listed
+- **Two aliases in different FORMS.** A user `typealias DecimalDigit = function(…)` against the stdlib
   ranged one was `E3061`, though neither file can name the other's declaration either.
 
 **The property that makes a pair legal is that neither declaration can SEE the other** — visibility and
@@ -161,7 +166,7 @@ meet still collide: `type-name-collision.md`'s `error.crossfile-type-and-exporte
 <!-- test: stdlib-user-shadows.user-ranged-typealias-wins-over-a-listed-module -->
 `stdlib/Clock.maxon` declares `typealias DurationMs = int(0 to i64.max)` and is loaded into this compile.
 A user file declaring its own `DurationMs` over a NARROWER range is legal, and the range in force in that
-file is the USER's: `50` is outside `int(0 to 10)` and is refused against it, where the listed module's
+file is the USER's: `50` is outside `int(0 to 10)` and is refused against it, where the stdlib module's
 range would have accepted it. The rejection is the observation — a program that merely compiled would not
 say WHICH declaration answered.
 ```maxon
@@ -531,7 +536,7 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.user-interface-coexists-with-a-listed-modules-typealias -->
-An `interface` against a listed module that is NOT `Builtins.maxon`: `stdlib/Testing.maxon:72` declares
+An `interface` against a stdlib module that is NOT `Builtins.maxon`: `stdlib/Testing.maxon:72` declares
 `typealias Tolerance = float(0.0 to f64.max)`. The rule is a property of provenance and visibility, not
 of one module, and a case anchored only in `Builtins.maxon` could not tell the two apart.
 ```maxon

@@ -82,9 +82,9 @@ four wore one until the 2026-07-28 targets audit measured them green on x64-linu
 <!-- test: builtins-sleep.statement-position -->
 <!-- targets: x64-windows, arm64-macos -->
 A void wrapper shaped exactly like `stdlib/Sleep.maxon` — one `__Builtins.sleep(…)` statement and
-nothing else — compiles, and the sleep is OBSERVABLE: the elapsed time measured across it with the
-whitelisted `Clock` is at least most of the requested duration. Two whitelisted-era mechanisms in one
-program: a `Clock` reading from the whitelist and a void intrinsic in statement position.
+nothing else — compiles, and the sleep is OBSERVABLE: the elapsed time measured across it with
+stdlib's `Clock` is at least most of the requested duration. Two stdlib-loading mechanisms in one
+program: a `Clock` reading out of stdlib and a void intrinsic in statement position.
 ```maxon
 typealias Millis = int(0 to u64.max)
 
@@ -137,7 +137,7 @@ The duration is an integer count of milliseconds; a float is refused, by the SAM
 bare `sleep(1.5)` is refused by (`async-sleep.float-arg-rejected`) — one emit, so the two spellings
 cannot drift apart on what they accept. ⚠ The two differ in WHICH refusal arrives FIRST off
 x64-windows, which is why only this one is un-gated: the qualified `__Builtins.sleep` form reaches the
-operand check, while the bare `sleep` name is a whitelisted stdlib call the E3104 target gate refuses
+operand check, while the bare `sleep` name is a stdlib call the E3104 target gate refuses
 before the operand is ever typed. Measured 2026-07-28 on x64-linux and wasm32-wasi.
 ```maxon
 function main() returns ExitCode

@@ -960,14 +960,14 @@ end 'resolveType'
 //     insert("alice")` counted **3** against a control's **2** — a duplicate key stored twice, because the
 //     user's `equals` answered `false`.
 // A third door — the direct `s.hash()` / `s.equals(t)` dispatch — opened in the same rung, which is what
-// forced the fact to be enforced rather than merely asserted: `StdlibLoader` already said in prose that
-// "`String` is compiler-owned" and that "`Character` is a name the compiler owns", while nothing checked it.
+// forced the fact to be enforced rather than merely asserted: the tree already SAID in prose that `String`
+// and `Character` are names the compiler owns, while nothing checked it.
 // `IrInterface.isBuiltinConformanceImplName` now DEPENDS on this line: it declares every `String.`-qualified
 // callee to be the compiler's own, which is true only while no USER declaration can mint one.
 //
 // ⛔⛔ **AND THAT LAST WORD IS THE WHOLE OF IT — THE RESERVATION IS OVER *WHOSE* DECLARATION, NOT OVER
 // WHETHER ONE EXISTS. THIS PARAGRAPH USED TO SAY "…which is why neither `stdlib/String.maxon` nor
-// `stdlib/Character.maxon` can EVER be whitelisted", AND THAT CLAUSE WAS FALSE (W16).** It described shv2's
+// `stdlib/Character.maxon` can EVER be loaded", AND THAT CLAUSE WAS FALSE (W16).** It described shv2's
 // scaffolding as if it were a law about the language, and **both reference compilers disprove it**: the C#
 // bootstrap and v1 each hold `String` as a builtin AND compile `stdlib/String.maxon` — indeed each takes
 // String's whole LAYOUT from that file and neither has a name-reservation list at all.
@@ -978,10 +978,13 @@ end 'resolveType'
 // `maxon-shv2 build stdlib/String.maxon` panicked in `enclosingLayout` and `.../Character.maxon` in
 // `requireConstructible`. Giving that one write the provenance bit `upsertDeclaredEnum` already had cures
 // both; see `SignatureIndex.recordStruct` for the measurement.
-// ⇒ Neither module is listed YET, and the remaining blocker is NOT this rule. It is that shv2 keeps String's
-// REPRESENTATION itself (`Runtime/StringRuntime.StringRecordBytes`, a fused 56-byte record of seven flat
-// 8-byte slots) while the corpus declares two fields — so a corpus `String{managed: …}` would build against
-// offsets the builtin does not read. Reconciling those is CONVERGENCE, and it is a separate slice.
+// ⇒ ✅ **BOTH MODULES LOAD TODAY** — the loader takes all of `stdlib/` — and the blocker the sentence here
+// named as remaining was never this rule but the REPRESENTATION: shv2 keeps String's own record
+// (`Runtime/StringRuntime.StringRecordBytes`) while the corpus declares fields, so a corpus
+// `String{managed: …}` could build against offsets the builtin does not read. That is now held to ONE
+// description by `ProgramSignatures.checkFusedWrapperRecordLayouts`, which reads the corpus declaration and
+// the runtime's offsets together because both are always present. The reservation above is unaffected: it
+// is about WHOSE declaration may mint the name, not about whether the corpus declares it.
 //
 // ⚠ Neither name costs a program anything it could use. `Character` is the same case in every particular,
 // including the same two synthesized impls under `Character.hash`/`Character.equals`; it is reserved with

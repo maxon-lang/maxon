@@ -565,13 +565,13 @@ end 'producerMaskFor'
 // ⛔⛔ **AND THE PREDICATE IS `livesUnderStdlibDirectory` — A PATH FACT — NOT `isStdlibSource`, WHICH IS A
 // VISIBILITY FACT. THE TWO DIFFER FOR EXACTLY ONE COMPILE SHAPE AND IT WAS A FALSE REFUSAL.**
 //
-// `maxon-shv2 build stdlib/File.maxon` — the command `StdlibLoader`'s own readiness rule prescribes, and the
-// one every whitelist entry is MEASURED with — reported four
+// `maxon-shv2 build stdlib/File.maxon` — the command `StdlibLoader`'s own readiness rule prescribes for
+// compiling one stdlib module on its own — reported four
 // `E3088: function 'String.addressableBytes' is module-scoped and not visible from this directory`, about
 // two files sitting in the SAME directory. (`FilePath.maxon` reported five of `String.byteAtOrPanic`;
 // `Subprocess.maxon`, four. Every stdlib module that calls a `module`-visible stdlib function was affected,
-// so several listed modules' committed *"exits 1 with E3001 AND NOTHING ELSE"* claims had quietly stopped
-// being true.)
+// so several modules' committed *"exits 1 with E3001 AND NOTHING ELSE"* claims had quietly stopped being
+// true.)
 //
 // The mechanism is that TWO FILES IN ONE DIRECTORY WERE ANCHORED AT TWO DIFFERENT ROOTS, and a module
 // directory is only comparable against one derived from the same anchor. `isStdlibSourceFile` answers
@@ -1480,9 +1480,8 @@ end 'probeOnePathCacheHits'
 // memoized to once per build — so it is the same shape as the walk the loader already makes.
 //
 // It asks the DIRECTORY rather than `project.stdlibSourcePaths` deliberately: that record is an ARRAY,
-// so a membership test over it is a linear scan of ~49 `FilePath.equals`, each allocating two Strings —
-// an order of magnitude worse than one `isInside` — and it would go on being worse as the loader's
-// whitelist grows toward the whole of `stdlib/`.
+// so a membership test over it is a linear scan of ~51 `FilePath.equals`, each allocating two Strings —
+// an order of magnitude worse than one `isInside`, and it grows with every file added to `stdlib/`.
 // ⚠ **RESOLVE BOTH SIDES FIRST — `isInside` compares SPELLINGS, not files.** Before that it answered
 // differently for one file depending only on how the command line named it: `build stdlib/p19rev`
 // read the project's own sources as the USER's (correct), and `build C:/…/stdlib/p19rev` read the
@@ -1558,7 +1557,7 @@ end 'blameOutsideTheLibrary'
 // ⚠ **MEASURED, because the obvious version — a second `resolve` + `isInside` per file — is the shape
 // `isStdlibSourceFile`'s own header rules out ("asking it twice per file would not be [affordable]").**
 // Shipped that way for one build, the scale ladder read **+2,438 allocations at rung 0 rising to +13,350
-// at rung 5** ON TOP of this rung's whitelist cost, growing with the file count — a per-file term bought
+// at rung 5** ON TOP of that rung's own stdlib-loading cost, growing with the file count — a per-file term bought
 // to answer a per-compile question. As a derivation over one root probe it is **+32 allocations, EXACTLY
 // FLAT at all six rungs**: the probe itself, once, and nothing that scales.
 // ⭐ **EXPORTED, BECAUSE THE DECLARATION SWEEP ASKS IT TOO (W3).** `ProgramSignatures.foldFile` decides
@@ -1585,23 +1584,22 @@ end 'livesUnderStdlibDirectory'
 // The one module whose declarations MAY carry the reserved `__` prefix — `stdlib/Builtins.maxon`, the
 // type-system bridge to the compiler's intrinsics (the error enums a builtin throws, the parse helpers
 // `int.fromString` rewrites to). Named RELATIVE to `stdlib/` and joined against `project.stdlibDir`, the
-// same construction `StdlibLoader.listWhitelistedModule` uses, so the two spell one file one way.
+// same construction `StdlibLoader` uses for the one file it excludes, so both name a stdlib module one way.
 //
-// ⚠ **EXPORTED, BECAUSE THE SENTENCE ABOVE USED TO BE A CLAIM AND IS NOW A MECHANISM (A1s review).** Until
-// A1s the loader did not mention this file at all, so "the two spell one file one way" was true of ONE
-// spelling. A1s LISTED it, which put a second bare `"Builtins.maxon"` literal in `StdlibLoader`'s whitelist
-// — a second spelling of the one fact, at the rung whose whole thesis is that a fact belongs in one place.
-// The loader now reads this constant instead. What it buys is narrow and worth stating: a rename is loud
-// either way (the loader would throw `fileNotFound`, or the parser would refuse the module's own `__`
-// declarations with E2051), but the exemption and the listing can no longer be given DIFFERENT files.
-export let CompilerInternalDeclaringModule = "Builtins.maxon"
+// ⚠ **MODULE-PRIVATE, LIKE ITS SIBLING BELOW, AND IT WAS `export`ed FOR ONE CONSUMER THAT NO LONGER
+// EXISTS.** While the loader carried a whitelist it had to name this file to list it, and reading the
+// constant rather than writing a second `"Builtins.maxon"` literal was what kept the exemption and the
+// listing from being given DIFFERENT files. The whitelist is gone — the loader takes all of `stdlib/` —
+// so there is no listing to agree with and no cross-file reader; `checkUnusedExports` would refuse the
+// `export` with E3092, and the odd-one-out against `TestReportDeclaringModule` disappears with it.
+let CompilerInternalDeclaringModule = "Builtins.maxon"
 
 // ⭐⭐ **THE SECOND SUCH MODULE, AND THE ONE THIS EXEMPTION BECAME A SET FOR (W72)** — `stdlib/Testing.maxon`,
 // whose `export type __TestReport` is the reporting surface a test binary speaks to its runner through. It
 // is the compiler that emits the calls to it, so the name is `__`-prefixed for the same reason
 // `Builtins.maxon`'s are, and `E2051` was the whole of what stood between shv2 and that module.
 //
-// ⛔⛔ **THE EXEMPTION IS A LIST OF NAMED MODULES AND *NOT* "ANY LISTED STDLIB MODULE, EXCEPT A NAME AN
+// ⛔⛔ **THE EXEMPTION IS A LIST OF NAMED MODULES AND *NOT* "ANY STDLIB MODULE, EXCEPT A NAME AN
 // INTRINSIC ALREADY CLAIMS" — BECAUSE NOTHING IN THIS COMPILER CAN ANSWER THE EXCEPT-CLAUSE.** That
 // broader rule is the real invariant and it needs a REGISTRY of the names the compiler emits; there is
 // none. The nearest thing, `MmRuntime.isSignaturelessCompilerCallee`, is `isCompilerInternalCallee(name)
@@ -1611,15 +1609,14 @@ export let CompilerInternalDeclaringModule = "Builtins.maxon"
 // calls through the full user-function battery. A refusal you cannot state is worse than a list you must
 // extend, so the door stays a list — one literal per module, each granting exactly the file it names.
 //
-// ⚠ **AND IT IS NOT THE LOADER'S WHITELIST EITHER**, which would have been the tidy derivation: at W72 this
-// module was deliberately NOT listed (listing it was its own decision, needing its own collision-rule pass),
-// and an exemption derived from the listing could not clear the door ahead of that decision — which is what
-// `maxon-shv2 build stdlib/Testing.maxon` measured the module's remaining blockers WITH.
-//
-// ⚠ **W81 HAS SINCE LISTED IT (`StdlibLoader.whitelistedStdlibModules`), AND THE TWO STILL MUST NOT BE ONE
-// DERIVATION.** The listing catching up does not make the whitelist the right source: `Builtins.maxon` is
-// exempt for a reason that has nothing to do with being listed, and the next `__`-declaring module will
-// again need the door open before its own listing pass runs. The set stays a list of named modules.
+// ⚠ **AND IT IS NOT "IS THIS FILE UNDER `stdlib/`?" EITHER**, which is what the tidy derivation has become
+// now that `StdlibLoader` loads the whole directory. That is the same blanket rule the paragraph above
+// refuses, wearing the loader's clothes: it would hand `__mm_incref` to any file dropped into `stdlib/`,
+// including the one `stdlib/Internals.maxon` the loader excludes precisely because it declares exactly
+// that. The exemption is about what a NAMED file is FOR — `Builtins.maxon` bridges the intrinsics,
+// `Testing.maxon` carries the runner's report type — and neither reason is "it lives under `stdlib/`".
+// It was not the loader's whitelist while there was one, for the same reason, and there is now no listing
+// left to be tempted by. The set stays a list of named modules.
 let TestReportDeclaringModule = "Testing.maxon"
 
 // ⭐ **IS THIS FILE ONE OF THOSE THAT DECLARE THE RESERVED NAMESPACE (D6, widened to a set at W72)?** Read
@@ -1652,9 +1649,9 @@ function declaresCompilerInternalNames(project Project, path FilePath) returns b
 	return declaresReservedNamesAs(project, path: path, relative: CompilerInternalDeclaringModule) or declaresReservedNamesAs(project, path: path, relative: TestReportDeclaringModule)
 end 'declaresCompilerInternalNames'
 
-// One entry of the set above: is `path` the stdlib module `relative` names? Named as the loader names
-// its own listing argument (`StdlibLoader.listWhitelistedModule`), because it is the same thing: a path
-// relative to `stdlib/`, joined against the very directory the loader enumerates.
+// One entry of the set above: is `path` the stdlib module `relative` names? `relative` is spelled the way
+// `StdlibLoader.SupersededRuntimeModule` is spelled, because it is the same thing: a path relative to
+// `stdlib/`, joined against the very directory the loader enumerates.
 function declaresReservedNamesAs(project Project, path FilePath, relative String) returns bool
 	if not path.toString().endsWith(relative) 'notEvenTheName'
 		return false

@@ -901,7 +901,7 @@ message text.**
 
 ⚠ It also exercises the corpus body end to end: sabotaging `stdlib/Vector.maxon`'s `get` to `throw
 ArrayError.indexOutOfBounds` turns this case red where the intact declaration answers 42, which is the
-control `stdlib-whitelist.md` runs for a listed module and this rung owes for a retired member.
+control `stdlib-loading.md` runs for a stdlib module and this rung owes for a retired member.
 
 <!-- test: the-members-are-functions-and-answer-to-their-static-spelling -->
 Both retired accessors, named statically, with the receiver passed as the first argument and the
@@ -940,9 +940,9 @@ end 'main'
 ## A `let` Vector Still Refuses The Write, By The Declaration's Own Rule
 
 ⚖ **THE RULING SAID THIS REFUSAL WOULD BE DROPPED BY DESIGN, AND FOR THIS MEMBER IT IS NOT — MEASURED
-(W190).** `STDLIB-BRINGUP.md`'s E3019 ruling is that the immutable-receiver rule is a BUILTIN-SURFACE rule
-and a declared type is exempt, *"so a retirement DROPS the immutable-receiver refusal by design"*; `Set`
-paid three cases for it. A `Vector` pays none: `stdlib/Vector.maxon`'s `set` writes through its receiver
+(W190).** The standing ruling (user, 2026-08-14) is that E3019's immutable-receiver rule is a
+BUILTIN-SURFACE rule and a declared type is exempt, *"so a retirement DROPS the immutable-receiver refusal
+by design"*; `Set` paid three cases for it. A `Vector` pays none: `stdlib/Vector.maxon`'s `set` writes through its receiver
 (`managed.set`), so the ORDINARY parameter-mutation rule reaches the same conclusion from the declaration
 instead of from a roster — which is what `surfaceRosterProvider`'s note records happening for `Set`'s and
 `Map`'s own mutators at W105.

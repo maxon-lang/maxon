@@ -1380,7 +1380,7 @@ end 'targetRefusalIn'
 // `outcome` first is enough only while such a case PASSES; the moment its pinned text stops matching it
 // becomes a FAILED verdict over a compile that exited 1 having printed nothing but E3104s — which is
 // bit-for-bit the shape a skip is read off. So the very cases that pin the refusal —
-// `builtins-sleep.rejected-on-wasm`, `stdlib-whitelist.target-refusal-blames-the-crossing-call`,
+// `builtins-sleep.rejected-on-wasm`, `stdlib-loading.target-refusal-blames-the-crossing-call`,
 // `console-stdin`/`process-executable-path`/`builtins-clock`'s twins — would turn into SILENT SKIPS at
 // the exact moment they broke, and a test that can only pass or vanish pins nothing.
 //
@@ -2790,7 +2790,22 @@ function copyStdlibSources(from FilePath, into FilePath, written FilePathArray) 
 	var sources = MaxonSourcePathArray.create()
 	_ = try collectMaxonSources(from, into: sources) otherwise throw OverlayError.refused("could not walk {from.toString()} to copy it for a '{StdlibOverlayMarker}' case")
 
+	// ⚠ **STAGE WHAT THE COMPILER LOADS, NOT WHAT THE WALK FINDS — the two differ by exactly one file, and
+	// the overlay guard below cannot tell them apart on its own.** That guard refuses an overlay naming
+	// "not a file the compiler loads from <stdlib>", and it enforces that by asking whether the name is in
+	// THIS copy. So any file copied here but not loaded by the compiler passes the guard, overlays a file
+	// nothing reads, and delivers precisely the outcome the refusal exists to prevent: a case that passes
+	// having tested nothing. Skipping it here makes the guard's question and its message the same question
+	// again. Asked of the loader (`StdlibLoader.supersededRuntimeModulePath`) rather than spelled out — the
+	// name of the excluded module is the loader's to know, and a second copy of it here is the drift this
+	// whole rung deleted 2,200 lines to be rid of. Hoisted, one `join` per staging.
+	let supersededByTheCompilersOwnRuntime = supersededRuntimeModulePath(from)
+
 	for source in sources 'eachSource'
+		if source.equals(supersededByTheCompilersOwnRuntime) 'notLoadedSoNotStaged'
+			continue
+		end 'notLoadedSoNotStaged'
+
 		let relative = try source.relativeTo(from) otherwise throw OverlayError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
 
 		let destination = into.join(relative)

@@ -831,15 +831,16 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalD
 		// exactly one label**.
 		//
 		// ⛔ **NO COMMITTED CASE WENT RED OVER ANY OF THAT, AND THIS COMMENT CREDITED ONE THAT HAD NOT (W69
-		// review).** `stdlib-whitelist.a-listed-modules-literals-are-byte-neutral` sees a displaced payload only
+		// review).** `stdlib-loading.a-stdlib-modules-literals-are-byte-neutral` sees a displaced payload only
 		// through its golden FRAGMENT, and a fragment mismatch is REFERENCE, NOT A GATE — it prints a `note:`
 		// and leaves the exit code at 0. MEASURED by neutralising this very gate and rebuilding: that case
 		// reported PASS with an orphan blob at `.rdata` byte 0 of every program in the suite. The gate below is
-		// held by `stdlib-whitelist.a-listed-modules-literals-cannot-reach-the-rdata-image` instead, whose
+		// held by `stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image` instead, whose
 		// ```RequiredRdata block pins the LINKED image from byte 0 and fails at byte 6 without this `continue`.
 		//
-		// ⇒ the gate is the SAME reachability fact stated the same way, never "is this whitelisted", so it
-		// outlives the filter. A REACHABLE stdlib function is not in the set and registers exactly as
+		// ⇒ the gate is the SAME reachability fact stated the same way, never "is this whitelisted" — and
+		// that prediction is now CASHED: the whitelist has been deleted and this gate did not move. A
+		// REACHABLE stdlib function is not in the set and registers exactly as
 		// before, and no user function is ever in it — the ordering property this walk exists to establish
 		// is untouched for every literal a program can actually name.
 		if unreachableStdlib.contains(func.name) 'notInTheProgram'
@@ -1252,8 +1253,8 @@ type MaxonToStdLowering
 		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
 			let srcFunc = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
 			// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES HAS NO BODY LOWERED, AND THE REASON IS THE
-			// WHITELIST'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module changes NOTHING for a
-			// program that does not use it"). This pass is PRE-ELIMINATION, and lowering a body REGISTERS
+			// LOADER'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module to `stdlib/` changes
+			// NOTHING for a program that does not reach it"). This pass is PRE-ELIMINATION, and lowering a body REGISTERS
 			// `.rdata`: `lowerStringLiteral` mints a blob + a record, `lowerConstArrayLiteral` mints a blob,
 			// and `ensureWitnessTable`/`ensureLayoutDescriptor` mint a labelled payload. Dead-function
 			// elimination prunes FUNCTIONS, never `.rdata`, so every one of those SURVIVES its own function —

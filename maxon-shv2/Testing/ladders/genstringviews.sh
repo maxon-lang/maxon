@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # THE P1.8 SLICE E SURFACE — `toByteArray` / `clone` / `codepoints` / `utf16` / `isEmpty` /
-# `replaceFirst` / `String.from(bytes)`, plus the nine `utf16*` free functions the stdlib WHITELIST
+# `replaceFirst` / `String.from(bytes)`, plus the nine `utf16*` free functions the stdlib LOADER
 # delivers. `gentrim.sh`'s sibling and deliberately its twin in shape; read that file's header first.
 #
 # ⚠ **`ScaleCorpus` IS BLIND TO EVERY LAST PIECE OF THIS RUNG — THE SEVENTH CONSECUTIVE RUNG WITH THAT
@@ -16,7 +16,7 @@
 #                                                                               knob). Not one String.
 #
 # ⇒ `__str_to_bytes`, `__str_to_codepoints`, `__str_to_utf16`, `__str_clone`, `__str_replace_first`,
-# `parseMaterializedView`, `parseStringStaticCall` and all nine whitelisted `utf16*` declarations are
+# `parseMaterializedView`, `parseStringStaticCall` and all nine stdlib `utf16*` declarations are
 # STRUCTURALLY invisible to a default `scale-test` run — in allocations, in bytes AND in CPU alike. A Δ0
 # from it is the instrument's blind spot and not a result. This ladder is the instrument for them.
 #
@@ -132,10 +132,10 @@
 #              `sites-control` is THE CONTROL and matters most — the same program shape over the P1.2
 #              String surface and none of this rung's. It prices what the rung costs a program that
 #              never uses it. ⭐ `sites-utf16fns` is the one family member that is not about a parser
-#              arm at all: it calls the nine WHITELISTED free functions, so it prices what a program
+#              arm at all: it calls the nine STDLIB free functions, so it prices what a program
 #              pays for a stdlib module it genuinely uses, against `sites-control`, which pays only for
 #              the module being LOADED. (What the loaded-but-unused module costs is a different
-#              question with its own instrument — `genwhitelist.sh`.)
+#              question with its own instrument — `genstdlibload.sh`.)
 #
 #   `data-*`  — a RUN ladder on the STRING LENGTH knob. `<n>` is a number of DOUBLINGS of the subject
 #              string; the DATA doubles and the SOURCE does not. ⭐ **THIS IS THE FAMILY THAT SETTLES
@@ -226,7 +226,7 @@
 #   x1.96; `sites-replacefirst` x1.57 x1.72 x1.84 x1.91; `sites-from` x1.57 x1.72 x1.84 x1.91;
 #   `sites-utf16fns` x1.66 x1.79 x1.88 x1.94; `sites-control` x1.72 x1.84 x1.91 x1.95. **Nothing bends.**
 #   ⭐ `sites-utf16fns` is the CHEAPEST mode of the nine (488,192 allocations at 1,024 sites against the
-#   control's 921,668), which is the useful direction of that comparison: calling a whitelisted stdlib
+#   control's 921,668), which is the useful direction of that comparison: calling a stdlib
 #   function costs less than the `append` the control does, so the module delivers its capability
 #   without a per-site tax.
 #
@@ -363,7 +363,7 @@ emit_site() {
 		echo -e "\ttotal = total + v${n}.byteLength()"
 		;;
 	sites-utf16fns)
-		# ⭐ The WHITELIST-DELIVERED surface: nine free functions declared in a stdlib module, called by
+		# ⭐ The STDLIB-DELIVERED surface: nine free functions declared in a stdlib module, called by
 		# BARE NAME. Every site cycles a different one so no single declaration dominates the reading.
 		case $((n % 3)) in
 		0) echo -e "\ttotal = total + utf16Width(total)" ;;

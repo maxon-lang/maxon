@@ -1271,11 +1271,26 @@ end 'builtinStdlibAlias'
 // program declared one number, the OS got another, and no diagnostic named the difference.
 //
 // ⭐ **THIS IS A MIRROR OF A DECLARATION, NOT A SECOND AUTHORITY — and it retires without being edited.**
-// `stdlib/Process.maxon` is not on shv2's stdlib whitelist (it is blocked on
-// `__Builtins.executablePath`, and on declaring `ExitCode`, a name this compiler owns), so there is no
-// loaded file to read the bound out of and the mirror is the only copy that can exist today. The builtin
-// is the LAST arm of `lookup`, BELOW every declaration — so on the day that module is listed, its
-// `typealias` answers and this stops being consulted.
+// The mechanism that makes that true is `lookup`'s ORDER: the builtin is its LAST arm, BELOW every
+// declaration, so any file declaring `ExitCode` answers instead and this is consulted only for a name no
+// file declared. It is a fallback by construction, never an override.
+//
+// ⚠ **AND `stdlib/Process.maxon` IS LOADED — the sentence here said it was "not on shv2's stdlib
+// whitelist", which was stale before the whitelist was deleted and is doubly stale now that the loader
+// takes all of `stdlib/`.** It declares `ExitCode` itself (`:7-16`, `u32.max` under `#if os(Windows)`,
+// `0 to 255` elsewhere) — the very bound this mirror carries.
+//
+// ⚠ **AND THAT DECLARATION DOES REACH THE REGISTRY — DO NOT RE-OPEN IT.** This comment briefly said the
+// question was unsettled, citing the fallback arm's self-description as answering for *"every program in
+// the corpus but twenty-nine"*. That number counts corpus FRAGMENT FILES declaring the name; it was never
+// a claim that a stdlib declaration is invisible. The committed measurement is
+// `specs-shv2/bytearray-element-size.md`'s `an-exit-code-element-fills-its-own-slot-and-takes-a-raw-byte-write`,
+// green, in a program that declares no `ExitCode` and still gets the 4-byte slot only `Process.maxon`'s
+// declaration can supply — and both registries are fed by the same `record` (see this file's
+// `storageBytesInEveryFile`). ⇒ this mirror is a possibly-DEAD copy, not a contested one, and no wrong
+// answer is available from it because the builtin is `lookup`'s LAST arm. **Retiring it is its own rung**
+// (it needs the fallback arm's "twenty-nine" self-description re-measured); the ORDER above is what keeps
+// the two from disagreeing until then.
 //
 // ⭐ **THE BOUND IS RESOLVED WHERE THE TARGET IS KNOWN — AT REGISTRY CONSTRUCTION.** `lookup` holds no
 // project and no target; `Project` holds one, and its own header states the licence: a project *"is
@@ -5644,7 +5659,7 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // ⭐⭐ **`Ordering` IS DECLARED, NOT SYNTHESIZED (W3) — AND IT WAS THE LAST TRANSCRIPTION OF A CORPUS
 // DECLARATION THIS FILE CARRIED.** `builtinOrderingEnum()` stood here, restating `stdlib/Interfaces.maxon:34-38`
 // case for case, for the stated reason that shv2 read no stdlib. It reads that module now
-// (`StdlibLoader.whitelistedStdlibModules`), so the declaration arrives through `upsertDeclaredEnum` like any
+// (`StdlibLoader.loadStdlibSources`), so the declaration arrives through `upsertDeclaredEnum` like any
 // other and every tag reader takes its layout from `requireCorpusDeclaredEnum` — the `__Managed*Error`
 // precedent directly below, applied to the one enum in the set whose ordinals the compiler EMITS rather than
 // merely throws.
@@ -6024,10 +6039,13 @@ end 'DeclaredBuiltinErrorEnum'
 //
 // ⚠ **ITS ABSENCE IS A DIAGNOSTIC, NOT A PANIC AND NOT A SILENTLY-EMPTY ENUM** — the coupling this rung's
 // ruling deliberately buys is that the builtin error families now depend on a stdlib module being LOADED.
-// The file going MISSING is caught earlier and more precisely (`StdlibLoader.listWhitelistedModule` throws
-// `fileNotFound` naming the path), so what actually reaches here is the module present but no longer LISTED,
-// or listed but no longer declaring the enum. Both are edits to this checkout, and both would otherwise
-// produce a compiler that throws ordinals no handler arm can name.
+// ⛔ **AND THERE IS NO LONGER AN EARLIER, MORE PRECISE GUARD IN FRONT OF IT.** While the loader carried a
+// whitelist, a NAMED-but-absent module threw `fileNotFound` before anything reached here; the loader now
+// enumerates `stdlib/` and simply does not find a file that is not there, so a module DELETED from the
+// checkout arrives here as this diagnostic and nowhere sooner. That widens what reaches this arm from
+// "listed but no longer declaring the enum" to "the declaration is not in this compile, for any reason" —
+// all of them edits to this checkout, and all of them would otherwise produce a compiler that throws
+// ordinals no handler arm can name.
 module function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
 	let layout = try project.enumTypes.get(typeName) otherwise 'notDeclared'
 		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: SEVERAL
@@ -6036,10 +6054,10 @@ module function declaredBuiltinErrorEnum(project Project, typeName ByteArray, in
 		// `StringError` and `MapError`, which left this door at W49 and W105 when the corpus became their only
 		// producer (`Compiler.compileToCodeResult` records both retirements). Counted again it would go stale
 		// again, and in either direction: the set is a consequence of which runtimes still transcribe an
-		// ordinal and which modules the loader lists, neither of which is read from here. The roster that DOES
+		// ordinal and which modules `stdlib/` holds, neither of which is read from here. The roster that DOES
 		// know is the call block in `Compiler.compileToCodeResult`; this sentence only needs the fact that
 		// makes naming a module wrong, which is that more than one declares one.
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "'{String.from(typeName)}' is the error enum {String.from(installer)} throws, and this compile declares no enum of that name — it is declared by a stdlib module, which `StdlibLoader.whitelistedStdlibModules` must list for the runtime's error ordinals to name anything"))
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "'{String.from(typeName)}' is the error enum {String.from(installer)} throws, and this compile declares no enum of that name — it is declared by a stdlib module, which must be present under `stdlib/` and must still declare that enum for the runtime's error ordinals to name anything"))
 		return DeclaredBuiltinErrorEnum.notDeclared
 	end 'notDeclared'
 
@@ -6056,12 +6074,14 @@ end 'declaredBuiltinErrorEnum'
 // DIFFERENT QUESTIONS.** That one asks *"is there a declaration to CHECK the runtime's claimed ordinals
 // against?"* — a claim can be refused and the compile can carry on to report it. This one asks *"what tag IS
 // `lessThan`?"* at a site that must emit a number: there is no degraded answer, and continuing would mean
-// inventing one. The entry cannot be missing in a sound checkout — `StdlibLoader` lists the declaring module
-// unconditionally and `listWhitelistedModule` throws `fileNotFound` if the file is gone — so what reaches
-// here is a declaration deleted from a listed module, which is the same class of checkout edit
-// `EnumLayout.tagOfCase` panics on.
+// inventing one. The entry cannot be missing in a sound checkout — `StdlibLoader` loads every module under
+// `stdlib/`, so a checkout that has `stdlib/Interfaces.maxon` compiles its `enum Ordering` — and what
+// reaches here is that declaration deleted, or the file itself gone. ⚠ Neither is caught any earlier: the
+// loader stopped naming individual modules when its whitelist went, so a missing FILE is no longer a
+// `fileNotFound` in front of this panic. It is the same class of checkout edit `EnumLayout.tagOfCase`
+// panics on, and the panic names what is absent.
 export function requireCorpusDeclaredEnum(registry EnumLayoutMap, typeName ByteArray, reader String) returns EnumLayout
-	return try registry.get(typeName) otherwise panic("requireCorpusDeclaredEnum: {reader} needs the case tags of `enum {String.from(typeName)}`, and this compile declares no enum of that name — the compiler reads that declaration out of the corpus rather than transcribing it, so the module declaring it must be listed by `StdlibLoader.whitelistedStdlibModules` and must still declare it")
+	return try registry.get(typeName) otherwise panic("requireCorpusDeclaredEnum: {reader} needs the case tags of `enum {String.from(typeName)}`, and this compile declares no enum of that name — the compiler reads that declaration out of the corpus rather than transcribing it, so the module declaring it must be present under `stdlib/` and must still declare it")
 end 'requireCorpusDeclaredEnum'
 
 // ⭐ **AN ENUM REGISTRY, SEEDED WITH THE ENUMS NO CORPUS FILE DECLARES (P1.7a slice 2b-ii, +W3)** — THE one

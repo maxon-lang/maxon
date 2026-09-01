@@ -201,9 +201,9 @@ A pass elsewhere is not a thing that could be had, and the marker only spares th
 whose answer is already known.
 
 ⚠ **NOBODY HAD EVER RUN THESE CASES OFF-WINDOWS, AND A SURVEY CALLED THEM "byte-identically
-portable" (N2 review, MEASURED).** They were unreachable until the rung that whitelisted
+portable" (N2 review, MEASURED).** They were unreachable until the rung that first loaded
 `stdlib/File.maxon` landed — so the claim had never been tested, and the first cross-target run after
-that whitelist read **15 failures on x64-linux and 14 on wasm32-wasi**, every one of them this gate.
+that read **15 failures on x64-linux and 14 on wasm32-wasi**, every one of them this gate.
 A portability claim about code nothing has executed is a guess.
 
 ⚠ **IT IS NOT A PER-TARGET OPT-IN, AND THE TEST OF THAT IS WHAT CARRIES NO MARKER.** Anything
