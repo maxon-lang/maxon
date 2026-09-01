@@ -2352,6 +2352,16 @@ let sharedEmptyCharLiteralOps = CharLiteralOpMap.create()
 // every USER program — the method is stdlib-only — and all but a handful of the corpus's own.
 let sharedEmptyStringBytesViewOps = StringBytesViewOpMap.create()
 
+// The same COW anchor for the folded-index call-site map (`FoldedIndexCallSiteMap`), with the same
+// invariant: a function that never asks `startIndex()`/`endIndex()` OF A LITERAL INCREFS this one rather
+// than allocating, which is every function of almost every program.
+let sharedEmptyFoldedIndexCallSites = FoldedIndexCallSiteMap.create()
+
+// The same COW anchor for the grapheme-width memo (`SingleByteGraphemeLiteralMap`). Unlike its siblings
+// this one is per-FILE rather than per-function — see the typealias — so it is copied off the anchor at
+// most once per parse and never reset.
+let sharedEmptySingleByteGraphemeLiterals = SingleByteGraphemeLiteralMap.create()
+
 // The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
 // AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInstanceAliasMap`'s pattern, for its reason
 // and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
@@ -3733,6 +3743,16 @@ function opIsDirectCallTo(op MaxonOp, callee ByteArray) returns bool
 		noCallee gives false
 	end 'kind'
 end 'opIsDirectCallTo'
+
+// The DECODED payload of a `stringLiteral` op. Its one caller reached this op through
+// `ConstPayloadDomain.stringLiteralOp`, which `emitStringLiteral` is the sole writer of — so any other
+// variant here is that column pointing at the wrong op, which is a broken invariant and not a case to answer.
+function stringLiteralOpBytes(op MaxonOp) returns ByteArray
+	return match op 'op'
+		stringLiteral(_, bytes) gives bytes
+		default panic("stringLiteralOpBytes: the op `ConstPayloadDomain.stringLiteralOp` names is not a `stringLiteral` — `emitStringLiteral` files that index off `module.opCount()` as it appends the op, so the two cannot disagree")
+	end 'op'
+end 'stringLiteralOpBytes'
 
 export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
@@ -11012,9 +11032,133 @@ enum ConstPayloadDomain
 	// through the integer pair — its ONE reader is the division-by-zero proof, which asks the pattern-safe
 	// `floatOrderKey` rather than comparing the bits as a number.
 	float
+	// ⭐ **THE PAYLOAD IS THE `OpIndex` OF THE `stringLiteral` OP THAT DEFINED THIS VALUE** — i.e. *"the
+	// compiler MINTED these bytes and can still read them"*. Written by `emitStringLiteral`, the one site that
+	// mints a `string`-tagged literal, and read through `knownLiteralBytes`.
+	//
+	// ⚠ **THE OP INDEX RATHER THAN THE BYTES, because this column is `ParsedInt`-wide and a `ByteArray` is
+	// not** — and an op index needs no second table: `module.ops` already holds the bytes, its indices are
+	// stable for the whole file parse (`retypeCharLiteralAsCodepoint` writes one back in place), and this
+	// column is re-created per function beside every other value column, so an index cannot outlive the
+	// artifact that gave it meaning.
+	stringLiteralOp
+	// ⭐ **THE PAYLOAD IS A BYTE POSITION INTO A KNOWN-BYTES String** — what `startIndex()` and `endIndex()`
+	// answer when their receiver's bytes are `stringLiteralOp`-known. Written by `recordConstStringIndexResult`
+	// and read through `knownStringBytePos`.
+	//
+	// ⚠ It is NOT `integer`: a `StringIndex` is a two-field heap box, not a number, so nothing that reads an
+	// INTEGER constant (the shift rule, `emitBinOp`'s fold, the duplicate-pattern check, the division proof)
+	// may ever see this payload as one. A domain of its own is what keeps them from it.
+	stringBytePos
 end 'ConstPayloadDomain'
 
 export typealias ConstPayloadDomainArray = Array with ConstPayloadDomain
+
+// ⭐⭐ **THE `stdlib/String.maxon` DECLARATIONS THE CONSTANT-SLICE FOLD RECOGNIZES**
+// (`specs-shv2/constant-string-slice.md`), spelled as the qualified names `dispatchMethodOnBase` mints for a
+// method on a `String` receiver — i.e. BEFORE `SemanticCheck.resolveOverloadedCalls` appends an overload's
+// parameter types, which is why `slice` is named once here and the two overloads are told apart by their
+// second argument's LABEL below. Whole names for the reason `BuiltinsMmAllocTotalName` is one: what is being
+// matched is a callee, and a callee is one name.
+let StringSliceMethodName = b"String.slice"
+let StringStartIndexMethodName = b"String.startIndex"
+let StringEndIndexMethodName = b"String.endIndex"
+
+// The two `slice` overloads' second argument labels — `slice(start, endIndex:)` and `slice(start, length:)`.
+// The label IS the overload here, because only the first argument may be positional.
+let SliceEndIndexArgLabel = b"endIndex"
+let SliceLengthArgLabel = b"length"
+
+// `slice`'s argument shape at the parse tier: the prepended receiver, the start index, and the bound.
+let StringSliceArgCount = 3 as ElementCount
+let SliceReceiverArgIndex = 0 as ElementCount
+let SliceStartArgIndex = 1 as ElementCount
+let SliceBoundArgIndex = 2 as ElementCount
+
+// `startIndex()` / `endIndex()` take no argument of their own, so the prepended receiver is the whole list.
+let StringIndexAccessorArgCount = 1 as ElementCount
+
+// Where `startIndex()` points: the first byte. Named rather than written as a bare `0` beside a `count()`,
+// because the pair is what the fold's range test reads and one of them being a position is the point.
+let LiteralStartBytePos = 0 as ParsedInt
+
+// ⭐ **THE BYTES BEHIND A VALUE THE COMPILER MINTED FROM A STRING LITERAL, OR THE ABSENCE OF THEM.** A union
+// rather than a `ByteArray` plus a companion `bool`, and rather than an empty `ByteArray` standing for
+// "unknown": `""` is a perfectly good literal whose slice is a perfectly good fold, so an empty payload is a
+// VALUE here and can never be the sentinel for its own absence.
+union KnownLiteralBytes
+	unknown
+	// The DECODED payload the `stringLiteral` op carries — the same bytes `LowerMaxonToStd` will register as
+	// an immortal `.rdata` blob — and the INDEX of the op carrying them. The index rides along because it is
+	// the literal's identity: two values naming one literal (a rebind, a second use) share it, so it is what
+	// `literalHasSingleByteGraphemes` memoizes the UAX#29 answer under. Deriving it a second time from the
+	// value would be the same read written twice, free to be given a different value id one edit later.
+	payload(literalOp OpIndex, bytes ByteArray)
+end 'KnownLiteralBytes'
+
+// ⭐ **THE BYTE POSITION BEHIND A `StringIndex` THE COMPILER MINTED, OR THE ABSENCE OF ONE.** `0` is the
+// answer for every `startIndex()`, so it cannot double as "no answer" — the same reason
+// `floatConstBitsOf` refuses to hand back its unseeded slot.
+union KnownStringBytePos
+	unknown
+	position(bytePos ParsedInt)
+end 'KnownStringBytePos'
+
+// ⭐ **WHAT A `String.slice` CALL BECAME.** `notFolded` is a DECISION — the receiver's bytes or a bound was
+// not a compile-time fact, or the range was out of the literal — and the caller emits the ordinary call, so
+// the runtime path (and its panic) is what an un-folded slice still gets.
+union ConstantSliceFold
+	notFolded
+	folded(literal ValueId)
+end 'ConstantSliceFold'
+
+// ⭐⭐ **WHERE THE `startIndex()` / `endIndex()` CALL THAT DEFINED A KNOWN BYTE POSITION WAS APPENDED** —
+// filed as the call is emitted, so the fold that makes it garbage can drop it in O(1) instead of hunting
+// for it.
+//
+// ⛔ **THE FIRST CUT HUNTED, AND THE HUNT WAS THE WHOLE BLOCK.** It scanned `opRefs` backwards decoding
+// every op, then rebuilt the block's whole `opRefs` array and walked EVERY range-check site the function
+// had recorded — three unbounded walks per removed accessor, twice per folded slice, in a block whose
+// length GROWS with the number of folds. That is O(F·B + F·S) for F folded slices, i.e. quadratic in one
+// function's size. All three walks are bounded here, and by facts rather than by luck:
+//
+//   * `block` + `blockOpPos` say exactly where the op ref stands, so nothing is searched for.
+//   * `opIndex` is the PROOF that it still stands there. Module op indices are minted by append and never
+//     reused, so `opRefs[blockOpPos] == opIndex` is identity and not resemblance — and when a `try` fork or
+//     a ternary's `detachOpRefsAbove` has moved or truncated the block underneath the record, the compare
+//     fails and the removal is DECLINED. A declined removal keeps a correct program that pays one
+//     allocation; a removal on a stale position would delete somebody else's op.
+//   * `siteMark` is `rangeCheckSites.count()` at the instant the op was appended. A site records
+//     `maxonOpPos = opRefs.count()` in the block it is recorded in, so every site filed BEFORE this op was
+//     appended names a position at or below it and cannot be moved by its removal. Only the sites after
+//     the mark can, which is `rehomeArmRangeSites`' bounded sub-range for a removal rather than a
+//     relocation.
+type FoldedIndexCallSite
+	export let block as BlockId
+	export let blockOpPos as BlockOpPos
+	export let opIndex as OpIndex
+	export let siteMark as ElementCount
+
+	export static function create(block BlockId, blockOpPos BlockOpPos, opIndex OpIndex, siteMark ElementCount) returns FoldedIndexCallSite
+		return Self{block: block, blockOpPos: blockOpPos, opIndex: opIndex, siteMark: siteMark}
+	end 'create'
+end 'FoldedIndexCallSite'
+
+// A Map rather than a dense column for `CharLiteralOpMap`'s reason: the population is a function's
+// `startIndex()`/`endIndex()` calls ON A LITERAL, which is zero for almost every function. Reset per
+// function and SWAPPED across a closure body, exactly like the sibling value columns — a ValueId means
+// nothing outside the SSA space that minted it.
+typealias FoldedIndexCallSiteMap = Map with (ValueId, FoldedIndexCallSite)
+
+// ⭐ **WHETHER A STRING LITERAL'S BYTES ARE ALL SINGLE-BYTE GRAPHEMES, MEMOIZED PER LITERAL OP.**
+// `bytesAreSingleByteGraphemes` is an O(L) scan of the literal, and the `length:` overload asks it at every
+// fold site — so K sites cutting windows of one L-byte literal re-scanned it K times, and K and L both
+// grow with the source. Asked once per literal here instead.
+//
+// Keyed by the `stringLiteral` OP rather than by a ValueId, which is why it is NOT reset per function or
+// swapped across a closure: op indices are the FILE's, minted by append and never reused, so an answer
+// stays true for the whole file parse. It is the same question about the same bytes wherever it is asked.
+typealias SingleByteGraphemeLiteralMap = Map with (OpIndex, bool)
 
 // ⭐⭐ **WHAT THE COMPILER CAN PROVE ABOUT A DIVISOR (A1)** — the fallible-division rule's three answers, as
 // ONE value rather than as two predicates asked in sequence.
@@ -11793,6 +11937,22 @@ export type Parser
 	// old value, set true, emit, restore. It is never left set across a statement. Same per-function reset
 	// and per-closure save/restore as `tryBlocks` above (see that field's lifetime rule).
 	var tryBlockRoutingSuppressed as bool
+
+	// ⛔⛔ **A `try` TARGET MUST STILL BE A CALL WHEN THE TARGET PARSE ENDS, SO NO FOLD MAY EAT ONE INSIDE
+	// IT.** `parseTry` and the `if let x = try …` form both find their target by looking for the LAST call op
+	// the target parse appended (`rewriteLastCallToTryCall`) and decide **E3055** — *"try requires a throwing
+	// function"*, the oracle's own diagnostic — from what it names. A constant-slice fold that removed that
+	// call left `try s.slice(s.startIndex(), length: 5) otherwise "x"` answering **E2015** *"the expression
+	// after `try` is not a call"*, which is the wrong noun for a call that is right there in the source
+	// (MEASURED against the bootstrap, which says E3055). The program is illegal either way — `String.slice`
+	// does not throw — so declining the fold here costs an impossible program its optimization and buys back
+	// the diagnostic that names the real problem.
+	//
+	// ⚠ **IT COVERS THE TARGET'S ARGUMENTS TOO**, so a literal slice inside `try f(lit.slice(…))` keeps its
+	// runtime call. That is the same coarseness `parseTryCallTarget` already documents for the flag above,
+	// for the same reason: the bracket is the whole target parse, and the alternative is a SECOND way to
+	// decide which call is "the" target — two deciders of one fact, free to disagree.
+	var tryTargetMustStayACall as bool
 	// ⭐ **THE `(e)` BINDINGS CURRENTLY IN SCOPE THAT NAME A SYNTHESIZED ERROR UNION, innermost last.** A
 	// handler pushes one when it declares such a binding and pops it at its own `end`, so `match e` resolves
 	// the union by the name the source wrote — and by the VALUE that name is still bound to, which is what
@@ -12189,6 +12349,14 @@ export type Parser
 	// stream-write fold does with it and for the allocation it removes.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
 	var stringBytesViewOps as StringBytesViewOpMap
+	// ⭐⭐ **WHERE EACH KNOWN-BYTE-POSITION `startIndex()`/`endIndex()` CALL WAS APPENDED** — see
+	// `FoldedIndexCallSite` for the three walks this record replaces and for why a miss is a DECLINE.
+	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
+	var foldedIndexCallSites as FoldedIndexCallSiteMap
+	// ⭐ **THE UAX#29 GRAPHEME-WIDTH ANSWER PER STRING LITERAL OP** — see `SingleByteGraphemeLiteralMap`.
+	// Keyed by an OP index and therefore per-FILE: deliberately NOT reset per function, and not swapped
+	// across a closure body, because neither changes what a literal's bytes are.
+	var singleByteGraphemeLiterals as SingleByteGraphemeLiteralMap
 	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
 	// stops a `let`-declared array's record from being written through a mutable ALIAS.
 	//
@@ -13268,6 +13436,7 @@ export type Parser
 			loops: LoopContextArray.create(),
 			tryBlocks: TryBlockContextArray.create(),
 			tryBlockRoutingSuppressed: false,
+			tryTargetMustStayACall: false,
 			errorUnionBindings: ErrorUnionBindingArray.create(),
 			tryBindingName: EmptySourceText,
 			tryBindingMatched: false,
@@ -13300,6 +13469,8 @@ export type Parser
 			countedValueRanges: sharedEmptyProvenIntRanges,
 			charLiteralOps: sharedEmptyCharLiteralOps,
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
+			foldedIndexCallSites: sharedEmptyFoldedIndexCallSites,
+			singleByteGraphemeLiterals: sharedEmptySingleByteGraphemeLiterals,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			enclosingFunctionMayReturnAGlobalAlias: false,
 			capturedImmutableGlobalReads: sharedEmptyImmutableGlobalReads,
@@ -24955,6 +25126,7 @@ export type Parser
 		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
 		self.tryBlocks = TryBlockContextArray.create()
 		self.tryBlockRoutingSuppressed = false
+		self.tryTargetMustStayACall = false
 		self.matches = MatchContextArray.create()
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
 		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
@@ -24993,6 +25165,7 @@ export type Parser
 		self.countedValueRanges = sharedEmptyProvenIntRanges
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
+		self.foldedIndexCallSites = sharedEmptyFoldedIndexCallSites
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
@@ -26478,6 +26651,7 @@ export type Parser
 		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
 		self.tryBlocks = TryBlockContextArray.create()
 		self.tryBlockRoutingSuppressed = false
+		self.tryTargetMustStayACall = false
 		self.matches = MatchContextArray.create()
 		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
@@ -26530,6 +26704,7 @@ export type Parser
 		self.writtenNegativeLiterals = sharedEmptyWrittenNegativeLiterals
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
+		self.foldedIndexCallSites = sharedEmptyFoldedIndexCallSites
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		// ⭐⭐ **W117, ASKED OF THE HELPER'S OWN MINTED NAME — WHICH IS WHAT SEPARATES THE LANGUAGE'S TWO
@@ -32547,9 +32722,14 @@ export type Parser
 	//
 	function parseTryCallTarget(func IrFunction) returns ValueId throws ParseError
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
+		let savedTargetMustStayACall = self.tryTargetMustStayACall
 		self.tryBlockRoutingSuppressed = true
+		// See `tryTargetMustStayACall`: the rewrite one level up looks for the target's own last CALL op, so
+		// no fold inside the target may remove one.
+		self.tryTargetMustStayACall = true
 		let target = try self.parseTryTargetExpression(func)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
+		self.tryTargetMustStayACall = savedTargetMustStayACall
 		return target
 	end 'parseTryCallTarget'
 
@@ -32607,6 +32787,14 @@ export type Parser
 	// `startBlock` stands at `p - opShift` of the continuation. Only sites naming `fromBlock` move — a site
 	// the arm recorded in a block of its OWN (a nested ternary's branch, a short-circuit, a `try` fork)
 	// names that block, and those blocks are re-registered under the same ids, so they need nothing.
+	//
+	// ⚠⚠ **THE SECOND PLACE THAT KNOWS A SITE'S ORDINAL IS A KEY IS `removeCurrentBlockOpAt`** — the
+	// constant-slice fold's op REMOVAL, which shifts by one instead of relocating and skips instead of
+	// asserting. The two loops are the same rule with different failure policies, and nothing but this
+	// cross-reference makes them agree: **a change to `RangeCheckSite`'s position representation must be
+	// made in BOTH, and a THIRD mutation of any block's `opRefs` owes the same walk.** There are exactly two
+	// `opRefs` mutations in this parser (`detachOpRefsAbove` and `removeCurrentBlockOpAt`); a grep for
+	// `opRefs.pop` / `opRefs.set` is what enumerates them.
 	function rehomeArmRangeSites(fromBlock BlockId, toBlock BlockId, opShift BlockOpPos, firstSite ElementCount, endSite ElementCount)
 		for i in firstSite upto endSite 'eachArmSite'
 			var site = try self.rangeCheckSites.get(i) otherwise panic("rehomeArmRangeSites: rangeCheckSites.get OOB at {i}, inside the range the ternary's own marks bound")
@@ -46339,8 +46527,52 @@ export type Parser
 		return self.constPayloadOf(id)
 	end 'floatConstBitsOf'
 
-	// The raw payload, whichever domain it is in. Private to the two typed readers above, which is what keeps
-	// the domain check in front of every read of it.
+	// ⭐ **THE BYTES BEHIND `id`, WHEN THE COMPILER MINTED THEM AS A STRING LITERAL IN THIS FUNCTION.** The
+	// receiver test the constant-slice fold is built on, and it is deliberately the SAME criterion
+	// `LiteralArgPromotion.ArgProvenance.isImmortal` applies for the same reason: a String's immortality is a
+	// RUNTIME property of the record it happens to hold, so a parameter, a field, a value arriving through a
+	// merge and the result of a runtime slice are all `unknown` here — only a value THIS parse minted is
+	// known. A value minted by a fold is one of those, so a slice of a folded slice folds too.
+	function knownLiteralBytes(id ValueId) returns KnownLiteralBytes
+		if self.constPayloadDomain(id) != ConstPayloadDomain.stringLiteralOp 'notAMintedLiteral'
+			return KnownLiteralBytes.unknown
+		end 'notAMintedLiteral'
+
+		let literalOp = self.constPayloadOf(id)
+		return KnownLiteralBytes.payload(literalOp, bytes: stringLiteralOpBytes(self.maxonOpAt(literalOp)))
+	end 'knownLiteralBytes'
+
+	// ⭐ **DOES `id` NAME A BYTE POSITION THIS PARSE MINTED?** — the predicate half of `knownStringBytePos`,
+	// separate because it is asked on the hottest path there is (once per emitted call, to decide whether the
+	// call is one a later fold may drop) and the union answer is a HEAP BOX: every case of a boxed union is
+	// one here, payload-free ones included. Asking the domain column costs one array read and nothing else.
+	function valueIsKnownStringBytePos(id ValueId) returns bool
+		return self.constPayloadDomain(id) == ConstPayloadDomain.stringBytePos
+	end 'valueIsKnownStringBytePos'
+
+	// The byte position behind `id`, when it is a `StringIndex` this parse minted from a known-bytes
+	// receiver — see `recordConstStringIndexResult` for the two accessors that answer one.
+	function knownStringBytePos(id ValueId) returns KnownStringBytePos
+		if not self.valueIsKnownStringBytePos(id) 'notAMintedPosition'
+			return KnownStringBytePos.unknown
+		end 'notAMintedPosition'
+
+		return KnownStringBytePos.position(self.constPayloadOf(id))
+	end 'knownStringBytePos'
+
+	// The op at `index` of the artifact under construction. ONE reader today (`knownLiteralBytes`), and it is
+	// a function rather than an inline `ops.get` so that the panic — a miss here is a broken invariant, never
+	// a case to answer — is worded once for every index this parse files off `module.opCount()` as it appends.
+	function maxonOpAt(index OpIndex) returns MaxonOp
+		return try self.artifact.module.ops.get(index) otherwise panic("Parser.maxonOpAt: op {index} is outside the {self.artifact.module.opCount()} ops this file has emitted — every index read here was filed off `module.opCount()` as the op was appended")
+	end 'maxonOpAt'
+
+	// The raw payload, whichever domain it is in. Private to the FOUR typed readers above — `constOf`,
+	// `floatConstBitsOf`, `knownLiteralBytes` and `knownStringBytePos`, one per `ConstPayloadDomain` case that
+	// carries a payload — which is what keeps the domain check in front of every read of it. Anything that
+	// reads this column WITHOUT first asking `constPayloadDomain` is a fifth reader and is the bug this
+	// privacy exists to make impossible: 64 bits are 64 bits, and an OpIndex read as an integer constant is a
+	// silent wrong answer at compile time.
 	function constPayloadOf(id ValueId) returns ParsedInt
 		return try self.valueConsts.get(id) otherwise panic("Parser.constPayloadOf: value v{id} has no constant slot — every SSA value must be minted through mintValue")
 	end 'constPayloadOf'
@@ -50964,6 +51196,12 @@ export type Parser
 	// place.
 	function emitStringLiteral(bytes ByteArray, range SourceRange) returns ValueId
 		let result = self.mintValue(ValueTypeTag.string, nameId: UnnamedTypeId)
+		// ⭐ **THE ONE SITE THAT MINTS A `string`-TAGGED LITERAL IS THE ONE SITE THAT CAN CLAIM ITS BYTES.**
+		// Filed BEFORE the emit, off the count that IS the index the append will land at —
+		// `emitCharacterLiteral`'s discipline, for its reason. It is what makes `knownLiteralBytes` a fact
+		// about provenance rather than a guess, and it applies to a FOLDED slice too: a fold emits through
+		// this door, so the value it produces is a literal in every sense the rest of the parser can ask.
+		self.recordConstPayload(result, payload: self.artifact.module.opCount(), domain: ConstPayloadDomain.stringLiteralOp)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.stringLiteral(result, bytes: bytes), range: range)
 		return result
 	end 'emitStringLiteral'
@@ -70386,6 +70624,7 @@ export type Parser
 		// the pop. `loops`/`matches` two lines up carry exactly this pairing for exactly this reason.
 		let savedTryBlocks = self.tryBlocks
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
+		let savedTargetMustStayACall = self.tryTargetMustStayACall
 		// A closure body is a DIFFERENT `IrFunction`, so an enclosing handler's error-union binding and its
 		// E3084 obligation must not be visible inside it — a `match e` there would name a fused phi from the
 		// function the closure was written in. See the fields for the measured shape this neighbourhood has.
@@ -70455,6 +70694,7 @@ export type Parser
 		// exactly like the sibling value columns"); this is what makes it true.
 		let savedCharLiteralOps = self.charLiteralOps
 		let savedStringBytesViewOps = self.stringBytesViewOps
+		let savedFoldedIndexCallSites = self.foldedIndexCallSites
 		// ⛔⛔ **THE SAME DEFECT, TWICE MORE — FOUND BY SWEEPING THE RESET LIST AGAINST THIS ONE (BATCH23
 		// review).** Both are RESET below, correctly, and neither was restored, and each is a compiler PANIC
 		// on an ordinary program. They are listed here rather than beside their resets because the reset is
@@ -70599,6 +70839,7 @@ export type Parser
 		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
 		self.tryBlocks = TryBlockContextArray.create()
 		self.tryBlockRoutingSuppressed = false
+		self.tryTargetMustStayACall = false
 		self.matches = MatchContextArray.create()
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
 		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
@@ -70638,6 +70879,7 @@ export type Parser
 		self.countedValueRanges = sharedEmptyProvenIntRanges
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
+		self.foldedIndexCallSites = sharedEmptyFoldedIndexCallSites
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		self.enclosingFunctionMayReturnAGlobalAlias = false
@@ -70832,6 +71074,7 @@ export type Parser
 		self.matches = savedMatches
 		self.tryBlocks = savedTryBlocks
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
+		self.tryTargetMustStayACall = savedTargetMustStayACall
 		self.errorUnionBindings = savedErrorUnionBindings
 		self.tryBindingName = savedTryBindingName
 		self.tryBindingMatched = savedTryBindingMatched
@@ -70882,6 +71125,7 @@ export type Parser
 		self.countedValueRanges = savedCountedValueRanges
 		self.charLiteralOps = savedCharLiteralOps
 		self.stringBytesViewOps = savedStringBytesViewOps
+		self.foldedIndexCallSites = savedFoldedIndexCallSites
 		self.iterationLockedBindings = savedIterationLockedBindings
 		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.enclosingFunctionMayReturnAGlobalAlias = savedMayReturnAGlobalAlias
@@ -74629,8 +74873,14 @@ export type Parser
 	// (a byte view outliving its String) cannot arise, because nothing survives the call at all.
 	// The fold's precondition that is about the OP rather than about ownership — asked at the call site so a
 	// decline falls through to the ordinary emit, which is where the token for its range lives.
+	// ⚠ **THIS ASKS RESEMBLANCE (is the op at that index a call to this callee?), NOT IDENTITY.** Its sibling
+	// `currentBlockStillHoldsFiledOp` asks the stronger question — is the filed op ref still standing at the
+	// filed position of the filed block — because the constant-slice fold can take an op REF out of a block
+	// (`removeCurrentBlockOpAt`). This one cannot notice that, and does not have to: the op it names is a
+	// corpus `addressableBytes` call, which no remover targets. **A second remover would change that**, and
+	// the fix would be to file the block and position here too rather than to widen the name test.
 	function byteViewCallStillSitsAt(viewOpIdx OpIndex) returns bool
-		return opIsDirectCallTo(try self.artifact.module.ops.get(viewOpIdx) otherwise panic("byteViewCallStillSitsAt: ops.get({viewOpIdx}) OOB — the index was filed by `dispatchMethodOnBase` as the floor the corpus call would land at, and ops are never removed"), callee: qualifiedMethodName(StringConformerName, methodName: CorpusAddressableBytes))
+		return opIsDirectCallTo(try self.artifact.module.ops.get(viewOpIdx) otherwise panic("byteViewCallStillSitsAt: ops.get({viewOpIdx}) OOB — the index was filed by `dispatchMethodOnBase` as the floor the corpus call would land at, and `module.ops` is append-only: a fold may orphan an op REF, never renumber or drop the op"), callee: qualifiedMethodName(StringConformerName, methodName: CorpusAddressableBytes))
 	end 'byteViewCallStillSitsAt'
 
 	function foldByteViewIntoStreamWrite(view ValueId, viewOpIdx OpIndex, runtimeName ByteArray) returns ValueId
@@ -75505,6 +75755,22 @@ export type Parser
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
+		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
+		// ALL** (`specs-shv2/constant-string-slice.md`). Asked FIRST, ahead of the mint, the default fill and
+		// the consume, for the discipline the argument refusal above states: a call that is not going to be
+		// emitted must not have minted a result or moved an argument on the way to finding that out.
+		//
+		// ⚠ **THE ADMISSION TEST IS SPELLED HERE, NOT INSIDE THE FOLD, BECAUSE `foldConstantStringSlice`
+		// ANSWERS WITH A BOXED UNION AND THIS LINE RUNS FOR EVERY CALL IN EVERY COMPILE** — the whole stdlib
+		// is parsed into every program, so a `notFolded` box built to say "this was never a slice" would be a
+		// heap allocation on the hottest path the parser has. Three allocation-free compares (a length-first
+		// byte compare, an arity and a flag) leave every other call having built nothing.
+		if callee.equals(StringSliceMethodName) and args.count() == StringSliceArgCount and not self.tryTargetMustStayACall 'aSliceCallWorthAsking'
+			match self.foldConstantStringSlice(anchor, args: args, argLabels: argLabels, rparenTok: rparenTok) 'constantSlice'
+				notFolded then break 'constantSlice'
+				folded(literal) then return literal
+			end 'constantSlice'
+		end 'aSliceCallWorthAsking'
 		// ⭐ **W4′ — THE ARGUMENT TWIN OF THE RETURN DOOR (W192 review), asked here because this is the one
 		// line every direct, method and static call passes with the whole argument list in hand.**
 		// Ahead of the mint and the consume so a refused call emits nothing — the discipline
@@ -75544,6 +75810,11 @@ export type Parser
 		// the alias having erased it. Every direct, method and static call funnels through this one line.
 		self.markDeclaredSurface(result, declared: self.signatures.declaredReturnSurface(callee))
 		self.recordCallResultInstanceAlias(result, callee: callee)
+		// ⭐ **THE OTHER HALF OF THE CONSTANT-SLICE FOLD**: `startIndex()` / `endIndex()` on a receiver whose
+		// bytes this parse minted answer a byte position the compiler already knows, so the answer is recorded
+		// on the result. Here for the three lines above's reason — this is the one place a call's NAME, its
+		// arguments and its result value are all in hand.
+		self.recordConstStringIndexResult(result, callee: callee, args: args)
 		// ⛔ **AND NO SIZED-CONTAINER MARK, for `bindParameters`' recorded reason**: a `returns ElementMemory`
 		// hands back the record OR a view of it and the declaration cannot tell which, so the fact is refused
 		// at the RETURN inside the declaration (`emitOwnedValueReturn`) rather than inferred at the call.
@@ -75584,6 +75855,13 @@ export type Parser
 		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
 		let opIdx = self.artifact.module.ops.count()
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
+		// ⭐ **AND WHERE THAT OP LANDED, WHEN IT IS ONE A LATER FOLD MAY DROP.** Only the two index accessors
+		// over a known-bytes receiver answer true here — `recordConstStringIndexResult` above is the sole
+		// writer of the domain it reads — and the gate is the PREDICATE rather than the union reader, because
+		// this line runs for every call in every compile. See `FoldedIndexCallSite`.
+		if self.valueIsKnownStringBytePos(result) 'aCallAConstantSliceCanDrop'
+			self.recordFoldedIndexCallSite(result, opIndex: opIdx)
+		end 'aCallAConstantSliceCanDrop'
 		// ⭐ **THE OTHER ROUTING DOOR FOR A BLOCK-FORM `try` BODY** — this one carries every call the author
 		// spelled (free, method, static), so a bare call to a declared throwing function inside such a body
 		// reaches the shared handler. `result` rides along because an ADOPTED managed one is already enrolled
@@ -75612,6 +75890,294 @@ export type Parser
 			aNarrowSignedSlot(slotBytes) then return self.emitSignExtendFromSlot(result, slotBytes: slotBytes, valueType: self.typeOf(result), range: callRange)
 		end 'reading'
 	end 'emitCall'
+
+	// ⭐⭐ **A SLICE OF A LITERAL WHOSE BOUNDS THE COMPILER KNOWS IS A LITERAL** —
+	// `specs-shv2/constant-string-slice.md`, decided here and nowhere else.
+	//
+	// `s.slice(…)` reaches `stdlib/String.maxon`'s `sliceBytes`, which calls `__managed_slice`, whose
+	// `ManagedMemoryRuntime.emitRecordView` mints a HEAP record per evaluation over the literal's immortal
+	// blob. Copy-free and count-free, but an allocation all the same, and one paid on every trip of a loop.
+	// When the receiver's bytes and both bounds are compile-time facts the compiler can cut the window
+	// itself, and what it emits is an ORDINARY STRING LITERAL — the same `emitStringLiteral` a source `"…"`
+	// goes through.
+	//
+	// ⭐⭐ **THAT SAMENESS IS THE WHOLE DESIGN, AND IT IS WHY THE FOLD IS HERE AND NOT AT THE MAXON TIER.**
+	// An immortal `.rdata` record may not be written in place: the copy-on-write detach republishes
+	// `buffer@0`/`capacity@16`/`length@8` INTO the record, which faults on x64 and arm64 and — worse —
+	// silently succeeds on `wasm32-wasi`, whose linear memory has no read-only segment, corrupting every
+	// other use of those deduped bytes. What keeps a literal safe is `promoteBorrowedToOwned` COPYING it at a
+	// `var`'s declaration, and that promotion is decided from the value being BORROWED, a fact the parser
+	// records as it binds. A rewrite one pass later would hand a `var` an immortal record the declaration had
+	// already waved through as owned. Emitting the literal HERE inherits that regime, plus
+	// `LiteralArgPromotion`'s copy before a mutating parameter and the four `emitRecordIsImmortal` branches —
+	// and teaches no new buffer provenance, which is what `BufferOwnership`'s header requires of anything
+	// that would.
+	//
+	// ⚠ **IT RETURNS AHEAD OF EVERY OTHER CHECK IN `emitCall`, AND THAT IS SOUND BECAUSE IT IS ONE NAMED
+	// CALLEE.** `String.slice` mutates nothing, consumes nothing, throws nothing, and carries no
+	// sized-container record — so the argument refusal, the default fill, the caller-consume and the
+	// constant-argument range record all have nothing to say about a call that is not going to exist. The
+	// range record in particular is what would refuse `length: -1`, and a negative length is exactly one of
+	// the cases this DECLINES to fold, so that diagnostic still fires through the ordinary path.
+	//
+	// ⚠ **ADMISSION — the callee's name, the arity and the `try`-target flag — IS DECIDED BY THE CALLER**, and
+	// deliberately: this answers with a boxed union, `emitCall` runs for every call in every compile, and a
+	// `notFolded` box built to say "that was never a slice" would be an allocation on the parser's hottest
+	// path. So everything reaching here is a three-argument `String.slice` outside a `try` target, and this
+	// decides only what no compare can: whether the receiver and the bounds are compile-time facts.
+	function foldConstantStringSlice(anchor Token, args ValueIdArray, argLabels ByteArrayArray, rparenTok Token) returns ConstantSliceFold
+		return match self.knownLiteralBytes(try args.get(SliceReceiverArgIndex) otherwise panic("foldConstantStringSlice: args.get OOB at the receiver of a {args.count()}-argument call")) 'receiver'
+			unknown gives ConstantSliceFold.notFolded
+			payload(literalOp, bytes) gives self.foldSliceOfKnownBytes(bytes, literalOp: literalOp, anchor: anchor, args: args, argLabels: argLabels, rparenTok: rparenTok)
+		end 'receiver'
+	end 'foldConstantStringSlice'
+
+	// The receiver's bytes are in hand. Is the START a byte position the compiler minted?
+	function foldSliceOfKnownBytes(receiverBytes ByteArray, literalOp OpIndex, anchor Token, args ValueIdArray, argLabels ByteArrayArray, rparenTok Token) returns ConstantSliceFold
+		let startArg = try args.get(SliceStartArgIndex) otherwise panic("foldSliceOfKnownBytes: args.get OOB at the start index of a {args.count()}-argument `String.slice`")
+		let boundArg = try args.get(SliceBoundArgIndex) otherwise panic("foldSliceOfKnownBytes: args.get OOB at the bound of a {args.count()}-argument `String.slice`")
+		// `argLabels` is parallel to `args` unconditionally — see `MaxonOp.call`.
+		let boundLabel = try argLabels.get(SliceBoundArgIndex) otherwise panic("foldSliceOfKnownBytes: argLabels holds {argLabels.count()} entries for {args.count()} arguments — the two columns are parallel")
+
+		return match self.knownStringBytePos(startArg) 'start'
+			unknown gives ConstantSliceFold.notFolded
+			position(startPos) gives self.foldSliceFromStart(receiverBytes, literalOp: literalOp, startPos: startPos, startArg: startArg, boundArg: boundArg, boundLabel: boundLabel, anchor: anchor, rparenTok: rparenTok)
+		end 'start'
+	end 'foldSliceOfKnownBytes'
+
+	// ⭐ **THE TWO `slice` OVERLOADS, TOLD APART BY THE BOUND'S LABEL** — which is what tells them apart at
+	// this tier at all: `SemanticCheck.resolveOverloadedCalls` appends the parameter types to the callee name
+	// a whole pass later, and only the first argument of a call may be positional, so the label IS the
+	// overload here.
+	function foldSliceFromStart(receiverBytes ByteArray, literalOp OpIndex, startPos ParsedInt, startArg ValueId, boundArg ValueId, boundLabel ByteArray, anchor Token, rparenTok Token) returns ConstantSliceFold
+		if boundLabel.equals(SliceEndIndexArgLabel) 'byEndIndex'
+			return match self.knownStringBytePos(boundArg) 'endBound'
+				unknown gives ConstantSliceFold.notFolded
+				position(endPos) gives self.foldSliceOverRange(receiverBytes, startPos: startPos, endPos: endPos, startArg: startArg, boundArg: boundArg, anchor: anchor, rparenTok: rparenTok)
+			end 'endBound'
+		end 'byEndIndex'
+
+		if not boundLabel.equals(SliceLengthArgLabel) 'notASliceOverloadThisKnows'
+			return ConstantSliceFold.notFolded
+		end 'notASliceOverloadThisKnows'
+
+		// ⚠⚠ **`length:` COUNTS GRAPHEME CLUSTERS, NOT BYTES, so this arm folds ONLY where the two are the
+		// same number.** For a literal carrying multi-byte clusters the conversion is UAX#29 segmentation
+		// (`graphemeOffsetToBytePos`), which is the emitted runtime's job and not the compiler's — a fold that
+		// read the count as a byte offset would cut a multi-byte cluster in half and answer bytes no reading
+		// of the program produces. `string-index.md:slice-by-length-counts-clusters` is that shape, and it
+		// keeps the runtime call. The predicate is `StringRuntime`'s own, exported rather than re-derived so
+		// the two cannot come to disagree about a CR — and MEMOIZED per literal op, because it is an O(L)
+		// scan and K windows of one literal would otherwise scan it K times.
+		if not self.constIsKnown(boundArg) or not self.literalHasSingleByteGraphemes(literalOp, bytes: receiverBytes) 'notAByteCount'
+			return ConstantSliceFold.notFolded
+		end 'notAByteCount'
+
+		// Bounded against the receiver BEFORE the addition, so `startPos + length` cannot leave the i64 the
+		// payload column is; the shared range test below still decides whether the window is inside.
+		let length = self.constOf(boundArg)
+		if length < 0 or length > receiverBytes.count() 'notAWindowOfThisLiteral'
+			return ConstantSliceFold.notFolded
+		end 'notAWindowOfThisLiteral'
+
+		return self.foldSliceOverRange(receiverBytes, startPos: startPos, endPos: startPos + length, startArg: startArg, boundArg: boundArg, anchor: anchor, rparenTok: rparenTok)
+	end 'foldSliceFromStart'
+
+	// ⭐ **IS EVERY GRAPHEME OF THIS LITERAL ONE BYTE? ASKED ONCE PER LITERAL, NOT ONCE PER FOLD SITE.**
+	// `bytesAreSingleByteGraphemes` walks the whole literal, and the `length:` overload asks it at every fold
+	// site — so K sites cutting windows of one L-byte literal paid O(K·L), with K and L both growing with the
+	// source. The op index is the literal's identity (`KnownLiteralBytes.payload`), which is why the memo is
+	// keyed by it and survives for the whole file parse: the answer is a fact about the bytes and nothing a
+	// function boundary can change.
+	function literalHasSingleByteGraphemes(literalOp OpIndex, bytes ByteArray) returns bool
+		if let alreadyScanned = try self.singleByteGraphemeLiterals.get(literalOp) 'scannedOnAnEarlierFold'
+			return alreadyScanned
+		end 'scannedOnAnEarlierFold'
+
+		let answer = bytesAreSingleByteGraphemes(bytes)
+		// COPY-ON-WRITE off the shared empty map, exactly as `recordCharLiteralOp` does and for its reason: a
+		// file that folds no `length:` slice never allocates one.
+		if self.singleByteGraphemeLiterals is sharedEmptySingleByteGraphemeLiterals 'stillShared'
+			self.singleByteGraphemeLiterals = SingleByteGraphemeLiteralMap.create()
+		end 'stillShared'
+		self.singleByteGraphemeLiterals.upsert(literalOp, value: answer)
+
+		return answer
+	end 'literalHasSingleByteGraphemes'
+
+	// Both ends are numbers now. Cut the window — or decline, and let the emitted call answer.
+	//
+	// ⚠ **K DISTINCT WINDOWS OF ONE L-BYTE LITERAL EMIT UP TO O(K·L) `.rdata` BYTES, AND THAT IS INHERENT
+	// RATHER THAN A COST TO REMOVE.** Distinct windows genuinely are distinct constants and need distinct
+	// blobs; identical ones already collapse, because `GlobalDataTable.registerRdataConstant` dedupes by
+	// payload bytes — which is the same sharing `a-folded-slice-does-not-corrupt-a-deduped-literal` pins the
+	// safety of. The alternative — one blob plus an offset — is the runtime view record this fold exists to
+	// stop allocating.
+	function foldSliceOverRange(receiverBytes ByteArray, startPos ParsedInt, endPos ParsedInt, startArg ValueId, boundArg ValueId, anchor Token, rparenTok Token) returns ConstantSliceFold
+		// ⛔ **AN OUT-OF-RANGE CONSTANT RANGE IS NOT A DIAGNOSTIC HERE — IT IS A DECLINE.** `sliceBytes`
+		// panics on exactly this, with a trace `string-index.md` pins verbatim, and folding the program's
+		// abort away would be this pass answering a question the language has already answered. Two literals
+		// are enough to reach it: `a.slice(a.startIndex(), endIndex: b.endIndex())` with `b` the longer.
+		if startPos < 0 or endPos < startPos or endPos > receiverBytes.count() 'outsideTheLiteral'
+			return ConstantSliceFold.notFolded
+		end 'outsideTheLiteral'
+
+		// ⭐ **THE INDEX ACCESSORS GO WITH THE CALL, AND THAT IS HALF THE COST THIS REMOVES.** A `StringIndex`
+		// is a two-field HEAP box (`stdlib/String.maxon`), so `s.startIndex()` and `s.endIndex()` are an
+		// allocation each — leave them and a folded `endIndex:` slice still costs two.
+		//
+		// ⚠ **THE BOUND GOES FIRST, AND THE ORDER IS LOAD-BEARING.** Arguments are parsed left to right, so
+		// the bound's op stands AFTER the start's in the block; each removal shifts every op ref behind it
+		// down by one, and `FoldedIndexCallSite` records an absolute position. Dropping the later one first
+		// leaves the earlier one's record exact. The reverse order would leave the start's record naming the
+		// op that followed it — which `currentBlockStillHoldsFiledOp` would catch as a mismatch and decline,
+		// so it is one allocation rather than a wrong answer, but it is still the wrong order.
+		self.dropFoldedStringIndexCall(boundArg)
+		self.dropFoldedStringIndexCall(startArg)
+
+		return ConstantSliceFold.folded(self.emitStringLiteral(try receiverBytes.slice(startPos, endIndex: endPos) otherwise panic("foldSliceOverRange: [{startPos}, {endPos}) is not a range of a {receiverBytes.count()}-byte literal — the guard above admits only ranges inside it"), range: SourceRange.between(anchor, last: rparenTok)))
+	end 'foldSliceOverRange'
+
+	// ⭐⭐ **DROP THE `startIndex()` / `endIndex()` CALL THE FOLD HAS JUST MADE GARBAGE, AND THE STATEMENT'S
+	// DEBT FOR ITS BOX WITH IT.** Both accessors are PURE — they read the receiver and build a fresh index —
+	// and that purity is the whole licence for removing one: nothing observable happens between the call and
+	// the value nobody now reads.
+	//
+	// ⚠ **THE GATE IS `pendingTempsContain`, NOT "does anything else name this value".** A value a BINDING
+	// owns (`let i = s.startIndex()`) is read by that binding's scope drop and by every later mention of its
+	// name, none of which this door can see; the pending list is precisely the owned values NO binding owns,
+	// and an expression's value has exactly one syntactic consumer — the call this fold has just replaced. A
+	// bound index therefore keeps its call and the slice still folds, which costs an allocation and answers
+	// the same bytes.
+	//
+	// ⚠ It is also what makes this safe to call on the LENGTH argument: an integer literal is not an owned
+	// temp, so the `length:` overload's bound leaves through the provenance test above and nothing is removed.
+	//
+	// ⭐ **NOTHING IS SEARCHED FOR.** `FoldedIndexCallSite` was filed as the call was emitted, so the op ref's
+	// position is read rather than hunted, and the two MISSES below — no record, or a record the block no
+	// longer bears out — are ordinary answers that keep the call.
+	function dropFoldedStringIndexCall(value ValueId)
+		if not self.valueIsKnownStringBytePos(value) 'notAnIndexThisParseMinted'
+			return
+		end 'notAnIndexThisParseMinted'
+
+		if not self.pendingTempsContain(value) 'someoneElseHoldsIt'
+			return
+		end 'someoneElseHoldsIt'
+
+		if let site = try self.foldedIndexCallSites.get(value) 'itsCallSiteIsOnFile'
+			if self.currentBlockStillHoldsFiledOp(site) 'andTheBlockStillBearsItOut'
+				self.removeCurrentBlockOpAt(site.blockOpPos, siteMark: site.siteMark)
+				self.removeFromPendingTemps(value)
+			end 'andTheBlockStillBearsItOut'
+		end 'itsCallSiteIsOnFile'
+	end 'dropFoldedStringIndexCall'
+
+	// ⭐⭐ **DOES THE CURRENT BLOCK STILL HOLD THE FILED OP REF WHERE IT WAS FILED?** — an IDENTITY check, not
+	// a resemblance one: `module.ops` indices are minted by append and never reused, so an op index appears in
+	// exactly one block's `opRefs` at exactly one position, and this compare is the whole proof.
+	//
+	// ⛔ **THE `false` ANSWERS ARE REAL AND ARE WHY THIS EXISTS.** A `try` or a ternary inside the argument
+	// list forks the block, so the accessor may stand in one this parse has already left — and a ternary's
+	// `detachOpRefsAbove` truncates the block it was recorded in and re-attaches the ops elsewhere. Either way
+	// the recorded position now names a different op or no op at all, and the removal is DECLINED: the call
+	// stays, the program is correct, and it pays the one allocation this fold would have saved.
+	function currentBlockStillHoldsFiledOp(site FoldedIndexCallSite) returns bool
+		if site.block != self.currentBlock.id or site.blockOpPos >= self.currentBlock.opRefs.count() 'theBlockHasMovedOnFromIt'
+			return false
+		end 'theBlockHasMovedOnFromIt'
+
+		let standingThere = try self.currentBlock.opRefs.get(site.blockOpPos) otherwise panic("currentBlockStillHoldsFiledOp: opRefs.get OOB at {site.blockOpPos} of {self.currentBlock.opRefs.count()} — the bound was just checked")
+		return standingThere == site.opIndex
+	end 'currentBlockStillHoldsFiledOp'
+
+	// File where the op defining a known byte position was appended, so the fold that makes it garbage can
+	// drop it without hunting. `recordCharLiteralOp`'s twin — same COW-off-the-shared-empty discipline, same
+	// reason — differing only in what a site is: see `FoldedIndexCallSite` for why it takes four numbers.
+	function recordFoldedIndexCallSite(value ValueId, opIndex OpIndex)
+		if self.foldedIndexCallSites is sharedEmptyFoldedIndexCallSites 'stillShared'
+			self.foldedIndexCallSites = FoldedIndexCallSiteMap.create()
+		end 'stillShared'
+
+		let landedAt = self.currentBlock.opRefs.count() - 1
+		self.foldedIndexCallSites.upsert(value, value: FoldedIndexCallSite.create(self.currentBlock.id, blockOpPos: landedAt, opIndex: opIndex, siteMark: self.rangeCheckSites.count()))
+	end 'recordFoldedIndexCallSite'
+
+	// ⚠⚠ **AN OP'S ORDINAL IN ITS BLOCK IS A KEY, SO REMOVING ONE MOVES EVERY RANGE-CHECK SITE BEHIND IT.**
+	// `RangeCheckSite` anchors a guard by (block, ordinal) because a narrowing int→int cast emits no op of
+	// its own to hang it on, and `LowerMaxonToStd` consumes each block's sites in ASCENDING order against the
+	// ops it walks (`requireSiteOrdinalsAscend`) — so a site left naming its old ordinal would have its guard
+	// emitted one op late, which is the wrong side of the very cast it guards. This is
+	// `rehomeArmRangeSites`' arithmetic for a REMOVAL rather than a relocation, and the recorded order is
+	// preserved because every affected site moves by the same one.
+	//
+	// ⭐⭐ **BOTH WALKS ARE BOUNDED, AND BY THE SAME FACT: THE OP WAS APPENDED MOMENTS AGO.**
+	//
+	//   * The op refs are shifted down IN PLACE from `removedAt`, so the work is the number of ops appended
+	//     AFTER the accessor — the rest of one argument list — and not the length of the block. Rebuilding
+	//     the array instead cost O(B) copies plus a fresh `OpIndexArray` per removal, twice per folded slice,
+	//     in a block whose length grows with the number of folds: an O(F²) that the ladder cannot see because
+	//     its corpus emits no constant slice at all.
+	//   * `siteMark` is `rangeCheckSites.count()` at the instant the op was appended, and a site records
+	//     `maxonOpPos = opRefs.count()` of the block it is recorded in — so every site filed before that
+	//     instant names a position at or below `removedAt` and is unmoved by definition. Only the sites after
+	//     the mark can move, which is `rehomeArmRangeSites`' bounded sub-range in the other direction.
+	//
+	// ⚠ The op keeps its `module.ops` index and is simply referenced by no block — the ops and the blocks
+	// that order them are separate stores (`detachOpRefsAbove` states the same split), and every walk of this
+	// IR reaches an op through some block's `opRefs`. So an unreferenced op is not visited rather than
+	// visited-and-skipped, and rewriting the index space to close the gap would invalidate every index
+	// already filed against it (`ConstPayloadDomain.stringLiteralOp`'s among them).
+	function removeCurrentBlockOpAt(removedAt BlockOpPos, siteMark ElementCount)
+		let lastPos = self.currentBlock.opRefs.count() - 1
+		for i in removedAt upto lastPos 'shiftTheTailDown'
+			let following = try self.currentBlock.opRefs.get(i + 1) otherwise panic("removeCurrentBlockOpAt: opRefs.get OOB at {i + 1} of {self.currentBlock.opRefs.count()}")
+			try self.currentBlock.opRefs.set(i, value: following) otherwise panic("removeCurrentBlockOpAt: opRefs.set OOB at {i} of {self.currentBlock.opRefs.count()}")
+		end 'shiftTheTailDown'
+		_ = try self.currentBlock.opRefs.pop() otherwise panic("removeCurrentBlockOpAt: opRefs.pop on a block the caller proved holds position {removedAt}")
+
+		for i in siteMark upto self.rangeCheckSites.count() 'eachSiteSinceTheOpWasAppended'
+			var site = try self.rangeCheckSites.get(i) otherwise panic("removeCurrentBlockOpAt: rangeCheckSites.get OOB at {i} of {self.rangeCheckSites.count()}")
+			if site.block != self.currentBlock.id or site.maxonOpPos <= removedAt 'unmovedByTheRemoval'
+				continue
+			end 'unmovedByTheRemoval'
+
+			site.maxonOpPos = site.maxonOpPos - 1
+		end 'eachSiteSinceTheOpWasAppended'
+	end 'removeCurrentBlockOpAt'
+
+	// ⭐ **`startIndex()` AND `endIndex()` OF A KNOWN-BYTES RECEIVER ANSWER A BYTE POSITION THE COMPILER
+	// ALREADY HOLDS** — 0 and the literal's byte length. Recorded on the RESULT, keyed by ValueId, so a
+	// rebinding cannot carry a stale answer: `string-type-2.md:reassigned-var-equality-not-const-folded`
+	// exists because v1's string-const specializer keyed on a DECLARATION id and never invalidated on
+	// reassignment, which self-compiled into a miscompile. A rebind mints a new ValueId, so keying here is
+	// structurally safe.
+	//
+	// ⚠ **THE CALLEE IS TESTED BEFORE THE RECEIVER, WHICH IS THE OPPOSITE OF THE READING ORDER AND IS
+	// DELIBERATE.** `knownLiteralBytes` answers with a boxed union — a heap allocation — and this runs for
+	// every one-argument call in every compile. Two length-first byte compares leave every other such call
+	// having built nothing.
+	function recordConstStringIndexResult(result ValueId, callee ByteArray, args ValueIdArray)
+		if args.count() != StringIndexAccessorArgCount 'notAnAccessorShape'
+			return
+		end 'notAnAccessorShape'
+
+		let atTheFirstByte = callee.equals(StringStartIndexMethodName)
+		if not atTheFirstByte and not callee.equals(StringEndIndexMethodName) 'notAnIndexAccessor'
+			return
+		end 'notAnIndexAccessor'
+
+		match self.knownLiteralBytes(try args.get(SliceReceiverArgIndex) otherwise panic("recordConstStringIndexResult: args.get OOB at the receiver of a one-argument call")) 'receiver'
+			unknown then break 'receiver'
+			payload(_, bytes) then self.recordAccessorBytePos(result, atTheFirstByte: atTheFirstByte, receiverBytes: bytes)
+		end 'receiver'
+	end 'recordConstStringIndexResult'
+
+	// Which position the accessor its caller identified names: the first byte, or one past the last.
+	function recordAccessorBytePos(result ValueId, atTheFirstByte bool, receiverBytes ByteArray)
+		let bytePos = LiteralStartBytePos if atTheFirstByte else receiverBytes.count()
+		self.recordConstPayload(result, payload: bytePos, domain: ConstPayloadDomain.stringBytePos)
+	end 'recordAccessorBytePos'
 
 	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** (BATCH2 slice 4) — each one
 	// becomes a call to the declaration's synthesized helper, appended with the parameter's own NAME as its

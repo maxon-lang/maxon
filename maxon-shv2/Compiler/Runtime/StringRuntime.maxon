@@ -501,10 +501,15 @@ export let StrRetainName = b"__str_retain"
 // True iff every GRAPHEME of these bytes is exactly one byte — the `singleByteGraphemes@48` scan, run once
 // per distinct literal at lower time (the cold path), never per value.
 //
+// ⭐ **EXPORTED BECAUSE THE PARSER ASKS THE SAME QUESTION OF THE SAME BYTES.** `Parser.foldSliceFromStart`
+// folds `lit.slice(lit.startIndex(), length: n)` into a literal of its own only when a GRAPHEME count and a
+// BYTE count are the same number for those bytes — which is this predicate, and re-deriving it there would be
+// two spellings of one rule, free to disagree about `` on the day one of them was edited.
+//
 // ⭐ **ONE PASS TESTING BOTH, rather than an ASCII scan followed by a CR scan** — the corpus's
 // `scanSingleByteGraphemes` (`stdlib/String.maxon:1048`) is the same loop for the same stated reason, and
 // this is its compile-time twin over a literal's bytes.
-function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
+export function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
 	for b in bytes 'each'
 		// A CR is ASCII and is NOT a grapheme on its own — GB3 joins it to a following LF — so it is the one
 		// byte that clears this flag without being high.

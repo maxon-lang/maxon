@@ -975,10 +975,13 @@ function markOneReachable(name ByteArray, byName FuncIndexByName, reached BoolAr
 end 'markOneReachable'
 
 // Walk `block.opRefs` DIRECTLY — not `IrModule.liveOpIndices`, which allocates a fresh op-index array
-// per function. This runs at the Maxon tier BEFORE any block-rebuilding pass, so `opRefs` holds no
-// orphan ops (the concern that forces `liveOpIndices` at the Std tier), which is exactly why
-// `scanRuntimeUsage` walks the same way here. A terminator names no callee, so visiting only the body
-// ops in `opRefs` is complete for reachability.
+// per function and answers the same question here, since a terminator names no callee. Walking `opRefs`
+// is what makes this ORPHAN-PROOF, and that is now load-bearing rather than incidental: the sentence here
+// used to be *"this runs at the Maxon tier before any block-rebuilding pass, so there are no orphan ops"*,
+// and `Parser.removeCurrentBlockOpAt` (the constant-slice fold) FALSIFIED IT — a dropped
+// `startIndex()`/`endIndex()` call keeps its `module.ops` index and is referenced by no block. ⇒ **A flat
+// scan of `module.ops` at the Maxon tier is no longer equivalent to this walk and never was safe to
+// assume**; `scanRuntimeUsage` walks `opRefs` for the same reason.
 //
 // ⚠ **IT ALSO ANSWERED "DID ANY OP HERE THREAD A WITNESS TABLE?" UNTIL W129, RIDING ALONG ON THE
 // `maxonOpCalleeKind` CLASSIFICATION THIS LOOP ALREADY COMPUTES.** That question had exactly one subject —

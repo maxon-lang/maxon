@@ -217,6 +217,13 @@ export type IrModule uses Op
 	// `compactOps`). A consumer that scans `self.ops` therefore sees dead ops from
 	// every prior pass — which is a false positive for anything asking "did this
 	// pass leave a forbidden op behind?".
+	//
+	// ⚠ **THE MAXON TIER ORPHANS TOO, SINCE THE CONSTANT-SLICE FOLD.**
+	// `Parser.removeCurrentBlockOpAt` takes one op ref out of a block and leaves the
+	// op itself in `self.ops` (it must: `ConstPayloadDomain.stringLiteralOp` and
+	// `Parser.charLiteralOps` both FILE indices into this array, so closing the gap
+	// would invalidate them). So "orphans start at the Std tier" is no longer true,
+	// and a Maxon-tier consumer must reach ops through a block like every other.
 	export function liveOpIndices(func IrFunction) returns OpIndexArray
 		var indices = OpIndexArray.create()
 		for blockRef in func.blockRefs 'eachBlock'
