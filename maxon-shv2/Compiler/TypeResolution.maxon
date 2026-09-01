@@ -249,11 +249,11 @@ module function resolveTypes(project Project, module MaxonModule)
 	// var is immutable; field assignment through it is rejected).
 	for i in 0 upto module.functions.count() 'eachFunc'
 		var func = try module.functions.get(i) otherwise panic("resolveTypes: functions.get OOB at {i}")
-		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType)
+		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType, readerFilePath: func.sourceFilePath)
 
 		var resolvedParams = MaxonTypeArray.create()
 		for pt in func.maxonParamTypes 'eachParam'
-			resolvedParams.push(resolveType(project, signatures: signatures, t: pt))
+			resolvedParams.push(resolveType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath))
 		end 'eachParam'
 		func.maxonParamTypes = resolvedParams
 
@@ -386,16 +386,18 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 		var resolvedParams = MaxonTypeArray.create()
 		var preErasedNames = ByteArrayArray.create()
 		for param in alias.paramTypes 'eachParam'
-			resolvedParams.push(resolveType(project, signatures: signatures, t: functionAliasParamType(project, param: param)))
+			// The reader is the alias's OWN declaring file — a function alias's signature is written there
+			// and nowhere else, so a name it spells means what that file means by it.
+			resolvedParams.push(resolveType(project, signatures: signatures, t: functionAliasParamType(project, param: param), readerFilePath: alias.declFilePath))
 			// ⚠ **READ, NOT DERIVED — and it used to be derived, differently.** This tier once asked
-			// `signatures.containsEnum(param.typeName)` while the declared-function tier asked
+			// `signatures.containsEnumInAnyFile(param.typeName)` while the declared-function tier asked
 			// `Parser.aggregateNameOf`, so one parameter got two classifications: a per-instance ranged alias
 			// carried an identity on one side and none on the other. The identity is now extracted ONCE, at the
 			// parse, by the extraction both tiers fill through (`Parser.erasedAggregateNameOf`) — a shared
 			// comparison over two different classifications would only have made the disagreement a refusal.
 			preErasedNames.push(param.aggregateName)
 		end 'eachParam'
-		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias)), paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
+		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias), readerFilePath: alias.declFilePath), paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
 	end 'eachAlias'
 end 'resolveFunctionAliasShapes'
 
@@ -764,7 +766,7 @@ end 'pendingWithPair'
 function checkStructFieldTypes(project Project, signatures ProgramSignatures)
 	for (_, layout) in project.structTypes 'eachStruct'
 		for fieldType in layout.fieldTypes 'eachField'
-			_ = resolveType(project, signatures: signatures, t: fieldType)
+			_ = resolveType(project, signatures: signatures, t: fieldType, readerFilePath: layout.declFilePath)
 		end 'eachField'
 	end 'eachStruct'
 end 'checkStructFieldTypes'
@@ -819,10 +821,10 @@ function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns M
 	return sourceParams
 end 'sourceParamTypesOf'
 
-function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType) returns MaxonReturnType
+function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType, readerFilePath FilePath) returns MaxonReturnType
 	return match ret 'r'
 		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(resolveType(project, signatures: signatures, t: inner))
+		value(inner) gives MaxonReturnType.value(resolveType(project, signatures: signatures, t: inner, readerFilePath: readerFilePath))
 	end 'r'
 end 'resolveReturnType'
 
@@ -832,13 +834,13 @@ end 'resolveReturnType'
 // be erased exactly as this pass erased every other slot of the shapes being compared. A second erasure
 // written there would be a second answer to "what does this name denote", which is the disagreement this
 // file's header is about.
-export function resolveType(project Project, signatures ProgramSignatures, t MaxonType) returns MaxonType
+export function resolveType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath) returns MaxonType
 	match t 'r'
 		boolean then return t
 		integer then return t
 		float then return t
 		exitCode then return t
-		named(id) then return resolveNamedType(project, signatures: signatures, id: id)
+		named(id) then return resolveNamedType(project, signatures: signatures, id: id, readerFilePath: readerFilePath)
 		unresolved then panic("resolveTypes: `unresolved` reached type resolution — the parser emits no unresolved placeholders at M1")
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints a `structRef`
 		// directly for `Self` (and for the enclosing type's own name) inside a `type` body, because
@@ -1042,7 +1044,14 @@ end 'isCompilerOwnedTypeName'
 // one such box per reference cost (+36 × 2^n allocations across the scale ladder — a term that grows
 // with the PROGRAM, where every other cost of alias resolution grows only with the DECLARATIONS).
 // `UnknownTypeName` is payload-free, so it is a scalar; the caller already holds the name.
-export function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId) returns MaxonType throws UnknownTypeName
+// ⭐⭐ **`readerFilePath` IS WHICH FILE IS ASKING, AND IT IS NOT DECORATION.** Two declarations of one name
+// may now stand at once when neither can see the other (`typeNamePairMayCoexist`), and at that point the
+// three NOMINAL arms below and the alias arms beneath them are BOTH right — for different files. Without
+// the reader, the arm ORDER decided it for the whole program: MEASURED, `stdlib/Builtins.maxon`'s own
+// `i64.min as ParsedInt` resolved to a USER program's `type ParsedInt` and the E3009 named a library line
+// the author never opened. The reader for a stored DECLARATION's type is its DECLARING file, never the
+// caller's — see `resolveNamedType`, which is where each of the three is obtained.
+export function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns MaxonType throws UnknownTypeName
 	// ⭐⭐ **THE NAME *AND* THE ANSWER ARE `builtinTypeNameTag`'S — THIS ARM OWNS NEITHER (W1 review).** This
 	// used to spell `ExitCode` and `MaxonType.exitCode` itself, which made the AUTHORITY for what a type name
 	// denotes and the TABLE the interner-free doors re-derive from two independent lists of which builtin
@@ -1103,15 +1112,20 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// `structOf`), and two structs with identical fields are still two types. So the id survives,
 	// carried by `structRef`.
 	//
-	// It is tested BEFORE the alias registry only for readability: a name cannot be both — a
-	// `typealias` and a `type` of one name would be a duplicate declaration, and (⚠) that is NOT
-	// yet diagnosed. It is a real gap, it belongs with the duplicate-`type` gap `commitStructTypes`
-	// records, and neither is this rung's.
+	// ⛔⛔ **IT USED TO BE TESTED BEFORE THE ALIAS REGISTRY "only for readability", ON THE CLAIM THAT A NAME
+	// CANNOT BE BOTH — and that claim was already false when it was written.** A `typealias Box` and a
+	// `type Box` of one name IS diagnosed (E3006, `TypeNameRegistry`), so the paragraph that stood here was
+	// stale in one direction; and since `typeNamePairMayCoexist` a pair whose two declarations cannot see
+	// each other is LEGAL, so it is stale in the other. The order is therefore load-bearing after all, and
+	// what makes it right is the guard rather than the position: a nominal arm claims a contested name only
+	// for a reader the nominal declaration actually answers for. `crossKindContested` is an empty-map probe
+	// for every program that contests nothing, so the hot path is what it was.
+	//
 	// `containsStruct`, not `structOf`: the layout itself is not wanted here, and `structOf` boxes a
 	// throwaway `DeclaredStruct.undeclared` for the COMMON no answer. Resolution answers WHICH TYPE
 	// this name is, and the answer is the id the reference already carries. The fields are the
 	// parser's question, asked of the signature index at the use site.
-	if signatures.containsStruct(name) 'isStruct'
+	if signatures.containsStructInAnyFile(name) and not signatures.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'isStruct'
 		return MaxonType.structRef(id)
 	end 'isStruct'
 
@@ -1133,10 +1147,13 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// are interfaces. `lookupInterface` (not a bare map probe) is what admits the SYNTHESIZED protocol
 	// interfaces on the same footing as the user-declared ones — the one lookup rule, stated in
 	// `IrInterface`.
-	match lookupInterface(signatures.interfaceMap(), name: name) 'isInterface'
-		found then return MaxonType.interfaceRef(id)
-		notFound then break 'isInterface'
-	end 'isInterface'
+	// The contest guard is the struct arm's, for the struct arm's reason — a user `interface Tolerance`
+	// beside `stdlib/Testing.maxon`'s `typealias Tolerance` is exactly the same shape one keyword over. The
+	// membership is read into a bool first because a `match` arm is ONE statement and this arm has to be
+	// able to FALL THROUGH to the alias arms below rather than answer.
+	if signatures.containsInterfaceFor(name, readerFilePath: readerFilePath) 'anInterfaceAnswersHere'
+		return MaxonType.interfaceRef(id)
+	end 'anInterfaceAnswersHere'
 
 	// ⭐ A DECLARED `enum`/`union` RESOLVES AWAY TO `integer`, the OPPOSITE of a struct — and for the
 	// same reason an alias does. An enum value IS its i64 tag (int backing) or its float BIT PATTERN
@@ -1149,7 +1166,11 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	//
 	// The compiler-known `Ordering` resolves HERE rather than through an inline arm of its own, because
 	// `createEnumRegistry` seeds it INTO this registry — one registration, every reader, no arm to add.
-	if signatures.containsEnum(name) 'isEnum'
+	// The contest guard is the struct arm's — and this arm needs it even though its ANSWER is the same
+	// `integer` a ranged int alias gives: a user `enum RepeatCount` beside `stdlib/Builtins.maxon`'s
+	// `typealias RepeatCount` erases alike, but a FLOAT alias does not, and neither does a generic or
+	// function one. An arm that was right by coincidence for one alias form is not right.
+	if signatures.containsEnumInAnyFile(name) and not signatures.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'isEnum'
 		return MaxonType.integer
 	end 'isEnum'
 
@@ -1165,8 +1186,17 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// declaring file. This is the HOTTEST reader of the registry — once per named type reference in
 	// the program — which is why the door it asks through hands back the primitive rather than a
 	// `DeclaredAlias` that would be heap-boxed per call.
+	//
+	// ⚠ **AND IT ANSWERS ONLY WHERE A *RANGED* ALIAS IS WHAT THE READER MEANS.** The registry is bare and
+	// whole-program, so for a name two files declare in two FORMS it answered for both — which is how
+	// `a.maxon`'s own `5 as Handler`, whose only `Handler` is an `int` alias, came to be refused *"Cannot
+	// cast from int to function"*. A reader that means the FUNCTION or GENERIC form has had its reference
+	// re-tagged by `Parser.parseTypeReference` long before this door, so declining here loses no answer; it
+	// is this door refusing to hand the other form's reader a meaning that is not its.
 	if let underlying = try signatures.aliasUnderlyingInAnyFile(name) 'isPlainAlias'
-		return underlying
+		if signatures.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.rangedAlias) 'itIsTheReadersOwnForm'
+			return underlying
+		end 'itIsTheReadersOwnForm'
 	end 'isPlainAlias'
 
 	// ⭐ A QUALIFIED ALIAS (P1.6-C) — a base-template inner alias ("Wrapper.Idx", the shared-body form a
@@ -1176,9 +1206,11 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// VALUE column, where the front-end identity checks read it; a signature carries no identity. Reached only
 	// for a name that is NEITHER a plain alias nor an aggregate — a rare, dotted name — so the qualified-name
 	// split never touches the plain-alias hot path.
-	// `CompilerOwnedDeclFilePath` (N3): this arm wants only `underlying`, and the door above it is the FILE-LESS
-	// erasure whose own header says why — a `StructLayout`'s field types arrive here with no declaring file.
-	match signatures.qualifiedAliasOf(name, readerFilePath: CompilerOwnedDeclFilePath) 'qualified'
+	// ⚠ It is asked from the READER's file, not `CompilerOwnedDeclFilePath`. It used to pass the latter on the
+	// grounds that "this arm wants only `underlying`" and that a `StructLayout`'s field types arrive with no
+	// declaring file — the second half of which is no longer true (`checkStructFieldTypes` reads
+	// `layout.declFilePath`), and the first was never a reason to hand a per-instance lookup the wrong file.
+	match signatures.qualifiedAliasOf(name, readerFilePath: readerFilePath) 'qualified'
 		declared(alias) then return alias.underlying
 		undeclared then break 'qualified'
 	end 'qualified'
@@ -1188,6 +1220,15 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// user-defined type this slice does not have. Each reader decides what to DO about it:
 	// this pass reports E3011 unpositioned and recovers, the two cast sites raise the same
 	// code anchored on the `as` they were written at.
+	//
+	// ⚠ **ONE ARRIVAL HERE IS NOT A TYPO, AND ITS NOUN IS WRONG: a CROSS-KIND CONTESTED name whose reader
+	// means a NON-RANGED alias form.** Such a reference is re-tagged by `Parser.parseTypeReference` long
+	// before this door — the whole reason the ranged arm above declines it — so the only way one reaches
+	// this line is through a caller that resolves a type WITHOUT that re-tag, and "Unknown type 'Handler'"
+	// is then false about a name the program declares twice over. It is left rather than papered over: the
+	// honest text is a sentence about a name meaning something else HERE, which is a diagnostic this
+	// registry has no code for, and inventing one is not this change's to do. Reported to the coordinator
+	// with that reasoning rather than guessed at.
 	throw UnknownTypeName.notDeclared
 end 'denotedNamedType'
 
@@ -1255,10 +1296,10 @@ end 'barePrimitiveCastMessage'
 // it means threading that span from `parseTypeReference` through `FuncSignature` into the registry
 // this pass reads, which is its own piece of work. ⚠ It is NOT a property of the diagnostic: a cast
 // target reaches the same verdict POSITIONED, because the parser holds the `as` token when it asks.
-function resolveNamedType(project Project, signatures ProgramSignatures, id TypeNameId) returns MaxonType
+function resolveNamedType(project Project, signatures ProgramSignatures, id TypeNameId, readerFilePath FilePath) returns MaxonType
 	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
 
-	return try denotedNamedType(signatures, name: name, id: id) otherwise 'undeclared'
+	return try denotedNamedType(signatures, name: name, id: id, readerFilePath: readerFilePath) otherwise 'undeclared'
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name))))
 
 		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics

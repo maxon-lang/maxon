@@ -1061,7 +1061,7 @@ end 'reportUnsatisfiedConstraint'
 // (a Maxon union value is a heap object in every case), and a conforming instantiation — every one in a
 // program that compiles — must not pay for a diagnostic it does not produce.
 function constrainedTypeParamName(signatures ProgramSignatures, baseName ByteArray, position FieldIndex) returns ByteArray
-	match signatures.structOf(baseName) 'base'
+	match signatures.structInAnyFile(baseName) 'base'
 		declared(layout) then return try layout.typeParamNames.get(position) otherwise panic("constrainedTypeParamName: '{String.from(baseName)}' constrains type-parameter position {position}, outside its own `uses` list of {layout.typeParamNames.count()} — a `where` constraint is recorded against that list")
 		undeclared then panic("constrainedTypeParamName: '{String.from(baseName)}' carries a `where` constraint but is in no struct registry — `structWhereConstraints` read that constraint off the very layout this lookup misses")
 	end 'base'
@@ -2176,7 +2176,9 @@ end 'requireSameErrorType'
 // is the whole point of the classifier's third box: a typo'd requirement must not buy the abstract
 // requirement's narrowing, so it falls to the strict same-name rule and is refused by it.
 function throwsRequirementIsAbstract(project Project, signatures ProgramSignatures, required String) returns bool
-	return match classifyThrowsClauseName(project, signatures: signatures, name: required) 'kind'
+	// `CompilerOwnedDeclFilePath`: a requirement's `throws` type is written inside an `interface`, which
+	// records no declaring file — see the classifier's own header.
+	return match classifyThrowsClauseName(project, signatures: signatures, name: required, readerFilePath: CompilerOwnedDeclFilePath) 'kind'
 		concreteError gives false
 		abstractInterface gives true
 		undeclared gives false
@@ -2197,7 +2199,7 @@ end 'throwsRequirementIsAbstract'
 // other cannot:
 //
 //   • **`concreteError` — it names a declared enum/union**, asked of the registry the catch DECODE itself
-//     consults (`Parser.throwsTypeIsBoxedUnion` → `enumOf(name)`), so it is the only honest answer to "can
+//     consults (`Parser.throwsTypeIsBoxedUnion` → `enumInAnyFile(name)`), so it is the only honest answer to "can
 //     this be discriminated?". Asking that rather than testing the literal name `Error` is what keeps a
 //     user's own `enum Error` — which the language accepts — from being read as abstract: for that program
 //     the clause IS concrete. `containsEnum` and not `enumOf`, because no caller here needs a layout and
@@ -2219,14 +2221,21 @@ export enum ThrowsClauseKind
 	undeclared
 end 'ThrowsClauseKind'
 
-export function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String) returns ThrowsClauseKind
+// ⚠ **IT SORTS THE NAME AS `readerFilePath` MEANS IT, NOT AS THE PROGRAM DOES.** A `throws` clause names a
+// type in a FILE, and both boxes it can land in are registries a cross-KIND contest can give to another
+// declaration — so a `throws Fault` written where `Fault` means a ranged alias would otherwise have been
+// sorted `concreteError` off a DIFFERENT file's enum, and the catch would decode against cases the clause's
+// own file never named. The two callers each have a reader to give: a plain function's is its declaring
+// file, and an interface REQUIREMENT's is `CompilerOwnedDeclFilePath` — a requirement is written inside an
+// `interface`, which records no declaring file (`SemanticCheck.witnessFormalDeclaredType` says the same).
+export function classifyThrowsClauseName(project Project, signatures ProgramSignatures, name String, readerFilePath FilePath) returns ThrowsClauseKind
 	let key = name.toByteArray()
-	if signatures.containsEnum(key) 'namesAConcreteError'
+	if signatures.containsEnumFor(key, readerFilePath: readerFilePath) 'namesAConcreteError'
 		return ThrowsClauseKind.concreteError
 	end 'namesAConcreteError'
 
 	return match lookupInterface(project.interfaces, name: key) 'iface'
-		found gives ThrowsClauseKind.abstractInterface
+		found gives ThrowsClauseKind.abstractInterface if not signatures.aliasShadowsNominalFor(key, readerFilePath: readerFilePath) else ThrowsClauseKind.undeclared
 		notFound gives ThrowsClauseKind.undeclared
 	end 'iface'
 end 'classifyThrowsClauseName'
@@ -2235,12 +2244,12 @@ end 'classifyThrowsClauseName'
 // scalar `ordinal + ErrorFlagOrdinalBias` flag. A payload-carrying union's flag is the heap box pointer
 // itself (`Parser.emitThrowError` stamps `errorIsBoxed` off the thrown value and `lowerThrowError` writes the
 // pointer verbatim), so under an abstract requirement the handler would subtract the bias from a pointer and
-// never release the box. Read through the SAME `enumOf(name).isBoxed()` the catch decode reads, for that
+// never release the box. Read through the SAME `enumInAnyFile(name).isBoxed()` the catch decode reads, for that
 // function's own reason: a boxed union must not be encoded as a pointer at one end and decoded as an ordinal
 // at the other, and two spellings of "is it boxed?" is exactly how that comes to be true.
 //
 // ⚠⚠ **"NOT FOUND IN THE ENUM REGISTRY" IS NOT EVIDENCE THE FLAG IS SCALAR — IT IS THE COMPILER HAVING NO
-// ANSWER, AND IT GETS ITS OWN REFUSAL (A1s review).** As first written this asked `enumOf(declared)` and
+// ANSWER, AND IT GETS ITS OWN REFUSAL (A1s review).** As first written this asked `enumInAnyFile(declared)` and
 // read the `undeclared` arm as `false`, i.e. as "not boxed, therefore fine" — the PERMISSIVE reading of a
 // memory-safety question, taken for a name the compiler could not resolve. MEASURED on the shipped rung:
 // an impl declaring `throws Bogus`, a name in no registry at all, was ACCEPTED under `throws Error` and
@@ -2257,7 +2266,7 @@ end 'classifyThrowsClauseName'
 // PLAIN function was accepted when this was written; A1s-throwsbox's E3113 closed that gap, and this arm
 // still owns the IMPL-side spelling because it alone can name the requirement the impl is violating.)
 function requireImplErrorIsANarrowableError(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
-	match signatures.enumOf(declared.toByteArray()) 'implError'
+	match signatures.enumInAnyFile(declared.toByteArray()) 'implError'
 		declared(layout) then requireImplErrorConformsAndIsScalar(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared, layout: layout)
 		undeclared then reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it 'throws {required}', and '{declared}' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare '{declared}', or name '{required}' itself")
 	end 'implError'

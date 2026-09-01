@@ -345,6 +345,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// `Parser.foldDeclaredSignaturesInto`) and keeps this memo cacheable: a query that reported would
 	// have to suppress on a hit, exactly as `queryParseOps` must.
 	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+	// ⭐⭐ **AND WHICH NAMES MORE THAN ONE *KIND* OF DECLARATION HOLDS — BEFORE `evaluateInitializers`, and
+	// that position is forced.** `stdlib/Builtins.maxon:427`'s `let __FloatSignBit = i64.min as ParsedInt`
+	// is a top-level CONSTANT, so the const evaluator is one of the two readers that must already know a
+	// user `type ParsedInt` does not answer for a library file. Every declaration in the program is folded
+	// by this line and no file has been parsed, which is the same window the three instance settles below
+	// occupy. See `settleCrossKindContests`.
+	signatures.settleCrossKindContests()
 	// ⭐ **AND WHICH NAMES ARE RANGE-CONTESTED (N2) — FIRST of the whole-program steps, because the three
 	// below all READ a generic instance and this is what decides which instance a file means.** A name
 	// declared over two different ranges by two files is two element TYPES, so its instances are split here,
@@ -1303,7 +1310,10 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	// by the one function, so a mint the parser's instances name is a mint the range checks can find — a
 	// second derivation would be free to disagree, which is the shape `RangedAliasRegistry.create`'s seed
 	// comment already refuses one door over.
-	project.typeAliases.settleRangeContests()
+	// ⚠ **AND IT IS HANDED THE SAME CROSS-KIND NAMES the signature index's own settle was given**, for the
+	// reason the paragraph above gives about the two registries: a mint one holds and the other does not is
+	// a scoped element the range checks cannot find.
+	project.typeAliases.settleRangeContests(programSignaturesIn(project, asker: "queryAllModule").crossKindScopedAliasNames())
 
 	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
 	return merged
@@ -1556,6 +1566,18 @@ end 'blameOutsideTheLibrary'
 // that is the same question this answers — so it is asked here rather than re-spelled as
 // `isStdlibSource or self.rootIsUnderStdlibDirectory` one file over. The header above is a proof about ONE
 // predicate; a second spelling of it is a second thing that can stop being true.
+// ⭐ **THE MEMOIZED WHOLE-PROGRAM INDEX, FOR A READER THAT CANNOT FAIL.** Every caller here runs BELOW the
+// point `compileToCodeResult` computes and memoizes it, so a fresh failure is impossible and a `throws` on
+// each of them would be an error path no program can take.
+//
+// ⚠ **IT LIVES HERE, BESIDE THE QUERY, BECAUSE IT HAS TWO TIERS OF CALLER.** It was `SemanticCheck`'s own
+// file-private helper until the whole-program TYPE-NAME contest gave `queryAllModule` — this file, at the
+// project registry's own range-contest settle — a reason to ask the same question, and a second copy of
+// "fetch the memo or panic" is a second place for the sentence explaining why it cannot fail to go stale.
+export function programSignaturesIn(project Project, asker String) returns ProgramSignatures
+	return try queryProgramSignatures(project) otherwise panic("{asker}: queryProgramSignatures failed below the pipeline — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+end 'programSignaturesIn'
+
 export function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
 	return isStdlibSource or signatures.rootIsUnderStdlibDirectory
 end 'livesUnderStdlibDirectory'

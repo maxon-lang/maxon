@@ -243,31 +243,72 @@ error E3006: <fragment>:5:6: duplicate definition of 'Box' — already declared 
 ```
 
 
-<!-- test: error.crossfile-type-and-typealias -->
-Across files, and this is the direction file scoping does NOT rescue: `b.maxon`'s own `typealias Box`
-is unreachable from `b.maxon` itself, because the struct registry is bare and is consulted first. The
-cast below was rejected with `E3009: Cannot cast from int to struct` — against a `type` declared in a
-file it never names — and that was the ONLY thing the program said.
+<!-- test: crossfile-type-and-file-private-typealias-coexist -->
+Across files, with a FILE-PRIVATE alias — and this is the direction file scoping now does rescue.
+`b.maxon`'s own `typealias Box` used to be unreachable from `b.maxon` itself, because the struct
+registry is bare and is consulted first: the cast below was rejected with `E3009: Cannot cast from int
+to struct`, against a `type` declared in a file it never names, and an `E3006` blamed the pair as a
+duplicate.
 
-**Both are reported now, and the E3009 comes first.** The cast error is raised by the parser, which
-runs before the merge the collision is detected at; it is a true statement about the program as the
-compiler must read it, and E3006 is the reason it reads that way. What matters is that the E3009 no
-longer arrives ALONE: aborting `b.maxon`'s parse used to discard everything it had declared, so the
-duplicate that caused the cast error was suppressed by the cast error
-(`Parser.abortedParseArtifact`).
+**Neither declaration is a duplicate of anything.** A non-exported `typealias` is file-local, so
+`a.maxon`'s `export type Box` cannot see it and it cannot see the struct — the two names never meet.
+`b.maxon`'s cast resolves against `b.maxon`'s own alias, which is the reader-file rule the ranged
+registry has always applied, now applied to the CASCADE that picks which registry answers. The
+exported pair that genuinely does collide is the next test.
+
+`main.maxon` names `Box` too, and means the STRUCT — a's declaration is the only one it can see — while
+`b.maxon` means its own alias by the same spelling in the same program. That is the whole claim, and it
+is why main constructs one rather than merely calling `useIt`: a case where nobody outside `a.maxon`
+names `Box` would be answered by the compiler without ever deciding which declaration it meant.
 ```maxon
 // --- file: a.maxon
 typealias Small = int(0 to 100)
 
 export type Box
 	export var v as Small
+
+	export static function create(v Small) returns Box
+		return Self{v: v}
+	end 'create'
 end 'Box'
 
 // --- file: b.maxon
 typealias Box = int(0 to 10)
 
-export function useIt() returns ExitCode
+export function useIt() returns Box
 	return 5 as Box
+end 'useIt'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let boxed = Box.create(3)
+
+	return useIt() + boxed.v
+end 'main'
+```
+```exitcode
+8
+```
+
+
+<!-- test: error.crossfile-type-and-exported-typealias -->
+The boundary the previous test does not cross: `b.maxon`'s alias is `export`ed, so it IS visible to
+`a.maxon`, the two declarations genuinely claim one name in one scope, and the pair stays a duplicate.
+File scoping rescues a pair that never meets; it does not merge two that do. A `type` and a `typealias`
+of one name, both reachable from one file, is exactly what no qualification could disambiguate.
+```maxon
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+
+export type Score
+	export var v as Small
+end 'Score'
+
+// --- file: b.maxon
+export typealias Score = int(0 to 10)
+
+export function useIt() returns ExitCode
+	return 5 as Score
 end 'useIt'
 
 // --- file: main.maxon
@@ -277,7 +318,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3009: <fragment>:13:11: Cannot cast from int to struct
-error E3006: <fragment>:10:11: duplicate definition of 'Box' — already declared as `type Box`
+error E3006: <fragment>:10:18: duplicate definition of 'Score' — already declared as `type Score`
 ```
 
 
@@ -479,18 +520,18 @@ error E3062: <fragment>:10:11: unused typealias: 'G'
 ```
 
 
-<!-- test: error.crossfile-ranged-and-function-alias -->
-Two files, one name, two alias FORMS. This is the pair the file-local carve-out does not cover: the
-function-alias registry is bare and whole-program, so it answers for `a.maxon` too, and `a.maxon`'s
-own `5 as Handler` was rejected with `Cannot cast from int to function` — a diagnostic in a file
-whose only `Handler` is an `int` alias, naming a declaration it never mentions, and the only thing
-the program said. The E3061 that explains it now accompanies it (see the previous test on why the
-consequence is printed first).
+<!-- test: crossfile-ranged-and-function-alias-coexist -->
+Two files, one name, two alias FORMS — and the carve-out now covers it, because the property that
+makes a pair legal is that neither declaration can see the other, not that they happen to be spelled
+alike. The function-alias registry was bare and whole-program, so it answered for `a.maxon` too, and
+`a.maxon`'s own `5 as Handler` was rejected with `Cannot cast from int to function` — a diagnostic in
+a file whose only `Handler` is an `int` alias, naming a declaration it never mentions. Both aliases
+are file-private, so each answers for its own file and neither is a duplicate.
 ```maxon
 // --- file: a.maxon
 typealias Handler = int(0 to 10)
 
-export function useA() returns ExitCode
+export function useA() returns Handler
 	return 5 as Handler
 end 'useA'
 
@@ -503,13 +544,17 @@ end 'useB'
 
 typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
+function zero() returns Integer
+	return 0
+end 'zero'
+
 function main() returns ExitCode
-	return useA()
+	return useA() + useB(zero)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3009: <fragment>:6:11: Cannot cast from int to function
-error E3061: <fragment>:10:11: Duplicate typealias 'Handler'
+```exitcode
+5
 ```
 
 
@@ -1757,4 +1802,542 @@ end 'main'
 ```
 ```exitcode
 142
+```
+
+
+<!-- test: crossfile-return-type-is-the-declaring-files-meaning -->
+⭐⭐ **A CALLEE'S RETURN TYPE IS A SLOT OF THE FILE THAT DECLARED IT, NEVER OF THE FILE CALLING IT** —
+the shape neither of the coexistence cases above reaches, and the one where getting it wrong is SILENT.
+`a.maxon` declares a file-private `typealias Widget` and `b.maxon` an `export type Widget`; the two
+coexist because neither can see the other. `main.maxon` declares NEITHER, so it is a stranger to the name
+— and a stranger that resolved each callee's return type in ITS OWN scope would give both functions one
+meaning, when the whole point is that they have two.
+
+Read with the caller's file it was **`E3005: Cannot return 'struct' from function declared to return
+'int'`** for `fromA`, and through the field read below it dereferenced the integer `3` as a record —
+**exit 139, clean compile, no diagnostic.**
+```maxon
+// --- file: a.maxon
+typealias Widget = int(0 to 5)
+
+export function fromA() returns Widget
+	return 3
+end 'fromA'
+
+// --- file: b.maxon
+typealias Slot = int(0 to 100)
+
+export type Widget
+	export var value as Slot
+
+	export static function create(value Slot) returns Widget
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+export function fromB() returns Widget
+	return Widget.create(9)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let boxed = fromB()
+
+	return fromA() + boxed.value
+end 'main'
+```
+```exitcode
+12
+```
+
+
+<!-- test: crossfile-return-type-through-two-alias-forms -->
+The same rule through the arm that has no nominal declaration in it at all — a RANGED alias in one file
+against a TUPLE alias in another. It is a different code path (a tuple alias resolves to the tuple's own
+`structRef`, not to a declared `type`), so narrowing only the nominal side of the cascade leaves it open:
+`fromA`'s `int` was read as `main.maxon`'s meaning and the result bound a tuple.
+```maxon
+// --- file: a.maxon
+typealias Pair = int(0 to 5)
+
+export function fromA() returns Pair
+	return 4
+end 'fromA'
+
+// --- file: b.maxon
+typealias Coord = int(0 to 100)
+typealias Pair = (Coord, Coord)
+
+export function fromB() returns Pair
+	return (7, 9)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let p = fromB()
+
+	return fromA() + p.0 + p.1
+end 'main'
+```
+```exitcode
+20
+```
+
+
+<!-- test: error.crossfile-enum-member-is-not-reachable-through-an-alias -->
+⛔⛔ **A MEMBER ACCESS ON A COEXISTING NAME MUST NOT REACH THE OTHER FILE'S DECLARATION, AND WHEN IT DID
+THE RANGE AND THE VALUE CAME FROM DIFFERENT DECLARATIONS.** `a.maxon` means a ranged `int(0 to 5)` by
+`Status`; `b.maxon` declares an `enum Status` whose `big` is 200. `Status.big` written inside `a.maxon`
+resolved to `b.maxon`'s enum and stored **200** into a slot `a.maxon` declares as `int(0 to 5)` — the
+range from one declaration, the value from the other, **compiling clean and exiting 201.**
+
+`a.maxon` means the ALIAS by `Status`, and the only members a ranged alias has are its BOUNDS — so the
+access is refused by the rule that already governs `Status.min` / `Status.max`, naming what this file's
+declaration actually offers instead of silently reaching the other one.
+```maxon
+// --- file: a.maxon
+typealias Status = int(0 to 5)
+
+export function pick() returns ExitCode
+	var s = 1 as Status
+	s = Status.big
+	return s as ExitCode
+end 'pick'
+
+// --- file: b.maxon
+export enum Status
+	small = 1
+	big = 200
+end 'Status'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return pick()
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:7:13: Expected 'min or max' but got 'big'
+```
+
+
+<!-- test: crossfile-enum-member-keeps-its-own-files-value -->
+The runnable half of the case above, and the one that asserts the VALUES rather than a diagnostic: each
+file keeps its own declaration, so `b.maxon`'s `Status.big` is still 200 and `a.maxon`'s `Status` still
+ranges 0 to 5. A cure that reached the enum from `a.maxon` would be caught by the error case; a cure that
+lost `b.maxon`'s own enum would be caught here.
+```maxon
+// --- file: a.maxon
+typealias Status = int(0 to 5)
+
+export function clamped() returns ExitCode
+	let s = 4 as Status
+	return s
+end 'clamped'
+
+// --- file: b.maxon
+enum Status
+	small = 1
+	big = 200
+end 'Status'
+
+export function widest() returns ExitCode
+	return Status.big.rawValue as ExitCode
+end 'widest'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return widest() - clamped()
+end 'main'
+```
+```exitcode
+196
+```
+
+
+<!-- test: crossfile-return-type-that-is-an-enum-in-its-own-file -->
+⭐ **A COEXISTING NAME WHOSE DECLARING FILE MEANS AN `enum`, IN A RETURN TYPE.** Nothing in the suite put
+this shape in front of the code: an enum and a union are the two kinds that stay a bare `named` through
+resolution (`resolveNamedStruct` normalizes a struct, `resolveNamedAlias` the function/generic/tuple forms,
+`resolveFloatAliasType` a float alias — none of them touches an enum), so a repair that erases whatever is
+still `named` at the crossing erases them too, **even when the reader and the declaring file agree.**
+```maxon
+// --- file: a.maxon
+typealias Level = int(0 to 5)
+
+export function fromA() returns Level
+	return 3
+end 'fromA'
+
+// --- file: b.maxon
+enum Level
+	low = 1
+	high = 9
+end 'Level'
+
+export function fromB() returns Level
+	return Level.high
+end 'fromB'
+
+export function rankOf(l Level) returns ExitCode
+	return l.rawValue
+end 'rankOf'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + rankOf(fromB())
+end 'main'
+```
+```exitcode
+12
+```
+
+
+<!-- test: crossfile-return-type-that-is-a-boxed-union-in-its-own-file -->
+⭐⭐ **THE SILENT ONE: a BOXED union crossing a file boundary as a returned TEMPORARY.** `holds(s String)`
+gives the union a heap box, so the caller adopts the result and drops it once. Erase the type at the
+crossing and the box is never enrolled — no diagnostic, no output, **exit 139** — which is why this case
+returns a value that depends on the payload rather than merely compiling.
+```maxon
+// --- file: a.maxon
+typealias Container = int(0 to 5)
+
+export function fromA() returns Container
+	return 2
+end 'fromA'
+
+// --- file: b.maxon
+union Container
+	empty
+	holds(s String)
+end 'Container'
+
+export function makeB() returns Container
+	return Container.holds("xyzz")
+end 'makeB'
+
+export function widthOf(c Container) returns ExitCode
+	match c 'kind'
+		empty then return 0
+		holds(s) then return s.count() as ExitCode
+	end 'kind'
+end 'widthOf'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + widthOf(makeB())
+end 'main'
+```
+```exitcode
+6
+```
+
+
+<!-- test: crossfile-float-alias-against-a-nominal-declaration -->
+A FLOAT ranged alias in the contest. `resolveFloatAliasType` reaches the ranged registry through
+`aliasOf`, which is reader-aware about the RANGE and was blind to the KIND — so `b.maxon`'s own
+`returns Level` was resolved against `a.maxon`'s float alias, and the refusal landed **inside `b.maxon`,
+about a declaration its author never saw.**
+```maxon
+// --- file: a.maxon
+typealias Level = float(0.0 to 5.0)
+
+export function fromA() returns Level
+	return 2.5
+end 'fromA'
+
+// --- file: b.maxon
+enum Level
+	low = 1
+	high = 9
+end 'Level'
+
+export function fromB() returns Level
+	return Level.high
+end 'fromB'
+
+export function rankOf(l Level) returns ExitCode
+	return l.rawValue
+end 'rankOf'
+
+// --- file: main.maxon
+typealias Whole = int(0 to 100)
+
+function main() returns ExitCode
+	let scaled = trunc(fromA() * 2.0) as Whole
+
+	return scaled + rankOf(fromB())
+end 'main'
+```
+```exitcode
+14
+```
+
+
+<!-- test: crossfile-indirect-call-through-a-contested-returning-alias -->
+An INDIRECT call through a function-alias value whose return type is a coexisting name. The result's type
+is a slot of the file that declared the ALIAS, not of the file making the call — and `c.maxon` below
+declares neither `Token` nor `Cb`, so a call scoped by the caller resolved `Token` to `b.maxon`'s struct
+and handed back the integer 3 wearing a record's type.
+```maxon
+// --- file: a.maxon
+typealias Token = int(0 to 5)
+
+export typealias Cb = function() returns Token
+
+export function three() returns Token
+	return 3
+end 'three'
+
+// --- file: b.maxon
+typealias Slot = int(0 to 100)
+
+export type Token
+	export var value as Slot
+
+	export static function create(value Slot) returns Token
+		return Self{value: value}
+	end 'create'
+end 'Token'
+
+export function fromB() returns Token
+	return Token.create(9)
+end 'fromB'
+
+// --- file: c.maxon
+export function callIt(f Cb) returns ExitCode
+	return f()
+end 'callIt'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let boxed = fromB()
+
+	return callIt(three) + boxed.value
+end 'main'
+```
+```exitcode
+12
+```
+
+
+<!-- test: crossfile-boxed-union-temporary-is-discarded-by-a-stranger -->
+⭐⭐ **THE SILENT SHAPE, AND THE ONE THE LOUD UNION CASE ABOVE CANNOT REACH.** `main.maxon` declares
+NEITHER claimant and mentions `Container` only in `relay`'s signature — a function nothing calls — so the
+boxed union arrives as a DISCARDED owned temporary and every check that would have refused it is bypassed.
+
+The fault was not in `main.maxon` at all: `a.maxon`'s `return 2 as Container` had its value classified by
+the whole-program enum registry, which found `b.maxon`'s BOXED union, and the return path emitted
+**`__mm_retain` on the integer 2** — `x64.movRegImm32 rcx, 2` / `x64.callDirect __mm_retain`, in a function
+whose own file has no union in it. **Exit 139, clean compile, no output**, against a control that differs
+only in the name.
+```maxon
+// --- file: a.maxon
+typealias Container = int(0 to 5)
+
+export function fromA() returns ExitCode
+	return 2 as Container
+end 'fromA'
+
+// --- file: b.maxon
+export union Container
+	empty
+	holds(s String)
+end 'Container'
+
+export function fromB() returns Container
+	return Container.holds("hi")
+end 'fromB'
+
+export function valueOf(c Container) returns ExitCode
+	match c 'pick'
+		empty then return 0
+		holds(s) then return 3 if s.equals("hi") else 0
+	end 'pick'
+end 'valueOf'
+
+// --- file: main.maxon
+function relay(c Container) returns ExitCode
+	return valueOf(c)
+end 'relay'
+
+function main() returns ExitCode
+	_ = fromB()
+
+	return 5 + fromA()
+end 'main'
+```
+```exitcode
+7
+```
+
+
+<!-- test: crossfile-reassigned-parameter-of-a-contested-name -->
+⭐⭐ **THE PURELY LOCAL SHAPE — nothing crosses a file, and that is why the eleven cases above could not
+reach it.** Every other coexistence case puts the contested name at a crossing: a return type, a
+parameter's declared type, an indirect call. Here `a.maxon` reassigns its OWN by-reference parameter, and
+the fault is entirely inside `a.maxon` — the value never leaves it.
+
+A reassigned parameter is a CELL, and the cell asks the memory-management tier whether its content is
+managed. That tier had no reading file, so it answered off `b.maxon`'s declaration: `useA(c Container)`
+doing `c = 4` emitted **`__mm_incref` on the literal 4** and `__mm_decref` on a header at address **2** —
+exit **139** against a control of 7. The panic string two blocks up in the same function still read
+*"outside typealias 'Container'"*: the compiler knew it was a ranged alias while the tier disagreed,
+inside one function body.
+```maxon
+// --- file: a.maxon
+typealias Container = int(0 to 5)
+
+export function useA(c Container) returns ExitCode
+	c = 4
+	return c
+end 'useA'
+
+// --- file: b.maxon
+union Container
+	empty
+	holds(s String)
+end 'Container'
+
+export function fromB() returns ExitCode
+	let c = Container.holds("hi")
+
+	match c 'pick'
+		empty then return 0
+		holds(s) then return 3 if s.equals("hi") else 0
+	end 'pick'
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return useA(2) + fromB()
+end 'main'
+```
+```exitcode
+7
+```
+
+
+<!-- test: crossfile-reassigned-parameter-against-a-struct-claimant -->
+The same local shape with a `type` claimant rather than a union, because the two reach the managed
+classifier through different arms of it and only one of them was measured the first time.
+```maxon
+// --- file: a.maxon
+typealias Widget = int(0 to 5)
+
+export function useA(c Widget) returns ExitCode
+	c = 4
+	return c
+end 'useA'
+
+// --- file: b.maxon
+typealias Slot = int(0 to 100)
+
+type Widget
+	export var value as Slot
+
+	export static function create(value Slot) returns Widget
+		return Self{value: value}
+	end 'create'
+end 'Widget'
+
+export function fromB() returns ExitCode
+	return Widget.create(3).value
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return useA(2) + fromB()
+end 'main'
+```
+```exitcode
+7
+```
+
+
+<!-- test: error.crossfile-a-contested-name-does-not-credit-the-other-declaration -->
+⭐ **THE UNUSED-EXPORT AUDIT MUST NOT COUNT ONE FILE'S USES OF ITS OWN ALIAS AS REFERENCES TO ANOTHER
+FILE'S EXPORT.** `b.maxon`'s `export union Container` is named by nobody outside `b.maxon`, so it earns
+E3092 — and it did, until `a.maxon`'s file-private `typealias Container` was given the same spelling.
+The reference walk credited EVERY tracked declaration wearing the name, so `a.maxon`'s uses of its own
+alias silently satisfied the export and **the diagnostic vanished.** Not memory-unsafe, but it made this
+audit's answer depend on an unrelated file's choice of word.
+```maxon
+// --- file: a.maxon
+typealias Container = int(0 to 5)
+
+export function useA() returns ExitCode
+	let c = 4 as Container
+	return c
+end 'useA'
+
+// --- file: b.maxon
+export union Container
+	empty
+	holds(s String)
+end 'Container'
+
+export function fromB() returns ExitCode
+	let c = Container.holds("hi")
+
+	match c 'pick'
+		empty then return 0
+		holds(s) then return 3 if s.equals("hi") else 0
+	end 'pick'
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return useA() + fromB()
+end 'main'
+```
+```maxoncstderr
+error E3092: <fragment>:11:14: exported type 'Container' is never referenced outside its declaring file
+```
+
+
+<!-- test: error.crossfile-a-service-throws-a-contested-name -->
+<!-- targets: x64-windows, arm64-macos -->
+A `throws` clause is a MEANING question, so it is answered for the file that WROTE it. `b.maxon` declares
+its own ranged `Fault` and its service message declares `throws Fault`; `a.maxon`'s `enum Fault` is a
+different declaration that `b.maxon` cannot name. The clause therefore names no error type and the program
+is refused — even though an `enum Fault` does exist somewhere in it.
+
+This case is load-bearing beyond its own message. `ServiceCompanions.mintServiceReplyErrorType` decides
+whether to mint a fused reply-error enum by asking the same reader; the bare whole-program door would
+answer "enum" here and mint one. That mint is harmless ONLY while this refusal holds, so if E3113 ever
+stops covering this shape, this case goes red and names the gate that would then be minting a companion
+for a live program.
+```maxon
+// --- file: a.maxon
+export enum Fault implements Error
+	broke
+end 'Fault'
+
+// --- file: b.maxon
+typealias Fault = int(0 to 10)
+typealias Integer = int(i64.min to i64.max)
+
+export type Calc
+	var count as Integer
+	var seen as Fault
+
+	export static function create() returns Self
+		return Self{count: 0, seen: 3}
+	end 'create'
+
+	export function divide(n Integer, by Integer) returns Integer throws Fault
+		return n + by + self.count + self.seen
+	end 'divide'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let v = try await h.divide(10, by: 2) otherwise return 70
+
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3113: <fragment>:19:18: 'throws Fault' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
 ```

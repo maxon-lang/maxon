@@ -655,10 +655,19 @@ E3006 SemanticDuplicateDefinition
 	doc in one whole-program namespace, and a fixed resolution cascade used to
 	doc pick the winner silently. Fires from `commitTypeNameDecls` in shv2 at the
 	doc merge. Kind-independent exactly as (c) is: what is refused is the SECOND
-	doc declaration of the name, whichever keyword introduced either of them. The
-	doc one exception is two `typealias` declarations, which are E3061 -- and
-	doc which are legal outright when they are the same alias FORM in different
-	doc files, a non-exported typealias being file-local; (e) a name claimed
+	doc declaration of the name, whichever keyword introduced either of them --
+	doc UNLESS THE TWO DECLARATIONS CANNOT SEE EACH OTHER, which is the whole
+	doc rule (`typeNamePairMayCoexist` in shv2). Three ways that holds: two
+	doc `typealias` declarations in different files, whatever their FORMS (each
+	doc alias form is scoped, and an ambiguity between two an author could both
+	doc name is E3063 at the reference rather than a refusal of the
+	doc declarations); a nominal declaration against a FILE-PRIVATE alias in
+	doc another file; and a pair drawn from two LAYERS -- a `stdlib/`
+	doc declaration and a user one are never both in scope. What still collides
+	doc is one FILE declaring a name twice, two NOMINAL declarations, and a
+	doc nominal declaration against an alias that is exported or `module`-visible
+	doc from another file in the same layer. A pair of typealiases that does
+	doc collide is E3061 rather than this code; (e) a name claimed
 	doc twice in the COMPILED type namespace -- a generic instantiation has no
 	doc source name, so the compiler joins its base to its arguments (`Box with
 	doc String` -> `Box_String`) and derives every per-type symbol from that
@@ -873,14 +882,15 @@ E3061 SemanticDuplicateTypeAlias
 	selfhosted semanticDuplicateTypeAlias
 	shv2 semanticDuplicateTypeAlias
 	doc Two typealiases in scope declare the same name.
-	doc Two declarations of one name are legal only when both are `typealias` of
-	doc the SAME FORM (both ranged, both function, both generic-instance) in
-	doc DIFFERENT files -- a non-exported typealias is file-local
-	doc (specs/duplicate-typealias.md). Every other pair collides: same file
-	doc whatever the forms, and different files whenever the forms differ, since
-	doc only the ranged registry is scoped per declaring file. shv2 raises this
-	doc from `commitTypeNameDecls` when BOTH declarations are typealiases; a pair
-	doc involving a `type`/`enum`/`union`/`interface` is E3006 instead.
+	doc Two `typealias` declarations of one name in DIFFERENT files are legal,
+	doc whatever their forms: every alias form is scoped, a non-exported one is
+	doc file-local (specs/duplicate-typealias.md), and an ambiguity between two
+	doc an author could both name is a property of the USE -- E3063 at the
+	doc reference -- rather than a refusal of the declarations. What this code
+	doc refuses is ONE FILE declaring the name twice, which no qualification
+	doc could disambiguate. shv2 raises it from `commitTypeNameDecls` when BOTH
+	doc declarations are typealiases; a colliding pair involving a
+	doc `type`/`enum`/`union`/`interface` is E3006 instead.
 
 E3062 SemanticUnusedTypeAlias
 	csharp SemanticUnusedTypeAlias

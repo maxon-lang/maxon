@@ -846,14 +846,14 @@ function reportTypeNameCollision(project Project, decl TypeNameDecl, winner Type
 	// file's diagnostic.** Two files may each legally declare `typealias Byte` (`TypeNameRegistry`'s
 	// carve-out; seven `stdlib/` files do), so one file declaring it twice would poison the name
 	// project-wide and silently swallow another file's genuinely-unused `Byte`.
-	project.collidedTypeNames.insert(fileScopedDeclKey(decl.name, declFilePath: decl.declFilePath))
+	project.collidedTypeNames.insert(fileScopedDeclKey(decl.name, declFilePath: decl.claim.declFilePath))
 
-	if isTypeAliasDecl(decl.kind) and isTypeAliasDecl(winner.kind) 'bothAreTypeAliases'
-		reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(decl.name)}'", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+	if isTypeAliasDecl(decl.claim.kind) and isTypeAliasDecl(winner.claim.kind) 'bothAreTypeAliases'
+		reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(decl.name)}'", line: decl.nameLine, column: decl.nameColumn, filePath: decl.claim.declFilePath)
 		return
 	end 'bothAreTypeAliases'
 
-	reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{String.from(decl.name)}' — already declared as `{typeDeclKeyword(winner.kind)} {String.from(winner.name)}`", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+	reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{String.from(decl.name)}' — already declared as `{typeDeclKeyword(winner.claim.kind)} {String.from(winner.name)}`", line: decl.nameLine, column: decl.nameColumn, filePath: decl.claim.declFilePath)
 end 'reportTypeNameCollision'
 
 // --- The COMPILED half of the same namespace: one emitted type name, one INSTANTIATION ---

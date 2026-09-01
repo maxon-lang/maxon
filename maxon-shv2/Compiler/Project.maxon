@@ -1769,6 +1769,33 @@ export type RangedAliasRegistry
 		return try self.multiplyDeclared.get(name) otherwise sharedEmptyContestedDeclarations
 	end 'contestedDeclarations'
 
+	// ⭐ **EVERY NAME SOME FILE DECLARES A RANGED ALIAS UNDER** — for the ONE whole-program walk that has to
+	// visit them all (`ProgramSignatures.settleCrossKindContests`, which offers every declared type name to
+	// the cross-KIND test). A fresh array rather than the map itself: this registry's index is its own, and
+	// handing a caller a live handle to it is how a reader becomes a writer.
+	//
+	// It allocates once per compile, on a walk that already visits every declaration in the program.
+	export function declaredNames() returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		for (name, _) in self.byName 'eachDeclaredName'
+			names.push(name)
+		end 'eachDeclaredName'
+
+		return names
+	end 'declaredNames'
+
+	// ⭐ **THE DECLARATION `byName` HOLDS — no scoping, and NO BUILTIN FALLBACK.** It is deliberately not
+	// `lookup`, whose job is to answer what a READER means and which therefore synthesizes the builtin
+	// `ExitCode` alias for a name no file declares. A contest is a question about DECLARATIONS, so a
+	// synthesized answer here would file a claim for a declaration that appears in no program.
+	export function declarationInAnyFile(name ByteArray) returns DeclaredAlias
+		if let any = try self.byName.get(name) 'declaredSomewhere'
+			return DeclaredAlias.declared(any)
+		end 'declaredSomewhere'
+
+		return DeclaredAlias.undeclared
+	end 'declarationInAnyFile'
+
 	// ⚠ **THE BARE PROBE, for the readers that HAVE no file to ask from** — type resolution's erasure
 	// of a `named` to its primitive (`resolveNamedType`, reached for a `StructLayout` field type,
 	// which records no declaring file), conformance-signature canonicalization, union payload
@@ -2156,7 +2183,22 @@ export type RangedAliasRegistry
 	// hands a 2-byte element a ONE-BYTE stride with no diagnostic. Building into a LOCAL and assigning at the
 	// end makes "the mints exist before anything can name them" a property of the code rather than of the
 	// fact that nothing currently runs between the two loops.
-	export function settleRangeContests()
+	// ⭐⭐ **`alsoScope` IS EVERY NAME A SECOND *KIND* OF DECLARATION ALSO HOLDS** — the cross-KIND contest's
+	// names (`ProgramSignatures.crossKindScopedAliasNames`), scoped through exactly this mechanism and not a
+	// second one. A `type ParsedInt` in a user file and a `typealias ParsedInt` in `stdlib/Builtins.maxon`
+	// give the name two MEANINGS rather than two ranges, but the thing that has to happen to a container
+	// over it is identical: its element needs a spelling only ONE declaration answers for, so that a reader
+	// with no file — the whole managed tier (`typeIsManaged`, `managedFieldDropCallee`) — cannot resolve it
+	// to the other one. **MEASURED without it:** `stdlib/Builtins.maxon`'s own
+	// `typealias ParsedIntArray = Array with ParsedInt` had its element classified as the USER's struct, so
+	// printing a float dropped an array of INTEGERS through `__destruct_ParsedInt` — exit **0xC0000005**, no
+	// diagnostic and no output.
+	//
+	// ⚠ **SUCH A NAME IS SCOPED EVEN WITH ONE RANGE CLAIMANT, which is the one rule the two halves do not
+	// share.** A range contest needs two claimants by definition — one range is no disagreement — while a
+	// KIND contest's alias side is very often a single declaration, and it is precisely that declaration the
+	// container's element must be pinned to. The `< 2` test therefore belongs to the range walk alone.
+	export function settleRangeContests(alsoScope ByteArrayArray)
 		var mints = RangedTypeAliasArray.create()
 		// ⚠ **BUILT OWNED, AND THE SHARED EMPTY HANDLE IS WHAT THE FIELD KEEPS WHEN NOTHING IS CONTESTED.**
 		// This used to start AS `sharedEmptyRangeContests` and copy-on-write on the first contest, guarded by
@@ -2165,27 +2207,30 @@ export type RangedAliasRegistry
 		// and the rule is about what the name CAN reach. The publish below is already gated on `count() > 0`,
 		// so an uncontested program still never touches the field; what it now costs is one empty map.
 		var settled = RangeContestedAliasMap.create()
-		for (name, byFile) in self.multiplyDeclared 'eachMultiplyDeclaredName'
-			var claimants = RangedTypeAliasArray.create()
-			for (_, alias) in byFile 'eachDeclaration'
-				if not holdsRange(claimants, low: alias.low, high: alias.high) 'aRangeNoEarlierDeclarationClaimed'
-					claimants.push(alias)
-				end 'aRangeNoEarlierDeclarationClaimed'
-			end 'eachDeclaration'
-
+		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
+			let claimants = self.distinctRangeClaimants(name)
 			if claimants.count() < 2 'everyDeclarationAgreesAboutTheRange'
 				continue
 			end 'everyDeclarationAgreesAboutTheRange'
 
-			var spellings = ByteArrayArray.create()
-			for claimant in claimants 'eachDistinctRange'
-				let spelling = rangeQualifiedAliasName(name, low: claimant.low, high: claimant.high)
-				spellings.push(spelling)
-				mints.push(rangeQualifiedMint(claimant, spelling: spelling))
-			end 'eachDistinctRange'
-
-			settled.upsert(name, value: spellings)
+			settled.upsert(name, value: scopedSpellingsOf(name, claimants: claimants, mints: mints))
 		end 'eachMultiplyDeclaredName'
+
+		// ⭐ The cross-KIND half — see this function's header. It runs SECOND and skips a name the range walk
+		// already scoped, so a name that is both range-contested AND kind-contested keeps the range walk's
+		// spellings: those are one per RANGE, which is the finer split of the two and subsumes this one.
+		for name in alsoScope 'eachKindContestedName'
+			if settled.contains(name) 'theRangeContestAlreadyScopedIt'
+				continue
+			end 'theRangeContestAlreadyScopedIt'
+
+			let kindClaimants = self.distinctRangeClaimants(name)
+			if kindClaimants.count() == 0 'noRangedDeclarationHoldsIt'
+				continue
+			end 'noRangedDeclarationHoldsIt'
+
+			settled.upsert(name, value: scopedSpellingsOf(name, claimants: kindClaimants, mints: mints))
+		end 'eachKindContestedName'
 
 		// ⚠ RECORDED BEFORE THE PUBLISH BELOW, and separately from the walk above because `record` writes
 		// `multiplyDeclared` — the very map that walk iterates.
@@ -2222,16 +2267,50 @@ export type RangedAliasRegistry
 	// (instance, environment) pair a parse could ask for is interned in one pass beforehand
 	// (`ProgramSignatures.settleRangeScopedInstances`), and this is the list that makes that pass COMPLETE:
 	// a reader's answer is one of these declarations or the stranger's, and there is no third case.
+	//
+	// ⚠ **IT READS `distinctRangeClaimants`, NOT `contestedDeclarations`, AND THE DIFFERENCE IS THE WHOLE
+	// CROSS-KIND HALF.** A name only one file declares as a ranged alias holds NO entry in
+	// `multiplyDeclared` — so asking that map directly yielded no environment at all for a KIND-contested
+	// name, and the one file whose container had to be scoped (`stdlib/Builtins.maxon`) was never an
+	// environment. The claimant walk answers for both halves off one rule.
 	export function rangeContestEnvironments() returns FilePathArray
 		var environments = FilePathArray.create()
 		environments.push(CompilerOwnedDeclFilePath)
 		for (name, _) in self.rangeContested 'eachContestedName'
-			for (_, alias) in self.contestedDeclarations(name) 'eachDeclaration'
-				environments.push(alias.declFilePath)
+			for claimant in self.distinctRangeClaimants(name) 'eachDeclaration'
+				environments.push(claimant.declFilePath)
 			end 'eachDeclaration'
 		end 'eachContestedName'
 		return environments
 	end 'rangeContestEnvironments'
+
+	// ⭐ **ONE DECLARATION PER DISTINCT RANGE SOME FILE GIVES `name`** — the set both halves of
+	// `settleRangeContests` mint from, and the set `rangeContestEnvironments` reads its files off, so
+	// "which declarations does a contested name have" is answered in one place.
+	//
+	// ⚠ **THE SOLE-DECLARATION FALLBACK IS WHAT MAKES THE CROSS-KIND HALF POSSIBLE.** `multiplyDeclared`
+	// holds only the names two or more FILES declare; a name one file declares as a ranged alias while
+	// another holds it as a `type` is not in it, and that pair is exactly the one the cross-kind half exists
+	// for. It is `byName` and not `lookup`: this asks about DECLARATIONS, and `lookup` synthesizes the
+	// builtin `ExitCode` for a name no file declares at all.
+	function distinctRangeClaimants(name ByteArray) returns RangedTypeAliasArray
+		var claimants = RangedTypeAliasArray.create()
+		for (_, alias) in self.contestedDeclarations(name) 'eachDeclaringFile'
+			if not holdsRange(claimants, low: alias.low, high: alias.high) 'aRangeNoEarlierDeclarationClaimed'
+				claimants.push(alias)
+			end 'aRangeNoEarlierDeclarationClaimed'
+		end 'eachDeclaringFile'
+
+		if claimants.count() > 0 'severalFilesDeclareIt'
+			return claimants
+		end 'severalFilesDeclareIt'
+
+		if let sole = try self.byName.get(name) 'oneFileDeclaresIt'
+			claimants.push(sole)
+		end 'oneFileDeclaresIt'
+
+		return claimants
+	end 'distinctRangeClaimants'
 
 	// ⭐⭐ **WHAT `name` IS CALLED AS A GENERIC-INSTANCE ELEMENT WHEN READ FROM `readerFilePath` (N2)** —
 	// the bare name for every name in an uncontested program, and the reader's OWN claimant's mint for a
@@ -2265,6 +2344,21 @@ end 'RangedAliasRegistry'
 // make an unobservable field depend on that order. `global` is also the honest answer — a mint is
 // compiler-supplied, exactly like the seeds `builtinStdlibAlias` builds, and its NAME is unspellable in
 // source (`CompilerQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
+// The qualified SPELLING of each claimant, with the declaration each spelling names pushed onto `mints`.
+// Both halves of `settleRangeContests` build their entry through it, so a range-scoped element and a
+// kind-scoped one are spelled and registered by one act — a second speller would be a mint no reader can
+// find (see that function's ⚠⚠ note on publishing the map last).
+function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints RangedTypeAliasArray) returns ByteArrayArray
+	var spellings = ByteArrayArray.create()
+	for claimant in claimants 'eachDistinctRange'
+		let spelling = rangeQualifiedAliasName(name, low: claimant.low, high: claimant.high)
+		spellings.push(spelling)
+		mints.push(rangeQualifiedMint(claimant, spelling: spelling))
+	end 'eachDistinctRange'
+
+	return spellings
+end 'scopedSpellingsOf'
+
 function rangeQualifiedMint(claimant RangedTypeAlias, spelling ByteArray) returns RangedTypeAlias
 	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: Visibility.global, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn)
 end 'rangeQualifiedMint'
@@ -2389,18 +2483,55 @@ export function isTypeAliasDecl(kind TypeDeclKind) returns bool
 	end 'k'
 end 'isTypeAliasDecl'
 
+// ⭐⭐ **WHO CLAIMED A TYPE NAME — the four facts, and the ONLY four, that decide whether two
+// declarations of one name may COEXIST.** It is a record of its own rather than four fields on
+// `TypeNameDecl` because the rule has TWO consumers holding two different records, and neither may own
+// it: the MERGE-time duplicate check (`TypeNameRegistry`), which also needs the name and the position
+// it blames, and the SWEEP-time contest table (`ProgramSignatures.crossKindContests`), which needs
+// neither — it reports nothing, and it is keyed by the name. One record for the facts is what keeps
+// `typeNamePairMayCoexist` a single function instead of one predicate per consumer, which is what the
+// two used to be in every compiler that had this rule.
+//
+// It carries NO POSITION on purpose. The sweep's declaration arrays do not all hold one
+// (`StructLayout` and `EnumLayout` deliberately hold a `declFilePath` and nothing more — see
+// `TypeNameDecl`), and inventing a `0:0` for them would be a sentinel wearing a real position's shape.
+export type TypeNameClaim
+	export let kind as TypeDeclKind
+	export let declFilePath as FilePath
+	// ⚠ **THE *EFFECTIVE* TIER, NOT THE MODIFIER THE SOURCE WROTE.** `Parser.typeAliasVisibility` has
+	// already promoted every `stdlib/` alias to `global` by the time a claim is built, and this rule
+	// must read that answer rather than re-derive it — a second derivation is exactly how the shadow
+	// contest and the alias registry once came to disagree about which declarations are reachable.
+	//
+	// ⚠ It is NOT `UnusedExportCheck.declaredTypeVisibility`'s answer, which deliberately reports
+	// `file` for the kinds that audit does not track. That one answers "is this worth auditing"; this
+	// one answers "can another file see it".
+	export let visibility as Visibility
+	// ⭐ **WHICH LAYER DECLARED IT — `Parser.isStdlibSource`, the same bit `typeAliasVisibility` reads.**
+	// A pair drawn from two layers can never meet, and that is the half of the rule a FORM test cannot
+	// express: user code names a `stdlib/` declaration it never knew was there, and a `stdlib/` file
+	// cannot see a user file at all.
+	export let declaredByTheCorpus as bool
+
+	export static function create(kind TypeDeclKind, declFilePath FilePath, visibility Visibility, declaredByTheCorpus bool) returns TypeNameClaim
+		return Self{kind: kind, declFilePath: declFilePath, visibility: visibility, declaredByTheCorpus: declaredByTheCorpus}
+	end 'create'
+end 'TypeNameClaim'
+
+export typealias TypeNameClaimArray = Array with TypeNameClaim
+
 // ONE declaration that minted a type name, with where it was written. The position is the NAME
 // token's, never the keyword's — a collision blames the declaration the author just wrote, and
 // `RangedTypeAlias` already anchors E3061 that way.
 export type TypeNameDecl
 	export let name as ByteArray
-	export let kind as TypeDeclKind
-	export let declFilePath as FilePath
+	// The four rule facts, in the record BOTH consumers of the rule read — see `TypeNameClaim`.
+	export let claim as TypeNameClaim
 	export let nameLine as LineNumber
 	export let nameColumn as ColumnNumber
 
-	export static function create(name ByteArray, kind TypeDeclKind, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns TypeNameDecl
-		return Self{name: name, kind: kind, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn}
+	export static function create(name ByteArray, claim TypeNameClaim, nameLine LineNumber, nameColumn ColumnNumber) returns TypeNameDecl
+		return Self{name: name, claim: claim, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'TypeNameDecl'
 
@@ -2413,6 +2544,48 @@ export typealias TypeNameDeclArray = Array with TypeNameDecl
 
 // Type name -> the most recent ACCEPTED declaration of it. See `TypeNameRegistry`.
 typealias TypeNameDeclMap = Map with (ByteArray, TypeNameDecl)
+
+// Type name -> the BOUNDED set of accepted declarations that can still refuse a newcomer, once a second
+// declaration has been accepted alongside the first. See `TypeNameRegistry.coexisting`.
+typealias CoexistingTypeNameDeclMap = Map with (ByteArray, TypeNameDeclArray)
+
+// ⭐⭐ **HOW ONE DECLARATION CAN REFUSE ANOTHER FROM A DIFFERENT FILE — the whole of it, as FOUR values.**
+// `typeNamePairMayCoexist` refuses a cross-file pair for exactly two reasons: both NOMINAL, or a nominal
+// against a REACHABLE alias of the nominal's own layer. Neither reason reads anything about a declaration
+// beyond its kind, its tier and its layer — so this value is a declaration's entire future refusing power,
+// and two declarations sharing it refuse exactly the same newcomers.
+//
+// TWO readers turn that into a bound, and both of them used to be quadratic sweeps over every declaration
+// of a name: `TypeNameRegistry.coexisting` (which keeps one declaration per value, so a newcomer is
+// measured against at most four instead of against all n) and `ProgramSignatures.everyClaimMayCoexist`
+// (which counts values instead of testing every pair). Each states its own equivalence argument.
+//
+// ⚠ **A FILE-PRIVATE ALIAS IS `none`, AND THAT IS THE RULE RATHER THAN A GAP.** It is reachable from the
+// one file that declared it, so the only pair it can be half of is a SAME-FILE one — which is the half
+// neither reader answers this way (`TypeNameRegistry.winners`; the declaring-file set in the other).
+//
+// ⚠ The NOMINAL half is split by layer even though at most one nominal declaration of a name is ever
+// ACCEPTED: the second reader is handed claims that have not been through the merge yet, and the layer is
+// what decides which aliases that nominal meets.
+export enum TypeNameRefusalSlot
+	none
+	corpusNominal
+	userNominal
+	corpusAlias
+	userAlias
+end 'TypeNameRefusalSlot'
+
+export function typeNameRefusalSlot(claim TypeNameClaim) returns TypeNameRefusalSlot
+	if not isTypeAliasDecl(claim.kind) 'aNominalDeclaration'
+		return TypeNameRefusalSlot.corpusNominal if claim.declaredByTheCorpus else TypeNameRefusalSlot.userNominal
+	end 'aNominalDeclaration'
+
+	if claim.visibility == Visibility.file 'reachableFromItsOwnFileAlone'
+		return TypeNameRefusalSlot.none
+	end 'reachableFromItsOwnFileAlone'
+
+	return TypeNameRefusalSlot.corpusAlias if claim.declaredByTheCorpus else TypeNameRefusalSlot.userAlias
+end 'typeNameRefusalSlot'
 
 // What ONE declaration collided with, and therefore which diagnostic it earns. `accepted` covers
 // both "first declaration of this name" and the legal cross-file alias case; the collision arm
@@ -2432,23 +2605,34 @@ end 'TypeNameRecordOutcome'
 // pair written the other way round reported `E3009: Cannot cast from int to struct` — a consequence,
 // not a diagnosis.
 //
-// **THE RULE: a type name is declared exactly once**, with ONE exception.
+// **THE RULE: a type name is declared exactly once IN ANY ONE SCOPE.** Two declarations that cannot
+// SEE each other are not two claims on one name; they are two names that happen to be spelled alike.
+// `typeNamePairMayCoexist` is that rule, and it is stated there rather than here because a second
+// consumer reads it (`ProgramSignatures.crossKindContests`, which decides which of two coexisting
+// declarations a given file MEANS).
 //
-// ⚠ **THE EXCEPTION IS PER ALIAS FORM, NOT PER KEYWORD, and `stdlib/` needs both halves of that.**
-// A non-exported `typealias` is FILE-LOCAL (`specs/duplicate-typealias.md`), so two files may each
-// declare one — SEVEN stdlib files declare `Byte = int(0 to u8.max)` (ranged) and FIVE declare
-// `ByteArray = Array with Byte` (generic-instance). So the carve-out must cover the generic form as
-// well as the ranged one, or all of `stdlib/` stops loading.
+// ⛔⛔ **IT USED TO ASK WHETHER THE TWO WERE THE SAME ALIAS *FORM*, AND THAT IS A PROXY THAT FAILS IN
+// BOTH DIRECTIONS.** The form test was reached for because `stdlib/` needs the legal half — SEVEN
+// stdlib files declare `Byte = int(0 to u8.max)` and FIVE declare `ByteArray = Array with Byte` — but
+// sameness of form is not what makes those legal; UNREACHABILITY is. MEASURED, both directions:
 //
-// It must NOT cover a pair of DIFFERENT forms, and that is measured rather than assumed: only the
-// RANGED registry is file-scoped, so a `typealias Handler = function() returns int` in one file
-// answers for every file, and a file whose own `Handler` is `int(0 to 10)` had its own
-// `5 as Handler` rejected with `Cannot cast from int to function`.
+//   • **It refused pairs that never meet.** A user `type ParsedInt` against `stdlib/Builtins.maxon`'s
+//     non-exported `typealias ParsedInt` was E3006 blamed on the STDLIB line (stdlib merges last, so
+//     the library's own declaration is the "newcomer"), plus an E3009 inside `Builtins.maxon` where
+//     the module's own `i64.min as ParsedInt` had resolved to the USER's struct. Both diagnostics
+//     named a file the author never opened, and renaming the user's type made the program compile.
+//     A user `typealias DecimalDigit = function(…)` against the listed ranged one was E3061 the same
+//     way. `specs-shv2/stdlib-user-shadows.md` pins all five keywords.
 //
-// **OUT OF SCOPE, and unchanged:** two SAME-FORM aliases in two files that do not AGREE — two
-// function aliases with different signatures, two instance aliases over different instances — still
-// resolve last-wins. That is cross-file name resolution (the rung that also owns E3063); the ranged
-// form's half of it is already enforced as E3105.
+//   • **It admitted pairs that do meet** — nothing in the form test looks at visibility, so two
+//     `export`ed same-form aliases in two directories were accepted here with no diagnostic anywhere.
+//     That half is unchanged in outcome and is now stated: an ambiguity between two declarations a
+//     reader may BOTH name is a property of the USE, and it is E3063 at the reference
+//     (`ProgramSignatures.ambiguousAliasCandidates`), not a refusal of the declarations.
+//
+// **OUT OF SCOPE, and unchanged:** two aliases in two files that do not AGREE about the underlying
+// PRIMITIVE are still refused, as E3105 — see `RangedAliasRegistry.record`, whose contract
+// (`underlyingInAnyFile` answers for every file) is what that refusal keeps true.
 //
 // ⚠ **THIS REGISTRY HOLDS ONLY THE NAMES A DECLARATION SPELLS, AND THAT IS NOW THE WHOLE NAMESPACE.** A
 // generic instantiation spells no name: it COMPILES to a string every per-type symbol is derived from
@@ -2471,14 +2655,59 @@ export type TypeNameRegistry
 	// It is the induction `RangedAliasRegistry` makes with `sole` + `byFile.contains(declPath)`, which
 	// is where this check used to live.
 	//
+	// ⚠ **THE INDUCTION STILL CARRIES THE SAME-FILE CHECK, AND IT IS THE *ONLY* HALF IT CARRIES.** Once two
+	// declarations of one name may both stand, the most recent one is not the one a newcomer must be
+	// measured against for the CROSS-file half — `coexisting` below answers that, and the two together are
+	// the whole rule. (This paragraph briefly claimed the induction had stopped holding at all, which is a
+	// stronger statement than the code ever needed: contiguity is what it rests on, and coexistence does
+	// not touch contiguity.) For an uncontested name this slot is also the cheap first probe, and the only
+	// one such a name ever makes.
+	//
 	// A REJECTED declaration never displaces: the build is failing either way, and every later
 	// declaration of the name should be reported against one settled incumbent rather than against a
 	// predecessor that was itself refused. Only `kind` and `name` are ever read off the incumbent (see
 	// `reportTypeNameCollision`), so which ACCEPTED declaration is held changes no diagnostic text.
 	var winners as TypeNameDeclMap
 
+	// ⭐⭐ **THE ACCEPTED DECLARATIONS OF A NAME THAT CAN STILL REFUSE A NEWCOMER FROM ANOTHER FILE — and
+	// `winners` alone cannot stand in for them.** A single slot can answer "did THIS file already declare
+	// this name" only while every accepted declaration agrees with the one it holds. Once a name may be
+	// held by an alias in one file AND a nominal declaration in another, the slot's occupant decides which
+	// of the two a third declaration is measured against — so `typealias Box` in `b.maxon` accepted after
+	// `type Box` in `a.maxon` would leave a third file's `type Box` measured against the ALIAS, find them
+	// unable to meet, and accept a second whole-program nominal declaration in silence.
+	//
+	// ⛔⛔ **IT HELD *EVERY* ACCEPTED DECLARATION UNTIL 2026-08-31, AND THAT MADE THE MERGE QUADRATIC.**
+	// The newcomer was walked against the whole list, so a name declared by n files cost n²/2 pair tests —
+	// and `typeNamePairMayCoexist`'s first test is `FilePath.equals`, which on Windows CLONES and lowercases
+	// both paths. MEASURED on `scale-test`'s ladder, whose corpus gives every generated file its own
+	// file-private `typealias ScaleInt`: `phase:merge` went ×1.53→×1.95 per doubling (converging on linear)
+	// to ×1.55→×2.66 and still rising, **+5,619,036 allocations at rung 5, +146%**, with the per-rung delta
+	// tracking n²/2 to within 4% at every rung.
+	//
+	// ⭐ **THE LIST IS NOW BOUNDED, and the bound is a property of the RULE rather than a cap.**
+	// `typeNamePairMayCoexist` refuses a CROSS-FILE pair for exactly two reasons — both nominal, or a
+	// nominal against a reachable alias of its own layer — so what an accepted declaration can refuse in
+	// future is entirely captured by `typeNameRefusalSlot`, and a declaration whose slot an EARLIER one
+	// already holds can refuse nothing that earlier one does not. Keeping the earliest of each slot
+	// therefore preserves both the verdict and the BLAME: `admit` still reports the first refuser in
+	// acceptance order. Four of that enum's five values are keepable and at most THREE are ever here at
+	// once, since the two NOMINAL values are two layers of a declaration only one of which can be accepted.
+	//
+	// ⚠ **THE SAME-FILE HALF IS NOT IN HERE — `winners` carries it, and that is exact rather than
+	// approximate.** A file's declarations reach `record` contiguously (one artifact at a time, its own
+	// decls in source order) and a file can have at most ONE accepted declaration of a name (a second is
+	// refused by the first), so the only accepted declaration that can share the newcomer's file is the
+	// LAST one — which is precisely what `winners` holds. `admit` tests it after the slots, which is where
+	// it falls in acceptance order.
+	//
+	// ⚠ **EMPTY FOR EVERY PROGRAM THAT DECLARES EACH TYPE NAME ONCE — and non-empty for `stdlib/`,
+	// which declares `Byte` seven times.** A name reaching it pays one array and one probe per further
+	// declaration; a name that does not never touches it.
+	var coexisting as CoexistingTypeNameDeclMap
+
 	export static function create() returns TypeNameRegistry
-		return Self{winners: TypeNameDeclMap.create()}
+		return Self{winners: TypeNameDeclMap.create(), coexisting: CoexistingTypeNameDeclMap.create()}
 	end 'create'
 
 	// File one declaration, and answer whether it COLLIDED. The single place the rule is applied, so
@@ -2489,44 +2718,163 @@ export type TypeNameRegistry
 			return TypeNameRecordOutcome.accepted
 		end 'firstDeclarationOfThisName'
 
-		if isLegalRepeatedAlias(winner, newcomer: decl) 'fileLocalAlias'
-			// It is ACCEPTED, so it becomes the incumbent the NEXT declaration of this name is measured
-			// against — which is what lets the next one be recognized as this file declaring it twice.
-			self.winners.upsert(decl.name, value: decl)
-			return TypeNameRecordOutcome.accepted
-		end 'fileLocalAlias'
+		// The name is declared more than once, so the newcomer is measured against every declaration that
+		// can still refuse it — the slot list, then `winners` — and not merely the most recent. Before the
+		// map has an entry, `winner` IS every earlier declaration there is, so the second declaration of a
+		// name needs the winner test alone; the list is built from the two of them once it survives.
+		var refusers = try self.coexisting.get(decl.name) otherwise 'theSecondDeclarationOfThisName'
+			if not typeNamePairMayCoexist(winner.claim, newcomer: decl.claim) 'theTwoMeet'
+				return TypeNameRecordOutcome.collides(winner)
+			end 'theTwoMeet'
 
-		return TypeNameRecordOutcome.collides(winner)
+			var seeded = TypeNameDeclArray.create()
+			noteRefusalSlot(seeded, decl: winner)
+			noteRefusalSlot(seeded, decl: decl)
+			self.coexisting.upsert(decl.name, value: seeded)
+			self.winners.upsert(decl.name, value: decl)
+
+			return TypeNameRecordOutcome.accepted
+		end 'theSecondDeclarationOfThisName'
+
+		return self.admit(decl, refusers: refusers, winner: winner)
 	end 'record'
+
+	// Measure one newcomer against every accepted declaration of its name that could refuse it, and file
+	// it if they all admit it. Split from `record` because that function's second-declaration path applies
+	// the same rule over the one declaration there is, and neither may apply a different one — the failure
+	// `record`'s own header describes.
+	//
+	// It blames the FIRST incumbent that refuses, which is the earliest-declared one: a diagnostic about
+	// a name three declarations hold should name the declaration that established it. **The slot list is
+	// walked before `winner` because that is where the two fall in acceptance order** — every entry of the
+	// list was accepted no later than the winner, which is by definition the last accepted declaration.
+	function admit(decl TypeNameDecl, refusers TypeNameDeclArray, winner TypeNameDecl) returns TypeNameRecordOutcome
+		for incumbent in refusers 'eachRefusingSlot'
+			if not typeNamePairMayCoexist(incumbent.claim, newcomer: decl.claim) 'theTwoMeet'
+				return TypeNameRecordOutcome.collides(incumbent)
+			end 'theTwoMeet'
+		end 'eachRefusingSlot'
+
+		// The same-file half, and the ONLY pair the slot list above cannot hold — see `coexisting`. It is
+		// harmlessly re-asked of an incumbent the list already holds: the walk above reaches that one first
+		// and so decides the blame, exactly as a single list of every declaration did.
+		if not typeNamePairMayCoexist(winner.claim, newcomer: decl.claim) 'theTwoMeet'
+			return TypeNameRecordOutcome.collides(winner)
+		end 'theTwoMeet'
+
+		noteRefusalSlot(refusers, decl: decl)
+		self.coexisting.upsert(decl.name, value: refusers)
+		self.winners.upsert(decl.name, value: decl)
+
+		return TypeNameRecordOutcome.accepted
+	end 'admit'
 
 	// ⭐ **WHERE A TYPE NAME WAS DECLARED** — the anchor a diagnostic about a whole DECLARATION (rather than
 	// about a use of it) has to point at. `TypeCycleCheck` is the reader: E4014 blames `type Node`, at the
 	// NAME token, and none of the four per-kind registries carries a position (`StructLayout` and `EnumLayout`
 	// hold only `declFilePath`), which is precisely the gap this registry was built over.
 	//
+	// ⚠ **WHEN SEVERAL DECLARATIONS HOLD THE NAME, THE NOMINAL ONE IS THE ANSWER.** The reader asks about a
+	// TYPE CYCLE, which is a property of a `type`'s field graph — an alias has no fields and can be in no
+	// cycle — so anchoring E4014 on a coexisting alias would blame a declaration that cannot be at fault.
+	// `winners` holds the LAST accepted declaration, which for a coexisting name is whichever merged last.
+	// The slot list is a COMPLETE place to look for it even though it is not every declaration: two nominal
+	// declarations of one name never both stand, so the one nominal a coexisting name can have is exactly
+	// the one holding the nominal slot (see `TypeNameRefusalSlot`).
+	//
 	// A name no declaration filed has no answer, which is why it throws rather than inventing a position —
 	// the sentinel `0:0` would be indistinguishable from a compiler-synthesized declaration's real one.
 	export function declarationOf(name ByteArray) returns TypeNameDecl throws MapError
+		if let claimants = try self.coexisting.get(name) 'severalDeclarationsHoldIt'
+			for claimant in claimants 'eachClaimant'
+				if not isTypeAliasDecl(claimant.claim.kind) 'theNominalOne'
+					return claimant
+				end 'theNominalOne'
+			end 'eachClaimant'
+		end 'severalDeclarationsHoldIt'
+
 		return try self.winners.get(name)
 	end 'declarationOf'
 end 'TypeNameRegistry'
 
-// The ONE exception to "a type name is declared exactly once": the SAME alias form, in a DIFFERENT
-// file. Both halves are load-bearing and each is stated where it is enforced —
-//   • same FORM, because only the ranged registry is file-scoped and only same-form pairs of the two
-//     bare registries agree by construction in `stdlib/` (see `TypeNameRegistry`);
-//   • different FILE, because two declarations in ONE file are what no qualification could ever
-//     disambiguate, which is exactly what E3061 has always said (`specs/export-keyword.md`).
-//
-// ⚠ `winner` must be the LAST ACCEPTED declaration of the name and not the first, or the file test
-// asks the wrong question — see `TypeNameRegistry.winners`, where the reason is stated in full.
-function isLegalRepeatedAlias(winner TypeNameDecl, newcomer TypeNameDecl) returns bool
-	if not isTypeAliasDecl(winner.kind) or winner.kind != newcomer.kind 'notOneAliasForm'
-		return false
-	end 'notOneAliasForm'
+// Keep `decl` among the accepted declarations a LATER newcomer is measured against, if and only if it can
+// refuse something no earlier accepted declaration already refuses — see `TypeNameRegistry.coexisting`,
+// where the bound this keeps is argued. Called in acceptance order, so the entry a slot keeps is the
+// EARLIEST declaration holding it, which is what makes the blame the earliest refuser's.
+function noteRefusalSlot(refusers TypeNameDeclArray, decl TypeNameDecl)
+	let slot = typeNameRefusalSlot(decl.claim)
+	if slot == TypeNameRefusalSlot.none 'itCanRefuseOnlyItsOwnFile'
+		return
+	end 'itCanRefuseOnlyItsOwnFile'
 
-	return not winner.declFilePath.equals(newcomer.declFilePath)
-end 'isLegalRepeatedAlias'
+	for held in refusers 'eachHeldSlot'
+		if typeNameRefusalSlot(held.claim) == slot 'anEarlierDeclarationRefusesEverythingThisOneWould'
+			return
+		end 'anEarlierDeclarationRefusesEverythingThisOneWould'
+	end 'eachHeldSlot'
+
+	refusers.push(decl)
+end 'noteRefusalSlot'
+
+// ⭐⭐ **MAY TWO DECLARATIONS OF ONE TYPE NAME COEXIST? — THE WHOLE RULE, WRITTEN ONCE, READ TWICE.**
+// `TypeNameRegistry.record` reads it to decide whether a pair earns a diagnostic;
+// `ProgramSignatures.settleCrossKindContests` reads it to decide which pairs it must then tell apart
+// at every REFERENCE. Two spellings of this would be a compiler that refuses a pair it also resolves,
+// or resolves one it refuses.
+//
+// **THE PROPERTY IT TESTS IS THAT NEITHER DECLARATION CAN SEE THE OTHER.** Four ways that holds, and
+// the last two are what the old same-FORM test could not express:
+//
+//   1. **Two ALIASES.** Every `typealias` form is scoped: a non-exported one is file-local
+//      (`specs/duplicate-typealias.md`), and an exported one that a reader may also name is not a
+//      duplicate DECLARATION but an ambiguous REFERENCE — E3063, at the use. So no alias pair is
+//      refused here, in any combination of forms, and `stdlib/`'s seven `Byte`s keep loading.
+//   2. **A NOMINAL declaration against a FILE-PRIVATE alias.** The alias is reachable from exactly one
+//      file, which is the file that declared it, and the nominal declaration is not in it.
+//   3. **A pair drawn from two LAYERS.** A `stdlib/` declaration and a user one are never both in
+//      scope: user code cannot name a library declaration it never knew was there, and a library file
+//      cannot see a user file. (The other direction of that pair — a user declaration against a
+//      library NOMINAL one — never arrives here at all: `SignatureIndex.contestStdlibTypeName` has
+//      already moved the library's declaration to `__Name`.)
+//
+// And two ways it does not, both unchanged from the rule this replaces:
+//
+//   • **ONE FILE, TWICE** — whatever the kinds. That is the pair no qualification could ever
+//     disambiguate, which is exactly what E3061 has always said (`specs/export-keyword.md`), and it is
+//     tested FIRST so no later arm can admit it.
+//   • **TWO NOMINAL DECLARATIONS.** A `type`/`enum`/`union`/`interface` name is whole-program in every
+//     registry shv2 has; there is no scope to separate two of them.
+// Not exported: the sweep-time consumer does NOT call this — `SignatureIndex.everyClaimMayCoexist`
+// answers the same question as three counts, which is what keeps that quantifier one pass. This is the
+// merge's own reader of the rule, and the two are held together by that function's argument rather than
+// by a call.
+function typeNamePairMayCoexist(winner TypeNameClaim, newcomer TypeNameClaim) returns bool
+	if winner.declFilePath.equals(newcomer.declFilePath) 'oneFileDeclaredItTwice'
+		return false
+	end 'oneFileDeclaredItTwice'
+
+	let winnerIsAlias = isTypeAliasDecl(winner.kind)
+	let newcomerIsAlias = isTypeAliasDecl(newcomer.kind)
+
+	if winnerIsAlias and newcomerIsAlias 'twoAliases'
+		return true
+	end 'twoAliases'
+
+	if not winnerIsAlias and not newcomerIsAlias 'twoNominalDeclarations'
+		return false
+	end 'twoNominalDeclarations'
+
+	// Exactly one of the two is an alias, and it is the only one whose visibility means anything here: a
+	// nominal type name is answered by whole-program registries with no visibility gate on the NAME at
+	// all (`containsStruct`, `containsEnum`, `interfaceMap`), so there is no tier of it that another file
+	// could fail to see.
+	let alias = winner if winnerIsAlias else newcomer
+	if alias.visibility == Visibility.file 'theAliasIsReachableFromItsOwnFileAlone'
+		return true
+	end 'theAliasIsReachableFromItsOwnFileAlone'
+
+	return winner.declaredByTheCorpus != newcomer.declaredByTheCorpus
+end 'typeNamePairMayCoexist'
 
 // --- Range-check sites (P1.9) — the parser's carrier for `InsertRangeChecks` ---
 //
@@ -2943,6 +3291,18 @@ end 'FunctionRangeChecks'
 // (E3006) — so it survives the merge with no id remap, exactly like `funcSignatures`.
 export typealias RangeCheckPlanMap = Map with (ByteArray, FunctionRangeChecks)
 
+// ⭐ WHAT A FUNCTION VALUE RETURNS, AND WHOSE SLOT THAT TYPE IS — the pair `Parser.functionValueReturn`
+// answers in one walk. They travel together because the second is only knowable in the arm that produced
+// the first, and two walks over one source list is a pair nothing keeps in step.
+export type FunctionValueReturn
+	export let returnType as MaxonReturnType
+	export let scopeFilePath as FilePath
+
+	export static function create(returnType MaxonReturnType, scopeFilePath FilePath) returns FunctionValueReturn
+		return Self{returnType: returnType, scopeFilePath: scopeFilePath}
+	end 'create'
+end 'FunctionValueReturn'
+
 // ⭐ **A FUNCTION TYPEALIAS (P1.5-A1)** — `typealias UnaryOp = function(Integer) returns Integer`. It is
 // its OWN registry, NOT a `RangedTypeAlias`, because a function alias names a function TYPE, not a ranged
 // numeric one: a value of it is a code pointer (`TypeClass.function`), and `Parser.parseTypeReference`
@@ -2990,23 +3350,35 @@ export type FunctionTypeAlias
 	// return type does; the whole-program merge check (`checkValueMergeSignatures`) compares it by NAME
 	// against a declared function's display built the same way.
 	export let display as ByteArray
+	// ⭐ **WHERE IT WAS DECLARED, AND AT WHAT TIER — the `RangedTypeAlias` twin, and read for that twin's
+	// question**: which of two same-named declarations a given file may mean. This registry is keyed by the
+	// bare name and answers for the whole program, so without these a file whose own `Handler` is a ranged
+	// alias had `5 as Handler` refused *"Cannot cast from int to function"* against a declaration it never
+	// names. Both are the effective values — `Parser.typeAliasVisibility` has already promoted a `stdlib/`
+	// alias to `global` — because a second derivation of a tier is how two deciders come to disagree.
+	//
+	// ⚠ EMPTY / `file` on the NESTED copy `scopedToEnclosingType` mints only if its source was: that copy
+	// carries everything through unchanged, for the reason stated there.
+	export let declFilePath as FilePath
+	export let visibility as Visibility
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnTypeParamToken TypeParamId, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnTypeParamToken TypeParamId, returnAggregateName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray, declFilePath FilePath, visibility Visibility) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes, declFilePath: declFilePath, visibility: visibility}
 	end 'create'
 
-	// ⭐⭐ **THE SAME DECLARATION UNDER ITS ENCLOSING TYPE'S NAME — `Config.FnTypeAlias1` (W49b).** A nested
-	// function alias is published under BOTH keys; `Parser.publishNestedFunctionAlias` is the one home of why,
-	// and this is the copy it mints for the qualified one. `GenericAliasEntry.scopedToEnclosingType`'s twin,
-	// named alike because it is the same act on the other nested form.
+	// ⭐⭐ **THE SAME DECLARATION UNDER A SECOND KEY.** Two callers mint one, and they are two SCOPES rather
+	// than two acts: `Parser.publishNestedFunctionAlias` files a nested alias under its enclosing type's name
+	// (`Config.FnTypeAlias1`, W49b — the one home of why), and `Parser.pushNamespaceQualifiedFunctionAlias`
+	// files a visible one under its DIRECTORY's (`legacy.Score`, so `api.Score` and `legacy.Score` can be two
+	// forms of one bare name). `GenericAliasEntry.scopedToEnclosingType` is the nested form's twin.
 	//
 	// ⚠ Everything but the name is carried through UNCHANGED, and it must be: the SIGNATURE is what the two
 	// keys disagree about only across separate folds (`extension Iterable` read once per conformer), never
 	// between the two copies of ONE fold. A rebuild through `create` with anything defaulted would make the
 	// qualified copy answer a different shape from the bare one for the same written declaration.
-	export function scopedToEnclosingType(qualifiedName ByteArray) returns FunctionTypeAlias
-		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnTypeParamToken: self.returnTypeParamToken, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes}
-	end 'scopedToEnclosingType'
+	export function underName(qualifiedName ByteArray) returns FunctionTypeAlias
+		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnTypeParamToken: self.returnTypeParamToken, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes, declFilePath: self.declFilePath, visibility: self.visibility}
+	end 'underName'
 end 'FunctionTypeAlias'
 
 // ONE parameter of a function typealias, stored the way the alias's RETURN type is and for the same

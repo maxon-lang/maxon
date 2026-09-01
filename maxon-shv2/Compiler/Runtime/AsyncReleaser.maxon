@@ -318,7 +318,7 @@ end 'asyncSlotsAt'
 // ⭐ **ONLY A BOXED ERROR UNION IS A POINTER**, and that is the whole of the test. A SCALAR error clause
 // travels as `ordinal + ErrorFlagOrdinalBias` — a small integer that owns nothing and must never be handed
 // to a drop callee — while a boxed union's flag is written to `gt.threw` VERBATIM, with no bias added
-// (`LowerMaxonToStd.lowerThrowError`'s boxed arm), so a non-zero flag there IS the box pointer. `enumOf(…)
+// (`LowerMaxonToStd.lowerThrowError`'s boxed arm), so a non-zero flag there IS the box pointer. `enumInAnyFile(…)
 // .isBoxed()` is the same question `Parser.throwsTypeIsBoxedUnion` asks at the catch site, asked of the same
 // registry, so the encode, the catch and this release cannot come to three different answers.
 //
@@ -326,7 +326,7 @@ end 'asyncSlotsAt'
 // exactly what `unionBoxDropCallee` hands back for it.
 function asyncErrorSlotsOf(callee ByteArray, signatures ProgramSignatures) returns AsyncManagedSlotArray
 	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return AsyncManagedSlotArray.create()
-	return match signatures.enumOf(errorName.toByteArray()) 'e'
+	return match signatures.enumInAnyFile(errorName.toByteArray()) 'e'
 		declared(layout) gives asyncBoxedErrorSlots(layout, signatures: signatures, errorName: errorName.toByteArray())
 		undeclared gives AsyncManagedSlotArray.create()
 	end 'e'
@@ -394,7 +394,7 @@ function asyncErasedUnionIsBoxed(signatures ProgramSignatures, aggregateName Byt
 		return false
 	end 'identitySurvived'
 
-	return match signatures.enumOf(aggregateName) 'e'
+	return match signatures.enumInAnyFile(aggregateName) 'e'
 		declared(layout) gives layout.isBoxed()
 		undeclared gives false
 	end 'e'

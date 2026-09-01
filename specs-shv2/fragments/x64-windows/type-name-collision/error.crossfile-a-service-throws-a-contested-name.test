@@ -1,0 +1,33 @@
+// Test: error.crossfile-a-service-throws-a-contested-name
+// --- file: a.maxon
+export enum Fault implements Error
+	broke
+end 'Fault'
+
+// --- file: b.maxon
+typealias Fault = int(0 to 10)
+typealias Integer = int(i64.min to i64.max)
+
+export type Calc
+	var count as Integer
+	var seen as Fault
+
+	export static function create() returns Self
+		return Self{count: 0, seen: 3}
+	end 'create'
+
+	export function divide(n Integer, by Integer) returns Integer throws Fault
+		return n + by + self.count + self.seen
+	end 'divide'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let v = try await h.divide(10, by: 2) otherwise return 70
+
+	return v as ExitCode
+end 'main'
+---
+CompilerError:
+error E3113: <fragment>:19:18: 'throws Fault' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into

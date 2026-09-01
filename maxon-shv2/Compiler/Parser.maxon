@@ -13881,7 +13881,7 @@ export type Parser
 			return false
 		end 'notTheShape'
 
-		return match self.signatures.structOf(self.current().value) 'declared'
+		return match self.signatures.structFor(self.current().value, readerFilePath: self.filePath) 'declared'
 			declared gives true
 			undeclared gives false
 		end 'declared'
@@ -15699,7 +15699,7 @@ export type Parser
 	// is bounded besides: the edge is inert unless the helper genuinely needs a descriptor, which only a generic
 	// type's opaque-`T` default can produce.
 	function fieldDefaultHelperNamesOf(typeName ByteArray) returns ByteArrayArray
-		match self.signatures.structOf(typeName) 'declaringType'
+		match self.signatures.structFor(typeName, readerFilePath: self.filePath) 'declaringType'
 			undeclared then return ByteArrayArray.create()
 			declared(layout) then return fieldDefaultHelpersIn(layout)
 		end 'declaringType'
@@ -16643,7 +16643,7 @@ export type Parser
 			return false
 		end 'notAConstruction'
 		let qualified = joinQualifiedName(self.enclosingType, member: self.tokenAt(aliasPos).value)
-		if not self.signatures.isGenericAlias(qualified) 'notAlias'
+		if not self.signatures.isGenericAliasInAnyFile(qualified) 'notAlias'
 			return false
 		end 'notAlias'
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
@@ -18191,7 +18191,7 @@ export type Parser
 	function declaresTransferableParam(paramTypes MaxonTypeArray, takesReceiver bool) returns bool
 		for i in firstUserParamIndex(takesReceiver) upto paramTypes.count() 'eachParam'
 			let paramType = try paramTypes.get(i) otherwise panic("declaresTransferableParam: paramTypes.get OOB at {i} inside its own count()")
-			if self.signatures.typeIsManaged(paramType, from: self.artifact.typeNames) or maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'transferable'
+			if self.signatures.typeIsManagedFor(paramType, from: self.artifact.typeNames, readerFilePath: self.filePath) or maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'transferable'
 				return true
 			end 'transferable'
 		end 'eachParam'
@@ -19461,7 +19461,7 @@ export type Parser
 	// consequence is a conditional extension WITHHELD from that conformer and a body parsed with no
 	// substitution — `readOptionalImplementsClause`'s standard, bounded and missing rather than wrong.
 	function conformerAssociatedBindings(header ExtensionHeader, conformer ByteArray, index ProgramSignatures) returns ByteArrayArray
-		match index.structOf(conformer) 'conformerLayout'
+		match index.structInAnyFile(conformer) 'conformerLayout'
 			declared(layout) then return pairableConformanceBindings(layout.bindingsForInterface(header.nameTok.value), associatedTypeNames: extensionTargetParamNames(header.target))
 			undeclared then panic("Parser.conformerAssociatedBindings: conformer '{String.from(conformer)}' came out of `extensionTargetConformers`, which walks the struct registry this lookup misses")
 		end 'conformerLayout'
@@ -20388,12 +20388,19 @@ export type Parser
 	// `isTypeAliasDecl` is the one place that classification lives), and the visibility the source
 	// wrote. Splitting it out would mean fetching the same token twice off the same index.
 	//
+	// ⚠ **`visibility` IS THE *EFFECTIVE* TIER AND IT NOW TRAVELS ON THE RECORD.** It used to be read for
+	// the E3062 candidate list below and then dropped, which made the whole-program duplicate check
+	// visibility-blind BY CONSTRUCTION — a file-private alias, reachable from one file, was refused as a
+	// duplicate of a declaration in a file that could never name it. The caller has already applied
+	// `typeAliasVisibility` for the alias forms, so the promotion a `stdlib/` alias gets is in the value
+	// this stores rather than re-derived from it.
+	//
 	// ⚠ Only a TOP-LEVEL alias is a candidate. A nested one (`typealias Idx = …` inside a `type` body)
 	// never reaches here — `parseTypeMember` reads it — and it is deliberately not enrolled elsewhere:
 	// it is a member of a type, not a declaration of a file, and its uses are the type's.
 	function recordTypeName(nameIndex TokenIndex, kind TypeDeclKind, visibility Visibility)
 		let nameTok = self.tokenAt(nameIndex)
-		self.artifact.recordTypeNameDecl(TypeNameDecl.create(nameTok.value, kind: kind, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+		self.artifact.recordTypeNameDecl(TypeNameDecl.create(nameTok.value, claim: TypeNameClaim.create(kind, declFilePath: self.filePath, visibility: visibility, declaredByTheCorpus: self.isStdlibSource), nameLine: nameTok.line, nameColumn: nameTok.column))
 
 		if not isTypeAliasDecl(kind) or visibility != Visibility.file 'notAnUnusedCandidate'
 			return
@@ -20725,7 +20732,10 @@ export type Parser
 			// erases, and unlike the generic-instance form below, which names an instance rather than minting
 			// one. See `requireTypeNameNotCompilerOwned`.
 			try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.nominalIdentity)
-			functionOut.push(try self.readFunctionTypeAlias(nameTok, recordSignature: recordFunctionSignature))
+			let functionAlias = try self.readFunctionTypeAlias(nameTok, recordSignature: recordFunctionSignature, visibility: visibility)
+			functionOut.push(functionAlias)
+			self.pushNamespaceQualifiedFunctionAlias(functionOut, alias: functionAlias, tier: self.typeAliasVisibility(visibility))
+
 			return TypeDeclKind.functionAlias
 		end 'functionAlias'
 
@@ -20762,8 +20772,8 @@ export type Parser
 			// interned above whatever the owner says, because the ELEMENTS have to be validated on every read
 			// or a malformed nested alias inside a withheld extension body would go unreported.
 			match tupleOwner 'owner'
-				fileScope then self.signatures.recordTupleAlias(nameTok.value, tupleName: target)
-				enclosingType(owner) then self.signatures.recordTupleAlias(joinQualifiedName(owner, member: nameTok.value), tupleName: target)
+				fileScope then self.signatures.recordTupleAlias(nameTok.value, tupleName: target, declFilePath: self.filePath, visibility: self.typeAliasVisibility(visibility))
+				enclosingType(owner) then self.signatures.recordTupleAlias(joinQualifiedName(owner, member: nameTok.value), tupleName: target, declFilePath: self.filePath, visibility: self.typeAliasVisibility(visibility))
 				unpublished then break 'owner'
 			end 'owner'
 			return TypeDeclKind.tupleAlias
@@ -20852,6 +20862,26 @@ export type Parser
 
 		rangedOut.push(RangedTypeAlias.create(namespaceQualifiedName(self.namespace, name: nameTok.value), underlying: underlying, low: low, high: high, visibility: tier, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
 	end 'pushNamespaceQualifiedAlias'
+
+	// ⭐⭐ **THE FUNCTION FORM'S DIRECTORY-QUALIFIED MIRROR — the ranged one's twin, one registry over.**
+	// `api.Score` and `legacy.Score` are how E3063 tells the author to disambiguate a bare `Score`, and the
+	// cure has to reach whichever FORM each declaration was written in: once two files may declare one name
+	// in two different forms (`typeNamePairMayCoexist`), the qualified spelling of the FUNCTION one was a
+	// name no registry held and `legacy.Score` in a parameter position was **E3011 Unknown type**.
+	//
+	// ⚠ **GATED EXACTLY AS THE RANGED MIRROR IS**, and that gate is now the same fact rather than a
+	// coincidence: a file-private alias is reachable from its own file alone, where the BARE name already
+	// finds it, so a qualified mirror would be an entry no program could legally write. (The paragraph in
+	// `pushNamespaceQualifiedAlias` arguing the FUNCTION side must not gate was about a CALL's tier, which
+	// this is not — a function TYPEALIAS is a type name, and its tier is decided exactly where a ranged
+	// alias's is.)
+	function pushNamespaceQualifiedFunctionAlias(functionOut FunctionTypeAliasArray, alias FunctionTypeAlias, tier Visibility)
+		if tier == Visibility.file or self.namespace.isEmpty() 'noQualifiedSpelling'
+			return
+		end 'noQualifiedSpelling'
+
+		functionOut.push(alias.underName(namespaceQualifiedName(self.namespace, name: alias.name)))
+	end 'pushNamespaceQualifiedFunctionAlias'
 
 	// ⭐ **CAN A SINGLE 64-BIT TYPE HOLD THIS DECLARED RANGE?** The two ways it cannot, checked at the
 	// declaration — which is the only place the answer is still knowable, because `RangedTypeAlias`
@@ -21302,7 +21332,7 @@ export type Parser
 		end 'noEnclosingTypeToQualifyWith'
 
 		into.push(alias)
-		into.push(alias.scopedToEnclosingType(joinQualifiedName(self.enclosingType, member: alias.name)))
+		into.push(alias.underName(joinQualifiedName(self.enclosingType, member: alias.name)))
 	end 'publishNestedFunctionAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS (P1.6-A)** — `typealias IntBox = Box with Integer`. The cursor
@@ -21777,7 +21807,7 @@ export type Parser
 
 		let nameId = typeNameIdOf(argType)
 		let name = self.internedName(nameId)
-		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise 'undeclared'
+		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId, readerFilePath: self.filePath) otherwise 'undeclared'
 			self.recordArtifactDiagnostic(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name)), range: SourceRange.ofToken(argTok))
 			return
 		end 'undeclared'
@@ -21880,7 +21910,7 @@ export type Parser
 	// of this tail. Making the classification TERMINAL is the cure: every arm calls, none falls out, and the
 	// tail takes a name. Second instance of the shape `LowerMaxonToStd`'s residues took, one file over.
 	function checkStructGenericInstance(baseName ByteArray, baseTok Token, argCount FieldIndex)
-		match self.signatures.structOf(baseName) 'base'
+		match self.signatures.structFor(baseName, readerFilePath: self.filePath) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
 		end 'base'
@@ -21953,7 +21983,7 @@ export type Parser
 	// `recordSignature: false` and store the RETURN type alone, which they read identically; every consumer
 	// of a parameter type reads the real parse's copy in `project.functionTypeAliases`. The params are PARSED
 	// either way: the syntax must be consumed, and a malformed one rejected, wherever it is met.
-	function readFunctionTypeAlias(nameTok Token, recordSignature bool) returns FunctionTypeAlias throws ParseError
+	function readFunctionTypeAlias(nameTok Token, recordSignature bool, visibility Visibility) returns FunctionTypeAlias throws ParseError
 		try self.consume(TokenKind.function)
 		try self.consume(TokenKind.leftParen)
 
@@ -22018,7 +22048,7 @@ export type Parser
 		if recordSignature 'display'
 			display = formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames).toByteArray()
 		end 'display'
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams)
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnTypeParamToken: returnTypeParamToken, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams, declFilePath: self.filePath, visibility: self.typeAliasVisibility(visibility))
 	end 'readFunctionTypeAlias'
 
 	// One parameter of a function-type signature — an optional NAME followed by its type, or a bare type,
@@ -22373,7 +22403,7 @@ export type Parser
 	function contributeServiceCompanions(typeName ByteArray)
 		// The handle's EXISTENCE is what says this type is a service: the sweep mints one for every accepted
 		// spawn target and for nothing else, so this is the roster asked through the registry that holds it.
-		if not self.signatures.containsStruct(serviceHandleCompanionName(typeName)) 'notASpawnedService'
+		if not self.signatures.containsStructInAnyFile(serviceHandleCompanionName(typeName)) 'notASpawnedService'
 			return
 		end 'notASpawnedService'
 
@@ -23941,7 +23971,7 @@ export type Parser
 	// means one name was read two ways — not a program the author could write.
 	function enumBackingNestedStruct(struct StructLayout, field FieldIndex) returns StructLayout
 		let fieldName = self.internedName(typeNameIdOf(self.signatures.fieldTypeOf(struct, index: field, into: self.artifact.typeNames)))
-		match self.signatures.structOf(fieldName) 'declaring'
+		match self.signatures.structFor(fieldName, readerFilePath: self.filePath) 'declaring'
 			declared(nested) then return nested
 			undeclared then panic("enumBackingNestedStruct: field '{String.from(struct.fieldNameAt(field))}' of `type {String.from(struct.name)}` is declared `{String.from(fieldName)}`, which was classified a NESTED RECORD and yet no file declares a `type` of that name — `enumBackingRecordFieldDomain` reaches that classification only through `structOf` answering `declared` for this very name")
 		end 'declaring'
@@ -23995,7 +24025,7 @@ export type Parser
 	// through the one arm whose header had asserted *"the i64 is that enum's TAG, which is what an enum value
 	// IS"* — true for an enum and for a payload-free union, false for a boxed one.
 	function enumBackingNamedFieldDomain(name ByteArray) returns EnumBackingFieldDomain
-		let declared = self.signatures.enumOf(name)
+		let declared = self.signatures.enumFor(name, readerFilePath: self.filePath)
 		if not enumMatchIsDeclared(declared) 'notADeclaredEnum'
 			return EnumBackingFieldDomain.unsupported
 		end 'notADeclaredEnum'
@@ -24017,7 +24047,7 @@ export type Parser
 	// ⚠ Every leaf of such a record is classified by `enumBackingFieldDomainOf` itself, so a `String`, an
 	// array or a boxed union INSIDE a nested record is refused exactly as one at the top level is.
 	function enumBackingRecordFieldDomain(name ByteArray) returns EnumBackingFieldDomain
-		match self.signatures.structOf(name) 'declaring'
+		match self.signatures.structFor(name, readerFilePath: self.filePath) 'declaring'
 			declared then return EnumBackingFieldDomain.nestedRecord
 			undeclared then return EnumBackingFieldDomain.unsupported
 		end 'declaring'
@@ -24913,7 +24943,7 @@ export type Parser
 			// proven float alias is lifted (see `resolveFloatAliasType`). `paramTypes` itself is UNCHANGED —
 			// the recorded signature, `func.maxonParamTypes` and the parameter bindings keep the declared
 			// alias — so this touches ONLY the value-tag column the operators dispatch on.
-			self.recordValueType(self.resolveFloatAliasType(paramType))
+			self.recordValueType(self.resolveFloatAliasType(paramType, scopeFilePath: self.filePath))
 		end 'seedParamTypes'
 
 		// `self.valueTags` and `self.valueNameIds` are handed over BY REFERENCE, already seeded with
@@ -25985,7 +26015,7 @@ export type Parser
 	// The throwing half of `genericAliasDenotedType`'s join, for the one caller that wants the INSTANCE rather
 	// than what it denotes — see that function for why the two are not one door.
 	function declaredGenericAliasInstance(name ByteArray) returns GenericInstanceId throws MapError
-		if not self.signatures.isGenericAlias(name) 'namesNoInstance'
+		if not self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) 'namesNoInstance'
 			throw MapError.keyNotFound
 		end 'namesNoInstance'
 
@@ -26246,11 +26276,11 @@ export type Parser
 			return
 		end 'writtenAtFileScope'
 
-		self.enterTypeScope(declaringType, isEnum: self.signatures.containsEnum(declaringType))
+		self.enterTypeScope(declaringType, isEnum: self.signatures.containsEnumFor(declaringType, readerFilePath: self.filePath))
 		// An ENUM declares no `uses` clause and no `where` clause, and an undeclared name reaches here only
 		// from a program the real parse is already refusing — both leave the empty scopes `enterTypeScope`
 		// just installed, which is exactly what those declarations have.
-		match self.signatures.structOf(declaringType) 'declaringType'
+		match self.signatures.structFor(declaringType, readerFilePath: self.filePath) 'declaringType'
 			declared(layout) then self.installDeclaringTypeScope(layout)
 			undeclared then break 'declaringType'
 		end 'declaringType'
@@ -26547,7 +26577,7 @@ export type Parser
 			// machine class, and `x = 99.0` on such a parameter was E3009 ("cannot implicitly convert 'float'
 			// to 'int'") until this resolved it. A ranged INT alias stays `named` on purpose: its NAME is what
 			// carries the signedness `valueIsUnsigned` reads.
-			return try self.scope.declareCellBinding(paramName, varType: self.resolveFloatAliasType(paramType), mutable: paramIsMutable, cell: paramValue, isParameter: true)
+			return try self.scope.declareCellBinding(paramName, varType: self.resolveFloatAliasType(paramType, scopeFilePath: self.filePath), mutable: paramIsMutable, cell: paramValue, isParameter: true)
 		end 'arrivesAsACellAddress'
 
 		return try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: paramValue)
@@ -27294,6 +27324,17 @@ export type Parser
 					parts(_, member) then self.recordTypeNameUse(member)
 				end 'member'
 
+				// ⭐⭐ **A DIRECTORY-QUALIFIED FUNCTION TYPEALIAS IS A `function` PLACE, exactly as the bare
+				// spelling of it is** — the arm far below, applied to the mirror
+				// `pushNamespaceQualifiedFunctionAlias` files. Without it `legacy.Score` in a parameter
+				// position stayed a bare `named`, which reads as an INT everywhere, so the qualified spelling
+				// E3063 PRESCRIBES was unusable for the one form whose ambiguity made E3063 fire. The ranged
+				// mirror needs no arm here for the same reason a bare ranged alias needs none: it resolves as
+				// `named` and `TypeResolution` erases it.
+				if self.signatures.allFilesFolded and self.signatures.isFunctionAliasFor(qualified, readerFilePath: self.filePath) 'qualifiedFunctionAlias'
+					return MaxonType.function(self.artifact.typeNames.intern(qualified))
+				end 'qualifiedFunctionAlias'
+
 				return MaxonType.named(self.artifact.typeNames.intern(qualified))
 			end 'qualifiedMember'
 
@@ -27378,7 +27419,7 @@ export type Parser
 			// and the real parse rejects later.
 			if self.namesInnerAliasHere(name) 'innerAlias'
 				let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
-				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
+				if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualifiedInner) 'genericInnerAlias'
 					return self.genericAliasDenotedType(qualifiedInner)
 				end 'genericInnerAlias'
 				// A TUPLE inner alias (W43) — `Entry` inside `type Map uses Key, Value`. It resolves STRAIGHT
@@ -27386,8 +27427,8 @@ export type Parser
 				// below does, which is what makes an `Entry`-typed slot and a `(Key, Value)`-typed one one type.
 				// UNGATED by `allFilesFolded` for that arm's stated reason: `recordTupleAlias` writes DURING the
 				// walk, so the resolved answer is the common case here and the bare `named` the rare one.
-				if self.signatures.isTupleAlias(qualifiedInner) 'tupleInnerAlias'
-					return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(qualifiedInner)))
+				if self.signatures.isTupleAliasInAnyFile(qualifiedInner) 'tupleInnerAlias'
+					return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetInAnyFile(qualifiedInner)))
 				end 'tupleInnerAlias'
 				return MaxonType.named(self.artifact.typeNames.intern(qualifiedInner))
 			end 'innerAlias'
@@ -27460,23 +27501,41 @@ export type Parser
 			// only needs the ANSWER, and a union return is heap-boxed even for its `notFound` case — measured
 			// at +24,396 allocations in `phase:parse` at the ladder's rung 5, doubling per rung, on a corpus
 			// with no interface in it. See `builtinInterfaceKind`.
-			if self.signatures.allFilesFolded and isInterfaceName(self.signatures.interfaceMap(), name: name) 'wholeProgramInterfaceRegistry'
+			// ⚠ `aliasShadowsNominalFor` for `resolveNamedStruct`'s reason, one registry over: an interface name
+			// is whole-program, and a file whose own `typealias Tolerance` coexists with a user
+			// `interface Tolerance` means its own.
+			if self.signatures.allFilesFolded and self.signatures.containsInterfaceFor(name, readerFilePath: self.filePath) 'wholeProgramInterfaceRegistry'
 				return MaxonType.interfaceRef(self.artifact.typeNames.intern(name))
 			end 'wholeProgramInterfaceRegistry'
+
+			// ⭐⭐ **AMBIGUITY IS DECIDED BEFORE THE FORM ARMS, AND IT USED TO BE DECIDED AFTER THEM (N1c).**
+			// While a cross-FORM pair of one name was a declaration error, no ambiguous name could reach a
+			// form arm and "the last arm is where a bare ranged-alias name lands" was a complete statement.
+			// Once two files may export one name in two FORMS (`typeNamePairMayCoexist`), the function-alias
+			// arm below CLAIMED such a name and returned — so `50 as Score`, with a ranged `api.Score` and a
+			// function `legacy.Score` both in scope, was **E3009 `Cannot cast from int to function`** instead
+			// of the E3063 that names both candidates. The question is "could this reference mean more than
+			// one declaration", which is prior to what any one of them denotes.
+			try self.requireUnambiguousTypeName(name, anchor: tok)
 
 			if self.signatures.allFilesFolded 'wholeProgramAliasRegistries'
 				// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
 				// It resolves to `genericInstance(giid)`, the read-side twin of the function-alias arm below —
 				// or, over an `interface` base, to the EXISTENTIAL that instance denotes. `instanceDenotedType`
 				// is the one place that split is made; the arm ABOVE is the bare-name half of the same fact.
-				if self.signatures.isGenericAlias(name) 'genericAlias'
+				// The reader-aware form probes (`isGenericAliasFor` and its two twins below) rather than the bare
+				// ones: two files may declare one name in two alias FORMS, and each means its own. The QUALIFIED
+				// spellings above and inside the function arm stay bare, and that is structural rather than an
+				// omission — a nominal type name is an identifier and holds no `.`, so `Wrapper.Idx` can be
+				// claimed by no second kind and can never be contested.
+				if self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) 'genericAlias'
 					return self.genericAliasDenotedType(name)
 				end 'genericAlias'
 
 				// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
 				// a param/field/return declared with a function alias carries the `function` tag, which is what
 				// makes a function value assignable to it and an indirect call reach it.
-				if self.signatures.isFunctionAlias(name) 'functionAlias'
+				if self.signatures.isFunctionAliasFor(name, readerFilePath: self.filePath) 'functionAlias'
 					// ⭐⭐ **INSIDE A TYPE BODY, THAT BODY'S OWN NESTED DECLARATION WINS (W49b)** — the innermost
 					// scope, exactly as `namesInnerAliasHere` gives the three per-instance forms above. It is what
 					// makes `ElementTransform` mean THIS conformer's `function(Element) returns Element` in a
@@ -27490,7 +27549,7 @@ export type Parser
 					// already function aliases pay `joinQualifiedName`'s allocation.
 					if not self.enclosingType.isEmpty() 'maybeDeclaredInThisBody'
 						let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
-						if self.signatures.isFunctionAlias(qualifiedInner) 'thisBodysOwn'
+						if self.signatures.isFunctionAliasInAnyFile(qualifiedInner) 'thisBodysOwn'
 							return MaxonType.function(self.artifact.typeNames.intern(qualifiedInner))
 						end 'thisBodysOwn'
 					end 'maybeDeclaredInThisBody'
@@ -27504,8 +27563,8 @@ export type Parser
 			// `Pair`-typed slot and a `(Num, Num)`-typed one the same type. `tupleAliasTarget` canonicalizes,
 			// so a target the SWEEP registered under the source spelling answers under the canonical one.
 			// Ungated, for the reason the block above states.
-			if self.signatures.isTupleAlias(name) 'tupleAlias'
-				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(name)))
+			if self.signatures.isTupleAliasFor(name, readerFilePath: self.filePath) 'tupleAlias'
+				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetInAnyFile(name)))
 			end 'tupleAlias'
 
 			// ⭐⭐ **A BARE GENERIC TYPE NAME INSIDE A TYPE-PARAMETER SCOPE IS THAT TYPE AT THIS SCOPE'S
@@ -27526,9 +27585,6 @@ export type Parser
 					none then break 'scoped'
 				end 'scoped'
 			end 'insideATypeParameterScope'
-
-			// ⭐⭐ **THE LAST ARM IS WHERE A BARE RANGED-ALIAS NAME LANDS, SO IT IS WHERE E3063 IS DECIDED (N1c).**
-			try self.requireUnambiguousTypeName(name, anchor: tok)
 
 			return MaxonType.named(self.artifact.typeNames.intern(name))
 		end 'named'
@@ -27937,7 +27993,7 @@ export type Parser
 		end 'notInnerAlias'
 
 		let qualified = joinQualifiedName(self.enclosingType, member: name)
-		if not self.signatures.isGenericAlias(qualified) 'notKeyedWholeProgram'
+		if not self.signatures.isGenericAliasInAnyFile(qualified) 'notKeyedWholeProgram'
 			return name
 		end 'notKeyedWholeProgram'
 
@@ -27962,16 +28018,32 @@ export type Parser
 	// The `containsStruct` guard, not `structOf`, for the reason its header states: this is asked of
 	// EVERY `named` parameter and return type, most of them int aliases, and `structOf` would box a
 	// throwaway `DeclaredStruct.undeclared` for each.
-	function resolveNamedStruct(t MaxonType) returns MaxonType
+	// ⚠⚠ **`scopeFilePath` IS THE FILE THAT DECLARED THE *SLOT*, WHICH IS NOT ALWAYS THIS PARSER'S FILE.**
+	// A parameter list, a field and a `sizeof` operand are slots of the file being parsed, so those callers
+	// pass `self.filePath`; a CALLEE'S RETURN TYPE is a slot of the file that declared the CALLEE, and an
+	// OVERLOAD CANDIDATE'S PARAMETER a slot of the file that declared the candidate. Reading `self.filePath`
+	// for those two was a silent wrong answer the moment a name could mean two things: **MEASURED**, a
+	// `returns Widget` over `a.maxon`'s file-private ranged alias, called from a third file that declares
+	// neither, was `E3005 Cannot return 'struct' from function declared to return 'int'`, and through a
+	// field read it dereferenced the integer as a record — **exit 139, clean compile**.
+	// `ProgramSignatures.funcReturnDeclFiles`' header states the rule this parameter carries: *"the scope
+	// file is the SLOT's declaring file and never a reader's."*
+	function resolveNamedStruct(t MaxonType, scopeFilePath FilePath) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 			return t
 		end 'notNamed'
 
 		let id = typeNameIdOf(t)
 		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("resolveNamedStruct: a `named` type's id is not in this file's interner — `parseTypeReference` interned it from a name in the same table")
-		if not self.signatures.containsStruct(name) 'notStruct'
+		// ⚠ **AND NOT IF AN ALIAS ANSWERS FOR *THIS* FILE.** The struct registry is bare and whole-program,
+		// so once a `type Box` in one file and a `typealias Box` in another may both stand
+		// (`typeNamePairMayCoexist`) this re-tag claimed the name for every file. MEASURED: a user program
+		// declaring `type ParsedInt` made `stdlib/Builtins.maxon`'s own `__int_fromString(…) returns
+		// ParsedInt` a struct return, and its `return result` **E3005 'Cannot return int from function
+		// declared to return struct'** — inside a library file, about a declaration the author never saw.
+		if not self.signatures.containsStructInAnyFile(name) or self.signatures.aliasShadowsNominalFor(name, readerFilePath: scopeFilePath) 'notAStructHere'
 			return t
-		end 'notStruct'
+		end 'notAStructHere'
 
 		return MaxonType.structRef(id)
 	end 'resolveNamedStruct'
@@ -27989,25 +28061,28 @@ export type Parser
 	// `named`; a name is a struct, a float alias, a function alias, a generic alias, a tuple alias or a ranged
 	// int — NEVER two — so ONE `nameOf` decides which, idempotent and foldable alongside
 	// `resolveNamedStruct`/`resolveFloatAliasType`.
-	function resolveNamedAlias(t MaxonType) returns MaxonType
+	// `scopeFilePath` is `resolveNamedStruct`'s, for its reason — this is the same repair one registry over.
+	function resolveNamedAlias(t MaxonType, scopeFilePath FilePath) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 			return t
 		end 'notNamed'
 
 		let id = typeNameIdOf(t)
 		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("resolveNamedAlias: a `named` type's id is not in this file's interner — `parseTypeReference`/`fieldTypeOf` interned it from a name in the same table")
-		if self.signatures.isFunctionAlias(name) 'fa'
+		// The reader-aware probes for `parseTypeReference`'s reason — this is the READ-side twin of that
+		// cascade and the two may not answer a contested name differently.
+		if self.signatures.isFunctionAliasFor(name, readerFilePath: scopeFilePath) 'fa'
 			return MaxonType.function(id)
 		end 'fa'
-		if self.signatures.isGenericAlias(name) 'genericAlias'
+		if self.signatures.isGenericAliasFor(name, readerFilePath: scopeFilePath) 'genericAlias'
 			return self.genericAliasDenotedType(name)
 		end 'genericAlias'
 		// ⭐ A TUPLE-ALIAS return (`returns Pair`) — the `named` the sweep recorded resolved to the tuple's own
 		// CANONICAL `structRef`, so `let t = make()` binds a struct the caller adopts and `t.0` resolves.
 		// ⚠ MEASURED, A3e: without it the very same program was `E3011 Unknown type 'Pair'` whenever the walk
 		// reached the alias's file after the caller's, and ran when it reached it first.
-		if self.signatures.isTupleAlias(name) 'tupleAlias'
-			return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(name)))
+		if self.signatures.isTupleAliasFor(name, readerFilePath: scopeFilePath) 'tupleAlias'
+			return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetInAnyFile(name)))
 		end 'tupleAlias'
 		return t
 	end 'resolveNamedAlias'
@@ -28033,7 +28108,7 @@ export type Parser
 	function resolveNamedStructAll(types MaxonTypeArray) returns MaxonTypeArray
 		var resolved = MaxonTypeArray.create()
 		for t in types 'each'
-			resolved.push(self.resolveNamedStruct(t))
+			resolved.push(self.resolveNamedStruct(t, scopeFilePath: self.filePath))
 		end 'each'
 		return resolved
 	end 'resolveNamedStructAll'
@@ -28044,7 +28119,7 @@ export type Parser
 	function resolveNamedStructReturn(rt MaxonReturnType) returns MaxonReturnType
 		return match rt 'r'
 			void gives rt
-			value(inner) gives MaxonReturnType.value(self.resolveNamedStruct(inner))
+			value(inner) gives MaxonReturnType.value(self.resolveNamedStruct(inner, scopeFilePath: self.filePath))
 		end 'r'
 	end 'resolveNamedStructReturn'
 
@@ -29191,7 +29266,7 @@ export type Parser
 	// name that denotes no record, so the guard belongs with it rather than at each asker — written twice it
 	// was two copies of one precondition, free to be dropped from one of them.
 	function recordOpaqueSlotOwnerOf(name ByteArray) returns OpaqueSlotDeclaration
-		if not self.signatures.containsStruct(name) 'namesNoRecord'
+		if not self.signatures.containsStructInAnyFile(name) 'namesNoRecord'
 			return OpaqueSlotDeclaration.none
 		end 'namesNoRecord'
 
@@ -29227,7 +29302,7 @@ export type Parser
 	// which is why a miss is a panic — every tuple type in the compiler is registered by `internTupleLayout`
 	// before anything is typed with it.
 	function tupleLayoutOfValue(value ValueId) returns StructLayout
-		match self.signatures.structOf(self.valueTypeName(value)) 'registered'
+		match self.signatures.structFor(self.valueTypeName(value), readerFilePath: self.filePath) 'registered'
 			declared(layout) then return layout
 			undeclared then panic("tupleLayoutOfValue: the tuple `{String.from(self.valueTypeName(value))}` a value carries is not registered — every tuple `structRef` was minted by `internTupleLayout`, which registers the layout before it hands the name back")
 		end 'registered'
@@ -29747,11 +29822,11 @@ export type Parser
 	function fillFreshCell(value ValueId, declared MaxonType, rhsWasBareLocal bool, range SourceRange) returns ValueId throws ParseError
 		let cell = self.allocateCell(declared, range: range)
 		var stored = value
-		if self.signatures.typeIsManaged(declared, from: self.artifact.typeNames) 'cellTakesOwnership'
+		if self.signatures.typeIsManagedFor(declared, from: self.artifact.typeNames, readerFilePath: self.filePath) 'cellTakesOwnership'
 			stored = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(declared)), range: range)
 		end 'cellTakesOwnership'
 
-		self.emitIndirectStore(cell, offset: CellContentOffset, value: stored, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(declared)), range: range)
+		self.emitIndirectStore(cell, offset: CellContentOffset, value: stored, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(declared, scopeFilePath: self.filePath)), range: range)
 		// The FIRST value into a cell hands it W117's mark exactly as a later rebind does (`emitCellStore`) —
 		// asked of `value` rather than of `stored`, because the ownership move above mints the occupant and it
 		// is the incoming value the promotion marked.
@@ -29839,7 +29914,7 @@ export type Parser
 	// `float`, `bool`, byte or enum parameter costs exactly one `storeIndirect` per rebind.
 	function reassignCellBinding(binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
 		let range = SourceRange.ofToken(nameTok)
-		if not self.signatures.typeIsManaged(binding.varType, from: self.artifact.typeNames) 'scalarCell'
+		if not self.signatures.typeIsManagedFor(binding.varType, from: self.artifact.typeNames, readerFilePath: self.filePath) 'scalarCell'
 			self.emitCellStore(binding, value: value, range: range)
 			return
 		end 'scalarCell'
@@ -30178,7 +30253,7 @@ export type Parser
 		// which mint a `named`, so nothing is resolved through it today; it is stated because the alternative
 		// is a query whose answer depends on which table the caller happened to hold, which is precisely the
 		// cross-file misclassification T1 fixed one door along.
-		if not self.signatures.typeIsManaged(valueType, from: self.artifact.typeNames) 'scalarGlobal'
+		if not self.signatures.typeIsManagedFor(valueType, from: self.artifact.typeNames, readerFilePath: self.filePath) 'scalarGlobal'
 			self.emitGlobalStore(label, valueType: valueType, value: stored, range: range)
 			return
 		end 'scalarGlobal'
@@ -31088,7 +31163,9 @@ export type Parser
 	// disagree about the same name. Every reader arrives through `aggregateNameOf`, including the pre-erasure
 	// columns, which reach it through `erasedAggregateNameOf`.
 	function namedAggregateName(name ByteArray) returns ByteArray
-		if self.signatures.containsStruct(name) or self.signatures.containsEnum(name) 'registeredAggregate'
+		// The contest guard is `resolveNamedStruct`'s, for its reason: a name a NOMINAL declaration holds
+		// only for OTHER files carries no nominal identity in this one.
+		if (self.signatures.containsStructInAnyFile(name) or self.signatures.containsEnumInAnyFile(name)) and not self.signatures.aliasShadowsNominalFor(name, readerFilePath: self.filePath) 'registeredAggregate'
 			return name
 		end 'registeredAggregate'
 
@@ -31169,7 +31246,7 @@ export type Parser
 	// has not reached yet would classify differently there. Every caller is inside a `recordSignature`-gated
 	// or real-parse-only path.
 	function erasedAggregateNameOf(t MaxonType) returns ByteArray
-		let resolved = self.resolveNamedStruct(t)
+		let resolved = self.resolveNamedStruct(t, scopeFilePath: self.filePath)
 		let tag = maxonTypeTag(resolved)
 		if tag != ValueTypeTag.named 'survivesResolution'
 			return EmptySourceText
@@ -31253,22 +31330,35 @@ export type Parser
 	// of an `as` cast must decide a float-alias target the same way, so the decision is written once here
 	// and the id-keyed form above only resolves the id.
 	function rangedAliasTagOfName(name ByteArray) returns ValueTypeTag
+		return self.rangedAliasTagOfNameFrom(name, scopeFilePath: self.filePath)
+	end 'rangedAliasTagOfName'
+
+	// The same reduction on a named FILE's behalf. Split for `namedIsFloatAliasFor`'s reason: a slot another
+	// file declared is reduced in THAT file's scope, and `aliasOf` is where the reader is spent.
+	function rangedAliasTagOfNameFrom(name ByteArray, scopeFilePath FilePath) returns ValueTypeTag
 		if isSynthesizedIntAliasName(name) 'compilerDeclaredIntAlias'
 			return ValueTypeTag.integer
 		end 'compilerDeclaredIntAlias'
 
-		return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'a'
+		return match self.signatures.aliasOf(name, readerFilePath: scopeFilePath) 'a'
 			declared(alias) gives maxonTypeTag(alias.underlying)
 			undeclared gives ValueTypeTag.named
 		end 'a'
-	end 'rangedAliasTagOfName'
+	end 'rangedAliasTagOfNameFrom'
 
 	// Does `nameId` name a ranged FLOAT alias? A `float(low to high)` alias
 	// (`Parser.readTypeAliasDeclaration`) is the ONE `named` type whose VALUE is a genuine float; an
 	// `int(low to high)` alias is `named` too and is an int.
 	function namedIsFloatAlias(nameId TypeNameId) returns bool
-		return tagIsFloat(self.rangedAliasTag(nameId))
+		return self.namedIsFloatAliasFor(nameId, scopeFilePath: self.filePath)
 	end 'namedIsFloatAlias'
+
+	// The same question on a named FILE's behalf — see `resolveFloatAliasType`, the one caller that asks it
+	// for a slot another file declared. The bare form above is this one asked for THIS file, which is what
+	// every other reader of a float alias means.
+	function namedIsFloatAliasFor(nameId TypeNameId, scopeFilePath FilePath) returns bool
+		return tagIsFloat(self.rangedAliasTagOfNameFrom(self.internedName(nameId), scopeFilePath: scopeFilePath))
+	end 'namedIsFloatAliasFor'
 
 	// A `named` TAG that names a ranged float alias resolves to `float`; every other tag passes through —
 	// an INT alias stays `named` (`checkDeclaredType` reads it identically, and its name still carries the
@@ -31329,11 +31419,17 @@ export type Parser
 	// Std return type), or `trunc(x)` reads the `named` tag as already-integral and returns `x` unchanged
 	// and `return x` moves an XMM value through a GPR. An int alias keeps its `named` type (its name
 	// carries signedness); a struct/scalar/String passes through.
-	function resolveFloatAliasType(t MaxonType) returns MaxonType
+	// ⚠ **`scopeFilePath` FOR `resolveNamedStruct`'s REASON — this is the third of the three repairs and it
+	// was the one that never got the scope.** It reaches the ranged registry through `namedIsFloatAlias` ->
+	// `rangedAliasTag` -> `ProgramSignatures.aliasOf`, which is reader-aware about the RANGE; the KIND gate
+	// is `aliasOf`'s own since this rung, so what this parameter carries is WHOSE meaning is being asked.
+	// MEASURED without it: a `typealias Level = float(0.0 to 5.0)` in one file against an `enum Level` in
+	// another refused the enum file's OWN `returns Level` — inside a file whose author never saw the alias.
+	function resolveFloatAliasType(t MaxonType, scopeFilePath FilePath) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 			return t
 		end 'notNamed'
-		return MaxonType.float if self.namedIsFloatAlias(typeNameIdOf(t)) else t
+		return MaxonType.float if self.namedIsFloatAliasFor(typeNameIdOf(t), scopeFilePath: scopeFilePath) else t
 	end 'resolveFloatAliasType'
 
 	// ⭐ **THE BUILTIN CONFORMER A `(tag, nameId)` TYPE DISPATCHES ITS `.hash()`/`.equals()`/`.compare()`
@@ -34707,7 +34803,7 @@ export type Parser
 	// parser already resolved — so an undeclared name here is a compiler invariant break, not a user error
 	// (E3004 reports an unknown type long before a throw can name it).
 	function requireRoutedErrorLayout(name ByteArray) returns EnumLayout
-		match self.signatures.enumOf(name) 'declared'
+		match self.signatures.enumFor(name, readerFilePath: self.filePath) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("requireRoutedErrorLayout: '{String.from(name)}' is routed as an error type but declares no enum or union — every routing door reads the name off a resolved `throws` clause or a resolved thrown value")
 		end 'declared'
@@ -34818,7 +34914,7 @@ export type Parser
 		end 'fits'
 
 		// The enclosing clause denotes no error type — E3113 or E3016 owns this program (see the header above).
-		if not self.signatures.containsEnum(enclosing.toByteArray()) 'clauseIsNotAnErrorType'
+		if not self.signatures.containsEnumFor(enclosing.toByteArray(), readerFilePath: self.filePath) 'clauseIsNotAnErrorType'
 			return
 		end 'clauseIsNotAnErrorType'
 
@@ -34851,7 +34947,7 @@ export type Parser
 	// turns on, and the derive-once point for it. Read at BOTH ends so the flag round-trips: the throw
 	// ENCODE (`emitThrowError`, which stamps it on the `throwError` op for `lowerThrowError` to write the box
 	// pointer verbatim) and the catch DECODE (`declareCaughtError`, which binds `e` to that pointer verbatim
-	// for BOTH catching constructs). Both funnel through the one `enumOf(name).isBoxed()` here, so a boxed union cannot be
+	// for BOTH catching constructs). Both funnel through the one `enumInAnyFile(name).isBoxed()` here, so a boxed union cannot be
 	// encoded as a pointer at one end and decoded as an `ordinal + bias` at the other. A SCALAR enum and a
 	// non-`named` type are `false` — their flag is `ordinal + ErrorFlagOrdinalBias`.
 	function throwsTypeIsBoxedUnion(errorType MaxonType) returns bool
@@ -34859,7 +34955,7 @@ export type Parser
 			return false
 		end 'notNamed'
 		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(errorType)) otherwise return false
-		return match self.signatures.enumOf(name) 'e'
+		return match self.signatures.enumFor(name, readerFilePath: self.filePath) 'e'
 			declared(layout) gives layout.isBoxed()
 			undeclared gives false
 		end 'e'
@@ -34927,7 +35023,7 @@ export type Parser
 				// ⚠ Only a cell this frame OWNS reaches here: a by-reference PARAMETER's cell is the caller's and is
 				// never enrolled (`bindParameters`), so `ownedBindings` holds only locals and r-value scratch cells.
 				if bindingIsCell 'aCellOwnsTwoThings'
-					if self.signatures.typeIsManaged(bindingVarType, from: self.artifact.typeNames) 'cellHoldsAManagedRecord'
+					if self.signatures.typeIsManagedFor(bindingVarType, from: self.artifact.typeNames, readerFilePath: self.filePath) 'cellHoldsAManagedRecord'
 						self.emitDecref(self.emitCellLoad(bindingVarType, box: bindingValue, range: SourceRange.ofToken(anchor)), range: SourceRange.ofToken(anchor))
 					end 'cellHoldsAManagedRecord'
 
@@ -35028,7 +35124,7 @@ export type Parser
 	// owes it a release and a quiet miss would be a leak.
 	function declaredLayoutOfRecordValue(box ValueId) returns StructLayout
 		let name = self.valueTypeName(box)
-		match self.signatures.structOf(name) 'declared'
+		match self.signatures.structFor(name, readerFilePath: self.filePath) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("declaredLayoutOfRecordValue: v{box} took a descriptor-mediated reference into a slot of '{String.from(name)}', which declares no struct — a UNION box is the only other record `moveInPayload` fills, and a generic union over a type parameter is refused at the front end, so admitting one means this cascade now owes its payload a release")
 		end 'declared'
@@ -35302,7 +35398,7 @@ export type Parser
 		// (byte-identical), so only the managed case changes. The `containsStruct` gate keeps a `named` that
 		// names no declared struct (a ranged typealias) on the trivial path, where `managedFieldDropCallee`
 		// would otherwise panic (it classifies only struct/union/generic-alias fields).
-		if self.signatures.containsStruct(self.valueTypeName(value)) 'struct'
+		if self.signatures.containsStructFor(self.valueTypeName(value), readerFilePath: self.filePath) 'struct'
 			return self.structBoxDropCallee(value)
 		end 'struct'
 		return MmDecrefName
@@ -44055,7 +44151,7 @@ export type Parser
 			return DeclaredEnum.undeclared
 		end 'notNamed'
 
-		return self.signatures.enumOf(self.internedName(self.valueNameId(scrut)))
+		return self.signatures.enumFor(self.internedName(self.valueNameId(scrut)), readerFilePath: self.filePath)
 	end 'enumMatchFor'
 
 	// Is `value` a `union` value — a `named(X)` whose type is a declared `union`? The E3066 gate
@@ -47445,7 +47541,7 @@ export type Parser
 	// The `<T>.handle` layout, or a panic: the companions were minted for every ACCEPTED spawn target inside
 	// `queryProgramSignatures`, and every caller here has just been through `classifyServiceTarget`.
 	function serviceHandleLayout(typeName ByteArray) returns StructLayout
-		return match self.signatures.structOf(serviceHandleCompanionName(typeName)) 'lookup'
+		return match self.signatures.structInAnyFile(serviceHandleCompanionName(typeName)) 'lookup'
 			declared(layout) gives layout
 			undeclared panic("serviceHandleLayout: nothing declares `type {String.from(serviceHandleCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it for every accepted spawn target before any body is parsed, and this caller has already accepted one")
 		end 'lookup'
@@ -47884,7 +47980,7 @@ export type Parser
 	// and `true as Float` says "Cannot cast from bool to **float**" instead of naming the alias's erased
 	// `int`. Resolved HERE, at the one door both cast spellings ask, so neither can skip it.
 	function denotedCastTargetTag(name ByteArray, id TypeNameId, asTok Token) returns ValueTypeTag throws ParseError
-		let denoted = try denotedNamedType(self.signatures, name: name, id: id) otherwise 'undeclared'
+		let denoted = try denotedNamedType(self.signatures, name: name, id: id, readerFilePath: self.filePath) otherwise 'undeclared'
 			throw ParseError.unknownTypeName(String.from(name), line: asTok.line, column: asTok.column)
 		end 'undeclared'
 
@@ -50176,7 +50272,7 @@ export type Parser
 	function parseSizeof() returns ValueId throws ParseError
 		let sizeofTok = try self.consume(TokenKind.sizeof)
 		try self.consume(TokenKind.leftParen)
-		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted))
+		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted), scopeFilePath: self.filePath)
 		try self.consume(TokenKind.rightParen)
 
 		if maxonTypeTag(operand) == ValueTypeTag.typeParameter 'runtimeSize'
@@ -50247,7 +50343,7 @@ export type Parser
 	// against THIS file's interner, so it resolves through the file table, not the merged one).
 	function namedStructSizeBytes(id TypeNameId) returns ParsedInt
 		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("namedStructSizeBytes: a `structRef` id is not in this file's interner — `resolveNamedStruct` interned it from a name in the same table")
-		match self.signatures.structOf(name) 'lookup'
+		match self.signatures.structFor(name, readerFilePath: self.filePath) 'lookup'
 			declared(layout) then return layout.sizeBytes() as ParsedInt
 			undeclared then panic("namedStructSizeBytes: `structRef` names '{String.from(name)}', which `resolveNamedStruct` only tags for a declared struct")
 		end 'lookup'
@@ -50282,7 +50378,7 @@ export type Parser
 	function parseCountof() returns ValueId throws ParseError
 		let countofTok = try self.consume(TokenKind.countof)
 		try self.consume(TokenKind.leftParen)
-		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted))
+		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted), scopeFilePath: self.filePath)
 		try self.consume(TokenKind.rightParen)
 
 		// ⚠ **A COUNT IS A COORDINATE OF THE INSTANCE, SO ONLY AN INSTANCE CAN HAVE ONE.** A primitive, a
@@ -51630,7 +51726,7 @@ export type Parser
 		// that reaches this literal. That program is being refused for its real fault a moment later; this arm
 		// exists so the refusal it gets HERE is not E3076's: that one prescribes a static factory, and the
 		// factory an unkeyed alias would need (`{alias}.create()`) has nothing to resolve to either.
-		if not self.signatures.isGenericAlias(qualified) 'notKeyedWholeProgram'
+		if not self.signatures.isGenericAliasInAnyFile(qualified) 'notKeyedWholeProgram'
 			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, an inner typealias of `{String.from(self.enclosingType)}` that the whole-program declaration sweep did not key — so there is no container instance for the literal to build. A sweep stops early at a member it cannot read, so the declaration this one shares a body with is the fault to look for", line: aliasTok.line, column: aliasTok.column)
 		end 'notKeyedWholeProgram'
 
@@ -51787,7 +51883,7 @@ export type Parser
 			throw ParseError.unsupported("a struct literal naming `enum`/`union` `{String.from(typeName)}` — an enum/union declares no fields to write; a value of it is a CASE (`{String.from(typeName)}.<case>`, or `Self.<case>` from inside its own body)", line: typeTok.line, column: typeTok.column)
 		end 'enumBody'
 
-		match self.signatures.structOf(typeName) 'declared'
+		match self.signatures.structFor(typeName, readerFilePath: self.filePath) 'declared'
 			declared(layout) then return layout
 			// Unreachable: `namesEnclosingType` held and the enclosing declaration is a `type`, so this IS
 			// the struct currently being declared — and the declaration sweep recorded every `type` in the
@@ -52724,7 +52820,7 @@ export type Parser
 		// cross-file reference WORKS. E3062 only ever filters this set against a file's own non-exported
 		// typealiases, so a widened set can make it report LESS, never wrongly — and a name mentioned in
 		// any position is a name the file uses, which is the question E3062 asks too.
-		if self.signatures.containsStruct(baseTok.value) or self.signatures.containsEnum(baseTok.value) 'headNamesAType'
+		if self.signatures.containsStructFor(baseTok.value, readerFilePath: self.filePath) or self.signatures.containsEnumFor(baseTok.value, readerFilePath: self.filePath) 'headNamesAType'
 			self.recordTypeNameUse(baseTok.value)
 		end 'headNamesAType'
 
@@ -52742,8 +52838,12 @@ export type Parser
 		// ⚠ **A DECLARED ENUM THIS FILE MAY NOT NAME IS NOT AN ENUM REFERENCE HERE (N1a)** — it falls through
 		// to the hidden-base guard below, which reports the one mistake the reader can act on. The visibility
 		// probe is inside the `containsEnum` hit, so it costs nothing on the path this arm is guarded for.
-		if self.signatures.containsEnum(baseTok.value) and self.typeNameVisibleHere(baseTok.value) 'enumRef'
-			match self.signatures.enumOf(baseTok.value) 'declared'
+		// ⛔ **`containsEnumFor`, NOT THE BARE PROBE — this is the door BLOCKER 2 came through.**
+		// `typeNameVisibleHere` beside it checks the layout's VISIBILITY, which is a different question and
+		// answered `true` for an `export enum` another file declares: `Status.big` written where `Status`
+		// means a ranged `int(0 to 5)` reached that enum and stored 200 into the alias's slot.
+		if self.signatures.containsEnumFor(baseTok.value, readerFilePath: self.filePath) and self.typeNameVisibleHere(baseTok.value) 'enumRef'
+			match self.signatures.enumFor(baseTok.value, readerFilePath: self.filePath) 'declared'
 				declared(layout) then return try self.parseEnumLiteral(func, declaredLayout: layout)
 				undeclared then panic("parseDottedPrimary: containsEnum answered yes but enumOf answered undeclared — the two read the same enum registry, under the same key")
 			end 'declared'
@@ -52838,7 +52938,7 @@ export type Parser
 			return false
 		end 'notTwoSegmentsAndAMember'
 
-		return self.signatures.containsEnum(qualifiedMethodName(baseTok.value, methodName: self.tokenAt((self.pos + 2) as TokenIndex).value))
+		return self.signatures.containsEnumFor(qualifiedMethodName(baseTok.value, methodName: self.tokenAt((self.pos + 2) as TokenIndex).value), readerFilePath: self.filePath)
 	end 'dottedCompanionTypeAt'
 
 	// Consume the two-segment head and hand the rest to the member reader every one-segment head uses. The
@@ -52854,7 +52954,7 @@ export type Parser
 		try self.consume(TokenKind.dot)
 
 		let joined = qualifiedMethodName(headTok.value, methodName: memberTok.value)
-		return match self.signatures.enumOf(joined) 'declared'
+		return match self.signatures.enumFor(joined, readerFilePath: self.filePath) 'declared'
 			declared(layout) gives try self.parseEnumLiteralMember(func, declaredLayout: layout, typeTok: headTok)
 			undeclared panic("parseCompanionTypeLiteral: `{String.from(joined)}` is declared by no enum registry — `dottedCompanionTypeAt` answered `containsEnum` for this very name two tokens ago, and the two read one registry under one key")
 		end 'declared'
@@ -53012,7 +53112,7 @@ export type Parser
 	// member is declared in a `type` body, so its base is a declared struct by construction and `u16` never
 	// pays the join.
 	function namesStaticMemberAt(baseTok Token, memberIndex TokenIndex) returns bool
-		if not self.signatures.containsStruct(baseTok.value) 'notADeclaredTypeBase'
+		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.filePath) 'notADeclaredTypeBase'
 			return false
 		end 'notADeclaredTypeBase'
 
@@ -53396,11 +53496,11 @@ export type Parser
 	// `DeclaredEnum` heap-allocates even to say `undeclared`, and this runs at every `.` in every postfix
 	// chain and at every intermediate field hop. The membership test is over bytes already in hand.
 	function atEnumAccessorHopOfType(typeName ByteArray) returns bool
-		if not self.signatures.containsEnum(typeName) 'notAnEnumName'
+		if not self.signatures.containsEnumFor(typeName, readerFilePath: self.filePath) 'notAnEnumName'
 			return false
 		end 'notAnEnumName'
 
-		return self.atEnumInstanceAccessor(requireEnumLayout(self.signatures.enumOf(typeName)), index: self.pos)
+		return self.atEnumInstanceAccessor(requireEnumLayout(self.signatures.enumFor(typeName, readerFilePath: self.filePath)), index: self.pos)
 	end 'atEnumAccessorHopOfType'
 
 	// The kind of the token FOLLOWING the member — `index + 2`, the third of the three this shape spans, and
@@ -53441,7 +53541,7 @@ export type Parser
 			return layout
 		end 'notTheCompanion'
 
-		let found = self.signatures.enumOf(unionCasesCompanionName(layout.name))
+		let found = self.signatures.enumInAnyFile(unionCasesCompanionName(layout.name))
 		if not enumMatchIsDeclared(found) 'noCompanionRegistered'
 			return layout
 		end 'noCompanionRegistered'
@@ -54770,18 +54870,18 @@ export type Parser
 	// reason: `structOf`/`enumOf` box a `DeclaredStruct`/`DeclaredEnum` even to say `undeclared`, and this
 	// runs on paths where nearly every name is neither.
 	function typeNameVisibleHere(name ByteArray) returns bool
-		if self.signatures.containsStruct(name) 'declaredStruct'
-			match self.signatures.structOf(name) 'layout'
+		if self.signatures.containsStructFor(name, readerFilePath: self.filePath) 'declaredStruct'
+			match self.signatures.structFor(name, readerFilePath: self.filePath) 'layout'
 				declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
 				undeclared then panic("typeNameVisibleHere: containsStruct answered yes for '{String.from(name)}' but structOf answered undeclared — the two read one registry under one key")
 			end 'layout'
 		end 'declaredStruct'
 
-		if not self.signatures.containsEnum(name) 'notANominalDeclaration'
+		if not self.signatures.containsEnumFor(name, readerFilePath: self.filePath) 'notANominalDeclaration'
 			return true
 		end 'notANominalDeclaration'
 
-		match self.signatures.enumOf(name) 'layout'
+		match self.signatures.enumFor(name, readerFilePath: self.filePath) 'layout'
 			declared(layout) then return self.signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
 			undeclared then panic("typeNameVisibleHere: containsEnum answered yes for '{String.from(name)}' but enumOf answered undeclared — the two read one registry under one key")
 		end 'layout'
@@ -54907,7 +55007,7 @@ export type Parser
 		// ExitCode` then `IntPair.create(9)`, refused for a field access on `unknown` while the bootstrap runs
 		// it. Two rosters of "which containers does this compiler own", and two keys for one alias, are the
 		// same duplication in two columns.
-		if self.signatures.isGenericAlias(aliasName) 'containerAliasStatic'
+		if self.signatures.isGenericAliasFor(aliasName, readerFilePath: self.filePath) 'containerAliasStatic'
 			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath)
 
 			// ⭐⭐ **AND IT IS A BUILTIN CONTAINER WHOSE `create` THE COMPILER STILL EMITS (W190).** The
@@ -55049,7 +55149,7 @@ export type Parser
 	// parameters. See `bareGenericInstanceInScope` for the binding rule and for why the caller-side gate is
 	// spelled here.
 	function constructorInstanceOf(baseName ByteArray) returns ConstructorInstance
-		if self.signatures.isGenericAlias(baseName) 'genericAlias'
+		if self.signatures.isGenericAliasFor(baseName, readerFilePath: self.filePath) 'genericAlias'
 			return ConstructorInstance.instance(self.signatures.genericAliasInstanceFrom(baseName, readerFilePath: self.filePath))
 		end 'genericAlias'
 		if self.enclosingTypeParams.count() == 0 'noTypeParameterScope'
@@ -55110,7 +55210,7 @@ export type Parser
 		// would file a per-instance question under a name that answers no per-instance registry; the
 		// substitution the value actually needs is `retypeInstanceMethodResult`'s instance arm, which reads
 		// the gid and never the spelling.
-		if self.signatures.isGenericAlias(aliasName) 'writtenAlias'
+		if self.signatures.isGenericAliasFor(aliasName, readerFilePath: self.filePath) 'writtenAlias'
 			self.recordValueInstanceAlias(result, aliasName: aliasName)
 		end 'writtenAlias'
 
@@ -55759,7 +55859,7 @@ export type Parser
 		// Character, Array and Set receiver — so the interner read and the registry probe behind it are paid
 		// only by a receiver that is an enum or a ranged alias, and a ranged alias reaching here was already
 		// on its way to the struct fallthrough's refusal.
-		if recv.tag == ValueTypeTag.named and self.signatures.containsEnum(self.internedName(recv.nameId)) 'enumMethod'
+		if recv.tag == ValueTypeTag.named and self.signatures.containsEnumFor(self.internedName(recv.nameId), readerFilePath: self.filePath) 'enumMethod'
 			return try self.dispatchEnumMethod(func, recv: recv, resultUsed: resultUsed)
 		end 'enumMethod'
 
@@ -56191,7 +56291,7 @@ export type Parser
 		// `parseQualifiedCall` does resolve.
 		let baseName = self.genericAliasKeyFor(written)
 
-		if self.signatures.containsEnum(baseName) or self.signatures.isGenericAlias(baseName) 'enumOrGenericAlias'
+		if self.signatures.containsEnumFor(baseName, readerFilePath: self.filePath) or self.signatures.isGenericAliasFor(baseName, readerFilePath: self.filePath) 'enumOrGenericAlias'
 			return true
 		end 'enumOrGenericAlias'
 
@@ -57711,7 +57811,7 @@ export type Parser
 		// ⚠ `allFilesFolded` for the reason `scopedGenericInstanceOf` states: the alias registry is one the
 		// declaration sweep is still filling, so an ungated answer would depend on the loader's walk order.
 		let name = self.internedName(typeNameIdOf(declared))
-		if not self.signatures.allFilesFolded or not self.signatures.isGenericAlias(name) 'notAGenericAliasReturn'
+		if not self.signatures.allFilesFolded or not self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) 'notAGenericAliasReturn'
 			return declared
 		end 'notAGenericAliasReturn'
 
@@ -57851,7 +57951,7 @@ export type Parser
 	// the arm.
 	function resolvedElementIdentity(elementType MaxonType) returns ByteArray
 		let name = self.declaredElementIdentity(elementType)
-		if not self.signatures.containsStruct(name) and not self.signatures.containsEnum(name) 'erasesOrHasNoIdentity'
+		if not self.signatures.containsStructFor(name, readerFilePath: self.filePath) and not self.signatures.containsEnumFor(name, readerFilePath: self.filePath) 'erasesOrHasNoIdentity'
 			return EmptySourceText
 		end 'erasesOrHasNoIdentity'
 
@@ -57862,7 +57962,7 @@ export type Parser
 	// comparison, because "returns nothing" is a different complaint from "returns the wrong thing" and the
 	// container has no element for the void case to be compared against.
 	function elementTransformReturnType(transform ValueId, argTok Token) returns MaxonType throws ParseError
-		match self.functionValueReturnType(transform) 'returned'
+		match self.functionValueReturn(transform).returnType 'returned'
 			value(returnType) then return returnType
 			void then break 'returned'
 		end 'returned'
@@ -59897,7 +59997,7 @@ export type Parser
 		// spells records nothing and a program with no merge at all pays one set probe per container it
 		// builds. MEASURED ungated on the scale ladder: +2,069 allocations at rung 0 rising to +16,357 at
 		// rung 5, for a spelling nothing would ever ask for.
-		if self.signatures.instanceIsMultiplyAliased(giid) and self.signatures.isGenericAlias(aliasName) 'aWrittenAliasWorthRemembering'
+		if self.signatures.instanceIsMultiplyAliased(giid) and self.signatures.isGenericAliasFor(aliasName, readerFilePath: self.filePath) 'aWrittenAliasWorthRemembering'
 			self.recordValueInstanceAlias(container, aliasName: aliasName)
 		end 'aWrittenAliasWorthRemembering'
 
@@ -60462,7 +60562,7 @@ export type Parser
 	// through to **`E2004: Undefined variable 'CharSet'`** on six cases across `character-set`,
 	// `unicode-category` and `lazy-static`. See `ProgramSignatures.isSetShapedInstance`.
 	function namesSetInstanceAlias(name ByteArray) returns bool
-		return self.signatures.isGenericAlias(name) and self.signatures.isSetShapedInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
+		return self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) and self.signatures.isSetShapedInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 	end 'namesSetInstanceAlias'
 
 	// The same question one container over — is `name` a typealias for an `Array` instance? Its own predicate
@@ -60471,7 +60571,7 @@ export type Parser
 	// `__Array_<T>` spellings (`SignatureIndex.isArrayBaseName`), and a shared base-name compare would have
 	// answered `false` for every one of those.
 	function namesArrayInstanceAlias(name ByteArray) returns bool
-		return self.signatures.isGenericAlias(name) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
+		return self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 	end 'namesArrayInstanceAlias'
 
 	// ⭐⭐ **`ByteArray from [10, 20, 30]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN**, `Vector from […]`'s
@@ -62666,7 +62766,7 @@ export type Parser
 		// arm, which must keep its nested witness, and ABOVE the fallback, which reads the associated type's
 		// NAME as though it were a concrete type's.
 		if let bound = try self.associatedReturnThroughReceiverInstance(target, receiver: receiver) 'theReceiversInstanceBindsIt'
-			return self.mintOwnedCallResult(bound)
+			return self.mintOwnedCallResult(bound, scopeFilePath: CompilerOwnedDeclFilePath)
 		end 'theReceiversInstanceBindsIt'
 
 		// ⭐⭐ **AND THE SAME ANSWER FOR A CONSTRAINED TYPE PARAMETER, WHOSE `where` CLAUSE IS WHERE ITS `with`
@@ -62675,10 +62775,12 @@ export type Parser
 		// parameter on the DECLARATION — and above the fallback for the identical reason: the fallback reads
 		// the associated type's NAME as though it were a concrete type's.
 		if let bound = try self.associatedReturnThroughConstraintBinding(target, receiver: receiver) 'theConstraintBindsIt'
-			return self.mintOwnedCallResult(bound)
+			return self.mintOwnedCallResult(bound, scopeFilePath: CompilerOwnedDeclFilePath)
 		end 'theConstraintBindsIt'
 
-		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName))
+		// `CompilerOwnedDeclFilePath` for the two arms above's reason: a requirement's return type is written
+		// inside an `interface`, and `IrInterface` records no declaring file.
+		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName), scopeFilePath: CompilerOwnedDeclFilePath)
 	end 'witnessDispatchValueResult'
 
 	// ⭐⭐ **WHAT THE RECEIVER'S `with` ARGUMENTS SAY THIS ASSOCIATED-TYPE RETURN IS (W57).** `current()` on a
@@ -62833,7 +62935,7 @@ export type Parser
 		let range = SourceRange.ofToken(methodTok)
 		let distance = self.emitIndirectLoad(MaxonType.integer, box: target.witnessValue, offset: held.slotOffset, storageType: MaxonType.integer, range: range)
 		let nested = self.emitMachineWordAdd(target.witnessValue, rhs: distance, range: range)
-		let result = self.mintOwnedCallResult(MaxonType.interfaceRef(self.artifact.typeNames.intern(held.heldAt)))
+		let result = self.mintOwnedCallResult(MaxonType.interfaceRef(self.artifact.typeNames.intern(held.heldAt)), scopeFilePath: CompilerOwnedDeclFilePath)
 		self.pairInterfaceWitness(result, witness: nested)
 		// ⭐⭐ **THE HELD VALUE INHERITS THE `with` ARGUMENTS THE RECEIVER BOUND AT THIS POSITION (W57)** — the
 		// second half of the chain `for item in <an Iterable>` walks, and without it the first half buys
@@ -62861,10 +62963,10 @@ export type Parser
 	//     a concrete `Self`-returning impl does.
 	function mintSelfReturnedWitnessResult(receiver ValueId) returns ValueId
 		if self.tagOf(receiver) != ValueTypeTag.interfaceRef 'constrainedTypeParameter'
-			return self.mintOwnedCallResult(MaxonType.typeParameter(self.valueNameId(receiver)))
+			return self.mintOwnedCallResult(MaxonType.typeParameter(self.valueNameId(receiver)), scopeFilePath: CompilerOwnedDeclFilePath)
 		end 'constrainedTypeParameter'
 
-		let result = self.mintOwnedCallResult(MaxonType.interfaceRef(self.valueNameId(receiver)))
+		let result = self.mintOwnedCallResult(MaxonType.interfaceRef(self.valueNameId(receiver)), scopeFilePath: CompilerOwnedDeclFilePath)
 		self.pairInterfaceWitness(result, witness: self.witnessOfValue(receiver))
 		return result
 	end 'mintSelfReturnedWitnessResult'
@@ -64597,7 +64699,7 @@ export type Parser
 	// excluded on the same claim `IrFunction`'s mask table already makes about a `String` RECEIVER — a
 	// String write frees no container element — and nothing else is.
 	function typeOwnsBorrowableStorage(t MaxonType) returns bool
-		if not self.signatures.typeIsManaged(t, from: self.artifact.typeNames) 'ownsNoHeapAtAll'
+		if not self.signatures.typeIsManagedFor(t, from: self.artifact.typeNames, readerFilePath: self.filePath) 'ownsNoHeapAtAll'
 			return false
 		end 'ownsNoHeapAtAll'
 
@@ -65357,7 +65459,7 @@ export type Parser
 			return false
 		end 'notANamedLeaf'
 
-		return self.signatures.containsEnum(self.localTypeName(argType, asker: "argIsAnEnumValue"))
+		return self.signatures.containsEnumFor(self.localTypeName(argType, asker: "argIsAnEnumValue"), readerFilePath: self.filePath)
 	end 'argIsAnEnumValue'
 
 	// ⭐⭐ **SIGN-EXTEND A VALUE READ OUT OF A NARROW SIGNED SLOT — ONE compiler-only unary op.** The width
@@ -65632,7 +65734,7 @@ export type Parser
 		end 'instance'
 		if tag == ValueTypeTag.named 'named'
 			// ⛔ **A FOURTH COPY OF THE GENERIC-ALIAS ARM STOOD HERE AND WAS PROVABLY DEAD (A4k review).** It read
-			// `isGenericAlias(name)` and re-tagged to the instance — but `declaredSlotType` one line up already
+			// `isGenericAliasInAnyFile(name)` and re-tagged to the instance — but `declaredSlotType` one line up already
 			// asked that, over `denotedSlotType`, and its hit RETURNS a `genericInstance` the `instance` arm above
 			// takes. Reaching this line with tag `named` therefore MEANS the name is not a generic alias, and the
 			// two lookups cannot disagree: `adoptType` re-interns by the SAME name string, so the artifact table's
@@ -66907,7 +67009,7 @@ export type Parser
 	// The `baseTok` `structLayoutOfType` names in its diagnostics is the FIELD token here — for a hop, the
 	// field IS what the reader must fix.
 	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, fieldType MaxonType) returns StructLayout throws ParseError
-		let resolved = self.resolveNamedStruct(fieldType)
+		let resolved = self.resolveNamedStruct(fieldType, scopeFilePath: baseLayout.declFilePath)
 		let tag = maxonTypeTag(resolved)
 		if not self.tagCarriesStructLayoutHere(tag) 'notAStruct'
 			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(tag)}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
@@ -67601,7 +67703,7 @@ export type Parser
 			throw ParseError.unsupported("a field access through `self` in a method of `extension {String.from(self.enclosingType)}` — a primitive IS its value and declares no fields, so `self` here is the {String.from(self.enclosingType)} itself and has no members to read", line: anchor.line, column: anchor.column)
 		end 'aPrimitiveHasNoFields'
 
-		match self.signatures.structOf(self.enclosingType) 'declared'
+		match self.signatures.structFor(self.enclosingType, readerFilePath: self.filePath) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("enclosingLayout: `type {String.from(self.enclosingType)}` is being parsed right now, but the declaration sweep never recorded it — `recordScannedType` and `parseTypeDeclaration` disagree about what opens a type declaration")
 		end 'declared'
@@ -68092,7 +68194,7 @@ export type Parser
 			throw self.missingBaseLayout(access, typeName: typeName, baseTok: baseTok)
 		end 'noBaseLayout'
 
-		match self.signatures.structOf(typeName) 'declared'
+		match self.signatures.structFor(typeName, readerFilePath: self.filePath) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("structLayoutOfType: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference), and an INSTANCE base was gated by genericInstanceHasBaseLayout above")
 		end 'declared'
@@ -68214,7 +68316,7 @@ export type Parser
 	// settles both syntactically and neither ever wears a `named` tag.
 	//
 	// ⚠ **`CharacterSet` WAS THE MEASURED CASE AND IT IS NO LONGER ONE (W115).** It answered NOWHERE while
-	// its layout lived under the RESERVED spelling `__CharacterSet` and `containsStruct("CharacterSet")` was
+	// its layout lived under the RESERVED spelling `__CharacterSet` and `containsStructInAnyFile("CharacterSet")` was
 	// FALSE, and without this gate `function hasIt(s CharacterSet, …)` + `s.contains(c)` reported
 	// **`E3011: Unknown type 'CharacterSet'`** for a type the compiler shipped. `stdlib/CharacterSet.maxon`
 	// is listed now, so `recordStruct` files the corpus layout under the BARE name and the cascade answers it
@@ -68273,7 +68375,7 @@ export type Parser
 		// cascade ERASES — every arm returns `exitCode`, `structRef`, `integer` or a ranged alias's
 		// `int`/`float` underlying, and an arm that handed the `named` REFERENCE back would put this routine
 		// (and `denotedCastTargetTag`, which reads a tag off the same call) into an unbounded resolve.
-		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise throw ParseError.unknownTypeName(String.from(name), line: tok.line, column: tok.column)
+		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId, readerFilePath: self.filePath) otherwise throw ParseError.unknownTypeName(String.from(name), line: tok.line, column: tok.column)
 		if maxonTypeTag(denoted) == ValueTypeTag.named 'cascadeDidNotErase'
 			panic("requireDeclaredBaseTypeName: `denotedNamedType` answered `named` for '{String.from(name)}' — every arm of its cascade erases to a concrete type or throws, so a `named` answer means a new arm hands its own input back")
 		end 'cascadeDidNotErase'
@@ -68318,7 +68420,7 @@ export type Parser
 		if not tagIsByteRecord(tag) 'notAByteRecord'
 			return false
 		end 'notAByteRecord'
-		return match self.signatures.structOf(self.byteRecordLayoutName(tag)) 'corpusDeclaresIt'
+		return match self.signatures.structInAnyFile(self.byteRecordLayoutName(tag)) 'corpusDeclaresIt'
 			declared gives true
 			undeclared gives false
 		end 'corpusDeclaresIt'
@@ -68799,7 +68901,7 @@ export type Parser
 	// borrow live across a write to the parser's own storage (E3070, on this compiler's own source). Two
 	// scalars cannot dangle.
 	function emitCellLoad(cellVarType MaxonType, box ValueId, range SourceRange) returns ValueId
-		let cellType = self.resolveFloatAliasType(cellVarType)
+		let cellType = self.resolveFloatAliasType(cellVarType, scopeFilePath: self.filePath)
 		let loaded = self.emitIndirectLoad(cellType, box: box, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
 		if self.valueIsManagedHeap(loaded) 'managedOccupant'
 			self.markRebindableSlotRead(loaded)
@@ -68818,7 +68920,7 @@ export type Parser
 	// ⭐⭐ **WRITE A CELL-RESIDENT BINDING (PBR-2)** — the rebind, which for this binding kind is a store and
 	// not a `Scope.setValue`. That is the whole of what makes a caller observe a callee's `x = 99`.
 	function emitCellStore(binding VarInfo, value ValueId, range SourceRange)
-		self.emitIndirectStore(binding.boundValue, offset: CellContentOffset, value: value, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(binding.varType)), range: range)
+		self.emitIndirectStore(binding.boundValue, offset: CellContentOffset, value: value, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(binding.varType, scopeFilePath: self.filePath)), range: range)
 		// ⭐ **THE CELL ITSELF CARRIES W117's MARK (review)** — put on the BOX rather than on the occupant,
 		// because the occupant is a value this frame may never name again while the cell is what every later
 		// read, every capture and every write door (`bindingAliasesAnImmutableGlobal` reads `boundValue`, which
@@ -69160,7 +69262,7 @@ export type Parser
 		// the same door a struct field's width comes from and the same one `buildClosureEnv`'s store
 		// asks. That the two ask ONE routine is the invariant, not a tidiness: a slot filled at one
 		// width and read at another corrupts the environment silently.
-		let captureType = self.resolveFloatAliasType(binding.varType)
+		let captureType = self.resolveFloatAliasType(binding.varType, scopeFilePath: self.filePath)
 		let range = SourceRange.ofToken(anchor)
 
 		// ⭐⭐ **A CELL-RESIDENT BINDING IS CAPTURED BY ITS CELL, AND THAT IS WHAT MAKES CAPTURE BY REFERENCE
@@ -69838,7 +69940,7 @@ export type Parser
 		end 'oneAliasSpellsItForEveryone'
 
 		let aliasName = self.signatures.returnAliasNameOf(callee)
-		if not self.signatures.isGenericAlias(aliasName) 'theClauseNamedNoGenericAlias'
+		if not self.signatures.isGenericAliasFor(aliasName, readerFilePath: self.filePath) 'theClauseNamedNoGenericAlias'
 			return
 		end 'theClauseNamedNoGenericAlias'
 
@@ -70464,7 +70566,7 @@ export type Parser
 		// `parseFunction` seeds a function's, so `tagOf(param)` answers the operators before any op runs. A
 		// float-alias parameter is lifted to a genuine `float` tag (`resolveFloatAliasType`), the same care.
 		for paramType in paramTypes 'seedParamTypes'
-			self.recordValueType(self.resolveFloatAliasType(paramType))
+			self.recordValueType(self.resolveFloatAliasType(paramType, scopeFilePath: self.filePath))
 		end 'seedParamTypes'
 		// The reserved `__env` slot (ValueId `paramCount`) gets its own column entry — an i64 heap pointer —
 		// so the columns stay indexable by every ValueId whether or not the closure ends up capturing.
@@ -71015,7 +71117,7 @@ export type Parser
 		// ranged alias and a generic alias live in different registries, so `IntArray.` can only be this
 		// form — and claiming the whole shape is what lets the arm below say what a container's static
 		// surface IS, rather than leaving `ItemArray.push` to the bound reader's nonsense message.
-		if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot and self.signatures.isGenericAlias(self.current().value) 'containerFactoryInitializer'
+		if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot and self.signatures.isGenericAliasFor(self.current().value, readerFilePath: self.filePath) 'containerFactoryInitializer'
 			return try self.evalConstContainerCreate()
 		end 'containerFactoryInitializer'
 
@@ -71125,7 +71227,7 @@ export type Parser
 	function seatInDeclaringTypeBody(decl TopLevelDecl)
 		match decl.scope 'declaredIn'
 			fileScope then break 'declaredIn'
-			typeMember(typeName) then self.enterTypeScope(typeName, isEnum: self.signatures.containsEnum(typeName))
+			typeMember(typeName) then self.enterTypeScope(typeName, isEnum: self.signatures.containsEnumFor(typeName, readerFilePath: self.filePath))
 		end 'declaredIn'
 	end 'seatInDeclaringTypeBody'
 
@@ -71154,7 +71256,7 @@ export type Parser
 			return false
 		end 'notTheShape'
 
-		return match self.signatures.structOf(self.current().value) 'declared'
+		return match self.signatures.structFor(self.current().value, readerFilePath: self.filePath) 'declared'
 			declared gives true
 			undeclared gives false
 		end 'declared'
@@ -71945,7 +72047,7 @@ export type Parser
 		// A BARE `Set from […]` mints its instance from the elements, and a top-level element list cannot
 		// supply one: the members are folded, not emitted, so there is no value whose type could be read back.
 		// The alias form is the only one that STATES the instance, which is what this arm needs.
-		if not self.signatures.isGenericAlias(aliasTok.value) 'noInstanceStated'
+		if not self.signatures.isGenericAliasFor(aliasTok.value, readerFilePath: self.filePath) 'noInstanceStated'
 			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(aliasTok.value)} from […]` as a top-level initializer — a global set is declared through a generic-instance alias, which is what states the key type its members are checked against (`typealias {String.from(CharacterMemberSetAliasName)} = {String.from(SetBuiltinBaseName)} with Character`). A bare `{String.from(SetBuiltinBaseName)} from […]` infers its instance from the elements, which a folded member list cannot supply", line: aliasTok.line, column: aliasTok.column))
 		end 'noInstanceStated'
 
@@ -72820,7 +72922,7 @@ export type Parser
 			// false of shv2 too the moment an empty container and a `create()` factory were admitted — both are
 			// heap objects — which is the tell that it described a tier, not a rule.
 			if self.constEnumCaseOfLayout(tok, memberTok: memberTok, boxed: false) 'payloadFreeEnumCase'
-				let layout = requireEnumLayout(self.signatures.enumOf(tok.value))
+				let layout = requireEnumLayout(self.signatures.enumFor(tok.value, readerFilePath: self.filePath))
 				self.advance()
 				try self.consumeConstToken(TokenKind.dot)
 				self.advance()
@@ -72855,7 +72957,7 @@ export type Parser
 	// It asks the SWEEP's registry (`signatures.enumOf`), which is the only store that exists this early and
 	// is the same one every other constant-time enum question in this evaluator would ask.
 	function constEnumCaseOfLayout(tok Token, memberTok Token, boxed bool) returns bool
-		let namedEnum = self.signatures.enumOf(tok.value)
+		let namedEnum = self.signatures.enumFor(tok.value, readerFilePath: self.filePath)
 		if not enumMatchIsDeclared(namedEnum) 'notAnEnum'
 			return false
 		end 'notAnEnum'
@@ -76125,7 +76227,7 @@ export type Parser
 	// reject with E3004, and the pill is a legal send whose reply really does carry nothing.
 	function serviceReplyResultType(messageName ByteArray) returns MaxonReturnType
 		return match self.signatures.returnTypeOf(messageName, into: self.artifact.typeNames) 'r'
-			declared(declaredReturn) gives self.repairSweptReturnType(declaredReturn)
+			declared(declaredReturn) gives self.repairSweptReturnType(declaredReturn, scopeFilePath: self.signatures.recordedReturnDeclFileOf(messageName))
 			undeclared gives MaxonReturnType.void
 		end 'r'
 	end 'serviceReplyResultType'
@@ -76178,16 +76280,16 @@ export type Parser
 			undeclared gives MaxonReturnType.value(MaxonType.integer)
 		end 'r'
 
-		return self.repairSweptReturnType(swept)
+		return self.repairSweptReturnType(swept, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 	end 'calleeReturnType'
 
 	// The swept-type repair applied to a RETURN type — see `calleeReturnType`'s header for the two wrong
 	// answers an unrepaired one produced. Split out because the reply road (`serviceReplyResultType`) owes
 	// exactly the same repair and differs only in what it answers for a name nothing declares.
-	function repairSweptReturnType(swept MaxonReturnType) returns MaxonReturnType
+	function repairSweptReturnType(swept MaxonReturnType, scopeFilePath FilePath) returns MaxonReturnType
 		return match swept 'repair'
 			void gives swept
-			value(inner) gives MaxonReturnType.value(self.repairSweptType(inner))
+			value(inner) gives MaxonReturnType.value(self.repairSweptType(inner, scopeFilePath: scopeFilePath))
 		end 'repair'
 	end 'repairSweptReturnType'
 
@@ -76841,11 +76943,11 @@ export type Parser
 		let name = self.valueTypeName(value)
 		// A boxed union: `emitEnumBox` tags its box `named`, so this arm and the struct arm below split on
 		// which registry declares the name rather than on the tag.
-		if self.signatures.containsEnum(name) 'aUnionBox'
+		if self.signatures.containsEnumFor(name, readerFilePath: self.filePath) 'aUnionBox'
 			return "" if not self.signatures.unionHasManagedPayload(name) else "a `{String.from(name)}` whose variant carries a managed payload — a reference the sending frame may still hold"
 		end 'aUnionBox'
 
-		if not self.signatures.containsStruct(name) 'noSuchRecord'
+		if not self.signatures.containsStructFor(name, readerFilePath: self.filePath) 'noSuchRecord'
 			return "a managed value of `{String.from(name)}`, which no declaration this rule can read describes"
 		end 'noSuchRecord'
 
@@ -77088,7 +77190,7 @@ export type Parser
 			// the TOLERANT one — a struct, a float alias and a generic alias all arrive as a bare `named`
 			// (`parseTypeReference`'s `allFilesFolded` argument). Compared raw, a `ByteArray` parameter is a
 			// `named` while its argument is a generic instance, and every candidate scores incompatible.
-			let paramType = self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames))
+			let paramType = self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: candidate.declFilePath)
 			let paramTag = maxonTypeTag(paramType)
 			let argValue = try slotted.get(firstUser + i) otherwise panic("sweptOverloadArgFit: slotted.get OOB at {firstUser + i} — `slotCallArgs` answered `ordered`, so the counts agree, and `paramNames`/`paramTypes` are pushed in lockstep by the one walk that fills them")
 			let argTag = self.tagOf(argValue)
@@ -77148,7 +77250,10 @@ export type Parser
 	// finally a split and not a sentinel.
 	function mintDeclaredCallResult(callee ByteArray, anchor Token, returnType MaxonReturnType, resultUsed bool) returns ValueId throws ParseError
 		match returnType 'r'
-			value(inner) then return self.mintDirectCallValueResult(inner)
+			// ⭐ **THE CALLEE'S OWN DECLARING FILE — see `resolveNamedStruct`'s `scopeFilePath`.** A return
+			// type is a slot of the function that declared it, so the repair below is scoped by that file
+			// and never by the one making the call.
+			value(inner) then return self.mintDirectCallValueResult(inner, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 			void then break 'r'
 		end 'r'
 
@@ -77186,8 +77291,8 @@ export type Parser
 	// it is not an operand of the `call`, it is the call's other result, and `StdOp.tryCall` is where that
 	// becomes a def. It is tagged `integer` for the reason a merge phi's witness half is: it is a machine
 	// address, in the GPR file, and nothing dispatches ON it.
-	function mintDirectCallValueResult(inner MaxonType) returns ValueId
-		let result = self.mintOwnedCallResult(inner)
+	function mintDirectCallValueResult(inner MaxonType, scopeFilePath FilePath) returns ValueId
+		let result = self.mintOwnedCallResult(inner, scopeFilePath: scopeFilePath)
 		if self.tagOf(result) == ValueTypeTag.interfaceRef 'existentialReturn'
 			self.pairInterfaceWitness(result, witness: self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId))
 		end 'existentialReturn'
@@ -77224,12 +77329,66 @@ export type Parser
 	// ⚠ **TWO READERS OF SWEPT TYPES, AND THEY MUST REPAIR THEM ALIKE**: a call's RESULT (below) and an
 	// overload candidate's PARAMETER (`sweptOverloadArgFit`). Repairing one and not the other is exactly how a
 	// candidate gets scored against a tag its own argument check one pass later never sees.
-	function repairSweptType(swept MaxonType) returns MaxonType
-		return self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(swept)))
+	function repairSweptType(swept MaxonType, scopeFilePath FilePath) returns MaxonType
+		return self.scopeCrossedType(self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(swept, scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath)
 	end 'repairSweptType'
 
-	function mintOwnedCallResult(inner MaxonType) returns ValueId
-		let result = self.mintValueOfType(self.repairSweptType(inner))
+	// ⭐⭐ **A NAME THAT MEANS TWO THINGS MAY NOT TRAVEL AS A NAME ACROSS THE FILE BOUNDARY — the last step
+	// of the repair, and the one the scope alone does not buy.** Resolving the slot in its DECLARING file
+	// gives the right KIND; what it cannot fix is that the resulting value still WEARS the name, and every
+	// rule that reads a `named` value asks what THIS file means by it. MEASURED: `useIt() returns Box` over
+	// `b.maxon`'s file-private `int(0 to 10)`, returned from a `main.maxon` that means `a.maxon`'s
+	// `export type Box`, was **`E3005 Cannot return 'Box' from function declared to return 'int'`** — the
+	// value was an integer and the identity check read the caller's struct off its name.
+	//
+	// ⚠ **ERASED TO THE PRIMITIVE, WHICH IS THE HONEST ANSWER RATHER THAN A RETREAT.** The reading file
+	// cannot name the declaration this value came from — that is what "neither declaration can see the
+	// other" means — so it may not carry an identity the reader would resolve to a different declaration.
+	// The RANGE goes with it, and that is right too: a range is enforced in the file that declared it
+	// (`RangedAliasRegistry.lookup`), and this file declared nothing.
+	//
+	// ⛔⛔ **THE TEST IS THAT THE TWO FILES *DISAGREE*, AND IT USED TO BE "DOES THIS FILE MEAN THE RANGED
+	// ALIAS" — WHICH ERASED TYPES BOTH FILES AGREED ABOUT.** An `enum` and a `union` are the two kinds that
+	// stay a bare `named` all the way through: `resolveNamedStruct` normalizes a struct, `resolveNamedAlias`
+	// the function/generic/tuple forms and `resolveFloatAliasType` a float alias, and NOTHING normalizes an
+	// enum away — `rewriteRecordedReturnTypes`' header says so in as many words. So a union-returning callee
+	// arrived here wearing its name, failed a question it could never pass, and was erased for a reader that
+	// meant exactly what the callee did. MEASURED: a payload-free enum return became
+	// `E2015 field access on 'lv', which is declared 'int'`; a union return became
+	// `E3005 expected 'Container', got 'int'`; and a BOXED union's returned temporary lost its owned-box
+	// enrolment altogether — **exit 139, clean compile, no output.**
+	//
+	// ⚠ **AND A DISAGREEMENT IS NOT ENOUGH ON ITS OWN: only a RANGED alias has an erasure that is true.**
+	// Where the slot's file means a union and the reader means a struct, erasing to a ranged underlying
+	// would be a third wrong answer about a name with no ranged declaration in the pair at all, so that case
+	// is LEFT as it was — the reader's own rules then refuse it loudly, which is the pre-existing behaviour
+	// and the right one until a diagnostic is written for it.
+	//
+	// It is the LAST step because it must see what the three repairs above produced.
+	function scopeCrossedType(repaired MaxonType, scopeFilePath FilePath) returns MaxonType
+		if maxonTypeTag(repaired) != ValueTypeTag.named 'carriesNoNameToCross'
+			return repaired
+		end 'carriesNoNameToCross'
+
+		let name = self.internedName(typeNameIdOf(repaired))
+		if not self.signatures.crossKindContested(name) 'oneKindHoldsTheName'
+			return repaired
+		end 'oneKindHoldsTheName'
+
+		let slotKind = self.signatures.contestedTypeNameKindFor(name, readerFilePath: scopeFilePath)
+		if slotKind == self.signatures.contestedTypeNameKindFor(name, readerFilePath: self.filePath) 'bothFilesMeanTheSameDeclaration'
+			return repaired
+		end 'bothFilesMeanTheSameDeclaration'
+
+		if slotKind != TypeDeclKind.rangedAlias 'theSlotsMeaningHasNoTrueErasure'
+			return repaired
+		end 'theSlotsMeaningHasNoTrueErasure'
+
+		return try self.signatures.aliasUnderlyingInAnyFile(name) otherwise repaired
+	end 'scopeCrossedType'
+
+	function mintOwnedCallResult(inner MaxonType, scopeFilePath FilePath) returns ValueId
+		let result = self.mintValueOfType(self.repairSweptType(inner, scopeFilePath: scopeFilePath))
 
 		// ⭐ **THE FLOAT LIFT DROPS THE ALIAS NAME, so the alias is recorded beside the value.**
 		// `MaxonType.float` has no id slot, so a `returns Float` result lands with tag `float` and no name —
@@ -77405,8 +77564,9 @@ export type Parser
 	// void value; every value position (`resultUsed: true` — a binding, `return`, an operand, an argument)
 	// reports E2004 HERE, at the call, the same anchor and text the direct-call diagnostic uses.
 	function mintIndirectCallResult(callee ValueId, resultUsed bool, anchor Token) returns ValueId throws ParseError
-		match self.functionValueReturnType(callee) 'r'
-			value(inner) then return self.mintOwnedCallResult(inner)
+		let recovered = self.functionValueReturn(callee)
+		match recovered.returnType 'r'
+			value(inner) then return self.mintOwnedCallResult(inner, scopeFilePath: recovered.scopeFilePath)
 			void then break 'r'
 		end 'r'
 
@@ -77425,7 +77585,28 @@ export type Parser
 	// value's governing name IS a function, so its return is `returnTypeOf`. The two are disjoint — a name
 	// is a function alias or a function, never both — so trying the alias first and the function second is
 	// unambiguous.
-	function functionValueReturnType(callee ValueId) returns MaxonReturnType
+	// ⭐⭐ **ONE WALK, TWO ANSWERS — the TYPE a function value returns and WHOSE SLOT that type is.** The two
+	// were a pair of walks over the same three sources in the same order, held in step by a header saying
+	// they were twins; that is a promise nothing enforces, and this project's review priority is exactly
+	// that shape. Returning the pair makes the agreement structural: a fourth source cannot be given a type
+	// without being given a scope in the same arm.
+	//
+	// A function-TYPEALIAS value reads its return from the function-alias registry; a functionRef value's
+	// governing name IS a function, so its return is `returnTypeOf`. The two are disjoint — a name is a
+	// function alias or a function, never both — so trying the alias first and the function second is
+	// unambiguous.
+	//
+	// ⛔ **THE SCOPE HALF IS MEMORY SAFETY, not bookkeeping.** An indirect call's result is repaired like any
+	// other swept type, scoped by the file that DECLARED the slot. MEASURED with `self.filePath` for all
+	// three: `export typealias Cb = function() returns Token` where the alias's file means
+	// `Token = int(0 to 5)` and another declares `type Token` — a THIRD file calling through a `Cb` value
+	// got the struct, and reading `.value` off the returned integer was **exit 139 on a clean compile**.
+	//
+	//   • a LIFTED CLOSURE is this parse's own (`closureReturns` is file-local), so its slot is this file's;
+	//   • a FUNCTION ALIAS carries its declaring file (`FunctionTypeAlias.declFilePath`);
+	//   • a functionRef's governing name is a DECLARED FUNCTION, whose return slot is
+	//     `recordedReturnDeclFileOf`'s answer — the same door a DIRECT call asks.
+	function functionValueReturn(callee ValueId) returns FunctionValueReturn
 		let name = self.internedName(self.valueNameId(callee))
 
 		// ⭐ **A LIFTED CLOSURE first (P1.5-A2a).** Its return type is FILE-LOCAL — the whole-program index
@@ -77434,19 +77615,19 @@ export type Parser
 		// in source, so this can shadow no real function or alias; a non-closure name misses and falls
 		// through to the two whole-program lookups below.
 		if let closureReturn = try self.closureReturns.get(name) 'closure'
-			return closureReturn
+			return FunctionValueReturn.create(closureReturn, scopeFilePath: self.filePath)
 		end 'closure'
 
-		match self.signatures.functionAliasOf(name) 'alias'
-			declared(alias) then return self.functionAliasReturnType(alias)
+		match self.signatures.functionAliasInAnyFile(name) 'alias'
+			declared(alias) then return FunctionValueReturn.create(self.functionAliasReturnType(alias), scopeFilePath: alias.declFilePath)
 			undeclared then break 'alias'
 		end 'alias'
 
 		match self.signatures.returnTypeOf(name, into: self.artifact.typeNames) 'fn'
-			declared(returnType) then return returnType
-			undeclared then panic("functionValueReturnType: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, nor a declared function — every function value is minted from one of the three (parseClosureExpression / parseTypeReference / emitFunctionRef)")
+			declared(returnType) then return FunctionValueReturn.create(returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(name))
+			undeclared then panic("functionValueReturn: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, nor a declared function — every function value is minted from one of the three (parseClosureExpression / parseTypeReference / emitFunctionRef)")
 		end 'fn'
-	end 'functionValueReturnType'
+	end 'functionValueReturn'
 
 	// Reconstruct a function alias's declared return type from its interner-free (tag, name) storage (see
 	// FunctionTypeAlias), re-interning the name into THIS file's interner. `void` means the function
@@ -78507,7 +78688,7 @@ export type Parser
 			return false
 		end 'notStructBacked'
 
-		match self.signatures.structOf(layout.backingStructName) 'backing'
+		match self.signatures.structInAnyFile(layout.backingStructName) 'backing'
 			declared(struct) then return struct.declaresField(memberTok.value)
 			undeclared then return false
 		end 'backing'
@@ -79117,7 +79298,7 @@ export type Parser
 	// not at the declaration for the reason the whole backing is deferred: the case reader runs inside the
 	// sweep that is still building the registry this asks.
 	function requireEnumBackingStruct(layout EnumLayout, anchor Token) returns StructLayout throws ParseError
-		match self.signatures.structOf(layout.backingStructName) 'declaring'
+		match self.signatures.structInAnyFile(layout.backingStructName) 'declaring'
 			declared(struct) then return struct
 			undeclared then throw ParseError.undefinedVariable(String.from(layout.backingStructName), line: anchor.line, column: anchor.column)
 		end 'declaring'
@@ -79144,7 +79325,7 @@ export type Parser
 	// completed index. Both failures are the ordinary ones a `Priority.low` written in an EXPRESSION would
 	// get, worded by the same two constructors, so a typo in a backing reads like a typo anywhere else.
 	function enumBackingFieldCaseTag(enumName ByteArray, caseName ByteArray, anchor Token) returns ParsedInt throws ParseError
-		let referenced = self.signatures.enumOf(enumName)
+		let referenced = self.signatures.enumFor(enumName, readerFilePath: self.filePath)
 		if not enumMatchIsDeclared(referenced) 'noSuchEnum'
 			throw ParseError.undefinedVariable(String.from(enumName), line: anchor.line, column: anchor.column)
 		end 'noSuchEnum'
@@ -79391,7 +79572,7 @@ export type Parser
 		// question with a leak argument behind it — see the dispatch site — and this rung does not answer it.
 		// ⇒ what moves here is exactly one case: a member NO file declares, from a refusal about SHAPE to a
 		// refusal about the NAME. Pinned by `static-method-statement.error.unknown-static-names-the-callee`.
-		return self.signatures.containsStruct(baseName)
+		return self.signatures.containsStructFor(baseName, readerFilePath: self.filePath)
 	end 'voidStaticCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:

@@ -129,12 +129,32 @@ file is still refused; `c.nowMs()` on a value of the moved declaration is not.
   declaration answers user code — and it is why this bullet is about FREE functions: they have no type to
   shadow, so nothing moves.
 
-### The one kind that already works: a ranged `typealias`
+### The kind that needs no rename: a `typealias`, in ANY form
 
-A non-exported `typealias` is FILE-LOCAL per alias FORM (`type-name-collision.md`), and that carve-out
-predates this rule and is untouched by it. A user's own ranged `typealias DurationMs` therefore coexists
-with `stdlib/Clock.maxon`'s and answers for the user's file, including for its RANGE — which is what
+A non-exported `typealias` is FILE-LOCAL, and a file-local declaration cannot collide with anything: a
+listed module's alias and a user file's declaration of that name are never both in scope anywhere. So
+the shadow contest does not move an alias, and it does not need to — **precedence settles it instead of
+a rename.** A user's own ranged `typealias DurationMs` coexists with `stdlib/Clock.maxon`'s and answers
+for the user's file, including for its RANGE, which is what
 `user-ranged-typealias-wins-over-a-listed-module` below observes.
+
+⚠ **This used to hold ONLY for a ranged alias meeting another ranged alias, and the gap was a wrong
+answer inside `stdlib/` itself.** The registry's carve-out asked whether the two declarations were the
+same alias FORM, which is a proxy for "neither can see the other" that fails in two directions:
+
+- **A user NOMINAL declaration against a listed module's alias.** `type ParsedInt` against
+  `stdlib/Builtins.maxon:229`'s `typealias ParsedInt` was `E3006` — blamed on the STDLIB line, because
+  stdlib merges last and is therefore the "newcomer" — plus `E3009` at `stdlib/Builtins.maxon:427`,
+  where the module's own `i64.min as ParsedInt` resolved to the USER's struct. Both diagnostics named a
+  file the author never opened. The four nominal keywords all reach it, and `enum`/`union` reach only
+  the first: they resolve to `integer` as an alias does, so the module's own uses still type-check.
+- **Two aliases in different FORMS.** A user `typealias DecimalDigit = function(…)` against the listed
+  ranged one was `E3061`, though neither file can name the other's declaration either.
+
+**The property that makes a pair legal is that neither declaration can SEE the other** — visibility and
+provenance — and the form they are written in is not a proxy for it. Two declarations that genuinely do
+meet still collide: `type-name-collision.md`'s `error.crossfile-type-and-exported-typealias` pins the
+`export`ed pair, and `two-user-declarations-still-collide` below pins the same-file one.
 
 ## Tests
 
@@ -435,4 +455,211 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3006: <fragment>:6:6: duplicate definition of 'Clock' — already declared as `type Clock`
+```
+
+<!-- test: stdlib-user-shadows.user-type-coexists-with-a-listed-modules-typealias -->
+`stdlib/Builtins.maxon:229` declares a NON-EXPORTED `typealias ParsedInt`, and a user program declaring
+its own `type ParsedInt` used to be refused TWICE, both times inside a file the author never opened:
+`E3006` blamed the stdlib declaration as the duplicate — stdlib merges after the user's files, so the
+stdlib line is the "newcomer" — and `E3009: Cannot cast from int to struct` at
+`stdlib/Builtins.maxon:427`, where the module's own `i64.min as ParsedInt` resolved to the USER's struct
+because the struct registry is bare and whole-program and is consulted first.
+
+Neither declaration is reachable from the other's file, so neither is a duplicate of anything: a
+non-exported alias is file-local, and provenance settles the rest. Renaming the type to `UserParsedInt`
+compiled and returned 7 all along — the name was the ONLY difference.
+```maxon
+typealias Value = int(0 to 200)
+
+type ParsedInt
+	export let value as Value
+
+	export static function create(value Value) returns ParsedInt
+		return Self{value: value}
+	end 'create'
+end 'ParsedInt'
+
+function main() returns ExitCode
+	let p = ParsedInt.create(7)
+	return p.value
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: stdlib-user-shadows.user-enum-coexists-with-a-listed-modules-typealias -->
+The same pair with an `enum`, and it is the half that shows the two defects were SEPARATE. An enum
+resolves to `integer` exactly as a ranged alias does, so `stdlib/Builtins.maxon`'s own uses of
+`RepeatCount` (`:1699`) still type-checked and no `E3009` was ever raised — the program was refused by
+the duplicate check ALONE. A fix to resolution that left the registry alone would still refuse this.
+```maxon
+enum RepeatCount
+	first = 1
+	second = 7
+end 'RepeatCount'
+
+function main() returns ExitCode
+	return RepeatCount.second.rawValue
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: stdlib-user-shadows.user-union-coexists-with-a-listed-modules-typealias -->
+A `union` against `stdlib/Builtins.maxon:1846`'s `typealias PadWidth`. Listed for the same reason the
+`enum` case is: the rule is about the KEYWORD-INDEPENDENT namespace, so every declaration kind that
+files a name has to be observed, not inferred from the one that was.
+```maxon
+union PadWidth
+	narrow
+	wide
+end 'PadWidth'
+
+function main() returns ExitCode
+	let p = PadWidth.wide
+
+	match p 'pick'
+		narrow then return 1
+		wide then return 7
+	end 'pick'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: stdlib-user-shadows.user-interface-coexists-with-a-listed-modules-typealias -->
+An `interface` against a listed module that is NOT `Builtins.maxon`: `stdlib/Testing.maxon:72` declares
+`typealias Tolerance = float(0.0 to f64.max)`. The rule is a property of provenance and visibility, not
+of one module, and a case anchored only in `Builtins.maxon` could not tell the two apart.
+```maxon
+interface Tolerance
+	function score() returns ExitCode
+end 'Tolerance'
+
+type Fixed implements Tolerance
+	export static function create() returns Fixed
+		return Self{}
+	end 'create'
+
+	export function score() returns ExitCode
+		return 7
+	end 'score'
+end 'Fixed'
+
+function main() returns ExitCode
+	let f = Fixed.create()
+	return f.score()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: stdlib-user-shadows.user-function-alias-coexists-with-a-listed-modules-ranged-typealias -->
+Two `typealias` declarations of one name in two files, in DIFFERENT forms — a user function alias
+against `stdlib/Builtins.maxon:375`'s ranged `DecimalDigit`. The same-form carve-out did not cover it,
+so it was `E3061`, again blamed on the stdlib line. A file-private alias is file-local whatever its
+form, so the two coexist and each answers for its own file.
+```maxon
+typealias DecimalDigit = function(value ExitCode) returns ExitCode
+
+function apply(f DecimalDigit, v ExitCode) returns ExitCode
+	return f(v)
+end 'apply'
+
+function identity(value ExitCode) returns ExitCode
+	return value
+end 'identity'
+
+function main() returns ExitCode
+	return apply(identity, v: 7)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: stdlib-user-shadows.the-listed-module-keeps-its-own-alias -->
+⭐ **The discriminating case: it is not enough that the diagnostics stopped.** Every case above would
+also pass if the fix had made `stdlib/Builtins.maxon`'s `ParsedInt` mean the user's struct and simply
+stopped complaining about it. Here the user owns the name AND the program runs stdlib code that depends
+on the module's own meaning of it — `stdlib/Builtins.maxon:427`'s `let __FloatSignBit = i64.min as
+ParsedInt` is the sign bit float printing reads, and it is a CONST INITIALIZER, evaluated in every
+compile. A wrong answer inside the module shows up as the negative sign, not as an error.
+```maxon
+typealias Value = int(0 to 200)
+
+type ParsedInt
+	export let value as Value
+
+	export static function create(value Value) returns ParsedInt
+		return Self{value: value}
+	end 'create'
+end 'ParsedInt'
+
+function main() returns ExitCode
+	let p = ParsedInt.create(0)
+	let x = 2.5
+	print("{x}")
+	print("{-x}")
+	return p.value
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2.5-2.5
+```
+
+<!-- test: stdlib-user-shadows.a-user-container-over-the-shadowed-name -->
+⭐⭐ **The case that witnesses the MEMORY-SAFETY half, and it is the one the case above can only reach by
+accident.** A container's ELEMENT is classified by a tier that has no reading file — `typeIsManaged`, and
+the drop and clone routers behind it — so for a name that is a `type` in one file and a `typealias` in
+another, an element left as the bare name makes them GUESS. **MEASURED before the element mint:**
+`stdlib/Builtins.maxon`'s own `typealias ParsedIntArray = Array with ParsedInt` had its element read as a
+user program's struct, so printing a float dropped an array of INTEGERS through `__destruct_ParsedInt` —
+**exit 0xC0000005, no diagnostic and no output.**
+
+Here BOTH containers are live at once and each must keep its own element: the user's `ValueBoxes` holds
+`ParsedInt` STRUCTS that own their boxes, while `print("{x}")` runs the library's big-integer path over its
+own array of `ParsedInt` LIMBS. The declaring file decides the element, so the two are two instances — and
+a compiler that fused them either faults on the limbs or leaks the boxes.
+```maxon
+typealias Value = int(0 to 200)
+
+type ParsedInt
+	export let value as Value
+
+	export static function create(value Value) returns ParsedInt
+		return Self{value: value}
+	end 'create'
+end 'ParsedInt'
+
+typealias ValueBoxes = Array with ParsedInt
+
+function main() returns ExitCode
+	var boxes = ValueBoxes.create()
+	boxes.push(ParsedInt.create(3))
+	boxes.push(ParsedInt.create(4))
+
+	let x = 2.5
+	print("{x}")
+
+	var total = 0
+	for b in boxes 'each'
+		total = total + b.value
+	end 'each'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+2.5
 ```

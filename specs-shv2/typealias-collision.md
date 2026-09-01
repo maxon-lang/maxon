@@ -236,3 +236,59 @@ end 'main'
 ```maxoncstderr
 error E3063: app/specs/fragments/typealias-collision/error.ambiguous-typealias-is-anchored-on-the-name-token.test:10:36: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score
 ```
+
+
+<!-- test: error.exported-cross-form-typealias-collision -->
+Two exported aliases of one name in different directories, in DIFFERENT FORMS — one ranged, one
+function. This used to be `E3061` at DECLARATION time, refusing the pair outright, which is a
+different rule from the one the same-form pair gets four cases above: two exported declarations are
+accepted and the ambiguity is a property of the USE. The form they are written in is not what decides
+whether a reader can tell them apart. Both are accepted; a bare reference from a third file is E3063,
+naming both candidates exactly as the same-form case does.
+```maxon
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/types.maxon
+export typealias Score = function() returns ExitCode
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let x = 50 as Score
+	return x
+end 'main'
+```
+```maxoncstderr
+error E3063: app/specs/fragments/typealias-collision/error.exported-cross-form-typealias-collision.test:10:16: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score
+```
+
+
+<!-- test: exported-cross-form-typealias-qualified -->
+The same pair disambiguated, and it is the half that proves the two declarations both SURVIVED rather
+than one having been discarded to silence the diagnostic: `api.Score` is used as a ranged type and
+`legacy.Score` as a function type, in one file, at once. A cure that dropped either declaration would
+still pass the E3063 case above.
+```maxon
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/types.maxon
+export typealias Score = function() returns ExitCode
+
+// --- file: app/main.maxon
+function run(f legacy.Score) returns ExitCode
+	return f()
+end 'run'
+
+function seven() returns ExitCode
+	return 7
+end 'seven'
+
+function main() returns ExitCode
+	let a = 35 as api.Score
+	return a + run(seven)
+end 'main'
+```
+```exitcode
+42
+```

@@ -327,7 +327,7 @@ end 'seedFunctions'
 function namesAMethodOnATrackedType(signatures ProgramSignatures, qualifiedName ByteArray) returns bool
 	return match splitQualifiedName(qualifiedName) 'split'
 		notQualified gives false
-		parts(owner, _) gives signatures.containsStruct(owner) or signatures.containsEnum(owner)
+		parts(owner, _) gives signatures.containsStructInAnyFile(owner) or signatures.containsEnumInAnyFile(owner)
 	end 'split'
 end 'namesAMethodOnATrackedType'
 
@@ -356,45 +356,45 @@ function seedOneTypeName(signatures ProgramSignatures, decl TypeNameDecl, tracke
 		return
 	end 'narrowEnoughAlready'
 
-	tracked.add(TrackedDecl.create(TrackedDeclKind.trackedType, key: decl.name, displayName: String.from(decl.name), noun: typeDeclNoun(decl.kind), visibility: visibility, declFilePath: decl.declFilePath, declModuleDirectory: signatures.moduleDirectoryOf(decl.declFilePath), nameLine: decl.nameLine, nameColumn: decl.nameColumn))
+	tracked.add(TrackedDecl.create(TrackedDeclKind.trackedType, key: decl.name, displayName: String.from(decl.name), noun: typeDeclNoun(decl.claim.kind), visibility: visibility, declFilePath: decl.claim.declFilePath, declModuleDirectory: signatures.moduleDirectoryOf(decl.claim.declFilePath), nameLine: decl.nameLine, nameColumn: decl.nameColumn))
 end 'seedOneTypeName'
 
-// The tier a type name was declared with, asked of whichever registry holds that kind. A kind whose
-// registry has no entry answers `file`, which the caller reads as "nothing to audit" — that is the honest
-// answer for a declaration the fold dropped, not a sentinel.
+// ⭐ **WHICH TIERS THIS AUDIT TRACKS — and it is deliberately NOT the same question as "what tier was
+// this declared at".** A kind this audit does not cover answers `file`, which the caller reads as
+// "nothing to audit"; that is the honest answer for a kind whose unused-export rule has never been
+// written, not a sentinel and not a claim about the source.
+//
+// ⚠ **SO IT MAY NOT BE REPLACED WHOLESALE BY `decl.claim.visibility`**, which is the EFFECTIVE tier for
+// every kind (see `TypeNameClaim.visibility`). The one arm where the two ask the same question is the
+// ranged alias, and that arm now reads the claim rather than re-deriving it through `aliasOf` — the two
+// answered identically by construction (own-file lookup returns this very declaration), which is exactly
+// what made the second derivation a copy rather than a check.
 function declaredTypeVisibility(signatures ProgramSignatures, decl TypeNameDecl) returns Visibility
-	match decl.kind 'kind'
-		structType then return declaredStructVisibility(signatures, name: decl.name)
-		enumType then return declaredEnumVisibility(signatures, name: decl.name)
-		unionType then return declaredEnumVisibility(signatures, name: decl.name)
+	match decl.claim.kind 'kind'
+		structType then return declaredStructVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
+		enumType then return declaredEnumVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
+		unionType then return declaredEnumVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
 		interfaceType then return Visibility.file
-		rangedAlias then return declaredAliasVisibility(signatures, decl: decl)
+		rangedAlias then return decl.claim.visibility
 		functionAlias then return Visibility.file
 		genericAlias then return Visibility.file
 		tupleAlias then return Visibility.file
 	end 'kind'
 end 'declaredTypeVisibility'
 
-function declaredStructVisibility(signatures ProgramSignatures, name ByteArray) returns Visibility
-	return match signatures.structOf(name) 'lookup'
+function declaredStructVisibility(signatures ProgramSignatures, name ByteArray, declFilePath FilePath) returns Visibility
+	return match signatures.structFor(name, readerFilePath: declFilePath) 'lookup'
 		declared(layout) gives layout.visibility
 		undeclared gives Visibility.file
 	end 'lookup'
 end 'declaredStructVisibility'
 
-function declaredEnumVisibility(signatures ProgramSignatures, name ByteArray) returns Visibility
-	return match signatures.enumOf(name) 'lookup'
+function declaredEnumVisibility(signatures ProgramSignatures, name ByteArray, declFilePath FilePath) returns Visibility
+	return match signatures.enumFor(name, readerFilePath: declFilePath) 'lookup'
 		declared(layout) gives layout.visibility
 		undeclared gives Visibility.file
 	end 'lookup'
 end 'declaredEnumVisibility'
-
-function declaredAliasVisibility(signatures ProgramSignatures, decl TypeNameDecl) returns Visibility
-	return match signatures.aliasOf(decl.name, readerFilePath: decl.declFilePath) 'lookup'
-		declared(alias) gives alias.visibility
-		undeclared gives Visibility.file
-	end 'lookup'
-end 'declaredAliasVisibility'
 
 // The word the diagnostic calls a type declaration, matching the reference compiler's vocabulary: a
 // struct, enum or union is a "type" and an alias is a "typealias".
@@ -631,7 +631,7 @@ end 'noteCrossFileConstantReads'
 function noteFunctionName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String)
 	noteQualifiedOwner(signatures, tracked: tracked, callee: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	if let claimants = try tracked.functionIndex.get(name) 'tracked'
-		noteEveryClaimant(tracked, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'tracked'
 end 'noteFunctionName'
 
@@ -669,7 +669,7 @@ function noteTypeNameTransitively(signatures ProgramSignatures, tracked TrackedD
 	visited.insert(name)
 
 	if let claimants = try tracked.typeIndex.get(name) 'tracked'
-		noteEveryClaimant(tracked, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'tracked'
 
 	// A type this pass does not TRACK is still walked through: a file-private struct may hold a field of
@@ -679,7 +679,7 @@ function noteTypeNameTransitively(signatures ProgramSignatures, tracked TrackedD
 end 'noteTypeNameTransitively'
 
 function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
-	match signatures.structOf(name) 'lookup'
+	match signatures.structFor(name, readerFilePath: readerFilePath) 'lookup'
 		undeclared then return
 		// A layout the SIGNATURE INDEX built, so its field-type ids are the index's own — see
 		// `noteSignatureTypes` for what resolving them anywhere else costs.
@@ -688,7 +688,7 @@ function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls
 end 'noteStructFieldTypes'
 
 function noteEnumPayloadTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String, visited VisitedTypeNameSet)
-	match signatures.enumOf(name) 'lookup'
+	match signatures.enumFor(name, readerFilePath: readerFilePath) 'lookup'
 		undeclared then return
 		declared(layout) then noteEveryPayloadType(signatures, tracked: tracked, layout: layout, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory, visited: visited)
 	end 'lookup'
@@ -781,7 +781,7 @@ end 'noteComponentTypeName'
 function noteBindingName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, readerFilePath FilePath, readerModuleDirectory String)
 	noteQualifiedOwner(signatures, tracked: tracked, callee: name, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	if let claimants = try tracked.bindingIndex.get(name) 'tracked'
-		noteEveryClaimant(tracked, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
+		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'tracked'
 end 'noteBindingName'
 
@@ -921,7 +921,23 @@ end 'noteDeclaredType'
 
 // Every declaration wearing the referenced name — see `TrackedDeclIndexMap` for why there can be more
 // than one and why crediting all of them is the safe direction.
-function noteEveryClaimant(tracked TrackedDecls, claimants TrackedDeclIndexArray, readerFilePath FilePath, readerModuleDirectory String)
+//
+// ⛔ **EXCEPT A DECLARATION THIS READER DOES NOT MEAN BY THE NAME, WHICH IS THE ONE WAY "CREDIT THEM ALL"
+// IS NOT SAFE.** Crediting a spare claimant only ever SUPPRESSES a warning, so the direction is right for
+// two declarations a reader genuinely could mean — but a cross-KIND contested name is two declarations
+// that CANNOT both be meant, and crediting the wrong one makes this audit's answer depend on an unrelated
+// file's spelling. MEASURED, one program twice: with `a.maxon`'s file-private alias named `Other`,
+// `b.maxon`'s `export union Container` earned `E3092: exported type 'Container' is never referenced
+// outside its declaring file`; with the alias named `Container`, `a.maxon`'s uses of its OWN alias were
+// counted as references to that union and **the diagnostic vanished**.
+//
+// ⚠ It is the CONTEST that is asked and not visibility: a name only one kind holds is credited exactly as
+// before, which is every name in every program in the corpus.
+function noteEveryClaimant(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, claimants TrackedDeclIndexArray, readerFilePath FilePath, readerModuleDirectory String)
+	if signatures.crossKindContested(name) and signatures.contestGivesThisReaderAScalar(name, readerFilePath: readerFilePath) 'thisReaderMeansTheAlias'
+		return
+	end 'thisReaderMeansTheAlias'
+
 	for at in claimants 'eachClaimant'
 		noteRead(tracked, index: at, readerFilePath: readerFilePath, readerModuleDirectory: readerModuleDirectory)
 	end 'eachClaimant'

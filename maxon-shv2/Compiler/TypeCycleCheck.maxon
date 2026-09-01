@@ -326,7 +326,7 @@ end 'blamePrecedes'
 // discipline this is.
 function reportTypeCycle(project Project, graph TypeCycleGraph, signatures ProgramSignatures, node CsrIndex, decl TypeNameDecl)
 	let path = graph.renderCyclePath(signatures, cycle: shortestCycleThrough(graph.adjacency(), start: node))
-	reportPositioned(project, code: ErrorCode.irTypeCycle, message: "type '{String.from(decl.name)}' contains a reference cycle (via {path}); recursive type references are not allowed", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+	reportPositioned(project, code: ErrorCode.irTypeCycle, message: "type '{String.from(decl.name)}' contains a reference cycle (via {path}); recursive type references are not allowed", line: decl.nameLine, column: decl.nameColumn, filePath: decl.claim.declFilePath)
 end 'reportTypeCycle'
 
 // The declaration of `name` when a USER file wrote it — the candidate filter and the anchor, in one lookup.
@@ -337,7 +337,7 @@ end 'reportTypeCycle'
 // path resolution affordable here: on every program that compiles it runs zero times.
 function userDeclarationOf(project Project, name ByteArray) returns TypeNameDecl throws MapError
 	let decl = try project.typeNameDecls.declarationOf(name)
-	if decl.declFilePath.equals(CompilerOwnedDeclFilePath) or isStdlibSourceFile(project, path: decl.declFilePath) 'noUserFileWroteIt'
+	if decl.claim.declFilePath.equals(CompilerOwnedDeclFilePath) or isStdlibSourceFile(project, path: decl.claim.declFilePath) 'noUserFileWroteIt'
 		throw MapError.keyNotFound
 	end 'noUserFileWroteIt'
 
@@ -347,8 +347,8 @@ end 'userDeclarationOf'
 // Was `decl` written before `other`? File path, then line, then column — v1's `cycleCandidateEarlier`, and
 // for its reason: it makes the blame a property of the program rather than of a registry's iteration order.
 function typeDeclEarlier(decl TypeNameDecl, other TypeNameDecl) returns bool
-	let path = decl.declFilePath.toString()
-	let otherPath = other.declFilePath.toString()
+	let path = decl.claim.declFilePath.toString()
+	let otherPath = other.claim.declFilePath.toString()
 	if not path.equals(otherPath) 'differentFiles'
 		return stringBytesPrecede(path, later: otherPath)
 	end 'differentFiles'

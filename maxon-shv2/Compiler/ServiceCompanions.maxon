@@ -186,7 +186,7 @@ end 'serviceIndexTypeName'
 // It THROWS rather than answering a default: "no such type" is the target classification's own first
 // verdict, and every other caller has already established the declaration.
 function serviceLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns StructLayout throws MapError
-	match signatures.structOf(typeName) 'lookup'
+	match signatures.structInAnyFile(typeName) 'lookup'
 		undeclared then throw MapError.keyNotFound
 		declared(layout) then return layout
 	end 'lookup'
@@ -271,7 +271,7 @@ function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey Byte
 	let errorName = try throwsClauseName(signatures.throwsOf(messageKey)) otherwise return ""
 	// An UNDECLARED error type is a program `SemanticCheck` refuses with E3113; answering nothing here leaves
 	// that refusal undisturbed rather than accusing the reply of a shape the declaration does not have.
-	if not signatures.containsEnum(errorName.toByteArray()) 'notAnErrorType'
+	if not signatures.containsEnumInAnyFile(errorName.toByteArray()) 'notAnErrorType'
 		return ""
 	end 'notAnErrorType'
 
@@ -375,7 +375,7 @@ end 'serviceUntransferableValueMessage'
 // A name no registry declares is E3011 at the declaration itself and is not this check's finding.
 function declaredInterfaceParameterNoun(signatures ProgramSignatures, resolved MaxonType) returns String
 	let name = serviceIndexTypeName(signatures, id: typeNameIdOf(resolved))
-	let form = try signatures.declaredFormOf(name) otherwise return ""
+	let form = try signatures.declaredFormInAnyFile(name) otherwise return ""
 	return InterfaceParameterNoun if form == TypeDeclKind.interfaceType else ""
 end 'declaredInterfaceParameterNoun'
 
@@ -743,7 +743,7 @@ end 'serviceReplyHandlerFusedShift'
 // without the stdlib, and a message throwing a type nothing declares is a program `SemanticCheck` refuses
 // with its own diagnostic — neither is this function's to report.
 module function serviceReplyErrorLayout(signatures ProgramSignatures, errorName ByteArray) returns EnumLayout
-	return match signatures.enumOf(errorName) 'e'
+	return match signatures.enumInAnyFile(errorName) 'e'
 		declared(layout) gives layout
 		undeclared gives EnumLayout.create(errorName, isUnion: false, conformsTo: sharedEmptyDeclaredConformances, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'e'
@@ -868,7 +868,7 @@ end 'ServiceMessageOwner'
 // still be doomed has not, and inventing a layout for it would report a second finding about the first one's
 // wreckage.
 module function serviceRequestLayoutOf(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout throws MapError
-	match signatures.enumOf(serviceRequestCompanionName(typeName)) 'lookup'
+	match signatures.enumInAnyFile(serviceRequestCompanionName(typeName)) 'lookup'
 		declared(layout) then return layout
 		undeclared then throw MapError.keyNotFound
 	end 'lookup'
@@ -935,7 +935,7 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 		// Asked of the REGISTRY rather than of the roster, because the registry is what a second mint would
 		// actually collide with — a `spawn` in a warm-rebuilt file whose companions are already folded in
 		// reaches here with the roster fresh and the registry filled.
-		if signatures.containsStruct(serviceHandleCompanionName(typeName)) 'alreadyMinted'
+		if signatures.containsStructInAnyFile(serviceHandleCompanionName(typeName)) 'alreadyMinted'
 			continue
 		end 'alreadyMinted'
 
@@ -944,7 +944,7 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 
 	// PASS 2 — the request unions, now that every handle a payload could be declared at exists.
 	for typeName in services 'eachRequest'
-		if signatures.containsEnum(serviceRequestCompanionName(typeName)) 'alreadyMinted'
+		if signatures.containsEnumInAnyFile(serviceRequestCompanionName(typeName)) 'alreadyMinted'
 			continue
 		end 'alreadyMinted'
 
@@ -985,7 +985,31 @@ function mintServiceReplyErrorType(signatures ProgramSignatures, messageKey Byte
 	// BOTH SIDES.** `uncarriableReplyErrorNoun` answers `""` for an undeclared type ON PURPOSE, so as not to
 	// pre-empt E3113 — which means its silence reads *"carriable, OR not an error type at all"*, and only
 	// this test tells the two apart.
-	if not signatures.containsEnum(handlerError) 'semanticCheckRefusesThisProgram'
+	// ⚠ **READER-AWARE, AND THE READER IS THE MESSAGE'S OWN DECLARING FILE.** `handlerError` is a name a USER
+	// WROTE in a `throws` clause, so it is a MEANING question and takes the same reader as
+	// `SemanticCheck`'s `classifyThrowsClauseName`, which decides E3113 for this very clause. Asking
+	// `containsEnumInAnyFile` here would answer a different program's question: under a cross-kind contest a
+	// name can be an `enum` in one file and a ranged alias in the message's own, and the bare door would say
+	// "enum" and mint a fused companion off a declaration the handler cannot name.
+	//
+	// ⛔ **THE SURROUNDING PROGRAM BEING REFUSED IS NOT A REASON TO ASK THE BARE DOOR.** E3113 refuses it
+	// only BECAUSE `classifyThrowsClauseName` reads the same reader; the two agreeing is what makes the
+	// refusal and this decline one answer rather than two that happen to coincide.
+	//
+	// ⚠ **NO PROGRAM CURRENTLY TELLS THE TWO SPELLINGS APART, AND THE REASON IS SPECIFIC — it is not
+	// "nobody can build one".** `containsEnumFor` is `containsEnumInAnyFile and not aliasShadowsNominalFor`,
+	// so it is strictly the MORE RESTRICTIVE of the two: it can never admit what the bare door refuses, and
+	// the only divergence is bare-admits / reader-declines. Every program in that gap has a `throws` clause
+	// whose reader means something other than an enum, which is precisely what `SemanticCheck` refuses with
+	// E3113 off the SAME reader — so the bare door's extra mint can only ever be spared for a program that
+	// is already dead. MEASURED: a service whose message declares `throws Fault` where its own file means a
+	// ranged `Fault` and another file declares `enum Fault` reports the identical E3113 under both
+	// spellings (`type-name-collision.md`'s `error.crossfile-a-service-throws-a-contested-name` pins that
+	// refusal, which is the property this argument rests on).
+	//
+	// ⇒ The reader-aware spelling is chosen because it asks the RIGHT QUESTION, not because it changes an
+	// answer today: it is the one that stays correct if E3113 ever stops covering this gap.
+	if not signatures.containsEnumFor(handlerError, readerFilePath: signatures.declaringFileOf(messageKey)) 'semanticCheckRefusesThisProgram'
 		return
 	end 'semanticCheckRefusesThisProgram'
 
@@ -1004,7 +1028,7 @@ function mintServiceReplyErrorType(signatures ProgramSignatures, messageKey Byte
 	// Asked of the REGISTRY rather than of the roster, for pass 1's reason: a warm rebuild arrives with a
 	// fresh roster and a filled registry.
 	let name = serviceReplyErrorsCompanionName(messageKey)
-	if signatures.containsEnum(name) 'alreadyMinted'
+	if signatures.containsEnumInAnyFile(name) 'alreadyMinted'
 		return
 	end 'alreadyMinted'
 

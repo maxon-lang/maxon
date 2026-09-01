@@ -2551,7 +2551,10 @@ export function slotStorageType(signatures ProgramSignatures, declared MaxonType
 	// (`declaredAggregateSlotWidth`) — so the two slot kinds cannot come to store the SAME union at two
 	// different widths, a divergence no diagnostic and no exit code can report. `TypeResolution.
 	// resolveNamedType` is the third deriver; that accessor's header names it.
-	if signatures.containsEnum(name) 'enumOrUnion'
+	// ⚠ `containsEnumFor` and not the bare probe: this function HOLDS a reader and spends it on `aliasOf`
+	// above, so spending it here too is what stops a file that means neither declaration taking the enum's
+	// WIDTH off another file's. The alias arm answering first is `aliasOf`'s kind gate, not an ordering.
+	if signatures.containsEnumFor(name, readerFilePath: readerFilePath) 'enumOrUnion'
 		return declaredAggregateSlotWidth()
 	end 'enumOrUnion'
 
@@ -2673,7 +2676,7 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 	// other type — a `named` IS what both forms are stored as — so there is nothing for that door to
 	// re-tag, and only the CLASS differs between them. An undeclared name is a user error TypeResolution
 	// reports as E3011; the caller keeps the op well-formed until the pipeline's error gate throws.
-	match signatures.enumOf(name) 'asEnum'
+	match signatures.enumInAnyFile(name) 'asEnum'
 		declared(enumLayout) then return enumPayloadClass(enumLayout, fieldType: fieldType)
 		undeclared then return PayloadClass.undeclaredName
 	end 'asEnum'
@@ -4522,7 +4525,7 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		return signatures.genericInstanceBoxDropCallee(rendered)
 	end 'aRenderedInstance'
 
-	let form = try signatures.declaredFormOf(declaredName) otherwise panic("managedNameDropCallee: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
+	let form = try signatures.declaredFormInAnyFile(declaredName) otherwise panic("managedNameDropCallee: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
 	match form 'form'
 		structType then return structBoxDropCallee(signatures, structName: declaredName)
 		// ⭐ **BY NAME, exactly as the struct arm is** — and through the SAME `unionBoxDropCallee` a boxed
@@ -4545,11 +4548,11 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		// the layout before the alias interned — and takes the instance box drop callee (`__managed_decref` for
 		// an `Array`, `__mm_decref`/`__destruct_<T>` for a struct box), exactly as a re-tagged
 		// `genericInstance` field does. The gid is `signatures`' own, needing no interner.
-		genericAlias then return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstance(declaredName))
+		genericAlias then return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstanceInAnyFile(declaredName))
 		// A tuple alias names the tuple's own struct and nothing else, and `denotedAggregateName` has already
 		// resolved it to that name upstream — so this arm is reached only if that resolution is narrowed, and
 		// a tuple box drops exactly as any other struct box does.
-		tupleAlias then return structBoxDropCallee(signatures, structName: signatures.tupleAliasTarget(declaredName))
+		tupleAlias then return structBoxDropCallee(signatures, structName: signatures.tupleAliasTargetInAnyFile(declaredName))
 	end 'form'
 end 'managedNameDropCallee'
 
@@ -4680,7 +4683,7 @@ function managedNameCloneStrategy(signatures ProgramSignatures, declaredName Byt
 		return instanceCloneStrategy(signatures, id: rendered, asElement: asElement)
 	end 'aRenderedInstance'
 
-	let form = try signatures.declaredFormOf(declaredName) otherwise panic("managedNameCloneStrategy: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
+	let form = try signatures.declaredFormInAnyFile(declaredName) otherwise panic("managedNameCloneStrategy: managed field '{String.from(declaredName)}' is declared by no registry — the caller classified it managed, and every managed non-String form is a declared struct, a boxed union or a generic-alias instance")
 	match form 'form'
 		// A scalar-only box still takes `__clone_<T>` (not the drop side's `__mm_decref`): the clone MUST
 		// allocate a fresh independent box, which only a synthesized cloner does.
@@ -4692,10 +4695,10 @@ function managedNameCloneStrategy(signatures ProgramSignatures, declaredName Byt
 		interfaceType then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is an interface, which no slot can be declared with today (E3011) — the rung that lands existential slots owes this arm a clone")
 		rangedAlias then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is a ranged typealias — a scalar, which `typeIsManaged` never classifies managed")
 		functionAlias then panic("managedNameCloneStrategy: '{String.from(declaredName)}' is a function typealias — a bare code pointer, which `typeIsManaged` never classifies managed")
-		genericAlias then return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(declaredName), asElement: asElement)
+		genericAlias then return instanceCloneStrategy(signatures, id: signatures.genericAliasInstanceInAnyFile(declaredName), asElement: asElement)
 		// The drop twin's tuple arm, one register over: `denotedAggregateName` has already resolved a tuple
 		// alias to the tuple's own struct name upstream, and a tuple box clones exactly as any struct box does.
-		tupleAlias then return ManagedCloneStrategy.direct(clonerSymbol(signatures.tupleAliasTarget(declaredName)))
+		tupleAlias then return ManagedCloneStrategy.direct(clonerSymbol(signatures.tupleAliasTargetInAnyFile(declaredName)))
 	end 'form'
 end 'managedNameCloneStrategy'
 
@@ -7225,6 +7228,111 @@ typealias CanonicalInstanceNameIndex = Map with (ByteArray, GenericInstanceId)
 // no id: it IS its name (`ProgramSignatures.tupleCanonicalNames`).
 export typealias TupleCanonicalNameMap = Map with (ByteArray, ByteArray)
 
+// ⭐ ONE `typealias Pair = (Num, Num)` DECLARATION — the tuple it names, plus where and at what tier it was
+// written. The two travel together rather than in a second map keyed alike, because they are one
+// declaration: `ProgramSignatures.settleCrossKindContests` needs the file and the tier for exactly the
+// entries `tupleAliasTarget` reads the name out of, and a parallel map is a second place for one of them to
+// go missing.
+type DeclaredTupleAlias
+	export let tupleName as ByteArray
+	export let claim as TypeNameClaim
+
+	export static function create(tupleName ByteArray, claim TypeNameClaim) returns DeclaredTupleAlias
+		return Self{tupleName: tupleName, claim: claim}
+	end 'create'
+end 'DeclaredTupleAlias'
+
+// A tuple-alias NAME ⇒ its declaration. See `ProgramSignatures.tupleAliases`.
+export typealias DeclaredTupleAliasMap = Map with (ByteArray, DeclaredTupleAlias)
+
+// ⭐ A type name ⇒ every declaration that holds it, when more than one KIND does. See
+// `ProgramSignatures.settleCrossKindContests`.
+typealias CrossKindContestMap = Map with (ByteArray, TypeNameClaimArray)
+
+// The declaring FILES a name's claims have been seen under, inside `everyClaimMayCoexist` — the one pair
+// test that reads something other than a claim's `TypeNameRefusalSlot`, and so the one that needs a set.
+typealias ClaimingFileSet = Set with String
+
+// Do ALL of a name's declarations stand together — every pair of them, not merely each against the last?
+// The rule is `typeNamePairMayCoexist`'s; this is the quantifier over it, and it is `every` rather than
+// `any` because one colliding pair makes the whole name a duplicate declaration that the merge will refuse.
+//
+// ⭐⭐ **ONE PASS, because "every pair coexists" is equivalent to THREE counts** — `typeNamePairMayCoexist`
+// refuses a pair for exactly three reasons, and each is a property of the whole list rather than of a pair:
+//
+//   1. two claims share a declaring FILE,
+//   2. two claims are NOMINAL, or
+//   3. a nominal claim meets a REACHABLE alias of its own layer.
+//
+// (2) and (3) read nothing but `typeNameRefusalSlot`, which is where that argument lives; (1) is the set.
+//
+// ⛔⛔ **IT WAS THE n² SWEEP, AND ITS OWN HEADER ASSERTED THE BOUND THAT MADE THAT SAFE** — *"a list that
+// is two long in every program that reaches it"* — which nothing tested and this very tree falsifies:
+// `scale-test`'s corpus gives EVERY generated file its own file-private `typealias ScaleInt`, 451 of them
+// at rung 5, so one `type ScaleInt` anywhere in such a program made this ~101,000 pair tests, each opening
+// with a `FilePath.equals` that CLONES and lowercases both paths on Windows. That is the same quadratic
+// `TypeNameRegistry.admit` was measured carrying (see `TypeNameRegistry.coexisting`), one door over — and
+// it is why the claim in this header is now a derivation instead of an assumption about the input.
+function everyClaimMayCoexist(claims TypeNameClaimArray) returns bool
+	var declaringFiles = ClaimingFileSet.create()
+	var corpusNominals = 0 as ElementCount
+	var userNominals = 0 as ElementCount
+	var corpusAliases = 0 as ElementCount
+	var userAliases = 0 as ElementCount
+
+	for claim in claims 'eachClaim'
+		let declaringFile = claim.declFilePath.toString()
+		if declaringFiles.contains(declaringFile) 'oneFileDeclaredItTwice'
+			return false
+		end 'oneFileDeclaredItTwice'
+
+		declaringFiles.insert(declaringFile)
+
+		// `none` is a FILE-PRIVATE alias, which can be half of no refusing pair but a same-file one — and
+		// that pair is the loop's own first test, above.
+		match typeNameRefusalSlot(claim) 'slot'
+			none then break 'slot'
+			corpusNominal then corpusNominals = corpusNominals + 1
+			userNominal then userNominals = userNominals + 1
+			corpusAlias then corpusAliases = corpusAliases + 1
+			userAlias then userAliases = userAliases + 1
+		end 'slot'
+	end 'eachClaim'
+
+	if corpusNominals + userNominals > 1 'twoNominalDeclarations'
+		return false
+	end 'twoNominalDeclarations'
+
+	if corpusNominals > 0 and corpusAliases > 0 'aLibraryNominalMeetsALibraryAlias'
+		return false
+	end 'aLibraryNominalMeetsALibraryAlias'
+
+	return not (userNominals > 0 and userAliases > 0)
+end 'everyClaimMayCoexist'
+
+// ⭐ THE ONE EMPTY cross-kind table every index is born holding — so a program in which each type name is
+// held by one kind of declaration, which is every program in the corpus, allocates NO index for a question
+// whose answer is "none". The discipline `sharedEmptyGenericAliasContests` established, for its reason:
+// copy-on-write off this handle at the single writer (`noteCrossKindContest`); NEVER mutated.
+let sharedEmptyCrossKindContests = CrossKindContestMap.create()
+
+// ⭐ HOW NEAR ONE DECLARATION IS TO THE FILE READING IT — the four tiers of
+// `ProgramSignatures.contestedTypeNameKindFor`, as a rank so the cascade is ONE classification per claim
+// rather than four sweeps. HIGHER IS NEARER; the reader's own file cannot be beaten. The names are constants
+// rather than an enum because they are compared with `>=`, which is what makes "nearer wins, and among
+// equals the later declaration" a single line.
+typealias ContestTier = int(0 to 3)
+let ContestTierHiddenFallback = 0 as ContestTier
+let ContestTierVisible = 1 as ContestTier
+let ContestTierReadersOwnLayer = 2 as ContestTier
+let ContestTierReadersOwnFile = 3 as ContestTier
+
+// An interface NAME ⇒ the site that declared it — a name-keyed view of `interfaceDeclSites`, built and
+// discarded inside `ProgramSignatures.settleCrossKindContests`. It exists because `interfaces` is not yet
+// filled when that pass runs (`foldInterfaceDeclarations` is later), so the SITES are the only record of
+// which names an `interface` declaration holds.
+typealias InterfaceDeclSiteByName = Map with (ByteArray, InterfaceDeclSite)
+
 // ⭐ A tuple name ⇒ the BOUNDED TOKEN that cites it as an ELEMENT of another tuple (W9) —
 // `__Tuple2#90fac2b26f6571d1`. Since W14b the token is a pure FUNCTION of the name
 // (`tupleElementTokenFor`), so this map no longer decides anything: it is a MEMO, and its key space is the
@@ -9174,7 +9282,10 @@ export type ProgramSignatures
 	// — a `Pair` reference resolves straight through to the tuple's own `structRef` — so nothing downstream
 	// ever sees the alias name. Read through `tupleAliasTarget`, which canonicalizes: the sweep writes the
 	// spelling it saw and the real parse the canonical one, exactly as every other tuple name does.
-	var tupleAliases as TupleCanonicalNameMap
+	var tupleAliases as DeclaredTupleAliasMap
+	// ⭐ Which type names more than one KIND of declaration holds — see `settleCrossKindContests`, its one
+	// writer. Born as the shared empty, which is where it stays for every program in the corpus.
+	var crossKindContests as CrossKindContestMap
 	// ⭐ **DOES ANY FILE IN THE PROGRAM MATERIALIZE A `[<identifier>…]` ARRAY LITERAL?** (P1.7 slice 3.) Set
 	// by the sweep, read ONCE by `queryProgramSignatures` after the last file folds, which is what makes
 	// `internLiteralContainerInstances` a single whole-program walk instead of a per-file one. A bool
@@ -10091,7 +10202,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: sharedEmptyCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: ConstantReadArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), multiplyAliasedInstances: GenericInstanceIdSet.create(), instanceAliasesByFile: InstanceAliasByFileMap.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -10189,11 +10300,13 @@ export type ProgramSignatures
 				self.userDeclaredTypeNames.insert(alias.name)
 			end 'aDeclarationTheUserWrote'
 		end 'eachAlias'
-		// The BASE-QUALIFIED copy of a nested function alias is skipped for the mirror's reason, and the dot is
-		// exact here for `mirrorsANamespaceQualifiedAlias`'s: a source-written alias name is an identifier and
-		// cannot hold a ".", and the function form takes no NAMESPACE mirror (`pushNamespaceQualifiedAlias`
-		// files into the RANGED array alone) — so a dotted name in this array is exactly and only the
-		// `<Type>.<member>` copy `Parser.publishNestedFunctionAlias` minted.
+		// The QUALIFIED copies of a function alias are skipped for the mirror's reason, and the dot is exact
+		// here for `mirrorsANamespaceQualifiedAlias`'s: a source-written alias name is an identifier and
+		// cannot hold a ".", so a dotted name in this array is exactly and only a copy the COMPILER minted —
+		// the `<Type>.<member>` one (`Parser.publishNestedFunctionAlias`) or the directory-qualified one
+		// (`Parser.pushNamespaceQualifiedFunctionAlias`). ⚠ That second minter is new: this sentence used to
+		// say the function form takes no NAMESPACE mirror at all, which stopped being true when `api.Score`
+		// and `legacy.Score` had to be able to name two FORMS of one bare name.
 		for functionAlias in functionAliases 'eachFunctionAlias'
 			if not containsQualifier(functionAlias.name) 'aDeclarationTheUserWrote'
 				self.userDeclaredTypeNames.insert(functionAlias.name)
@@ -11485,7 +11598,7 @@ export type ProgramSignatures
 		end 'spellsNoInstance'
 
 		let name = try interner.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.declarationViewInstanceOf: `named` id {typeNameIdOf(declared)} is not in the interner it was read with — a caller must hand the table its own type was minted from")
-		if self.isGenericAlias(name) 'spellsAnAlias'
+		if self.isGenericAliasInAnyFile(name) 'spellsAnAlias'
 			return ScopedGenericInstance.instance(self.genericAliasInstanceFrom(name, readerFilePath: readerFilePath))
 		end 'spellsAnAlias'
 
@@ -11590,6 +11703,20 @@ export type ProgramSignatures
 	// established that the declaration exists (`declaresCallee`), because a name with no declaration is not a
 	// sibling at all and takes a different door entirely. Answering `false` for it would be a sentinel: a typo
 	// would silently become a receiver-less call and be reported against its ARGUMENTS.
+	// ⭐ **THE FILE THAT DECLARED THIS FUNCTION — the reader for any question about what a name in its own
+	// SIGNATURE means**, a `throws` clause included. A signature's names are spelled by the declaring file,
+	// so that file is the one whose meaning of them is the right one; asking a reader-aware door with
+	// anything else answers a meaning question for a file that never wrote the name.
+	//
+	// It PANICS rather than defaulting because every caller reaches it through a key the declaration sweep
+	// has already recorded a site for — `funcDeclSites` and the throws/return registries are written by one
+	// act (`record`) — and a reader invented for a missing site is exactly the wrong-file answer above.
+	export function declaringFileOf(qualified ByteArray) returns FilePath
+		let site = try self.funcDeclSites.get(qualified) otherwise panic("ProgramSignatures.declaringFileOf: nothing declares '{String.from(qualified)}' — the caller establishes that before asking what a name in its signature means")
+
+		return site.declFilePath
+	end 'declaringFileOf'
+
 	export function declaredMethodTakesReceiver(qualified ByteArray) returns bool
 		let site = try self.funcDeclSites.get(qualified) otherwise panic("ProgramSignatures.declaredMethodTakesReceiver: nothing declares '{String.from(qualified)}' — the caller establishes that through `declaresCallee` first, and the two registries are written by one act (`record`)")
 		return site.takesReceiver
@@ -14646,7 +14773,7 @@ export type ProgramSignatures
 	// `constStructLayoutOf` because a MISS here is not this door's to panic on: the same name is resolved
 	// again, with the panic, where the box is actually built (`globalStructConstruct`).
 	function existentialFieldOfStruct(typeName ByteArray) returns ConstConstructionFieldLookup
-		match self.structOf(typeName) 'declared'
+		match self.structInAnyFile(typeName) 'declared'
 			undeclared then return ConstConstructionFieldLookup.none
 			declared(layout) then return self.existentialFieldOfLayout(layout)
 		end 'declared'
@@ -15264,7 +15391,7 @@ export type ProgramSignatures
 		end 'denotesAConcreteType'
 
 		let name = self.nameOfId(typeNameIdOf(denoted))
-		let form = try self.declaredFormOf(name) otherwise 'noFileDeclaresIt'
+		let form = try self.declaredFormOf(name, readerFilePath: layout.declFilePath) otherwise 'noFileDeclaresIt'
 			// A name no registry this tier can see holds. TWO programs land here and neither is this door's
 			// to judge: a field type NO file declares (E3011's subject, reported by `TypeResolution` against
 			// the merged registry — the authority), and an INTERFACE-typed field, whose registry is filled
@@ -15391,7 +15518,7 @@ export type ProgramSignatures
 	// answered `declared` for this very name, so a miss here is the declaration sweep and the arena disagreeing
 	// about what a `type` is — `recordedDeclFor`'s drift guard, stated for a struct.
 	function constStructLayoutOf(typeName ByteArray, declName ByteArray) returns StructLayout
-		match self.structOf(typeName) 'declared'
+		match self.structInAnyFile(typeName) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("ProgramSignatures.constStructLayoutOf: '{String.from(declName)}' is initialized by a `{String.from(typeName)}\{…\}` literal, and no file declares `type {String.from(typeName)}` — the evaluator admits the form only after `Parser.requireConstructible` has resolved that very layout")
 		end 'declared'
@@ -15520,7 +15647,7 @@ export type ProgramSignatures
 	// after establishing that the name is a declared BOXED union and that it HAS this case
 	// (`Parser.constBoxedUnionCase`).
 	function boxedUnionRecordOf(typeName ByteArray, caseName ByteArray) returns ManagedGlobalRecord
-		match self.enumOf(typeName) 'declared'
+		match self.enumInAnyFile(typeName) 'declared'
 			declared(layout) then return boxedUnionCaseBoxOf(layout, typeName: typeName, caseName: caseName)
 			undeclared then panic("ProgramSignatures.boxedUnionRecordOf: '{String.from(typeName)}' names no declared enum or union, and yet a constant initializer folded '{String.from(caseName)}' as one of its cases — the evaluator admits the form only after `signatures.enumOf` has answered `declared` for that very name")
 		end 'declared'
@@ -15963,7 +16090,22 @@ export type ProgramSignatures
 	// (`RangedAliasRegistry.lookup`, which carries the whole rule and its E3063 boundary). THE door the
 	// shift rule asks through — see `Parser.valueIsUnsigned` — and the reason a file's `int(0 to 500)`
 	// governs the casts written in it even where another file declares that name more widely.
+	// ⛔⛔ **AND IT IS KIND-GATED, WHICH `RangedAliasRegistry.lookup` BENEATH IT CANNOT BE.** That door is
+	// reader-aware about the RANGE — whose `int(0 to 10)` does this file mean — and knows nothing of a name
+	// two KINDS hold, so its `byName` fallback handed a file that means an `enum` another file's ALIAS.
+	// MEASURED: `typealias Level = float(0.0 to 5.0)` in one file against `export enum Level` in another
+	// refused the ENUM file's own `returns Level` with `Cannot return 'Level' from function declared to
+	// return 'float'` — inside a file about a declaration its author never saw, which is the original defect
+	// of this whole change, one registry over.
+	//
+	// ⭐ **THE GATE IS HERE AND NOT AT THE NINE CALL SITES**, because this is the complete site: every one of
+	// them already passes a reader, so a caller cannot reach the registry without going through this
+	// question. `readerMeansKind` is an empty-map probe in every program that contests nothing.
 	export function aliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
+		if not self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.rangedAlias) 'thisFileMeansAnotherDeclaration'
+			return DeclaredAlias.undeclared
+		end 'thisFileMeansAnotherDeclaration'
+
 		return self.typeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'aliasOf'
 
@@ -16056,6 +16198,14 @@ export type ProgramSignatures
 	// shared empty before a single candidate string is built. `Byte` and `Codepoint` are contested inside
 	// `stdlib/` in every compile there is, so that is the path that must stay free.
 	export function ambiguousAliasCandidates(name ByteArray, readerFilePath FilePath) returns StringArray
+		// ⭐⭐ **THE CROSS-FORM HALF FIRST, because the ranged registry cannot see it.** Two files that
+		// export one name in two different FORMS are contested in NEITHER registry's own multi-declaration
+		// index — each holds one declaration — while a bare reference from a third file could mean either.
+		// One `Map.contains` on a map that is empty in every program that contests nothing.
+		if self.crossKindContests.contains(name) 'severalKindsHoldTheName'
+			return self.crossKindAmbiguousCandidates(name, readerFilePath: readerFilePath)
+		end 'severalKindsHoldTheName'
+
 		let contested = self.typeAliases.contestedDeclarations(name)
 		if contested.contains(readerFilePath.toString()) 'theReadersOwnDeclarationIsWhatItMeans'
 			return sharedEmptyCandidateNames
@@ -16102,12 +16252,486 @@ export type ProgramSignatures
 	// ONE predicate because both passes must apply exactly the same ones. A pass that filtered differently
 	// from the pass that COUNTED would render a list whose length disagrees with its own verdict.
 	function candidateIsReachable(alias RangedTypeAlias, readerFilePath FilePath) returns bool
-		if not self.isVisibleFrom(alias.visibility, declFilePath: alias.declFilePath, readerFilePath: readerFilePath) 'hidden'
+		return self.candidateIsReachableFrom(alias.visibility, declFilePath: alias.declFilePath, readerFilePath: readerFilePath)
+	end 'candidateIsReachable'
+
+	// The same two rules over the two facts they actually read, so the CROSS-FORM candidate walk below
+	// applies them to a `TypeNameClaim` without a second statement of what "reachable" means.
+	function candidateIsReachableFrom(visibility Visibility, declFilePath FilePath, readerFilePath FilePath) returns bool
+		if not self.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerFilePath) 'hidden'
 			return false
 		end 'hidden'
 
-		return not isStdlibModuleDirectory(self.moduleDirectoryOf(alias.declFilePath))
-	end 'candidateIsReachable'
+		return not self.declaredByTheCorpus(declFilePath)
+	end 'candidateIsReachableFrom'
+
+	// ⭐⭐ **E3063's CANDIDATES FOR A NAME SEVERAL *KINDS* HOLD** — `ambiguousAliasCandidates`' cross-form
+	// half, applying the SAME four narrowing rules through the SAME predicates
+	// (`candidateIsReachableFrom`, `deeperEnclosingScope`, `scopeAdmits`, `qualifiedCandidateName`) over
+	// `crossKindContests`' claims instead of the ranged registry's declarations.
+	//
+	// ⚠ **THE LOOP IS ITS OWN AND THE RANGED ONE IS UNTOUCHED, WHICH IS A MEASURED CHOICE.** That path's two
+	// allocation-free guards — the reader's own declaration, then a reachable COUNT — are what keep `Byte`
+	// and `Codepoint`, contested inside `stdlib/` in every compile there is, off any claim-building path;
+	// funnelling both through one loop would have built a claim per declaration at every named type
+	// reference in the library. What may not be duplicated is the RULES, and none of them is.
+	//
+	// ⚠ **A NOMINAL CLAIM IS NOT A CANDIDATE.** The diagnostic says "Ambiguous typealias", and a nominal
+	// declaration that a reader could ALSO name never coexists with an alias in the first place
+	// (`typeNamePairMayCoexist`) — so one reaching here would be a claim the contest should not hold.
+	function crossKindAmbiguousCandidates(name ByteArray, readerFilePath FilePath) returns StringArray
+		let claims = try self.crossKindContests.get(name) otherwise panic("ProgramSignatures.crossKindAmbiguousCandidates: '{String.from(name)}' is not cross-kind contested — the caller asks `crossKindContests.contains` first")
+		let readerDirectory = self.moduleDirectoryOf(readerFilePath)
+		let readerPath = readerFilePath.toString()
+		var reachable = 0 as ElementCount
+		var scope = EnclosingScope.none
+		for claim in claims 'countReachable'
+			if claim.declFilePath.toString().equals(readerPath) 'theReadersOwnDeclarationIsWhatItMeans'
+				return sharedEmptyCandidateNames
+			end 'theReadersOwnDeclarationIsWhatItMeans'
+
+			if not isTypeAliasDecl(claim.kind) or not self.candidateIsReachableFrom(claim.visibility, declFilePath: claim.declFilePath, readerFilePath: readerFilePath) 'nominalHiddenOrLibrary'
+				continue
+			end 'nominalHiddenOrLibrary'
+
+			reachable = reachable + 1
+			scope = deeperEnclosingScope(scope, declDirectory: self.moduleDirectoryOf(claim.declFilePath), readerDirectory: readerDirectory)
+		end 'countReachable'
+
+		if reachable < 2 'atMostOneMeaning'
+			return sharedEmptyCandidateNames
+		end 'atMostOneMeaning'
+
+		var candidates = StringArray.create()
+		for claim in claims 'renderSurvivors'
+			if not isTypeAliasDecl(claim.kind) or not self.candidateIsReachableFrom(claim.visibility, declFilePath: claim.declFilePath, readerFilePath: readerFilePath) 'nominalHiddenOrLibrary'
+				continue
+			end 'nominalHiddenOrLibrary'
+
+			let declDirectory = self.moduleDirectoryOf(claim.declFilePath)
+			if not scopeAdmits(scope, declDirectory: declDirectory) 'aFartherScopeLosesToTheNearestOne'
+				continue
+			end 'aFartherScopeLosesToTheNearestOne'
+
+			insertCandidateName(candidates, candidate: qualifiedCandidateName(declDirectory, bare: name))
+		end 'renderSurvivors'
+
+		if candidates.count() < 2 'oneScopeWon'
+			return sharedEmptyCandidateNames
+		end 'oneScopeWon'
+
+		return candidates
+	end 'crossKindAmbiguousCandidates'
+
+	// ⭐⭐ **IS A DECLARATION IN THIS FILE THE LIBRARY'S? — THE ONE SPELLING OF PROVENANCE THIS INDEX USES.**
+	// A file's module directory is DERIVED from the provenance the loader already knows
+	// (`Queries.moduleDirectoryForFile` anchors a `stdlib/` file at the library's parent), so asking the
+	// directory is asking that bit through the answer every other provenance reader here already reads.
+	// `isStdlibModuleDirectory`'s own header refuses "a per-file provenance bit threaded to every candidate"
+	// for this exact reason; this function is that refusal made reusable, because the cross-kind contest and
+	// `candidateIsReachable` must not come to two answers about which layer declared a name.
+	// ⚠ **A DECLARATION THE COMPILER BUILT CARRIES NO FILE AT ALL** — a tuple layout, `Ordering`, the
+	// builtin error enums (`CompilerOwnedDeclFilePath`) — and it belongs to the LIBRARY layer by the same
+	// reading `Parser.typeAliasVisibility` gives a `stdlib/` alias: it is not the user's, and a user
+	// declaration of its name shadows it rather than meeting it. Answered here rather than left to
+	// `moduleDirectoryOf`, which panics for a path no file walk stamped — correctly, since every SOURCE
+	// path is stamped and a miss there would be a compiler bug.
+	export function declaredByTheCorpus(declFilePath FilePath) returns bool
+		if declFilePath.equals(CompilerOwnedDeclFilePath) 'theCompilersOwnDeclaration'
+			return true
+		end 'theCompilersOwnDeclaration'
+
+		return isStdlibModuleDirectory(self.moduleDirectoryOf(declFilePath))
+	end 'declaredByTheCorpus'
+
+	// --- The CROSS-KIND contest: one name, two kinds of declaration (this rung) ---
+
+	// One claim, with the provenance derived rather than carried — see `declaredByTheCorpus`. THE builder,
+	// so no source of a claim can supply a provenance of its own.
+	function typeNameClaim(kind TypeDeclKind, visibility Visibility, declFilePath FilePath) returns TypeNameClaim
+		return TypeNameClaim.create(kind, declFilePath: declFilePath, visibility: visibility, declaredByTheCorpus: self.declaredByTheCorpus(declFilePath))
+	end 'typeNameClaim'
+
+	// ⭐⭐ **WHICH TYPE NAMES MORE THAN ONE *KIND* OF DECLARATION HOLDS — settled once, with every file
+	// folded.** `typeNamePairMayCoexist` lets a `type Box` and a `typealias Box` in two files both stand;
+	// the moment they do, every registry keyed by the bare name answers for BOTH and the fixed cascade in
+	// `TypeResolution.denotedNamedType` picks one for the whole program. That is the wrong answer this
+	// table exists to prevent, and it was MEASURED inside `stdlib/`: the library's own
+	// `i64.min as ParsedInt` resolved to a USER program's `type ParsedInt`, and the E3009 named a library
+	// line the author never opened.
+	//
+	// ⚠ **IT RECORDS ONLY THE PAIRS THAT MAY COEXIST — `typeNamePairMayCoexist`, the SAME predicate the
+	// merge's duplicate check applies, which is what makes this table and that diagnostic two faces of one
+	// rule rather than two rules.** A pair that COLLIDES has a declaration the program is being refused
+	// for, and until the merge reports it resolution answers exactly as it always did: the fixed cascade,
+	// whole-program, arm order. That is deliberate rather than tolerated — a colliding `type Score` and
+	// `export typealias Score` earns BOTH the E3006 and the E3009 its misresolution causes
+	// (`type-name-collision.md`'s `error.crossfile-type-and-exported-typealias` pins the pair), because
+	// the second diagnostic is the CONSEQUENCE the first explains, and suppressing it here would hide the
+	// reason the reader is being told the name is claimed twice.
+	//
+	// ⚠ **THE TEST IS `declaredFormOf` DISAGREEING WITH THE REGISTRY THAT OFFERED THE NAME, and that is
+	// what keeps the list of "registries that can hold a type name" written down ONCE.** That cascade is
+	// FIRST-MATCH in a fixed order, so a name two kinds hold answers the earlier one — and this walk offers
+	// every name from every registry that holds it, so such a name is offered at least once from a registry
+	// that is not the cascade's first answer. All seven are therefore walked, the ranged one included: skip
+	// it and a `type Box` + `typealias Box` pair would be offered only as `structType`, which is exactly
+	// what the cascade answers.
+	//
+	// ⚠ **EMPTY FOR EVERY PROGRAM IN THE CORPUS**, which is what keeps the readers free: each is one probe
+	// of a map with no entries, and none of them allocates.
+	export function settleCrossKindContests()
+		// The interface half is indexed FIRST because it is the one kind whose registry is not yet built:
+		// `interfaces` is filled by `foldInterfaceDeclarations`, which runs after this. The SITES are all
+		// that exist here, and a name-keyed view of them is what makes the probe below a lookup rather
+		// than a scan per offered name. It is local — nothing after this line needs it.
+		var interfaceSitesByName = InterfaceDeclSiteByName.create()
+		for site in self.interfaceDeclSites 'eachInterfaceSite'
+			interfaceSitesByName.upsert(site.name, value: site)
+		end 'eachInterfaceSite'
+
+		for (name, _) in self.structTypes 'eachStruct'
+			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.structType, interfaceSitesByName: interfaceSitesByName)
+		end 'eachStruct'
+
+		for (name, layout) in self.enumTypes 'eachEnumOrUnion'
+			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.unionType if layout.isUnion else TypeDeclKind.enumType, interfaceSitesByName: interfaceSitesByName)
+		end 'eachEnumOrUnion'
+
+		for (name, _) in interfaceSitesByName 'eachInterface'
+			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.interfaceType, interfaceSitesByName: interfaceSitesByName)
+		end 'eachInterface'
+
+		// ⚠ **THESE TWO WALK A LOCAL; THE OTHER SIX WALK A FIELD DIRECTLY, AND THE DIFFERENCE IS THE LOOP
+		// VARIABLE'S LIFETIME, NOT THE WALK.** Destructuring a map entry — `for (name, _) in self.someMap` —
+		// COPIES the key into `name`, so nothing is borrowed from the field once the loop body starts and
+		// `noteCrossKindContest`, which takes `self` mutably, is free to run. The ranged and generic halves
+		// have no key to destructure: their loop variable stays a live view of the field for the whole body,
+		// so the call would mutate `self` while a view into one of its fields is outstanding (E3070). Giving
+		// each a local to walk is what the six get for free from destructuring, spelled out.
+		//
+		// It costs one array per settle and NOT one per name: `declaredNames` already builds its array, so
+		// the ranged half only binds what it was already given, and the generic half's array holds retained
+		// name handles rather than fresh ones.
+		let rangedAliasNames = self.typeAliases.declaredNames()
+		for aliasName in rangedAliasNames 'eachRangedAlias'
+			self.noteCrossKindContest(aliasName, offeredAs: TypeDeclKind.rangedAlias, interfaceSitesByName: interfaceSitesByName)
+		end 'eachRangedAlias'
+
+		for (name, _) in self.functionTypeAliases 'eachFunctionAlias'
+			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.functionAlias, interfaceSitesByName: interfaceSitesByName)
+		end 'eachFunctionAlias'
+
+		var genericAliasNames = ByteArrayArray.create()
+		for entry in self.genericAliasDecls 'eachGenericAliasName'
+			genericAliasNames.push(entry.aliasName)
+		end 'eachGenericAliasName'
+
+		for aliasName in genericAliasNames 'eachGenericAlias'
+			self.noteCrossKindContest(aliasName, offeredAs: TypeDeclKind.genericAlias, interfaceSitesByName: interfaceSitesByName)
+		end 'eachGenericAlias'
+
+		for (name, _) in self.tupleAliases 'eachTupleAlias'
+			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.tupleAlias, interfaceSitesByName: interfaceSitesByName)
+		end 'eachTupleAlias'
+	end 'settleCrossKindContests'
+
+	// File `name` if a SECOND kind of declaration holds it — see the walk above for why "`declaredFormOf`
+	// disagrees with the offering registry" is exactly that question. An uncontested name, which is every
+	// name in every program in the corpus, pays that one allocation-free cascade and stops.
+	//
+	// ⚠ **IT ASKS THE BARE CASCADE (`declaredFormInAnyFile`), which is the only one that can be asked while
+	// the contest table is still being built** — the reader-aware door reads that very table.
+	//
+	// ⚠ **AN `interface`-ONLY NAME IS THE ONE CASE THE CASCADE CANNOT ANSWER**, because
+	// `foldInterfaceDeclarations` has not run and `interfaces` is empty here — so it throws, which is read
+	// as "no other kind holds it". That is the right answer: the SITE that offered the name is then the
+	// only declaration of it.
+	function noteCrossKindContest(name ByteArray, offeredAs TypeDeclKind, interfaceSitesByName InterfaceDeclSiteByName)
+		if self.crossKindContests.contains(name) 'alreadySettled'
+			return
+		end 'alreadySettled'
+
+		let sweptForm = try self.declaredFormInAnyFile(name) otherwise return
+		if sweptForm == offeredAs 'noOtherKindHoldsIt'
+			return
+		end 'noOtherKindHoldsIt'
+
+		let claims = self.typeNameClaimsOf(name, interfaceSitesByName: interfaceSitesByName)
+		if not everyClaimMayCoexist(claims) 'thePairIsADuplicateDeclaration'
+			return
+		end 'thePairIsADuplicateDeclaration'
+
+		if self.crossKindContests is sharedEmptyCrossKindContests 'stillShared'
+			self.crossKindContests = CrossKindContestMap.create()
+		end 'stillShared'
+
+		self.crossKindContests.upsert(name, value: claims)
+	end 'noteCrossKindContest'
+
+// EVERY declaration of `name`, across every registry that can hold one. Reached only for a name
+	// `noteCrossKindContest` has already proven two kinds hold, so the records it builds are built once per
+	// contested name in the program and never on an uncontested one.
+	//
+	// ⚠ **THE RANGED ARM COLLECTS *EVERY* DECLARING FILE, not one.** `contestedDeclarations` is that set
+	// when several files declare the name; when one does it is empty and the sole declaration is read
+	// through `declarationInAnyFile` — which is deliberately not `lookup`, whose job is to answer what a
+	// READER means and which synthesizes the builtin `ExitCode` for a name no file declares at all.
+	function typeNameClaimsOf(name ByteArray, interfaceSitesByName InterfaceDeclSiteByName) returns TypeNameClaimArray
+		var claims = TypeNameClaimArray.create()
+
+		match self.structInAnyFile(name) 'aStruct'
+			declared(layout) then claims.push(self.typeNameClaim(TypeDeclKind.structType, visibility: layout.visibility, declFilePath: layout.declFilePath))
+			undeclared then break 'aStruct'
+		end 'aStruct'
+
+		match self.enumInAnyFile(name) 'anEnumOrUnion'
+			declared(layout) then claims.push(self.typeNameClaim(TypeDeclKind.unionType if layout.isUnion else TypeDeclKind.enumType, visibility: layout.visibility, declFilePath: layout.declFilePath))
+			undeclared then break 'anEnumOrUnion'
+		end 'anEnumOrUnion'
+
+		// ⚠ **AN `interface` IS `global`, AND THAT IS A FACT ABOUT shv2 RATHER THAN A FILLER.**
+		// `Parser.dispatchTopLevel` hands `parseInterfaceDeclaration` no visibility at all, so an interface
+		// name is reachable from every file in the program however it was written.
+		if let site = try interfaceSitesByName.get(name) 'anInterface'
+			claims.push(self.typeNameClaim(TypeDeclKind.interfaceType, visibility: Visibility.global, declFilePath: site.path))
+		end 'anInterface'
+
+		let contestedAliases = self.typeAliases.contestedDeclarations(name)
+		if contestedAliases.count() > 0 'severalFilesDeclareTheRangedAlias'
+			for (_, alias) in contestedAliases 'eachDeclaringFile'
+				claims.push(self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+			end 'eachDeclaringFile'
+		end 'severalFilesDeclareTheRangedAlias' else 'atMostOneFileDoes'
+			match self.typeAliases.declarationInAnyFile(name) 'theSoleRangedAlias'
+				declared(alias) then claims.push(self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+				undeclared then break 'theSoleRangedAlias'
+			end 'theSoleRangedAlias'
+		end 'atMostOneFileDoes'
+
+		match self.functionAliasInAnyFile(name) 'aFunctionAlias'
+			declared(alias) then claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+			undeclared then break 'aFunctionAlias'
+		end 'aFunctionAlias'
+
+		for entry in self.genericAliasDecls 'eachGenericAliasDecl'
+			if entry.aliasName.equals(name) 'thisOne'
+				claims.push(self.typeNameClaim(TypeDeclKind.genericAlias, visibility: entry.visibility, declFilePath: entry.filePath))
+			end 'thisOne'
+		end 'eachGenericAliasDecl'
+
+		if let tuple = try self.tupleAliases.get(name) 'aTupleAlias'
+			claims.push(tuple.claim)
+		end 'aTupleAlias'
+
+		return claims
+	end 'typeNameClaimsOf'
+
+	// ⭐⭐ **EVERY CROSS-KIND CONTESTED NAME, FOR THE ELEMENT-SCOPING MINT** —
+	// `RangedAliasRegistry.settleRangeContests`' `alsoScope`, which is where the whole argument for it
+	// lives. Read TWICE, by the two registries that must agree about which mints exist: this index's
+	// (`settleRangeScopedInstances`) and the project's (`Queries.queryAllModule`).
+	//
+	// ⚠ **IT IS EVERY CONTESTED NAME AND NOT THE ONES WITH A RANGED DECLARATION**, because "does a ranged
+	// alias hold this name" is `distinctRangeClaimants`' question and the registry is where it is asked. A
+	// name with no ranged declaration is skipped there, in the one place that can see it.
+	//
+	// ⚠ Empty for every program in the corpus, which is what keeps both settles at one `count()`.
+	export function crossKindScopedAliasNames() returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		for (name, _) in self.crossKindContests 'eachContestedName'
+			names.push(name)
+		end 'eachContestedName'
+
+		return names
+	end 'crossKindScopedAliasNames'
+
+	// ⭐ **IS `name` HELD BY MORE THAN ONE KIND OF DECLARATION?** The allocation-free gate every
+	// reader-aware door below opens with — one `Map.contains` on a map that is EMPTY in every program in
+	// the corpus, so a compiler that contests nothing pays exactly that and never reaches the cascade.
+	// ⭐⭐ **THE INTERFACE REGISTRY'S READER-AWARE DOOR — the member of the family that had none.** Every
+	// other registry gained one; `interfaces` was reached only through `interfaceMap()`/`isInterfaceName`,
+	// which are whole-program by construction, so each of the two TYPE-POSITION doors had to remember the
+	// contest for itself. This is where that is remembered once.
+	//
+	// ⚠ It is `isInterfaceName`, not `lookupInterface`: this answers a membership question asked of every
+	// type annotation in the program, and a union return is heap-boxed even for its `notFound` case (see
+	// `Parser.parseTypeReference`, which measured +24,396 allocations at the ladder's rung 5).
+	export function containsInterfaceFor(name ByteArray, readerFilePath FilePath) returns bool
+		return isInterfaceName(self.interfaces, name: name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath)
+	end 'containsInterfaceFor'
+
+	export function crossKindContested(name ByteArray) returns bool
+		return self.crossKindContests.contains(name)
+	end 'crossKindContested'
+
+	// ⭐⭐ **THE KIND A CROSS-KIND-CONTESTED NAME MEANS WHEN READ FROM `readerFilePath`** — the ONE decision
+	// every reader-aware door is a face of, so a cast target, a parameter type, a field type and a form
+	// probe cannot come to disagree about which of two coexisting declarations a file meant.
+	//
+	// FOUR tiers, narrowing, first answer wins:
+	//
+	//   1. **THE READER'S OWN FILE.** A file that declares the name means its own declaration, whatever any
+	//      other file declared — the same first probe `RangedAliasRegistry.lookup` and
+	//      `ambiguousAliasCandidates` make, so all three narrow alike. This is the tier that gives
+	//      `stdlib/Builtins.maxon` its own `ParsedInt` back while a user's `type ParsedInt` answers the
+	//      user's file.
+	//   2. **THE READER'S OWN LAYER**, among the declarations it may name — user code means the user's
+	//      declaration, a `stdlib/` file the library's. It is the same precedence the shadow contest
+	//      applies by RENAMING for a nominal pair (`contestStdlibTypeName`), stated here for the pair it
+	//      cannot rename because one side is an alias.
+	//      ⚠ **shv2 FOLDS `stdlib/` LAST, SO THIS TIER HAS TO BE EXPLICIT.** The bootstrap gets the same
+	//      guarantee for free from parse order — its library is read before any user alias exists — and
+	//      nothing here provides it: without the tier, a library file that declares none of a contested
+	//      name would resolve to whichever declaration merged last, which is the user's.
+	//   3. **ANY DECLARATION THE READER MAY NAME** — the stranger's tier, for a third file in neither
+	//      declaring layer.
+	//   4. **THE LAST DECLARATION**, where a name every declaration hides from this reader lands. Not a
+	//      sentinel: a hidden declaration must still be FOUND, or "no declaration binds this name" (E3011)
+	//      becomes indistinguishable from "one does, elsewhere, and did not export it" (E2003) — the
+	//      argument `RangedAliasRegistry.lookup`'s `byName` fallback states in full.
+	export function contestedTypeNameKindFor(name ByteArray, readerFilePath FilePath) returns TypeDeclKind
+		let claims = try self.crossKindContests.get(name) otherwise panic("ProgramSignatures.contestedTypeNameKindFor: '{String.from(name)}' is not cross-kind contested — every caller asks `crossKindContested` first")
+		let readerPath = readerFilePath.toString()
+
+		// ⚠ **A READER WITH NO FILE IS IN NO LAYER, so tier 2 cannot answer for it** — and that is the right
+		// answer rather than a guard: a whole-program crossing (an interface requirement's formal, a generic
+		// instance's type argument) belongs neither to the user's code nor to the library's, so it takes the
+		// STRANGER's tier like any other file that declares none of the name.
+		let readerHasAFile = not readerFilePath.equals(CompilerOwnedDeclFilePath)
+		let readerIsTheCorpus = readerHasAFile and self.declaredByTheCorpus(readerFilePath)
+
+		// The four tiers are RANKED rather than swept for one at a time, so each claim is classified once
+		// and the "last declaration wins within a tier" rule is the `>=` rather than four loops that could
+		// each apply it differently. The seed is the FIRST claim at the lowest tier, which is a real answer
+		// and not a placeholder: it is what tier 4 returns when every declaration is hidden from the reader.
+		// A KIND rather than the claim, because that is the whole answer and a `TypeNameClaim` is a
+		// reference type (holding one in a `var` is E3078).
+		var bestKind = (try claims.get(0) otherwise panic("ProgramSignatures.contestedTypeNameKindFor: '{String.from(name)}' was filed with no claims — `noteCrossKindContest` files a name only once two kinds hold it")).kind
+		var bestTier = ContestTierHiddenFallback
+
+		for claim in claims 'eachClaim'
+			var tier = ContestTierHiddenFallback
+
+			if claim.declFilePath.toString().equals(readerPath) 'theReadersOwnDeclaration'
+				tier = ContestTierReadersOwnFile
+			end 'theReadersOwnDeclaration' else if self.claimIsVisibleFrom(claim, readerFilePath: readerFilePath) 'theReaderMayNameIt'
+				tier = ContestTierReadersOwnLayer if readerHasAFile and claim.declaredByTheCorpus == readerIsTheCorpus else ContestTierVisible
+			end 'theReaderMayNameIt'
+
+			if tier >= bestTier 'atLeastAsNearAndDeclaredLater'
+				bestKind = claim.kind
+				bestTier = tier
+			end 'atLeastAsNearAndDeclaredLater'
+		end 'eachClaim'
+
+		return bestKind
+	end 'contestedTypeNameKindFor'
+
+	// May `readerFilePath` name this declaration? An ALIAS is scoped; a NOMINAL type name is not —
+	// `containsStruct`, `containsEnum` and the interface registry are whole-program with no visibility gate
+	// on the NAME at all, which is the same asymmetry `typeNamePairMayCoexist` reads. Answering `false` for
+	// a file-private `type` here would be a NARROWER rule than the one resolution actually applies, and
+	// this predicate exists to describe that rule rather than to improve it.
+	function claimIsVisibleFrom(claim TypeNameClaim, readerFilePath FilePath) returns bool
+		if not isTypeAliasDecl(claim.kind) 'aNominalNameIsWholeProgram'
+			return true
+		end 'aNominalNameIsWholeProgram'
+
+		return self.isVisibleFrom(claim.visibility, declFilePath: claim.declFilePath, readerFilePath: readerFilePath)
+	end 'claimIsVisibleFrom'
+
+	// ⭐⭐ **DOES AN ALIAS ANSWER FOR `readerFilePath`, WHERE A NOMINAL DECLARATION ALSO HOLDS THE NAME?**
+	// THE guard `TypeResolution.denotedNamedType`'s three nominal arms ask before claiming a name, so a
+	// coexisting alias is not silently overruled by an arm ORDER.
+	//
+	// ⚠ **ONE `Map.contains` ON AN EMPTY MAP, ALLOCATING NOTHING.** It is asked once per named type
+	// reference in the program — behind each arm's own registry probe, so only for a name that IS a
+	// struct/enum/interface — and `denotedNamedType`'s header records the +36 × 2^n allocations across the
+	// scale ladder that ONE boxed union at this door cost.
+	export function aliasShadowsNominalFor(name ByteArray, readerFilePath FilePath) returns bool
+		if not self.crossKindContests.contains(name) 'noSecondKindHoldsTheName'
+			return false
+		end 'noSecondKindHoldsTheName'
+
+		return isTypeAliasDecl(self.contestedTypeNameKindFor(name, readerFilePath: readerFilePath))
+	end 'aliasShadowsNominalFor'
+
+	// ⭐⭐ **THE LAYOUT DOORS, READER-AWARE — `structInAnyFile` / `enumInAnyFile` WITH THE CONTEST APPLIED.**
+	// The `contains*For` predicates answer "is it one?"; these answer "which one", and a caller that needs
+	// the LAYOUT — a field offset, an enum's `isBoxed()` — must not get another file's.
+	//
+	// ⛔⛔ **MEASURED, and it is why these exist at all.** `Parser.enumMatchFor` classified a VALUE minted in
+	// the file being parsed by asking `enumInAnyFile`: in a file meaning `typealias Container = int(0 to 5)`
+	// it found ANOTHER file's `union Container`, `isBoxed()` said yes, and the return path emitted
+	// **`__mm_retain` on the integer 1** — a segfault (exit 139) in a function whose own file has no union
+	// in it. The bare doors were already named `InAnyFile` by then; what was missing was somewhere for a
+	// reader-holding caller to GO.
+	export function structFor(name ByteArray, readerFilePath FilePath) returns DeclaredStruct
+		if self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'anotherDeclarationAnswersHere'
+			return DeclaredStruct.undeclared
+		end 'anotherDeclarationAnswersHere'
+
+		return self.structInAnyFile(name)
+	end 'structFor'
+
+	export function enumFor(name ByteArray, readerFilePath FilePath) returns DeclaredEnum
+		if self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'anotherDeclarationAnswersHere'
+			return DeclaredEnum.undeclared
+		end 'anotherDeclarationAnswersHere'
+
+		return self.enumInAnyFile(name)
+	end 'enumFor'
+
+	// ⭐⭐ **`containsStructInAnyFile` WITH THE CONTEST APPLIED — "does a `type` of this name answer for THIS
+	// FILE?"** Every door that decides what a WRITTEN name means asks this one; only a reader with no file
+	// at all asks the bare twin.
+	export function containsStructFor(name ByteArray, readerFilePath FilePath) returns bool
+		return self.containsStructInAnyFile(name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath)
+	end 'containsStructFor'
+
+	// The twin one registry over. ⛔ **MEASURED without it:** `a.maxon` meaning `int(0 to 5)` by `Status`
+	// reached `b.maxon`'s `enum Status` through the member door and stored its `big = 200` into a slot
+	// `a.maxon` declares `int(0 to 5)` — the RANGE from one declaration and the VALUE from the other,
+	// compiling clean and **exiting 201**.
+	export function containsEnumFor(name ByteArray, readerFilePath FilePath) returns bool
+		return self.containsEnumInAnyFile(name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath)
+	end 'containsEnumFor'
+
+	// ⭐ **`isFunctionAlias`, WITH THE CONTEST APPLIED** — the door every FORM probe that has a reader file
+	// asks, so `a.maxon`'s `5 as Handler` means `a.maxon`'s ranged alias while `b.maxon`'s `f Handler`
+	// means `b.maxon`'s function one. The bare twin stays, and stays correct, for the readers that hold no
+	// file (a `StructLayout`'s field types record none — see `aliasUnderlyingInAnyFile`).
+	// ⭐⭐ **IS `form` WHAT `readerFilePath` MEANS BY `name`? — the shared body of every reader-aware form
+	// probe**, and the reason there is no fourth spelling of "ask the contest, else say yes". A name only
+	// one kind holds means that kind for every reader, which is the answer this returns without touching
+	// the cascade.
+	//
+	// ⚠ **IT DOES *NOT* ASK WHETHER `form`'s REGISTRY HOLDS THE NAME**, and that is what makes it shareable:
+	// each caller keeps its own registry probe in front — `functionTypeAliases.contains`,
+	// `aliasUnderlyingInAnyFile` — and that probe is what keeps the common answer free, since a name no
+	// registry of that form holds never reaches here at all.
+	export function readerMeansKind(name ByteArray, readerFilePath FilePath, kind TypeDeclKind) returns bool
+		if not self.crossKindContests.contains(name) 'onlyOneKindHoldsTheName'
+			return true
+		end 'onlyOneKindHoldsTheName'
+
+		return self.contestedTypeNameKindFor(name, readerFilePath: readerFilePath) == kind
+	end 'readerMeansKind'
+
+	export function isFunctionAliasFor(name ByteArray, readerFilePath FilePath) returns bool
+		return self.functionTypeAliases.contains(name) and self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.functionAlias)
+	end 'isFunctionAliasFor'
+
+	// `isGenericAlias` with the contest applied — `isFunctionAliasFor`'s twin, one alias form over.
+	export function isGenericAliasFor(name ByteArray, readerFilePath FilePath) returns bool
+		return self.genericAliases.contains(name) and self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.genericAlias)
+	end 'isGenericAliasFor'
+
+	// `isTupleAlias` with the contest applied — `isFunctionAliasFor`'s twin, one alias form over.
+	export function isTupleAliasFor(name ByteArray, readerFilePath FilePath) returns bool
+		return self.tupleAliases.contains(name) and self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.tupleAlias)
+	end 'isTupleAliasFor'
 
 	// ⭐ **THE TYPE NAMES A FILE'S TOP-LEVEL INITIALIZERS NAME (P1.9) — a `use` the real parse
 	// structurally cannot see.**
@@ -16161,13 +16785,13 @@ export type ProgramSignatures
 	// Bare-name, exactly as `isFunctionAlias`/`isGenericAlias` are and for `classifyUnionPayload`'s
 	// reason: a `StructLayout` does not record the file its fields were declared in, so there is no
 	// reader file to resolve from.
-	export function isFloatAlias(name ByteArray) returns bool
+	export function isFloatAliasInAnyFile(name ByteArray) returns bool
 		if let underlying = try self.aliasUnderlyingInAnyFile(name) 'rangedAlias'
 			return tagIsFloat(maxonTypeTag(underlying))
 		end 'rangedAlias'
 
 		return false
-	end 'isFloatAlias'
+	end 'isFloatAliasInAnyFile'
 
 	// --- Inner + per-instance ranged aliases (P1.6-C) ---
 
@@ -16249,7 +16873,7 @@ export type ProgramSignatures
 	// `CompilerOwnedDeclFilePath`, which resolves like a stranger — the same convention
 	// `contestScopedDeclaredType` states for a layout no file declares.
 	function perInstanceAliasFromParts(prefix ByteArray, member ByteArray, readerFilePath FilePath) returns DeclaredAlias
-		if not self.isGenericAlias(prefix) 'notInstanceAlias'
+		if not self.isGenericAliasInAnyFile(prefix) 'notInstanceAlias'
 			return DeclaredAlias.undeclared
 		end 'notInstanceAlias'
 		// ⭐ **`scopedGenericAliasInstance` AND NOT `genericAliasInstanceFrom`, AND THE DIFFERENCE IS BOTH HALVES
@@ -16364,10 +16988,10 @@ export type ProgramSignatures
 	// indirect call recovers the callee's return type from. `undeclared` is the common answer (most names
 	// are not function aliases), spelled as a union arm rather than a sentinel for `DeclaredAlias`'s reason.
 	// It carries no interner ids (the return type is a tag + a name ByteArray), so it needs no `into`.
-	export function functionAliasOf(name ByteArray) returns DeclaredFunctionAlias
+	export function functionAliasInAnyFile(name ByteArray) returns DeclaredFunctionAlias
 		let alias = try self.functionTypeAliases.get(name) otherwise return DeclaredFunctionAlias.undeclared
 		return DeclaredFunctionAlias.declared(alias)
-	end 'functionAliasOf'
+	end 'functionAliasInAnyFile'
 
 	// Is `name` a declared FUNCTION typealias — the `bool` half of `functionAliasOf`, and a HOT-PATH
 	// allocation guard, exactly like `containsStruct`/`containsEnum` are for their `*Of` twins. Asked of
@@ -16376,9 +17000,9 @@ export type ProgramSignatures
 	// must not pay `functionAliasOf`'s `DeclaredFunctionAlias` box (a Maxon union value is a heap object
 	// EVERY case, `undeclared` included) just to throw it away. A `Map.contains` allocates nothing. Only
 	// the cold indirect-call return-type recovery, which needs the alias itself, calls `functionAliasOf`.
-	export function isFunctionAlias(name ByteArray) returns bool
+	export function isFunctionAliasInAnyFile(name ByteArray) returns bool
 		return self.functionTypeAliases.contains(name)
-	end 'isFunctionAlias'
+	end 'isFunctionAliasInAnyFile'
 
 	// ⭐ **A FUNCTION TYPEALIAS SUBSTITUTED IN AS A TYPE ARGUMENT IS A `function` PLACE, AND IT ARRIVES AS A
 	// `named` LEAF (W43b).** `substitutedInstanceArg` answers the argument AS INTERNED, and a function alias
@@ -16395,7 +17019,7 @@ export type ProgramSignatures
 		if maxonTypeTag(t) != ValueTypeTag.named 'notANamedLeaf'
 			return t
 		end 'notANamedLeaf'
-		if not self.isFunctionAlias(self.nameOfId(typeNameIdOf(t))) 'notAFunctionAlias'
+		if not self.isFunctionAliasInAnyFile(self.nameOfId(typeNameIdOf(t))) 'notAFunctionAlias'
 			return t
 		end 'notAFunctionAlias'
 		return MaxonType.function(typeNameIdOf(t))
@@ -16419,7 +17043,7 @@ export type ProgramSignatures
 		if maxonTypeTag(t) != ValueTypeTag.named 'notANamedLeaf'
 			return t
 		end 'notANamedLeaf'
-		return MaxonType.float if self.isFloatAlias(self.nameOfId(typeNameIdOf(t))) else t
+		return MaxonType.float if self.isFloatAliasInAnyFile(self.nameOfId(typeNameIdOf(t))) else t
 	end 'floatAliasResolved'
 
 	// The struct type `name` denotes, declared in ANY file — `aliasOf`'s twin, and the door the
@@ -16433,10 +17057,10 @@ export type ProgramSignatures
 	// a nicety: `indexOfField`/`offsetOfField`/`sizeBytes` are pure arithmetic over the name column
 	// and need no interner at all, so making every caller adopt a whole layout to ask "which slot?"
 	// would allocate a copy per field access to answer a question about integers.
-	export function structOf(name ByteArray) returns DeclaredStruct
+	export function structInAnyFile(name ByteArray) returns DeclaredStruct
 		let layout = try self.structTypes.get(name) otherwise return DeclaredStruct.undeclared
 		return DeclaredStruct.declared(layout)
-	end 'structOf'
+	end 'structInAnyFile'
 
 	// ⭐ **EVERY DECLARED `type` WHOSE `implements` CLAUSE REACHES `interfaceName`, IN DECLARATION ORDER** —
 	// the set an `extension <Interface>` declares its methods on. Asked by BOTH halves of the extension
@@ -16878,7 +17502,7 @@ export type ProgramSignatures
 	// A type carrying constraints but absent from the struct registry is unreachable: the constraints were
 	// filed under a method OF that type (`Parser.noteTypeExtensionWitnessConstraints`).
 	export function renderExtensionClause(typeName ByteArray, constraints WhereConstraintArray) returns String
-		match self.structOf(typeName) 'layout'
+		match self.structInAnyFile(typeName) 'layout'
 			declared(layout) then return renderWhereConstraints(constraints, paramNames: layout.typeParamNames)
 			undeclared then panic("ProgramSignatures.renderExtensionClause: '{String.from(typeName)}' carries conditional-extension constraints but is in no struct registry — the constraints were filed under a method of that type")
 		end 'layout'
@@ -17105,9 +17729,11 @@ export type ProgramSignatures
 		// spelling admitted here cannot come to differ. It runs FIRST so a `named` that denotes no interface at
 		// all still leaves by that door's throw; only past it is the written name asked whether it was an
 		// ALIAS, which is the half that carries arguments where a bare interface name carries none.
-		let denotedInterface = try self.sweptInterfaceTypeOf(arg)
+		// ⚠ `CompilerOwnedDeclFilePath`: a held ASSOCIATED type argument is read off an interned INSTANCE, so
+		// there is no file that wrote it — the reader with no file (see that constant's header).
+		let denotedInterface = try self.sweptInterfaceTypeOf(arg, readerFilePath: CompilerOwnedDeclFilePath)
 		let written = self.nameOfId(typeNameIdOf(arg))
-		if self.isGenericAlias(written) 'anAliasCarriesArguments'
+		if self.isGenericAliasInAnyFile(written) 'anAliasCarriesArguments'
 			return HeldAssociatedArg.instantiated(self.bareGenericAliasInstance(written))
 		end 'anAliasCarriesArguments'
 
@@ -17236,9 +17862,16 @@ export type ProgramSignatures
 	// COMMON no answer (`Parser.resolveNamedStruct` asks it of every `named` parameter/return type,
 	// most of them ranged int aliases) must not pay that box just to throw it away. A `Map.contains`
 	// allocates nothing.
-	export function containsStruct(name ByteArray) returns bool
+	// ⚠⚠ **`InAnyFile` IS A WARNING IN THE NAME, AND IT WAS ADDED BECAUSE A ROSTER OF DOORS WAS WRONG
+	// TWICE IN ONE CHANGE.** This registry is keyed by the BARE name and answers for the whole program, so
+	// once a `type` in one file and a `typealias` in another may both stand (`typeNamePairMayCoexist`) a
+	// bare read claims the name for every file. The reader-aware twin is `containsStructFor`; the rename is
+	// what makes choosing between them a decision the COMPILER forces at every call site instead of one a
+	// human list has to remember. Where a caller genuinely has no reading file — the managed classifiers,
+	// the drop and clone routers — this spelling is the right one and now says so in the source forever.
+	export function containsStructInAnyFile(name ByteArray) returns bool
 		return self.structTypes.contains(name)
-	end 'containsStruct'
+	end 'containsStructInAnyFile'
 
 	// ⭐⭐ **CAN A VALUE OF `type name` EXIST AT ALL?** — the question a base that is a STRUCT-TYPED SELF-FIELD
 	// ALIAS is admitted or refused on (`Parser.structBaseOfReceiver`).
@@ -18031,15 +18664,15 @@ export type ProgramSignatures
 	// Record `typealias <name> = (<elements>)` (P1.10). Written by BOTH the declaration sweep and the real
 	// parse from the same reader, exactly as every other alias registry is; the value is whichever spelling
 	// the writing pass could produce, and `tupleAliasTarget` canonicalizes on the way out.
-	export function recordTupleAlias(name ByteArray, tupleName ByteArray)
-		self.tupleAliases.upsert(name, value: tupleName)
+	export function recordTupleAlias(name ByteArray, tupleName ByteArray, declFilePath FilePath, visibility Visibility)
+		self.tupleAliases.upsert(name, value: DeclaredTupleAlias.create(tupleName, claim: self.typeNameClaim(TypeDeclKind.tupleAlias, visibility: visibility, declFilePath: declFilePath)))
 	end 'recordTupleAlias'
 
 	// Is `name` a TUPLE typealias? THE hot-path guard `parseTypeReference` asks of every bare type name, so
 	// it must allocate nothing (`Map.contains`) — the `isGenericAlias` twin.
-	export function isTupleAlias(name ByteArray) returns bool
+	export function isTupleAliasInAnyFile(name ByteArray) returns bool
 		return self.tupleAliases.contains(name)
-	end 'isTupleAlias'
+	end 'isTupleAliasInAnyFile'
 
 	// ⭐⭐ **THE NAME A DECLARED POSITION'S `named` TYPE ACTUALLY DENOTES — a tuple typealias answered as the
 	// tuple's own canonical name, every other name as itself (A3e). THE one home of that resolution.**
@@ -18054,7 +18687,7 @@ export type ProgramSignatures
 	// classifiers are deliberately allocation-free over the index's own interner (see `structFieldIsManaged`)
 	// and a rewritten layout would be a second copy of the declaration that could drift from the first.
 	export function denotedAggregateName(name ByteArray) returns ByteArray
-		return self.tupleAliasTarget(name) if self.isTupleAlias(name) else name
+		return self.tupleAliasTargetInAnyFile(name) if self.isTupleAliasInAnyFile(name) else name
 	end 'denotedAggregateName'
 
 	// **CAN A RAW SLOT TYPE'S TAG NAME A DECLARED AGGREGATE?** — a `structRef` (what a resolved reference
@@ -18094,10 +18727,11 @@ export type ProgramSignatures
 		return self.denotedAggregateName(self.nameOfId(typeNameIdOf(t)))
 	end 'denotedSlotAggregateName'
 
-	// The tuple type `name` aliases, CANONICAL. Precondition: `isTupleAlias(name)`.
-	export function tupleAliasTarget(name ByteArray) returns ByteArray
-		return self.canonicalNameOfStruct(try self.tupleAliases.get(name) otherwise panic("ProgramSignatures.tupleAliasTarget: '{String.from(name)}' is not a tuple typealias — every caller asks `isTupleAlias` first"))
-	end 'tupleAliasTarget'
+	// The tuple type `name` aliases, CANONICAL. Precondition: `isTupleAliasInAnyFile(name)`.
+	export function tupleAliasTargetInAnyFile(name ByteArray) returns ByteArray
+		let declared = try self.tupleAliases.get(name) otherwise panic("ProgramSignatures.tupleAliasTarget: '{String.from(name)}' is not a tuple typealias — every caller asks `isTupleAlias` first")
+		return self.canonicalNameOfStruct(declared.tupleName)
+	end 'tupleAliasTargetInAnyFile'
 
 	// A tuple's field type ADOPTED into `into` — `fieldTypeOf`'s answer for every element at once, which is
 	// what the parser needs to build the artifact's own copy of the layout (`remapArtifact` rewrites an
@@ -18141,12 +18775,12 @@ export type ProgramSignatures
 
 	// Is `name` a declared generic-instance TYPEALIAS (`IntBox`)? THE hot-path guard the parser asks of
 	// every type reference and every qualified-call base, so it must allocate nothing (`Map.contains`).
-	export function isGenericAlias(name ByteArray) returns bool
+	export function isGenericAliasInAnyFile(name ByteArray) returns bool
 		return self.genericAliases.contains(name)
-	end 'isGenericAlias'
+	end 'isGenericAliasInAnyFile'
 
 	// ⭐⭐ **THE FILE-LESS DOOR, AND IT REFUSES A CONTESTED NAME RATHER THAN GUESSING (N3).** Precondition:
-	// `isGenericAlias(name)`.
+	// `isGenericAliasInAnyFile(name)`.
 	//
 	// Its callers are the ones that structurally cannot name a reader: the drop/clone cascades and the
 	// layout-field probes, which read an instance's SHAPE (is it an `Array`? is its element managed? what is
@@ -18167,16 +18801,16 @@ export type ProgramSignatures
 	// `genericAliasSpellingIsSuperseded` FIRST** — the reader-free CLASSIFIERS, which whole-program walks drive
 	// over an append-only registry that still holds pre-settle instances. That is not a bypass of this refusal;
 	// it is the one case where the refusal is right and the caller must nevertheless not stop. See there.
-	export function genericAliasInstance(name ByteArray) returns GenericInstanceId
+	export function genericAliasInstanceInAnyFile(name ByteArray) returns GenericInstanceId
 		if self.contestedGenericAliases.contains(name) 'contestedAndThisDoorNamesNoReader'
 			panic("ProgramSignatures.genericAliasInstance: '{String.from(name)}' is declared by two files over different instances, and this door names no reader to choose between them — `settleGenericAliasContest` resolves every recorded declared type against its declaring file, so a spelling reaching here is one that pass does not cover")
 		end 'contestedAndThisDoorNamesNoReader'
 
 		return self.bareGenericAliasInstance(name)
-	end 'genericAliasInstance'
+	end 'genericAliasInstanceInAnyFile'
 
 	// ⭐⭐ **IS A GENERIC-ALIAS SPELLING ONE THE CONTEST HAS ALREADY REPLACED — i.e. is the instance carrying it
-	// SUPERSEDED? (A3k)** Precondition: `isGenericAlias(name)`.
+	// SUPERSEDED? (A3k)** Precondition: `isGenericAliasInAnyFile(name)`.
 	//
 	// **THIS IS THE OTHER HALF OF `genericAliasInstance`'s REFUSAL, and it exists because a WHOLE-PROGRAM WALK
 	// legitimately meets what that door legitimately refuses.** An instance's TYPE ARGUMENT is stored once, by
@@ -18223,7 +18857,7 @@ export type ProgramSignatures
 		end 'cannotNameAGenericAlias'
 
 		let name = self.denotedSlotAggregateName(t)
-		return self.isGenericAlias(name) and self.genericAliasSpellingIsSuperseded(name)
+		return self.isGenericAliasInAnyFile(name) and self.genericAliasSpellingIsSuperseded(name)
 	end 'typeArgSpellingIsSuperseded'
 
 	// The raw map read, with no contest test — the tier `scopedGenericAliasInstance` falls through to, and
@@ -18325,7 +18959,7 @@ export type ProgramSignatures
 	// descriptor-need pre-scan resolving `BagIter` to one base while the call that links against it mangles to
 	// another — a wrong SYMBOL and a wrong RESERVATION, with no compile error at either door.
 	export function denotedGenericBaseName(name ByteArray, readerFilePath FilePath) returns ByteArray
-		if not self.isGenericAlias(name) 'namesNoInstance'
+		if not self.isGenericAliasInAnyFile(name) 'namesNoInstance'
 			return name
 		end 'namesNoInstance'
 
@@ -18511,7 +19145,7 @@ export type ProgramSignatures
 	// declaration the record?" is exactly how the construction door and the descriptor stamp would come to
 	// disagree about one type — with the disagreement spending itself as a double free rather than a diagnostic.
 	export function declarationIsTheManagedRecord(name ByteArray) returns bool
-		return match self.structOf(name) 'declaration'
+		return match self.structInAnyFile(name) 'declaration'
 			declared(layout) gives layout.fieldCount() == 1 and self.firstFieldIsItsOwnBuffer(layout)
 			undeclared gives false
 		end 'declaration'
@@ -18578,7 +19212,7 @@ export type ProgramSignatures
 	// resolver would come to disagree about one declaration (`declarationIsTheManagedRecord`'s own reason for
 	// living in this index rather than in the parser).
 	export function declarationIsASizedContainerRecordNamed(name ByteArray) returns bool
-		return match self.structOf(name) 'declaration'
+		return match self.structInAnyFile(name) 'declaration'
 			declared(layout) gives layout.fieldCount() == 1 and self.declarationIsASizedContainerRecord(layout)
 			undeclared gives false
 		end 'declaration'
@@ -18997,7 +19631,7 @@ export type ProgramSignatures
 	// `enumOf` boxes a `DeclaredEnum` even to answer `undeclared`.
 	function namedTypeIsBoxedUnion(valueType MaxonType) returns bool
 		let name = try self.typeNames.nameOf(typeNameIdOf(valueType)) otherwise return false
-		return self.containsEnum(name) and self.declaredEnumIsBoxed(name)
+		return self.containsEnumInAnyFile(name) and self.declaredEnumIsBoxed(name)
 	end 'namedTypeIsBoxedUnion'
 
 	// ⭐⭐ **DOES A SLOT THAT IS EXACTLY ONE MACHINE WORD WIDE HOLD THIS TYPE? — the admission rule a
@@ -19489,11 +20123,11 @@ export type ProgramSignatures
 		let name = self.nameOfId(typeNameIdOf(columnType))
 		// A superseded spelling votes nothing, for `typeArgIsManagedElement`'s reason: this is a REFUSAL, and
 		// a contested alias name no reader can reach is not an instantiation of anything.
-		if not self.isGenericAlias(name) or self.genericAliasSpellingIsSuperseded(name) 'notAnAliasForAnInstance'
+		if not self.isGenericAliasInAnyFile(name) or self.genericAliasSpellingIsSuperseded(name) 'notAnAliasForAnInstance'
 			return false
 		end 'notAnAliasForAnInstance'
 
-		return self.instanceRestsAnUnnameableSlot(self.genericAliasInstance(name))
+		return self.instanceRestsAnUnnameableSlot(self.genericAliasInstanceInAnyFile(name))
 	end 'columnElementOwnsAnUnnameableSlot'
 
 	// ⭐⭐ **THE SAME QUESTION ASKED OF AN INSTANCE IN HAND, AND THE ONE PLACE THE WALK'S CYCLE SET IS SEEDED
@@ -19596,7 +20230,7 @@ export type ProgramSignatures
 	// shared body sees), through the one field-type door so a field spelled via an inner alias resolves the same
 	// way `substituteInstanceFieldType` resolves it.
 	function typeDeclaresABareTypeParameterField(typeName ByteArray) returns bool
-		match self.structOf(typeName) 'declared'
+		match self.structInAnyFile(typeName) 'declared'
 			undeclared then return false
 			declared(layout) then return self.layoutHasABareTypeParameterField(layout)
 		end 'declared'
@@ -20429,6 +21063,16 @@ export type ProgramSignatures
 	//     no declaration binds. `isBoxed` is asked and not assumed: it is the classifier that decides whether
 	//     the slot holds a tag or an address, and reading a pointer out of a one-byte slot is not a narrower
 	//     answer, it is a wrong one.
+	// ⚠⚠ **AND A CROSS-KIND CONTESTED NAME CANNOT REACH IT WEARING THE WRONG MEANING, WHICH IS A PROPERTY
+	// OF THE FAMILY RATHER THAN OF THIS DOOR.** It has no reading file — an element stride is read off an
+	// interned instance, which no file owns — so the question is what can ARRIVE here as a bare `named`.
+	// Every other kind is re-tagged before an element is interned: a struct to `structRef`, an interface to
+	// `interfaceRef`, a function/generic/tuple alias to its own form (`Parser.parseTypeReference`,
+	// `resolveNamedAlias`). That leaves exactly two — a RANGED alias, whose contested spelling
+	// `RangedAliasRegistry.settleRangeContests`' `alsoScope` has already scoped per declaring file, and an
+	// ENUM/UNION, which can only be contested against an alias and is then the pair's one nominal meaning.
+	// So there is no second meaning left for a reader to take. ⛔ If a kind is ever allowed to reach an
+	// element slot as a bare `named`, this argument stops holding and the stride becomes a guess.
 	function undeclaredNamedElementSlot(name ByteArray) returns StorageSlot
 		if isByteElementName(name) 'bytePacked'
 			return StorageSlot.create(ByteStringElementSize as ByteOffset, signExtends: false)
@@ -20437,11 +21081,11 @@ export type ProgramSignatures
 		// ⚠ Gated on the NON-ALLOCATING `contains` twin, for `typeNameVisibleHere`'s measured reason: `enumOf`
 		// boxes a `DeclaredEnum` even to say `undeclared`, and this door is on `arrayElementSize`'s path —
 		// asked for every `named` element in the program, nearly none of which is an enum.
-		if not self.containsEnum(name) 'notANominalDeclaration'
+		if not self.containsEnumInAnyFile(name) 'notANominalDeclaration'
 			return StorageSlot.machineWord()
 		end 'notANominalDeclaration'
 
-		match self.enumOf(name) 'declaration'
+		match self.enumInAnyFile(name) 'declaration'
 			declared(layout) then return StorageSlot.machineWord() if layout.isBoxed() else payloadFreeEnumTagSlot(layout)
 			undeclared then panic("undeclaredNamedElementSlot: containsEnum answered yes for '{String.from(name)}' but enumOf answered undeclared — the two read one registry under one key")
 		end 'declaration'
@@ -21047,6 +21691,17 @@ export type ProgramSignatures
 		end 'namesAContestedGenericAlias'
 
 		let name = self.nameOfId(typeNameIdOf(arg))
+		// ⚠ **A CROSS-KIND CONTESTED NAME IS SCOPED ONLY FOR A READER THAT MEANS THE ALIAS BY IT.** The
+		// scoped spelling names one ranged DECLARATION, so handing it to a file whose own `type ParsedInt`
+		// is what it wrote would turn that file's array of STRUCTS into an array of integers — the very
+		// wrong answer this scoping exists to stop, pointed the other way. A file that means the nominal
+		// declaration keeps the bare name, which the reader-free cascade resolves to that declaration
+		// (`declaredFormInAnyFile`, whose struct arm is first). Transparent to a pure RANGE contest, where
+		// every declaration of the name is an alias and this always answers true.
+		if not self.readerMeansKind(name, readerFilePath: filePath, kind: TypeDeclKind.rangedAlias) 'thisFileMeansSomethingElseByTheName'
+			return arg
+		end 'thisFileMeansSomethingElseByTheName'
+
 		let scoped = self.typeAliases.rangeScopedName(name, readerFilePath: filePath)
 		if scoped.equals(name) 'thisFileNamesTheBareDeclaration'
 			return arg
@@ -21074,7 +21729,7 @@ export type ProgramSignatures
 	// that is EMPTY unless two files declare one name. That is not an optimization — it is the proof that
 	// nothing this rung does can move a golden.
 	export function settleRangeScopedInstances()
-		self.typeAliases.settleRangeContests()
+		self.typeAliases.settleRangeContests(self.crossKindScopedAliasNames())
 		if not self.typeAliases.anyRangeContest() 'noNameInThisProgramIsContested'
 			return
 		end 'noNameInThisProgramIsContested'
@@ -21614,7 +22269,14 @@ export type ProgramSignatures
 	// an entry `contestScopedDeclaredType`'s own tag guard declines. It is the honest answer to "no file to
 	// prefer" rather than a stand-in for one, and it is the spelling `aggregatesConflict` already uses for
 	// that idea.
-	function recordedReturnDeclFileOf(callee ByteArray) returns FilePath
+	// ⚠ **EXPORTED FOR THE PARSER'S READ DOOR AS WELL AS THIS FILE'S REWRITE (this rung).** A CALL SITE
+	// repairs the callee's swept return type (`Parser.repairSweptType`), and that repair is scoped by the
+	// same rule the rewrite below applies — the SLOT's declaring file. Read with the CALLER's file instead,
+	// a coexisting name gave a callee's return two meanings: **MEASURED**, `fromA() returns Widget` over a
+	// file-private ranged alias, called from a third file that declares neither, was
+	// `E3005 Cannot return 'struct' from function declared to return 'int'` — and through a field read it
+	// dereferenced the integer 3 as a record, exit **139** on a clean compile.
+	export function recordedReturnDeclFileOf(callee ByteArray) returns FilePath
 		return try self.funcReturnDeclFiles.get(callee) otherwise CompilerOwnedDeclFilePath
 	end 'recordedReturnDeclFileOf'
 
@@ -21625,8 +22287,8 @@ export type ProgramSignatures
 		match rule 'rule'
 			contestScopedAlias then return try self.contestScopedReturnType(declared, declFilePath: declFilePath)
 			mergedInstance then return try self.mergedInstanceReturnOf(declared)
-			declaredStruct then return try self.sweptStructReturnOf(declared)
-			declaredInterface then return try self.sweptInterfaceReturnOf(declared)
+			declaredStruct then return try self.sweptStructReturnOf(declared, declFilePath: declFilePath)
+			declaredInterface then return try self.sweptInterfaceReturnOf(declared, declFilePath: declFilePath)
 		end 'rule'
 	end 'rewrittenReturnTypeUnder'
 
@@ -21650,17 +22312,17 @@ export type ProgramSignatures
 		end 'shape'
 	end 'mergedInstanceReturnOf'
 
-	function sweptStructReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
+	function sweptStructReturnOf(declared MaxonReturnType, declFilePath FilePath) returns MaxonType throws MapError
 		match declared 'shape'
 			void then throw MapError.keyNotFound
-			value(inner) then return try self.sweptStructTypeOf(inner)
+			value(inner) then return try self.sweptStructTypeOf(inner, readerFilePath: declFilePath)
 		end 'shape'
 	end 'sweptStructReturnOf'
 
 	// ⚠⚠ **IT RESOLVES THE NAME THROUGH `denotedAggregateName`, AND ASKING `containsStruct` OF THE RAW NAME
 	// MADE THE ANSWER A PROPERTY OF THE DISK (BATCH28 review).** A TUPLE TYPEALIAS mints no identity — it
-	// names the tuple's own canonical struct and nothing else — so `containsStruct("Pair")` is false while
-	// `containsStruct("__Tuple2.Num.Num")` is true, and a rule reading the raw name declined every
+	// names the tuple's own canonical struct and nothing else — so `containsStructInAnyFile("Pair")` is false while
+	// `containsStructInAnyFile("__Tuple2.Num.Num")` is true, and a rule reading the raw name declined every
 	// `returns Pair`. That was invisible while the sweep happened to resolve it: `recordTupleAlias` writes
 	// DURING the walk rather than at the end of a file (unlike every other alias registry), so a factory
 	// whose file the walk reached AFTER the alias's file got a resolved `structRef` from
@@ -21694,7 +22356,7 @@ export type ProgramSignatures
 	// already holds returns the id it already had, and a name already canonical maps to itself — so a
 	// declared `type` and an already-canonical tuple both fall out through the `equals` test unmoved, and
 	// the rule stays idempotent.
-	function sweptStructTypeOf(declared MaxonType) returns MaxonType throws MapError
+	function sweptStructTypeOf(declared MaxonType, readerFilePath FilePath) returns MaxonType throws MapError
 		let tag = maxonTypeTag(declared)
 		if not tagMayNameAggregate(tag) 'namesNoStructBox'
 			throw MapError.keyNotFound
@@ -21706,7 +22368,13 @@ export type ProgramSignatures
 		// router and every managed classifier already ask, so what this re-tags and what those route are one
 		// set by construction.
 		let denoted = self.canonicalNameOfStruct(self.denotedAggregateName(written))
-		if not self.containsStruct(denoted) 'namesNoStructBox'
+		// ⚠ **AND NOT WHERE AN ALIAS ANSWERS FOR THE DECLARING FILE.** `containsStruct` is bare and
+		// whole-program, so once a `type Box` and a `typealias Box` in two files may both stand this re-tag
+		// gave every file the struct. MEASURED inside `stdlib/`: `__int_fromString(…) returns ParsedInt` was
+		// rewritten to a USER program's `type ParsedInt`, so `let result = try __int_fromString(input)` bound
+		// a struct and `result < 0` was **E3005 'cannot compare struct with int'** — in a library file, three
+		// passes downstream of the declaration that caused it.
+		if not self.containsStructInAnyFile(denoted) or self.aliasShadowsNominalFor(written, readerFilePath: readerFilePath) 'namesNoStructBox'
 			throw MapError.keyNotFound
 		end 'namesNoStructBox'
 
@@ -21746,7 +22414,7 @@ export type ProgramSignatures
 		for (_, layout) in self.structTypes 'eachStruct'
 			for index in 0 upto layout.fieldCount() 'eachField'
 				let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.normalizeSweptInterfaceTypes: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
-				if let asInterface = try self.sweptInterfaceTypeOf(declared) 'namesAnInterface'
+				if let asInterface = try self.sweptInterfaceTypeOf(declared, readerFilePath: layout.declFilePath) 'namesAnInterface'
 					layout.retypeField(index, declaredType: asInterface)
 				end 'namesAnInterface'
 			end 'eachField'
@@ -21765,7 +22433,7 @@ export type ProgramSignatures
 	// a primitive, an instance) is not a `named` and is refused by the tag guard. It follows
 	// `contestScopedDeclaredType`'s shape — the other recorded-type re-tag on this index — including its
 	// "absence is a throw" convention, so both read as one kind of pass.
-	function sweptInterfaceTypeOf(declared MaxonType) returns MaxonType throws MapError
+	function sweptInterfaceTypeOf(declared MaxonType, readerFilePath FilePath) returns MaxonType throws MapError
 		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoInterface'
 			throw MapError.keyNotFound
 		end 'namesNoInterface'
@@ -21774,7 +22442,8 @@ export type ProgramSignatures
 		// struct and every return type, and only needs the answer.
 		let id = typeNameIdOf(declared)
 		let name = self.nameOfId(id)
-		if isInterfaceName(self.interfaces, name: name) 'aBareInterfaceName'
+		// The contest guard is `sweptStructTypeOf`'s, one registry over — see there.
+		if isInterfaceName(self.interfaces, name: name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'aBareInterfaceName'
 			return MaxonType.interfaceRef(id)
 		end 'aBareInterfaceName'
 
@@ -21785,7 +22454,7 @@ export type ProgramSignatures
 		// the field would be re-tagged `genericInstance` and budgeted ONE slot, while every reader of the type
 		// loaded a witness at `+8` — the next field. So the instance half is repaired HERE, where the re-tag goes
 		// through `retypeField` and rebuilds the two-slot prefix sum with it.
-		if not self.isGenericAlias(name) 'namesNoInterface'
+		if not self.isGenericAliasInAnyFile(name) 'namesNoInterface'
 			throw MapError.keyNotFound
 		end 'namesNoInterface'
 
@@ -21875,10 +22544,10 @@ export type ProgramSignatures
 	end 'sweptScopedGenericFieldTypeOf'
 
 	// The return-type wrapper of the test above: a `void` return names no type to re-tag.
-	function sweptInterfaceReturnOf(declared MaxonReturnType) returns MaxonType throws MapError
+	function sweptInterfaceReturnOf(declared MaxonReturnType, declFilePath FilePath) returns MaxonType throws MapError
 		match declared 'shape'
 			void then throw MapError.keyNotFound
-			value(inner) then return try self.sweptInterfaceTypeOf(inner)
+			value(inner) then return try self.sweptInterfaceTypeOf(inner, readerFilePath: declFilePath)
 		end 'shape'
 	end 'sweptInterfaceReturnOf'
 
@@ -22568,7 +23237,7 @@ export type ProgramSignatures
 		if self.isManagedMemoryCursorInstance(id) 'managedMemoryCursor'
 			return CursorRecordBytes as ByteOffset
 		end 'managedMemoryCursor'
-		match self.structOf(self.genericInstanceBaseName(id)) 'base'
+		match self.structInAnyFile(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base '{String.from(self.genericInstanceBaseName(id))}' is neither a builtin nor a declared struct, so it has no box — every caller opens with genericInstanceBaseIsKnown")
 		end 'base'
@@ -22629,7 +23298,7 @@ export type ProgramSignatures
 			// ⭐⭐ **RESOLVED THROUGH `denotedAggregateName` (A3e review) — a TYPE ARGUMENT is a RAW stored
 			// type, so this door reads a spelling no re-tag has passed over.** An instance's argument is
 			// interned once, by whichever pass first met `Sizer with Pair`, and the declaration SWEEP meets it
-			// with `parseTypeReference`'s tuple-alias arm answering `isTupleAlias("Pair")` — which is false
+			// with `parseTypeReference`'s tuple-alias arm answering `isTupleAliasInAnyFile("Pair")` — which is false
 			// until the alias's OWN file is walked. So `args[0]` is `named("Pair")` when the two files arrive
 			// in one order and `structRef(<the tuple>)` when they arrive in the other, and nothing downstream
 			// re-tags it: `genericInstanceSoleArgLogicalSize` hands it straight here.
@@ -22640,7 +23309,7 @@ export type ProgramSignatures
 			// baked into `.rdata` as `elementLogicalSize@56` — a silent wrong ANSWER, not a diagnostic. The
 			// unresolved name simply missed `structOf` and fell to `primitiveTypeByteSize(named)`, the
 			// machine-word fallback that exists for an enum/union.
-			match self.structOf(self.denotedSlotAggregateName(t)) 'lookup'
+			match self.structInAnyFile(self.denotedSlotAggregateName(t)) 'lookup'
 				declared(layout) then return layout.sizeBytes()
 				undeclared then return primitiveTypeByteSize(tag)
 			end 'lookup'
@@ -22853,7 +23522,7 @@ export type ProgramSignatures
 		// ⛔⛔ **AN ARRAY IS DECIDED BY ITS `where` CLAUSE AND MAY NEVER FALL THROUGH TO `declaredBase` (A4q).**
 		// The paragraph above rests on `Array` having no `StructLayout` — *"a BUILTIN base has no StructLayout
 		// to declare anything, so it keeps the mangled name it always had"* — and listing `stdlib/Array.maxon`
-		// ENDED that. `structOf("Array")` now answers `declared`, so a NON-conforming `Array with Opaque`
+		// ENDED that. `structInAnyFile("Array")` now answers `declared`, so a NON-conforming `Array with Opaque`
 		// stopped falling through to `unreduced` and collapsed to the conformer `Array` instead — which
 		// `stdlib/Array.maxon:637`'s `extension Array implements Hashable, Equatable where Element is Hashable
 		// and Equatable` registers as a plain declared conformance, because `typeDeclaresInterface` works in
@@ -22882,7 +23551,7 @@ export type ProgramSignatures
 		end 'theConditionalConformanceIsAuthoritative'
 
 		let baseName = self.genericInstanceBaseName(id)
-		return match self.structOf(baseName) 'base'
+		return match self.structInAnyFile(baseName) 'base'
 			declared gives GenericInstanceConformer.declaredBase(baseName)
 			undeclared gives GenericInstanceConformer.unreduced
 		end 'base'
@@ -22937,8 +23606,8 @@ export type ProgramSignatures
 	// arm existed: *"'UpCursor_Integer' does not implement 'Cursor'"* on a program whose
 	// `type UpCursor uses Element implements Cursor with Element` declares exactly that.
 	export function instanceOfDeclaredName(name ByteArray) returns GenericInstanceId throws MapError
-		if self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) 'genericInstanceAlias'
-			return self.genericAliasInstance(name)
+		if self.isGenericAliasInAnyFile(name) and not self.genericAliasSpellingIsSuperseded(name) 'genericInstanceAlias'
+			return self.genericAliasInstanceInAnyFile(name)
 		end 'genericInstanceAlias'
 
 		return try self.renderedInstanceOfUnclaimedName(name)
@@ -23120,7 +23789,7 @@ export type ProgramSignatures
 	// the same declarations, and a program whose sweep and parse disagree has a parse diagnostic and
 	// fails the build regardless.
 	function claimsCompiledTypeName(name ByteArray) returns bool
-		return self.containsStruct(name) or self.containsEnum(name)
+		return self.containsStructInAnyFile(name) or self.containsEnumInAnyFile(name)
 	end 'claimsCompiledTypeName'
 
 	// ⭐⭐ **THE ONE CANONICAL TYPE IDENTITY OF A GENERIC INSTANCE (P1.7).** `mangleGenericInstance` names
@@ -23589,14 +24258,15 @@ export type ProgramSignatures
 	// (gid, position) it was substituted once for this answer and again for the `structRef` arm, and a third
 	// time at the caller. One substitution, resolved once through `canonicalTypeArg` and read three times, is
 	// both fewer boxes and one resolution instead of two.
-	export function typeArgAggregateName(arg MaxonType) returns ByteArray
+	// ⚠ **AND IT ASKS ON THE CALLING FILE'S BEHALF, for `namedTypeArgIdentity`'s reason** — see there.
+	export function typeArgAggregateName(arg MaxonType, readerFilePath FilePath) returns ByteArray
 		match maxonTypeTag(arg) 'k'
 			// No nominal identity: a scalar, a `String`, an opaque `T` and a function value all coerce by
 			// TAG (`checkDeclaredType`), so `Box with Integer` keeps accepting a plain `42`.
 			boolean then return EmptySourceText
 			integer then return EmptySourceText
 			float then return EmptySourceText
-			named then return self.namedTypeArgIdentity(arg)
+			named then return self.namedTypeArgIdentity(arg, readerFilePath: readerFilePath)
 			exitCode then return EmptySourceText
 			unresolved then return EmptySourceText
 			void then panic("typeArgAggregateName: a type argument is `void` — a type argument is a TYPE, and the parser accepts no void one")
@@ -23708,9 +24378,16 @@ export type ProgramSignatures
 	//
 	// `named` is OVERLOADED — a declared union/enum VALUE (a boxed aggregate) and a ranged numeric alias
 	// share it — so only a registered aggregate carries identity, exactly as both twins decide it.
-	function namedTypeArgIdentity(arg MaxonType) returns ByteArray
+	// ⚠ **THE CONTEST GUARD IS `Parser.namedAggregateName`'s AND `SemanticCheck.aggregateNameFor`'s — the
+	// two doors this one is the third twin of.** `containsStruct`/`containsEnum` are bare and whole-program,
+	// so for a name a `type` in one file and a `typealias` in another may both hold this claimed a nominal
+	// identity for every reader while its twins (guarded) answered EMPTY inside the library. MEASURED:
+	// `stdlib/Builtins.maxon`'s `limbs.growFilled(n, value: 0)` over its own
+	// `typealias ParsedIntArray = Array with ParsedInt` was **E3005 `expected 'ParsedInt', got 'int'`**,
+	// because the element's identity was read as a USER program's struct and a `0` carries none.
+	function namedTypeArgIdentity(arg MaxonType, readerFilePath FilePath) returns ByteArray
 		let name = self.nameOfId(typeNameIdOf(arg))
-		if self.containsStruct(name) or self.containsEnum(name) 'registeredAggregate'
+		if (self.containsStructInAnyFile(name) or self.containsEnumInAnyFile(name)) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'registeredAggregate'
 			return name
 		end 'registeredAggregate'
 
@@ -23982,7 +24659,7 @@ export type ProgramSignatures
 	// synthesized builtin (no declaration to carry one) and for an undeclared base (E2055 already reported).
 	export function genericInstanceHasBaseLayout(id GenericInstanceId) returns bool
 		let baseName = self.genericInstanceBaseName(id)
-		return not self.isBuiltinGenericBaseName(baseName) and self.containsStruct(baseName)
+		return not self.isBuiltinGenericBaseName(baseName) and self.containsStructInAnyFile(baseName)
 	end 'genericInstanceHasBaseLayout'
 
 	// Is instance `id`'s base one this compiler KNOWS AT ALL — a builtin it synthesizes, or a `type` some
@@ -24001,7 +24678,7 @@ export type ProgramSignatures
 	// time and the E2055 `checkGenericInstance` had already recorded is drained whole-program, later.
 	export function genericInstanceBaseIsKnown(id GenericInstanceId) returns bool
 		let baseName = self.genericInstanceBaseName(id)
-		return self.isBuiltinGenericBaseName(baseName) or self.containsStruct(baseName)
+		return self.isBuiltinGenericBaseName(baseName) or self.containsStructInAnyFile(baseName)
 	end 'genericInstanceBaseIsKnown'
 
 	// --- Generic-instance managed drop (P1.6-B2) ---
@@ -24448,7 +25125,7 @@ export type ProgramSignatures
 	// spelling answers empty: a concrete instance supplies its own descriptor, and a corpus container keeps
 	// the edge tuned to it.
 	export function nestedParameterisedInstanceBaseOfAlias(name ByteArray, readerFilePath FilePath) returns ByteArray
-		if not self.isGenericAlias(name) 'namesNoInstance'
+		if not self.isGenericAliasInAnyFile(name) 'namesNoInstance'
 			return EmptySourceText
 		end 'namesNoInstance'
 
@@ -24467,7 +25144,7 @@ export type ProgramSignatures
 	// the recorded type directly gets a NAME and never a `genericInstance`. `substituteInstanceFieldType`'s
 	// header carries the measured leak the same omission produced one door over.
 	export function nestedParameterisedInstanceBaseOfField(structName ByteArray, fieldName ByteArray) returns ByteArray
-		match self.structOf(structName) 'declaringType'
+		match self.structInAnyFile(structName) 'declaringType'
 			undeclared then return EmptySourceText
 			declared(layout) then return self.nestedParameterisedInstanceBaseOfFieldIn(layout, fieldName: fieldName)
 		end 'declaringType'
@@ -24642,7 +25319,7 @@ export type ProgramSignatures
 		// ⭐⭐ **A GENERIC-INSTANCE ALIAS IS THE SECOND SPELLING THIS DOOR WAS BLIND TO, AND ITS DROP TWIN WAS
 		// NOT (A3k).** `typealias N0 = Box with S0` mints no identity of its own, so `structTypes` and
 		// `enumTypes` both miss it and the whole function answered `false` — while `typeIsManaged`'s own
-		// `named` arm has always ended in `isGenericAlias(name)` and answered `true`. That is the tuple-alias
+		// `named` arm has always ended in `isGenericAliasInAnyFile(name)` and answered `true`. That is the tuple-alias
 		// asymmetry A3e's review measured, one alias family over: the pair is read as
 		// `typeArgIsCoOwnedTrivial = typeIsManaged and not typeArgIsOwned`, so `Box with N0` classified as a
 		// CO-OWNED TRIVIAL box even though `N0` owns a String through `S0`.
@@ -24677,7 +25354,7 @@ export type ProgramSignatures
 		// `typeIsManaged` takes, so an ILL-FORMED program (one name in two registries, E3006/E3061, which are
 		// reported by a whole-program check that runs AFTER this classifier has answered) now reaches the two
 		// boundaries on ONE path instead of two — which is the agreement this function's header demands.
-		let form = try self.declaredFormOf(name) otherwise return false
+		let form = try self.declaredFormInAnyFile(name) otherwise return false
 		match form 'form'
 			// NARROWER than the drop boundary on purpose: an all-scalar struct (`Point`) is co-owned by
 			// RETAIN and not moved, so only a struct that owns managed heap is consumed.
@@ -24696,12 +25373,12 @@ export type ProgramSignatures
 			functionAlias then return false
 			// A SUPERSEDED spelling consumes nothing — no call site can name it. See
 			// `genericAliasSpellingIsSuperseded`, which records the two walks that reach this arm with one.
-			genericAlias then return not self.genericAliasSpellingIsSuperseded(name) and self.genericInstanceHasManagedField(self.genericAliasInstance(name))
+			genericAlias then return not self.genericAliasSpellingIsSuperseded(name) and self.genericInstanceHasManagedField(self.genericAliasInstanceInAnyFile(name))
 			// A tuple IS a struct box, and `denotedSlotAggregateName` above has already resolved the alias to
 			// the tuple's own canonical name — so this arm is reached only if that resolution is ever
 			// narrowed, and it must then answer exactly as the struct arm does. A3e's measured wrong answer
 			// is what happens when it does not.
-			tupleAlias then return self.structHasManagedField(self.tupleAliasTarget(name))
+			tupleAlias then return self.structHasManagedField(self.tupleAliasTargetInAnyFile(name))
 		end 'form'
 	end 'typeArgIsOwned'
 
@@ -24931,7 +25608,7 @@ export type ProgramSignatures
 	// `uncopyableElement`'s `not` makes it `false` — and every kind is folded by OR in
 	// `anyInstanceTypeArgHasKind`, so `false` is what "contributes nothing" means for all three. This one is a
 	// COMPOSITION of a GUARDED door and an UNGUARDED one: `typeIsManaged`'s `named` arm ends in
-	// `isGenericAlias(name)` and says MANAGED of a superseded spelling, while `typeArgIsOwned` now says NOT
+	// `isGenericAliasInAnyFile(name)` and says MANAGED of a superseded spelling, while `typeArgIsOwned` now says NOT
 	// OWNED of it — and `managed and not owned` is `true`. A pre-settle orphan would therefore vote CO-OWNED
 	// TRIVIAL all by itself, which is precisely the manufactured kind this rung exists to abolish, re-made one
 	// spelling over.
@@ -25412,10 +26089,10 @@ export type ProgramSignatures
 	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
 	// cases does a range arm cover? The layout it hands back carries plain NAMES and INTS (no ids),
 	// so every one of those questions is answered with no interner at all.
-	export function enumOf(name ByteArray) returns DeclaredEnum
+	export function enumInAnyFile(name ByteArray) returns DeclaredEnum
 		let layout = try self.enumTypes.get(name) otherwise return DeclaredEnum.undeclared
 		return DeclaredEnum.declared(layout)
-	end 'enumOf'
+	end 'enumInAnyFile'
 
 	// ⭐ **IS `name` A FLOAT-BACKED ENUM — one whose i64 tag is an f64's IEEE-754 BIT PATTERN (A4o)?** THE
 	// question every site that consumes an enum value as a NUMBER asks, so it is stated here once rather
@@ -25477,7 +26154,39 @@ export type ProgramSignatures
 	// declaration FORM and `TypeDeclKind` may not gain one: `denotedSlotType` already answers exactly this way
 	// (`MapError.keyNotFound`), and each door's fallthrough — an `adoptType` there, an enum lookup at the
 	// payload classifier, `false` here — is the rest of the answer rather than a recovery path.
-	export function declaredFormOf(name ByteArray) returns TypeDeclKind throws MapError
+	// ⭐⭐ **WHAT `readerFilePath` MEANS BY THIS NAME — the cascade below, with the cross-KIND contest
+	// applied.** Once a `type Box` in one file and a `typealias Box` in another may both stand
+	// (`typeNamePairMayCoexist`), a FIRST-MATCH cascade over whole-program registries picks one of them for
+	// every reader — the same defect `TypeResolution.denotedNamedType`'s arm order had, one registry family
+	// over, and it is what made a union PAYLOAD declared `ParsedInt` inside `stdlib/Builtins.maxon` a
+	// user program's struct (E3005 at `__Builtins.bitsToFloat`, inside a library file). `crossKindContested`
+	// is an empty-map probe in every program that contests nothing.
+	//
+	// ⚠ **THE DOOR TO ASK IS THE ONE THAT MATCHES THE QUESTION, AND THERE ARE TWO QUESTIONS.** This one is
+	// *"what does this NAME mean HERE"* — a declared slot's type, a constant's field type. The other is
+	// `declaredFormInAnyFile`: *"which registry holds this aggregate"*, asked by the memory-management
+	// routers about a name their caller has ALREADY classified managed. Handing the MM tier this door was
+	// measured and it PANICKED: `managedNameDropCallee` was told `ParsedInt` was a ranged typealias — "a
+	// scalar, which `typeIsManaged` never classifies managed" — for a value the parser had correctly typed
+	// as the user's struct, because the MM tier has no reading file and took the stranger's tier.
+	export function declaredFormOf(name ByteArray, readerFilePath FilePath) returns TypeDeclKind throws MapError
+		if self.crossKindContests.contains(name) 'severalKindsHoldIt'
+			return self.contestedTypeNameKindFor(name, readerFilePath: readerFilePath)
+		end 'severalKindsHoldIt'
+
+		return try self.declaredFormInAnyFile(name)
+	end 'declaredFormOf'
+
+	// ⭐ **WHICH REGISTRY HOLDS `name` — first match, whole-program, no reader.** THE one cascade; the
+	// reader-aware door above is this one plus the contest, so the two can never disagree about where a kind
+	// lives.
+	//
+	// ⚠ **ITS CALLERS ARE THE ONES WITH NO READING FILE AND NO NEED OF ONE**: the memory-management routers
+	// and the managed classifiers, which ask about a name the front end has already accepted and typed, and
+	// which need the AGGREGATE registries' answer rather than what some file means by the spelling. The
+	// struct arm is first, which is why a coexisting `type`/`typealias` pair answers `structType` here — the
+	// only kind that can own a record, and therefore the only one the caller could have been asking about.
+	export function declaredFormInAnyFile(name ByteArray) returns TypeDeclKind throws MapError
 		if self.structTypes.contains(name) 'structType'
 			return TypeDeclKind.structType
 		end 'structType'
@@ -25501,16 +26210,17 @@ export type ProgramSignatures
 		end 'functionAlias'
 
 		throw MapError.keyNotFound
-	end 'declaredFormOf'
+	end 'declaredFormInAnyFile'
 
 	// Is `name` a declared enum/union — the `bool` half of `enumOf`, and a HOT-PATH allocation guard.
 	// `enumOf` returns a `DeclaredEnum`, a Maxon union VALUE that allocates a heap box on its
 	// `undeclared` case as much as any other, so a caller that only needs "is it an enum?" for the
 	// COMMON no answer (`parseDottedPrimary` asks it of every `Point.create(…)` static call) must not
 	// pay `enumOf`'s box just to throw it away. A `Map.contains` allocates nothing.
-	export function containsEnum(name ByteArray) returns bool
+	// The `containsStructInAnyFile` warning, one registry over — see there for why the name carries it.
+	export function containsEnumInAnyFile(name ByteArray) returns bool
 		return self.enumTypes.contains(name)
-	end 'containsEnum'
+	end 'containsEnumInAnyFile'
 
 	// ⭐ **THE ONE RUNTIME ENTRY THAT DROPS AN OWNED BOX OF UNION `unionName`** — `__destruct_<U>` for a
 	// managed-payload union (its own tag-conditional cascade), the trivial `__mm_decref` for a scalar-only
@@ -25736,7 +26446,7 @@ export type ProgramSignatures
 	// `adoptType` here, an enum lookup at the payload classifier — is the rest of the answer and not a
 	// recovery path.
 	function denotedSlotType(name ByteArray, into TypeNameInterner, slotScopeFilePath FilePath) returns MaxonType throws MapError
-		let form = try self.declaredFormOf(name)
+		let form = try self.declaredFormOf(name, readerFilePath: slotScopeFilePath)
 		match form 'form'
 			// ⭐⭐ **A STRUCT-TYPED SLOT (`export var leaf as Leaf`) arrives as a `named` for the reason the
 			// alias arms below do** — the SWEEP recorded the declaration before anything could say what the
@@ -25813,7 +26523,7 @@ export type ProgramSignatures
 			// program the other walk order compiled and ran. It is also what retired
 			// `classifyUnionPayload`'s own `denotedAggregateName` step: a tuple-alias payload is answered by
 			// THIS arm now, so the payload door no longer pre-resolves a name the shared cascade resolves.
-			tupleAlias then return MaxonType.structRef(into.intern(self.tupleAliasTarget(name)))
+			tupleAlias then return MaxonType.structRef(into.intern(self.tupleAliasTargetInAnyFile(name)))
 		end 'form'
 	end 'denotedSlotType'
 
@@ -25846,7 +26556,7 @@ export type ProgramSignatures
 	// NAME is what carries the range and the signedness that `valueIsUnsigned` and the range checks read off
 	// it. So it throws, exactly as the enum/union arms do, and for the same reason — it is an ANSWER.
 	function rangedAliasSlotType(name ByteArray) returns MaxonType throws MapError
-		if not self.isFloatAlias(name) 'integerAlias'
+		if not self.isFloatAliasInAnyFile(name) 'integerAlias'
 			throw MapError.keyNotFound
 		end 'integerAlias'
 
@@ -26048,7 +26758,7 @@ export type ProgramSignatures
 	// ⛔⛔ **AND IT CARRIES THE SUPERSEDED GUARD, WHICH IS THE FOURTH DOOR TO NEED ONE (W41-trivial).** A
 	// spelling two files contest names no reader (`genericAliasSpellingIsSuperseded`), so the rule that door
 	// states applies here unchanged: **a classifier that meets one contributes NOTHING rather than guessing.**
-	// `typeIsManaged`'s `named` arm ends in `isGenericAlias(name)` and says MANAGED of such a spelling, and
+	// `typeIsManaged`'s `named` arm ends in `isGenericAliasInAnyFile(name)` and says MANAGED of such a spelling, and
 	// "managed" is spent HERE on naming a per-type callee — which for a contested alias is exactly the
 	// `genericAliasInstance` refusal, reached as a compiler PANIC instead of the diagnostic the program had
 	// already earned. `none` is the identity: both descriptor words stay 0 and both runtime entries are inert,
@@ -26108,7 +26818,7 @@ export type ProgramSignatures
 			return false
 		end 'namesNoDeclaration'
 
-		let form = try self.declaredFormOf(self.denotedSlotAggregateName(t)) otherwise return false
+		let form = try self.declaredFormInAnyFile(self.denotedSlotAggregateName(t)) otherwise return false
 		return form == TypeDeclKind.interfaceType
 	end 'typeDenotesInterface'
 
@@ -26234,7 +26944,7 @@ export type ProgramSignatures
 			return false
 		end 'notNamed'
 		let name = self.nameOfId(typeNameIdOf(t))
-		return self.isGenericAlias(name) and not self.genericAliasSpellingIsSuperseded(name) and self.isArrayInstance(self.genericAliasInstance(name))
+		return self.isGenericAliasInAnyFile(name) and not self.genericAliasSpellingIsSuperseded(name) and self.isArrayInstance(self.genericAliasInstanceInAnyFile(name))
 	end 'denotesArrayInstance'
 
 	// The `Array` instance the type above denotes. Precondition: `denotesArrayInstance(t)`, so exactly the
@@ -26243,7 +26953,7 @@ export type ProgramSignatures
 		if maxonTypeTag(t) == ValueTypeTag.genericInstance 'instance'
 			return typeNameIdOf(t)
 		end 'instance'
-		return self.genericAliasInstance(self.nameOfId(typeNameIdOf(t)))
+		return self.genericAliasInstanceInAnyFile(self.nameOfId(typeNameIdOf(t)))
 	end 'denotedArrayInstance'
 
 	// ⭐ **DOES A MANAGED-OPAQUE-ARRAY-HOLDING INSTANCE HAVE A DEEP-CLONEABLE ELEMENT (P1.7 slice 3b-vi-b-β)?**
@@ -26483,6 +27193,80 @@ export type ProgramSignatures
 	// `DeclaredStruct`/`DeclaredEnum`. That is why the form answer is an enum and not a `DeclaredEnum`-shaped
 	// union, and why `declaredEnumIsBoxed` reads `enumTypes` directly rather than through `enumOf`.
 
+	// ⭐⭐ **"DOES A CONTEST HAND *THIS* READER A PLAIN SCALAR BY THIS NAME?"** — narrower than
+	// `readerMeansKind`, and the difference is the whole of it: that door answers `true` for an UNCONTESTED
+	// name (one kind holds it, so the reader means that kind), which is exactly the wrong answer for a
+	// caller asking "may I ignore what the whole-program registry says". This one is false unless a contest
+	// is really in play.
+	export function contestGivesThisReaderAScalar(name ByteArray, readerFilePath FilePath) returns bool
+		if not self.crossKindContests.contains(name) 'oneKindHoldsTheName'
+			return false
+		end 'oneKindHoldsTheName'
+
+		return self.contestedTypeNameKindFor(name, readerFilePath: readerFilePath) == TypeDeclKind.rangedAlias
+	end 'contestGivesThisReaderAScalar'
+
+	// ⭐⭐ **`typeIsManaged` ASKED ON A FILE'S BEHALF — and ONLY its `named` arm can differ.**
+	//
+	// ⛔⛔ **MEASURED, twice, with name-only controls.** A REASSIGNED (by-reference) parameter declared with a
+	// contested name reaches the MM tier as a bare `named`, and `declaredNameIsManaged` answered off the
+	// OTHER file's declaration: `useA(c Container)` doing `c = 4`, in a file whose `Container` is
+	// `int(0 to 5)`, emitted `__mm_incref` on the literal 4 and `__mm_decref` on a header at address 2 —
+	// **exit 139** against a control of 7, for a boxed-union claimant AND for a `type Widget` one. The panic
+	// string two blocks up in the same function still read *"outside typealias 'Container'"*: the compiler
+	// knew it was a ranged alias while the MM tier disagreed, inside one function body.
+	//
+	// ⭐ **THE BOUND — why this is a sibling and not a reader threaded through the whole tier.** A bare
+	// `named` reaching a PARSER caller is either (a) the reader's own RANGED alias or (b) the reader's own
+	// enum/union; every other kind the reader could mean is re-tagged before the MM tier sees it, by doors
+	// that are already reader-aware (`resolveNamedStruct`→`structRef`, `isGenericAliasFor`→`genericInstance`,
+	// `isTupleAliasFor`→`structRef`, the interface arm→`interfaceRef`, `resolveFloatAliasType`→`float`). And
+	// (b) is safe: the only arm of `declaredFormInAnyFile` that could steal an enum name is `structTypes`,
+	// and `type X` + `enum X` are two NOMINALS that never coexist. So the one correction owed is (a), and
+	// `declaredNameIsManaged` keeps the reader-free contract its own header argues for — which is what the
+	// genuinely file-less callers (containers, struct-field cascades, destructor stamps) need.
+	//
+	// ⚠⚠ **THE LEAK DUAL IS UNMEASURED, AND THAT IS SAID OUT LOUD RATHER THAN ASSUMED.** The argument that a
+	// reader meaning a MANAGED kind can never be told "unmanaged" is that the two `false` arms
+	// (`rangedAlias`, `functionAlias`) sit after every managed arm in `declaredFormInAnyFile`, and that a
+	// reader meaning a tuple or generic alias never arrives here as `named` because those are re-tagged.
+	// **That is reasoning, not a measurement.** ⚠ ONE construction was attempted and did NOT reach this door:
+	// a `typealias Pair = (Coord, Coord)` against another file'''s `typealias Pair = int(0 to 5)`, reassigned
+	// by reference so the cell asks the tier — the tuple side re-tagged to `structRef` before arrival and the
+	// program matched its name-only control exactly (exit 14 both ways). The two candidate pairs are
+	// (ranged, tuple) and (ranged, generic), since every earlier arm of `declaredFormInAnyFile` is a nominal
+	// kind that cannot coexist with a nominal; both are re-tagged, which is the argument. ⇒ If a kind is ever
+	// allowed to reach the MM tier as a bare `named`, this property stops holding and the failure would be a
+	// LEAK (exit 101) rather than a fault — quieter than every defect this family has produced so far.
+	export function typeIsManagedFor(fieldType MaxonType, from TypeNameInterner, readerFilePath FilePath) returns bool
+		if self.namedTypeIsThisReadersScalar(fieldType, from: from, readerFilePath: readerFilePath) 'thisFileMeansAScalar'
+			return false
+		end 'thisFileMeansAScalar'
+
+		return self.typeIsManaged(fieldType, from: from)
+	end 'typeIsManagedFor'
+
+	// `typeOwesDrop` on a file's behalf — the ownership projection of the door above, corrected in the same
+	// one place, so a caller that must choose between the two (see `typeOwesDrop`) still chooses between two
+	// doors that agree about a contested name.
+	export function typeOwesDropFor(fieldType MaxonType, from TypeNameInterner, readerFilePath FilePath) returns bool
+		if self.namedTypeIsThisReadersScalar(fieldType, from: from, readerFilePath: readerFilePath) 'thisFileMeansAScalar'
+			return false
+		end 'thisFileMeansAScalar'
+
+		return self.typeOwesDrop(fieldType, from: from)
+	end 'typeOwesDropFor'
+
+	// The one correction both doors above make, written once: is this a bare `named` whose name a CONTEST
+	// hands this reader as a plain scalar? Every other tag, and every uncontested name, falls through.
+	function namedTypeIsThisReadersScalar(fieldType MaxonType, from TypeNameInterner, readerFilePath FilePath) returns bool
+		if maxonTypeTag(fieldType) != ValueTypeTag.named 'carriesNoContestableName'
+			return false
+		end 'carriesNoContestableName'
+
+		return self.contestGivesThisReaderAScalar(self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType))), readerFilePath: readerFilePath)
+	end 'namedTypeIsThisReadersScalar'
+
 	export function typeIsManaged(fieldType MaxonType, from TypeNameInterner) returns bool
 		let tag = maxonTypeTag(fieldType)
 		// `tagIsByteRecord`: "does this own heap?" is a question about the REPRESENTATION, and a Character
@@ -26581,7 +27365,7 @@ export type ProgramSignatures
 			return self.renderedNameIsPromiseHandle(name)
 		end 'aRenderedInstance'
 
-		return match try self.declaredFormOf(name) otherwise return false 'form'
+		return match try self.declaredFormInAnyFile(name) otherwise return false 'form'
 			structType to functionAlias gives false
 			genericAlias gives self.instanceIsPromiseHandle(self.bareGenericAliasInstance(name))
 			tupleAlias gives false
@@ -26627,7 +27411,7 @@ export type ProgramSignatures
 	// are written out rather than collapsed to a range for `declaredFormOf`'s own stated reason — a case
 	// appended to `TypeDeclKind` must fail to compile here rather than be swallowed.
 	export function nameIsDeclared(name ByteArray) returns bool
-		return match try self.declaredFormOf(name) otherwise return false 'form'
+		return match try self.declaredFormInAnyFile(name) otherwise return false 'form'
 			structType gives true
 			enumType gives true
 			unionType gives true
@@ -26666,7 +27450,7 @@ export type ProgramSignatures
 	// requirement's impl received one word where the fat pointer's two were passed, and the program
 	// SEGFAULTED (exit 139) on x64 and wasm alike.
 	export function declaredNameIsFatPointer(name ByteArray) returns bool
-		match try self.declaredFormOf(name) otherwise return false 'form'
+		match try self.declaredFormInAnyFile(name) otherwise return false 'form'
 			interfaceType then return true
 			structType to unionType then return false
 			// ⚠ **`genericAlias` STAYS `false` EVEN THOUGH `IntegerSeq = Seq with Integer` DENOTES AN
@@ -26713,7 +27497,7 @@ export type ProgramSignatures
 			return not self.renderedNameIsPromiseHandle(name)
 		end 'aRenderedInstance'
 
-		let form = try self.declaredFormOf(name) otherwise return false
+		let form = try self.declaredFormInAnyFile(name) otherwise return false
 		match form 'form'
 			structType then return true
 			// A payload-free enum's value IS its i64 tag — a scalar; a boxed one's is a heap box. `isBoxed`
@@ -26811,7 +27595,7 @@ export type ProgramSignatures
 	//
 	// ⚠⚠ **THE PAIRING THIS REPLACES WAS A REACHABLE COMPILER PANIC ON A VALID PROGRAM, MEASURED (T1 review).**
 	// `managedNameDropCallee`'s STRUCT arm already asked by name (`structHasManagedField`); its UNION arm
-	// fetched `enumOf(name)`'s layout — a SIGNATURES layout — and resolved that layout's payload ids against
+	// fetched `enumInAnyFile(name)`'s layout — a SIGNATURES layout — and resolved that layout's payload ids against
 	// the CALLER's `project.typeNames`. In ONE file the two tables fold in the same order and every id
 	// coincides; ACROSS files they diverge, so a `some(v Num)` payload whose `Num` is a ranged alias
 	// misresolved and the union read MANAGED, demanding a `__destruct_<U>` — while `installUnionDestructors`
@@ -26898,7 +27682,7 @@ export type ProgramSignatures
 		// (`managedFieldCloneStrategy`) — a name the gate and the strategy disagreed about would admit a clone
 		// nobody can emit.
 		let name = self.denotedSlotAggregateName(type)
-		if self.isGenericAlias(name) 'genericAlias'
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
 			// A SUPERSEDED spelling refuses nothing — no copy site can name it. `typeArgIsOwned`'s twin guard,
 			// off the SAME predicate: both are reader-free classifiers that a whole-program walk drives over the
 			// registry's pre-settle memory, and this one was ALREADY reachable — a two-file
@@ -26909,7 +27693,7 @@ export type ProgramSignatures
 				return true
 			end 'theContestReplacedThisOne'
 
-			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), visited: visited)
+			return self.instanceSupportsDeepClone(self.genericAliasInstanceInAnyFile(name), visited: visited)
 		end 'genericAlias'
 		// ⛔ **A COMPILER-OWNED AGGREGATE IS NOT DEEP-CLONEABLE, AND THE GATE HAS TO SAY SO — its layout is
 		// REGISTERED, so `containsStruct` below says yes and the walk would happily report its scalar-only
@@ -26951,10 +27735,10 @@ export type ProgramSignatures
 			return true
 		end 'cycle'
 		visited.insert(name)
-		if self.containsStruct(name) 'struct'
+		if self.containsStructInAnyFile(name) 'struct'
 			return self.structFieldsSupportDeepClone(name, visited: visited)
 		end 'struct'
-		match self.enumOf(name) 'union'
+		match self.enumInAnyFile(name) 'union'
 			declared(layout) then return self.unionPayloadsSupportDeepClone(layout, visited: visited)
 			undeclared then return false
 		end 'union'

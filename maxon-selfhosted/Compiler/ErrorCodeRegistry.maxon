@@ -117,10 +117,19 @@ export enum ErrorCode
 	// in one whole-program namespace, and a fixed resolution cascade used to
 	// pick the winner silently. Fires from `commitTypeNameDecls` in shv2 at the
 	// merge. Kind-independent exactly as (c) is: what is refused is the SECOND
-	// declaration of the name, whichever keyword introduced either of them. The
-	// one exception is two `typealias` declarations, which are E3061 -- and
-	// which are legal outright when they are the same alias FORM in different
-	// files, a non-exported typealias being file-local; (e) a name claimed
+	// declaration of the name, whichever keyword introduced either of them --
+	// UNLESS THE TWO DECLARATIONS CANNOT SEE EACH OTHER, which is the whole
+	// rule (`typeNamePairMayCoexist` in shv2). Three ways that holds: two
+	// `typealias` declarations in different files, whatever their FORMS (each
+	// alias form is scoped, and an ambiguity between two an author could both
+	// name is E3063 at the reference rather than a refusal of the
+	// declarations); a nominal declaration against a FILE-PRIVATE alias in
+	// another file; and a pair drawn from two LAYERS -- a `stdlib/`
+	// declaration and a user one are never both in scope. What still collides
+	// is one FILE declaring a name twice, two NOMINAL declarations, and a
+	// nominal declaration against an alias that is exported or `module`-visible
+	// from another file in the same layer. A pair of typealiases that does
+	// collide is E3061 rather than this code; (e) a name claimed
 	// twice in the COMPILED type namespace -- a generic instantiation has no
 	// source name, so the compiler joins its base to its arguments (`Box with
 	// String` -> `Box_String`) and derives every per-type symbol from that
@@ -223,14 +232,15 @@ export enum ErrorCode
 	// `maxonTypeOfTag`. NOT E3124, which is the opposite mismatch -- a value produced and dropped.
 	semanticOtherwiseTypeMismatch = 3059
 	// Two typealiases in scope declare the same name.
-	// Two declarations of one name are legal only when both are `typealias` of
-	// the SAME FORM (both ranged, both function, both generic-instance) in
-	// DIFFERENT files -- a non-exported typealias is file-local
-	// (specs/duplicate-typealias.md). Every other pair collides: same file
-	// whatever the forms, and different files whenever the forms differ, since
-	// only the ranged registry is scoped per declaring file. shv2 raises this
-	// from `commitTypeNameDecls` when BOTH declarations are typealiases; a pair
-	// involving a `type`/`enum`/`union`/`interface` is E3006 instead.
+	// Two `typealias` declarations of one name in DIFFERENT files are legal,
+	// whatever their forms: every alias form is scoped, a non-exported one is
+	// file-local (specs/duplicate-typealias.md), and an ambiguity between two
+	// an author could both name is a property of the USE -- E3063 at the
+	// reference -- rather than a refusal of the declarations. What this code
+	// refuses is ONE FILE declaring the name twice, which no qualification
+	// could disambiguate. shv2 raises it from `commitTypeNameDecls` when BOTH
+	// declarations are typealiases; a colliding pair involving a
+	// `type`/`enum`/`union`/`interface` is E3006 instead.
 	semanticDuplicateTypeAlias = 3061
 	// A typealias is declared and never used.
 	// "Used" means the NAME appears in a type position in its OWN declaring

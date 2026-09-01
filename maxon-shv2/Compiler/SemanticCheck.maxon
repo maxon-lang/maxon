@@ -566,7 +566,7 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 		// erased to `integer` — so the verdict above accepts `over(aBag)` at an `over(x Box)`. Identity is the
 		// interned NAME, and it is the same rule `checkOneArgType` applies at the same pair, asked here so a
 		// candidate is not selected on a tag agreement its own argument check will refuse.
-		var expected = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+		var expected = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: func.sourceFilePath)
 		if expected.isEmpty() 'erasedUnionParam'
 			expected = try sig.paramAggregateNames.get(i) otherwise panic("overloadArgTypeFit: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
 		end 'erasedUnionParam'
@@ -591,7 +591,7 @@ function overloadArgTypeFit(project Project, func IrFunction, sig FuncSignature,
 			// `expected 'Array_Integer', got 'Array___ManagedByte'`, naming a parameter the call was never
 			// written against. Pinned by `bytearray-element-size.md`'s
 			// `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`.
-			if programSignaturesIn(project, asker: "overloadArgTypeFit").aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), got: aggregateNameFor(project, tag: argTag, nameId: argNameId), gotTag: argTag, gotNameId: argNameId) 'aggregateMismatch'
+			if programSignaturesIn(project, asker: "overloadArgTypeFit").aggregatesConflict(expected, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), got: aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath), gotTag: argTag, gotNameId: argNameId) 'aggregateMismatch'
 				return OverloadFit.incompatible
 			end 'aggregateMismatch'
 		end 'aggregateComparable'
@@ -1062,7 +1062,7 @@ end 'checkThrowsClausesNameDeclaredErrors'
 // with nothing making the copies agree. A future edit to either ("a typealias to an enum is concrete too")
 // would have made the impl side and the plain-function side disagree about what an error type IS, silently.
 function requireThrowsClauseNamesADeclaredError(project Project, signatures ProgramSignatures, func IrFunction, declared String)
-	match classifyThrowsClauseName(project, signatures: signatures, name: declared) 'kind'
+	match classifyThrowsClauseName(project, signatures: signatures, name: declared, readerFilePath: func.sourceFilePath) 'kind'
 		concreteError then break 'kind'
 		abstractInterface then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names an INTERFACE. A caught error is decoded off the DECLARED clause, and an interface declares no case to decode — a payload-carrying conformer arrives as a heap box pointer that would be read back as an ordinal and never released. Name the error enum or union this function actually throws")
 		undeclared then reportThrowsClauseViolation(project, func: func, message: "'throws {declared}' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into")
@@ -2783,7 +2783,7 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// alias lives in `functionAliasShapes`. Answered as `function(id)` — the same type a declared function
 	// PARAMETER of that alias carries — so `checkOneArgType`'s function-shape arm compares the two shapes
 	// exactly as it does for a direct call.
-	if signatures.isFunctionAlias(formalName) 'functionAliasFormal'
+	if signatures.isFunctionAliasInAnyFile(formalName) 'functionAliasFormal'
 		return WitnessFormalType.declared(MaxonType.function(id), preErasedAggregate: EmptySourceText)
 	end 'functionAliasFormal'
 
@@ -2792,7 +2792,12 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// on `notDeclared` and are opaque. That is the honest answer and not an omission: both resolve through a
 	// READER'S FILE (`genericAliasInstanceFrom`, `qualifiedAliasOf`), and a requirement's formal is a
 	// whole-program name with no reading file to scope a contested prefix by.
-	let denoted = try denotedNamedType(signatures, name: formalName, id: id) otherwise return WitnessFormalType.opaque
+	//
+	// ⚠ **AND IT ASKS ON NO FILE'S BEHALF — `CompilerOwnedDeclFilePath`, which is that fact's one spelling (see its header).** A requirement's formal is a
+	// whole-program name written inside an `interface`, and `IrInterface` records no declaring file; the
+	// paragraph above already says a name that resolves through a READER is opaque here for exactly that
+	// reason, and a cross-KIND contested name is the same shape one registry over.
+	let denoted = try denotedNamedType(signatures, name: formalName, id: id, readerFilePath: CompilerOwnedDeclFilePath) otherwise return WitnessFormalType.opaque
 
 	// The identity `resolveTypes` took off this formal, if it took one — see `erasedFormalIdentity`.
 	return WitnessFormalType.declared(denoted, preErasedAggregate: erasedFormalIdentity(project, denoted: denoted, id: id))
@@ -2801,7 +2806,7 @@ end 'witnessFormalDeclaredType'
 // ⭐⭐ **THE IDENTITY THE FORMAL'S RESOLUTION DESTROYED, ASKED OF THE ONE WHOLE-PROGRAM CLASSIFIER — and
 // spelling it a THIRD time here was a measured wrong answer (BATCH18 review, second pass).**
 //
-// This gate read `containsEnum(formalName)`, which is a third answer to *"which identities does resolution
+// This gate read `containsEnumInAnyFile(formalName)`, which is a third answer to *"which identities does resolution
 // destroy?"* beside `Parser.erasedAggregateNameOf` (the parse tier's, which BATCH18-b unified across its own
 // two fill sites) and `aggregateNameFor` (this pass's own). It was the narrow one: a boxed enum erases, and
 // so does a **PER-INSTANCE RANGED ALIAS**, which it did not name.
@@ -2820,12 +2825,15 @@ end 'witnessFormalDeclaredType'
 // pre-resolution `named(id)` is the only thing that still knows what it was. `aggregateNameFor` decides both
 // asks, so the enum arm, the per-instance-alias arm and any arm added later reach this door by construction
 // rather than by a second author remembering them.
+// ⚠ `CompilerOwnedDeclFilePath` for `witnessFormalDeclaredType`'s reason, which is this function's caller: a
+// requirement's formal is a whole-program name written inside an `interface`, and `IrInterface` records no
+// declaring file.
 function erasedFormalIdentity(project Project, denoted MaxonType, id TypeNameId) returns ByteArray
-	if not aggregateNameFor(project, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted)).isEmpty() 'survivedResolution'
+	if not aggregateNameFor(project, tag: maxonTypeTag(denoted), nameId: typeNameIdOf(denoted), readerFilePath: CompilerOwnedDeclFilePath).isEmpty() 'survivedResolution'
 		return EmptySourceText
 	end 'survivedResolution'
 
-	return aggregateNameFor(project, tag: ValueTypeTag.named, nameId: id)
+	return aggregateNameFor(project, tag: ValueTypeTag.named, nameId: id, readerFilePath: CompilerOwnedDeclFilePath)
 end 'erasedFormalIdentity'
 
 // ⭐⭐ **THE NOUN A DIAGNOSTIC ABOUT THIS CALL MUST USE — THE ONE DOOR (A1s-prim).** Every message below
@@ -3411,7 +3419,7 @@ end 'checkOneTransform'
 function checkTransformParamType(project Project, transform PendingTransformArity, shape FunctionShape, method String)
 	let paramType = try shape.paramTypes.get(0) otherwise panic("checkTransformParamType: paramTypes.get OOB at 0 — the arity check proved this transform declares {transform.expectedArity} parameter(s)")
 	let paramTag = maxonTypeTag(paramType)
-	var paramIdentity = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+	var paramIdentity = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: transform.filePath)
 	if paramIdentity.isEmpty() 'erasedUnionParam'
 		paramIdentity = shapeParamIdentity(shape, index: 0)
 	end 'erasedUnionParam'
@@ -4154,9 +4162,6 @@ end 'targetCanHostSubprocess'
 // computed and memoized by `compileToCodeResult` before the pipeline runs (`queryProgramSignatures`), so a
 // pass downstream of it can only ever take the memo's hit. `asker` names the caller in the panic, which is
 // the only part that legitimately differs.
-function programSignaturesIn(project Project, asker String) returns ProgramSignatures
-	return try queryProgramSignatures(project) otherwise panic("{asker}: queryProgramSignatures failed inside semanticCheck — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-end 'programSignaturesIn'
 
 // **The one type rule that cannot live in the parser.** An argument must agree with the
 // parameter it fills, and the callee may be declared in another FILE — so the question needs
@@ -4406,11 +4411,11 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// doors for the programs each refused unresolved; they are disjoint (a name is one kind of alias or
 		// the other, never both), so their order between themselves says nothing.
 		let substituted = signatures.floatAliasResolved(signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))))
-		let expected = signatures.typeArgAggregateName(substituted)
+		let expected = signatures.typeArgAggregateName(substituted, readerFilePath: filePath)
 		let argId = try argIds.get(i) otherwise panic("checkTypeParameterArgsAt: argIds.get OOB at {i}")
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-		let got = aggregateNameFor(project, tag: argTag, nameId: argNameId)
+		let got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 		// Hoisted out of the failure branch because BOTH halves below want it now, and one unconditional read
 		// is cheaper than threading it into two. It is a dense array read on a path that already does four,
 		// and `checkArgTypes` fetches the same name unconditionally for every argument of every call.
@@ -4611,7 +4616,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
 		let argId = try argIds.get(i) otherwise panic("checkPerInstanceArgsWith: argIds.get OOB at {i}")
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type name")
-		let got = aggregateNameFor(project, tag: argTag, nameId: argNameId)
+		let got = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 		if got.isEmpty() 'decays'
 			continue
 		end 'decays'
@@ -5053,11 +5058,12 @@ function substitutedSlotIdentity(project Project, signatures ProgramSignatures, 
 	end 'concreteAtTheParse'
 
 	let unresolved = slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid)
-	if maxonTypeTag(resolveType(project, signatures: signatures, t: unresolved)) != ValueTypeTag.integer 'identitySurvivesInTheTypeItself'
+	if maxonTypeTag(resolveType(project, signatures: signatures, t: unresolved, readerFilePath: CompilerOwnedDeclFilePath)) != ValueTypeTag.integer 'identitySurvivesInTheTypeItself'
 		return EmptySourceText
 	end 'identitySurvivesInTheTypeItself'
 
-	return aggregateNameFor(project, tag: maxonTypeTag(unresolved), nameId: typeNameIdOf(unresolved))
+	// `CompilerOwnedDeclFilePath` for `resolvedSlotThroughCallInstance`'s reason, two lines up.
+	return aggregateNameFor(project, tag: maxonTypeTag(unresolved), nameId: typeNameIdOf(unresolved), readerFilePath: CompilerOwnedDeclFilePath)
 end 'substitutedSlotIdentity'
 
 // The RETURN slot's half of the identity above — one name rather than a column, because a function type
@@ -5118,7 +5124,10 @@ end 'slotThroughCallInstance'
 // `integer` by `resolveTypes`: one type, two spellings, and `resolvedTypesMatch` refuses them. Written once
 // rather than at the parameter loop and the return slot, which is where a pair like this comes apart.
 function resolvedSlotThroughCallInstance(project Project, signatures ProgramSignatures, slotType MaxonType, gid GenericInstanceId) returns MaxonType
-	return resolveType(project, signatures: signatures, t: slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid))
+	// ⚠ **`CompilerOwnedDeclFilePath` — a reader with no file: a generic instance's type ARGUMENT was interned before any file read it**, so
+	// there is no reading file to scope a cross-KIND contested name by — the same absence
+	// `witnessFormalDeclaredType` records, reached from the other side of the same crossing.
+	return resolveType(project, signatures: signatures, t: slotThroughCallInstance(project, signatures: signatures, slotType: slotType, gid: gid), readerFilePath: CompilerOwnedDeclFilePath)
 end 'resolvedSlotThroughCallInstance'
 
 // The RETURN slot of the substitution above — the `void`/`value` split, which a match arm's single statement
@@ -5754,7 +5763,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// a subtype of another. The comparison RULE is `namedAggregatesConflict`, shared verbatim with the
 	// parser's coercion sites; only the name EXTRACTION is local. The ARG side always resolves live,
 	// because an argument keeps its `named`/`structRef` tag (`aggregateNameFor` handles both).
-	var expectedAggregate = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+	var expectedAggregate = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: filePath)
 	if expectedAggregate.isEmpty() 'erasedUnionParam'
 		expectedAggregate = preErasedAggregate
 	end 'erasedUnionParam'
@@ -5764,7 +5773,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `argAggregateCannotDecay` what
 	// keeps it off a byte enum or a per-instance alias, both of which legitimately coerce to an int.
 	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
-		let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
+		let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 		// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY (R4.7) — the one place two DIFFERENT named aggregates denote one
 		// record, and the reason the DECLARED-function door has to ask what the BUILTIN door already asks.**
 		// shv2 has two byte element types on purpose (`ProgramSignatures.isBytePackedArrayInstance`), and a
@@ -5955,7 +5964,13 @@ function argAggregateCannotDecay(project Project, tag ValueTypeTag, nameId TypeN
 	return layout.isBoxed()
 end 'argAggregateCannotDecay'
 
-function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) returns ByteArray
+// ⚠ **AND IT ASKS ON A FILE'S BEHALF, because a name TWO KINDS hold carries a nominal identity in one file
+// and none in another.** `structTypes`/`enumTypes` are bare and whole-program, so once a `type ParsedInt`
+// and a `typealias ParsedInt` in two files may both stand (`typeNamePairMayCoexist`) this answered
+// `ParsedInt` for every file — while the PARSER's twin (`Parser.namedAggregateName`, guarded the same way)
+// answered EMPTY inside the library. MEASURED: sixteen **E3005 `expected 'ParsedInt', got 'ParsedInt'`**
+// inside `stdlib/Builtins.maxon`, one per call, the two tiers disagreeing about one name.
+function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns ByteArray
 	if tagIsStructRef(tag) 'struct'
 		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: structRef id {nameId} is not in the project interner — a structRef's name id is remapped project-global at merge (mergeArtifact)")
 	end 'struct'
@@ -5984,7 +5999,7 @@ function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) 
 	end 'notNamed'
 
 	let name = try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: named id {nameId} is not in the project interner — a named value's name id is remapped project-global at merge (mergeArtifact)")
-	if project.structTypes.contains(name) or project.enumTypes.contains(name) 'registeredAggregate'
+	if (project.structTypes.contains(name) or project.enumTypes.contains(name)) and not programSignaturesIn(project, asker: "aggregateNameFor").aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'registeredAggregate'
 		return name
 	end 'registeredAggregate'
 
@@ -6032,7 +6047,7 @@ function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, r
 
 	// Its aggregate NAME when it has one (`BoxB`), else the scalar TYPE it actually is (`int` for a bare
 	// integer meeting a union parameter).
-	return displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId))
+	return displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath))
 end 'typeDisplayName'
 
 // ⭐⭐ **HOW THE *PARAMETER* SIDE OF AN ARGUMENT REFUSAL IS SPELLED — the display door's other half.** It
