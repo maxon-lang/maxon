@@ -1497,6 +1497,69 @@ The four earliest rows predate the automated log; their numbers are reconstructe
 git, so they are accurate but were not written by the tool. They also predate the exponent table,
 which is why it starts empty.
 
+**2026-09-01 — W219: THE DRIVER'S TIMED WAITS BECAME INTERRUPTIBLE. A RUNTIME row, and the FIRST one here
+whose subject is LATENCY rather than throughput — read MC1's row below first, because this one is its
+mirror image and the two pull in opposite directions.** MC1 removed wakeup traffic; this adds a wakeup
+back, on the one path where its absence was a WRONG ANSWER. `scale-test` has nothing to say about either.
+
+**What it is.** `__gt_drive_until`'s netpoll has two arms where the driver has nothing runnable and nothing
+to WAIT ON — `awaitOtherM` (another M is executing, no timer) and `sleepwait` (a timer deadline). Both were
+`osSleepMs`, which waits on no object and therefore cannot be ended early. They are now one shared park:
+publish this driver's owner on its P, step `__sched_parked_drivers` (the `lock xadd` is the Dekker pair's
+StoreLoad barrier), RE-TEST the exit condition, then `osWaitHandle` on the P's own wake event with the old
+interval as the TIMEOUT. `__gt_runner_done` — the one door every finished green thread and every answered
+reply passes through — calls `__sched_wake_parked_drivers(owner)`, which is gated to one load when nobody is
+parked.
+
+**The defect it closes is a WRONG ANSWER**, and the reproducer
+(`maxon-shv2/track0/awaitany-index-torture.maxon` + `awaitany-index-race.sh`) is committed with it.
+⚠ **THE NUMBERS ARE IN `maxon-shv2/track0/README.md` UNDER "W219's READINGS" AND ARE NOT REPEATED HERE** —
+the reproducer's rate before and after, the 80 ms variant's latency, the wake-removed control and the
+send-and-await wall times. That section exists because the first cut of this change scattered five copies of
+those readings and two of them disagreed about which configuration they were quoting.
+
+The shape, without the numbers: unfixed, the driver slept through the reply, its own deadline fired during
+that sleep, and `awaitAny` then answered the promise that finished SECOND; fixed, the select is clean at
+every processor count. Removing only the WAKE — keeping the interruptible wait — puts the reproducer back in
+the red, which is what says the signal rather than the wait primitive is the fix. And the throughput effect
+is the opposite sign from what an added wakeup suggests, by a factor of sixty: `Sleep(1)` returns on
+Windows' scheduler tick, so every await in a send-and-await loop paid one, with process CPU near zero in
+both arms — the before arm's wall time was spent NOT RUNNING.
+
+**CPU: free at this resolution, and that is TWO interleaved sessions plus a null control each time.**
+`service-torture` at 480,000 messages (`rounds = 40000`), the same `GetProcessTimes` harness MC1's row
+describes, medians of 5 and of 7 at `MAXON_MAX_PROCS=16`: session 1 reads **before 812 → after 891** and
+session 2 **before 969 → after 844** — the sign FLIPS, which is what a reading inside the band looks like.
+The null controls (same bytes in both arms) read **1016 / 938** and **906 / 938** in those same sessions, so
+the band on this box is ±8% and both real readings sit inside it. N=1 is **172 both ways** — the control,
+since one processor never parks a driver against another M — N=4 reads 750 → 734, wall is 270-275
+throughout, `steals` 139k, and `aggregate=5226680` is byte-identical across all 48 runs at exit 42.
+⚠ **`service-torture` DOES NOT REACH THE REPLY PATH** (SV1 sends are fire-and-forget, so no reply cell is
+ever completed), which is exactly why the second corpus above exists and why its numbers are the ones that
+bound the added cost.
+
+**What it costs, stated as code rather than as a number.** One `.data` word (`__sched_parked_drivers`,
+`atomicStep`), one P field (`POffParkedDriverOwner`), a load-compare-branch at the tail of
+`__gt_runner_done`, and — only when a driver is actually parked — a walk of `__sched_procs` comparing one
+word per P. The `.data` word moves the `data {` section of every green-thread golden in the corpus: **331
+fragments re-minted across 51 filtered batches**, all of them one label at one offset, and a full run
+afterwards reports none still differing.
+
+⛔ **ONE BLIND SLEEP IS KEPT ON PURPOSE, AND IT IS THE DEADLOCK DETECTOR'S.** `confirmQuiet`'s not-proved
+edge (`GtRuntime`'s `confirmWait`) still calls `osSleepMs`, because `DeadlockConfirmPolls` was bisected
+against that call's real ~35 ms TICK and an interruptible wait there could let sixteen consecutive quiet
+polls elapse in microseconds — exit 92 on a live program. It also buys nothing: that edge is reached only
+when no M is executing and there is no timer, no parked child and no read in flight, so no party exists that
+could signal it. The constant's *"re-bisect it if the poll changes"* is discharged by not changing the poll.
+
+⚠ **arm64-macOS IS CROSS-COMPILED AND DISASSEMBLED, NOT RUN** (Windows host), and it is the lane where the
+ordering matters most. The park reads `str x24, [x22, #0xc0]` (arm the slot) → `ldaxr`/`add`/**`stlxr`** (the
+gate step, whose STORE-RELEASE is the barrier x86 gets from the `lock` prefix) → `ldr x0, [x19, #0x10]` (the
+exit re-test) → `_mrt_darwin_wait_one` on `#0x38` → the atomic decrement → `str xzr, [x22, #0xc0]`.
+`__sched_wake_parked_drivers` lowers to the gate load, the bound hoisted out of the loop, `#0xc0` compared
+per P and `_mrt_darwin_event_set` on `#0x38`. A census of the emitted image finds **exactly one
+`sleep_ms` per drive loop** — the three `confirmWait`s — and none anywhere else in the driver.
+
 **2026-09-01 — MC1: SPINNING-M ACCOUNTING. A RUNTIME row, not a compiler one — no `scale-test` numbers
 exist for it and none should be looked for.** `scale-test` measures the COMPILER compiling; this change is
 in the scheduler the compiler EMITS, and its subject is a program with twelve services and half a million

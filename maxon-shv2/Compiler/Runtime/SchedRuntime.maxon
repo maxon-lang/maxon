@@ -387,7 +387,24 @@ let POffIdleFlag = 0x30 as ByteOffset
 // The auto-reset Win32 event this P's M blocks on when it has no work, and an enqueuer signals to wake it.
 // AUTO-reset (`osEventCreate`), so a signal that arrives while the M is still running is not lost — it
 // leaves the event signalled and the next `osWaitHandle` returns at once.
-let POffWakeEvent = 0x38 as ByteOffset
+//
+// ⭐⭐ **IT IS THE ONE WAITABLE OBJECT AN M BLOCKS ON, AND SINCE W219 THAT IS TRUE OF DRIVERS TOO.** A worker
+// M blocks on it from `buildSchedWorkerLoop`'s `doWait`; `GtRuntime`'s netpoll `driverPark` blocks on it for
+// the poll interval or the timer delta, instead of the plain `Sleep` those two arms used to be. **EXPORTED**
+// for that second waiter: two event objects where one would do is how a wake comes to be delivered to a
+// party that is not listening, and this one already has the auto-reset semantics both waits need.
+//
+// ⚠ **THE TWO WAITERS ON ONE P NEVER OVERLAP, AND THE CASE WHERE THEY SEEM TO IS ANSWERED.** An M is either
+// in its worker loop's park or running a green thread whose await is driving, never both, so no signal is
+// ever split between them. What CAN happen is that a wake `__sched_wake_or_spawn` issued for the WORKER
+// (claiming its `idleFlag` while it was still running) is consumed by that M's DRIVER instead — and the
+// driver reaches `__sched_find_runnable` on the way round, so the green thread that prompted the wake is
+// picked up by the party that ate its signal. ⚠ **NOT NECESSARILY ON THE NEXT LAP**: `drive` consults
+// `__gt_coro_next` FIRST and branches straight to `run` when the owner's queue holds anything, so the search
+// can be several laps out — each of which is real work, none of which is a wait. The converse is likewise
+// benign: an auto-reset event left set costs its next waiter one extra lap of a loop that re-tests
+// everything.
+export let POffWakeEvent = 0x38 as ByteOffset
 
 // The `CreateThread` HANDLE of the worker M running on this P, or 0 for P[0] (the main OS thread, which we
 // never created). Stored rather than reserved because the handle is otherwise LOST: a reserved slot would
@@ -556,10 +573,16 @@ let POffPendingPark = POffStealCount + (PointerSlotBytes as ByteOffset)
 // green thread" and none of them can ever finish. The property that actually separates the two states is the
 // one this word carries: **has this M concluded, this pass, that there is nothing runnable anywhere?**
 //
-// ⛔ **IT IS NOT `POffIdleFlag` AND MUST NOT BE FOLDED INTO IT.** That flag means *"this M is about to block
-// on `wakeEvent`"* and an ENQUEUER clears it and signals that event. A driver in `awaitOtherM` blocks on a
+// ⛔ **IT IS NOT `POffIdleFlag` AND MUST NOT BE FOLDED INTO IT — AND W219 KILLED THE PREMISE THIS USED TO
+// GIVE WITHOUT TOUCHING THE CONCLUSION.** The old argument was that *"a driver in `awaitOtherM` blocks on a
 // SLEEP, not on the event, so publishing itself through that flag would send a wakeup to a party that is not
-// listening — a lost wakeup, which is the one failure the Dekker pair exists to prevent.
+// listening"*. That is now FALSE: a driver in `awaitOtherM` blocks on exactly that event. What still holds,
+// and what the separation actually rests on, is `POffParkedDriverOwner`'s argument — `idleFlag` means *"any
+// PUBLISH may wake this M"* and is answered by CLAIMING the P and handing it a SPINNING CREDIT that only the
+// worker loop's `wdequeue`/`reDequeued` pair gives back, while a driver waits on ONE named condition that no
+// published work satisfies and has no road on which to return a credit. Two states, two words; three, with
+// this one, because *"is this M wakeable"*, *"is this M a driver waiting for a named answer"* and *"has this
+// M concluded there is nothing runnable anywhere"* are three different questions about the same instant.
 //
 // ⚠ **IT IS STICKY ACROSS THE POLL, WHICH IS WHAT MAKES THE READ DETERMINISTIC RATHER THAN A COIN FLIP.**
 // It is set when a driver reaches `otherMs` (or a worker reaches its park) and cleared ONLY where that M
@@ -650,6 +673,50 @@ let POffSpinning = POffQuietPolls + (PointerSlotBytes as ByteOffset)
 let PSpinningFree = 0 as ParsedInt
 let PSpinningHeld = 1 as ParsedInt
 
+// ⭐⭐⭐ **THE GREEN THREAD WHOSE *DRIVER* IS BLOCKED ON THIS P's `wakeEvent`, OR 0 (W219) — the word that
+// makes `__gt_drive_until`'s timed wait INTERRUPTIBLE.**
+//
+// ⛔⛔ **THE DEFECT IT CLOSES IS A WRONG ANSWER, NOT A SLOW ONE.** The netpoll's blind arms used to be plain
+// `osSleepMs` calls on an object nobody can signal, so a driver that found nothing runnable did not observe a
+// promise ANOTHER M answered until its own interval was up — and by then the deadline it slept on had fired
+// too, so both promises read `completed` and the scan answered the one that finished SECOND.
+// **`maxon-shv2/track0/README.md` owns the measurement** (the reproducer, its rate, the wake-removed control
+// and the latency before and after). It is not restated here: this rung already produced two copies of that
+// reading that disagreed about which number they were quoting.
+//
+// ⛔ **IT IS NOT `POffIdleFlag`, AND FOLDING THE TWO WOULD BE A LATENCY CLIFF AND A THUNDERING HERD.** That
+// flag means *"this M has no work and any PUBLISH may wake it"*, and `__sched_wake_or_spawn` answers it by
+// CLAIMING the P and HANDING IT A SPINNING CREDIT that the worker loop's `wdequeue`/`reDequeued` pair is what
+// gives back — a driver has neither, and `buildSchedWorkerLoop`'s `reDequeued` note measures the leaked
+// credit as a 100 ms cliff on every later publish. The questions differ as well as the bookkeeping: a worker
+// is woken because WORK EXISTS and any worker will do, while a driver is waiting on ONE named condition that
+// no amount of published work satisfies. Waking every idle M on every completion instead would put fourteen
+// parked workers through a full `__sched_find_runnable` and a re-park per reply, which is precisely the
+// wakeup traffic the spinning-M accounting was added to remove.
+//
+// ⭐⭐ **IT HOLDS THE *OWNER*, AND THE COMPLETER NEVER DEREFERENCES IT.** `__sched_wake_parked_drivers`
+// compares this word against a pointer VALUE it read out of the finished GT, so a stale or recycled owner
+// address costs a spurious `SetEvent` (harmless on an auto-reset event a driver re-laps on) and can never be
+// a load through a freed struct. Keying the wake the other way round — a slot on the OWNER holding the P —
+// would be O(1) instead of this scan, and was rejected for exactly that: the replier would have to read a
+// green thread it does not own and that may have been reclaimed while its reply was in flight.
+//
+// ⛔ **SINGLE WRITER, AND THAT IS WHY A PLAIN STORE IS ENOUGH.** The only writer is the M holding this P, and
+// only from `driverPark`/`driverParkDisarm`. Drivers of one green thread are strictly NESTED — an outer one is
+// inside `emitGtRunOne`'s context switch while an inner one runs — so at most one of them is ever armed. The
+// StoreLoad barrier the Dekker pair needs is not this store's: it is the `lock xadd` on
+// `__sched_parked_drivers` that follows it.
+//
+// ⚠ **A `.data`-free slot, for `POffStealCount`'s reason** — a `.data` word appears in the `data {` section
+// of every green-thread golden in the corpus, and this is per-M state.
+let POffParkedDriverOwner = POffSpinning + (PointerSlotBytes as ByteOffset)
+
+// *"No driver is parked on this P."* Named for `PStatusUnused`/`PSpinningFree`'s reason one field family up:
+// the arm, the disarm and the walk's comparison must agree about which value means *empty*, and three bare
+// zeros at three sites is that fact written three times. ⚠ It is safe as a sentinel only because a GT's
+// owner is never 0 — see the walk, which states that invariant and what would break without it.
+let ParkedDriverNone = 0 as ParsedInt
+
 // ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`), the same
 // count v1's arm64 backend uses (`Arm64MacosGreenThread.maxon:163`, `GtMaxLocalQueueLen = 256`) and the same
 // the bootstrap caps its linked local queue at. FIXED rather than grown: the overflow has somewhere to go
@@ -672,7 +739,7 @@ let RunqIndexMask = RunqSlots - 1
 // would be the same fact converted four times.
 let RunqHalfSlots = RunqSlots shr 1
 
-let POffRunqBase = POffSpinning + (PointerSlotBytes as ByteOffset)
+let POffRunqBase = POffParkedDriverOwner + (PointerSlotBytes as ByteOffset)
 
 // The bootstrap's header, shv2's bigger inline GT, the tail scalars and the ring. See the layout header for
 // why this is not the bootstrap's 376.
@@ -793,6 +860,14 @@ let SchedProgressLabel = b"__sched_progress"
 // ⚠ **A POLL IS NOT A MILLISECOND, AND THE TABLE IS THE ONLY HONEST UNIT.** `OtherWorkerPollMs` is 1, but
 // Windows' `Sleep(1)` returns on the scheduler's tick — the readings above work out at ~35 ms per poll — so
 // this constant may not be reasoned about as a duration. Re-bisect it if the poll changes.
+//
+// ✅ **THAT INSTRUCTION WAS TRIGGERED AT W219 AND DISCHARGED WITHOUT A RE-BISECT, BY KEEPING THE POLL.**
+// W219 made the driver's blind waits interruptible, which would have let any `SetEvent` for this P return
+// the corroboration's wait in microseconds — sixteen consecutive quiet polls in no time at all, i.e. exit 92
+// on live programs, the direction the table above calls unacceptable. So the not-proved edge does NOT take
+// the new park: `GtRuntime`'s `confirmWait` keeps the plain `osSleepMs` and states why nothing could signal
+// it there anyway (no M executing, no timer, no child, no read in flight — no party exists that could).
+// ⇒ **the poll this number was bisected against is unchanged, and the 16 still means what the table says.**
 let DeadlockConfirmPolls = 16 as ParsedInt
 
 let SchedActiveWorkersLabel = b"__sched_active_workers"
@@ -840,6 +915,29 @@ export let SchedMaxActiveWorkersLabel = b"__sched_max_active_workers"
 // and the gate.
 let SchedSpinningLabel = b"__sched_nmspinning"
 
+// ⭐⭐⭐ **HOW MANY Ps CARRY A `POffParkedDriverOwner` (W219) — the gate that keeps the completion wake off
+// the hot path, and the STORELOAD BARRIER the Dekker pair on that word depends on.**
+//
+// ⭐ **IT IS A GATE FIRST.** `__sched_wake_parked_drivers` runs at the tail of `__gt_runner_done`, i.e. once
+// per green thread that finishes and once per service reply that is answered. Almost every one of those runs
+// with no driver parked anywhere, and this word is what makes that case ONE LOAD instead of a walk of every
+// P — the same shape, and the same argument, as `__sched_nmspinning`'s gate one field up.
+//
+// ⭐⭐ **AND IT IS A BARRIER SECOND, WHICH IS WHY THE ARMING SIDE STEPS IT *AFTER* PUBLISHING THE SLOT.** The
+// driver stores its owner into `P->parkedDriverOwner`, steps this count, and only THEN re-tests its exit
+// condition; the completer stores the answer, and only then reads this count. Both arms need the count's
+// `lock xadd` between their own store and their own load or x86's StoreLoad reordering lets BOTH miss — the
+// completer reading a stale 0 and skipping the signal while the driver reads a stale status and blocks. That
+// is the same pair `POffIdleFlag` forms with the run-queue publish, and the same instruction pays for it.
+// ⚠ **The COMPLETER's half of the barrier is not written at its read**: `__gt_runner_done` reaches the wake
+// through `emitGtTeardownArrive`, whose own `lock xadd` on the teardown word sits between the caller's status
+// store and this load. That is stated at both ends rather than at one.
+//
+// `atomicStep`: every mutation is `emitGlobalAccumulate(multiM: true)`, i.e. `StdOp.atomicRmw`. ⚠ It must be
+// atomic even though each M steps it once up and once down — the two Ms are different Ms, and a lost
+// increment is a driver that published a slot the gate says is not there.
+let SchedParkedDriversLabel = b"__sched_parked_drivers"
+
 // Set at teardown so a parked worker leaves its loop instead of blocking for ever. ⚠ The worker loop reads
 // it TWICE, because the second read is half of the missed-wakeup argument rather than a duplicate of the
 // first. See `buildSchedWorkerLoop`.
@@ -882,6 +980,34 @@ let SchedWorkerLoopName = b"__sched_worker_loop"
 // The readers are the hand-assembled IOCP completion loop (which wakes after publishing a green thread) and
 // the `DeadFunctionElimination` root that keeps this alive for that call.
 export let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
+
+// ⭐⭐⭐ **`__sched_wake_parked_drivers(owner)` — THE OTHER HALF OF THE SAME WAKE, FOR THE OTHER KIND OF
+// WAITER (W219).** `__sched_wake_or_spawn` answers *"a green thread is runnable — get SOME M onto it"*; this
+// answers *"a promise owned by `owner` has been answered — wake the ONE driver that is waiting on it"*. Both
+// end in a `SetEvent` on a P's `POffWakeEvent`, which is the whole of what is shared and the whole of what
+// needs to be: the two differ in every term above that signal, and folding them would mean either taking the
+// spinning gate onto a path it is WRONG for or waking every idle M on every completion.
+//
+//   • **THE GATE.** `__sched_wake_or_spawn` skips its scan when an M is already SPINNING, because a spinner
+//     will find the published work. That reasoning does not transfer: a spinning M searches run queues, and
+//     no search anywhere satisfies *"has slot 3 of this array completed?"*. Gated on the spinning count, a
+//     completion wake would be suppressed exactly when the machine is busiest.
+//   • **THE ADDRESSEE.** `__sched_wake_or_spawn` signals the FIRST idle P it finds, because any M will do.
+//     Here only one party can act on the news, so the scan matches on `POffParkedDriverOwner` and signals
+//     that P alone. Signalling one idle M at random would usually wake a parked worker, which would search,
+//     find nothing and re-park while the driver slept on; signalling ALL of them would put every parked
+//     worker through a full `__sched_find_runnable` per reply.
+//   • **NO SPAWN ARM.** A completed promise is not work, so there is nothing for a new OS thread to run —
+//     `track0/pin-matrix.sh` reads a worker started here as a permanently idle M.
+//   • **NO SPINNING HAND-OVER, AND NO `idleFlag` CLAIM.** The driver is not part of the worker pool's
+//     accounting; `POffParkedDriverOwner` says why.
+//
+// ⚠ **IT CLEARS NOTHING.** The slot is the driver's to clear at `driverParkDisarm`, so a signal after
+// the driver has already woken leaves the auto-reset event set and costs that driver's next wait one extra
+// lap. `POffWakeEvent`'s own note is why that is free rather than a lost wakeup.
+// EXPORTED for its ONE caller, `GtRuntime.__gt_runner_done` — the choke point every finished green thread
+// and every answered reply passes through.
+export let SchedWakeParkedDriversName = b"__sched_wake_parked_drivers"
 
 // `__sched_drain_pending()` — move whatever the three deferred slots hold onto the queue or the store they
 // belong on, now that the context switch which made deferral necessary has completed.
@@ -1305,6 +1431,9 @@ export function schedRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntry
 		// Every mutation is the `atomicRmw` in `emitSchedSpinningTransition` or the gate's `atomicCas`; see
 		// `SchedSpinningLabel` for what a lost update would cost (a permanently suppressed wakeup).
 		pushRuntimeGlobal(out, label: SchedSpinningLabel, sharing: MultiMSharing.atomicStep)
+		// Every mutation is `emitGlobalAccumulate(multiM: true)` at the driver's arm and disarm; see
+		// `SchedParkedDriversLabel` for why the same instruction is also the Dekker pair's barrier.
+		pushRuntimeGlobal(out, label: SchedParkedDriversLabel, sharing: MultiMSharing.atomicStep)
 	end 'procsTeardown'
 
 	return out
@@ -1330,6 +1459,9 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedAnyExecuting(module)
 	buildSchedWorkerLoop(module)
 	buildSchedWakeOrSpawn(module)
+	// The second wake, for the other kind of waiter — see `SchedWakeParkedDriversName` for why the two are
+	// different functions rather than one with a flag.
+	buildSchedWakeParkedDrivers(module)
 	buildSchedStopWorkers(module)
 end 'installSchedRuntime'
 
@@ -2785,6 +2917,110 @@ function buildSchedStealCount(module StdModule)
 
 	module.functions.push(func)
 end 'buildSchedStealCount'
+
+// ==========================================================================
+// `__sched_wake_parked_drivers`
+// ==========================================================================
+
+// The walk `SchedWakeParkedDriversName` describes: skip everything when no driver is parked anywhere, else
+// signal every P whose published owner is the one whose promise has just been answered.
+//
+// ⚠ **THE GATE'S LOAD IS PLAIN, AND ITS BARRIER IS THE CALLER'S.** `__gt_runner_done` reaches this call
+// through `emitGtTeardownArrive`'s `lock xadd`, which is what stops the completed status store from being
+// reordered past this read. `SchedParkedDriversLabel` carries the pair in full, and the caller repeats it at
+// the call.
+//
+// ⚠ **THE SLOT'S LOAD IS PLAIN TOO, AND CANNOT BE A DEREFERENCE.** It is one aligned word written whole by
+// the P's own M, and the walk COMPARES it against a pointer value rather than following it — see
+// `POffParkedDriverOwner` for why that distinction is the safety argument and not a micro-optimisation.
+//
+// ⚠ **IT DOES NOT STOP AT THE FIRST MATCH.** At most one P can carry a given owner (a green thread runs on
+// one M at a time, and its drivers are nested), so an early exit would save one comparison per processor on a
+// path that already only runs when a driver is parked — and a `break` here is a second exit edge to keep
+// right for no measured gain.
+function buildSchedWakeParkedDrivers(module StdModule)
+	var func = IrFunction.createFromStd(SchedWakeParkedDriversName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var scanSetup = module.addBlock(func, label: b"wpdscan")
+	var loopHdr = module.addBlock(func, label: b"wpdhdr")
+	var loopBody = module.addBlock(func, label: b"wpdbody")
+	var signalIt = module.addBlock(func, label: b"wpdsignal")
+	var nextProc = module.addBlock(func, label: b"wpdnext")
+	var doneBlock = module.addBlock(func, label: b"wpddone")
+
+	emitParams(module, block: entry, count: 1)
+	// ⚠ **A GT's OWNER IS NEVER `ParkedDriverNone`, WHICH IS WHAT KEEPS THAT VALUE USABLE AS THE SLOT's
+	// *"nobody is parked"* READING.** `buildGtSpawn` states the invariant at the store (*"a zero owner is not
+	// a benign default"*), a cell copies its owner off the sender, and a green thread owns itself. Were it
+	// ever 0, the arm would publish the sentinel and this walk would signal every P that is NOT parked.
+	let owner = 0 as ValueId
+
+	// The gate, and the ONLY thing the common case pays: one load, one compare, one branch. Everything below
+	// — including the `__sched_num_procs` load — is behind it.
+	let parked = emitLoadGlobalWord(module, block: entry, label: SchedParkedDriversLabel, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let noneParked = emitCmp(module, block: entry, a: parked, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(noneParked, thenBlockId: doneBlock.id, elseBlockId: scanSetup.id))
+
+	// ⭐ **THE WALK STARTS AT 0, WHERE `__sched_wake_or_spawn`'s STARTS AT 1.** That function skips P[0]
+	// because the MAIN OS thread is never parked on a wake event — it drives the scheduler instead — and that
+	// is precisely the party this one exists to reach. A driver on P[0] is the common case, not the corner.
+	//
+	// The bound is read HERE and not in the header, so the walk costs no load per processor —
+	// `__sched_num_procs` is sealed before any worker exists and cannot change under the loop.
+	let numProcs = emitLoadGlobalWord(module, block: scanSetup, label: SchedNumProcsLabel, ids: ids)
+	let index = ids.mint()
+	loopHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	module.setTerminator(scanSetup, op: StdOp.branch(loopHdr.id))
+	scanSetup.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(zero)))
+
+	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
+
+	let p = emitLoadProc(module, block: loopBody, index: index, ids: ids)
+	let waitingOwner = emitLoadField(module, block: loopBody, record: p, offset: POffParkedDriverOwner, ids: ids)
+	let isOurs = emitCmp(module, block: loopBody, a: waitingOwner, b: owner, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loopBody, op: StdOp.condBranch(isOurs, thenBlockId: signalIt.id, elseBlockId: nextProc.id))
+
+	// ⚠ `loopBody` dominates this block, so its `p` is reused rather than re-derived — `buildSchedWakeOrSpawn`
+	// spells the index→P mapping once per scan for the same reason.
+	module.appendOp(signalIt, op: StdOp.osSetEvent(emitLoadField(module, block: signalIt, record: p, offset: POffWakeEvent, ids: ids)))
+	module.setTerminator(signalIt, op: StdOp.branch(nextProc.id))
+
+	let step = emitConst(module, block: nextProc, value: 1, ids: ids)
+	let nextIndex = emitBin(module, block: nextProc, a: index, b: step, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nextProc, op: StdOp.branch(loopHdr.id))
+	nextProc.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(nextIndex)))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedWakeParkedDrivers'
+
+// ⭐⭐ **THE DRIVER'S ARM — publish the slot, THEN step the gate.** The order is the Dekker pair's and not a
+// preference: while the count is up the slot is published, so a completer that reads a non-zero count is
+// guaranteed to find the slot on its walk. Stepping first would open a window in which the count says
+// *"somebody is parked"* and the walk finds nobody, which costs nothing, and a window the other way round
+// — a published slot no gate admits to — which is the lost wakeup this whole pair exists to prevent.
+//
+// The count's `lock xadd` is also the StoreLoad barrier between this store and the driver's re-test of its
+// own exit condition; see `SchedParkedDriversLabel`.
+export function emitSchedArmParkedDriver(module StdModule, block IrBlock, p ValueId, owner ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: p, offset: POffParkedDriverOwner, value: owner)
+	_ = emitGlobalAccumulate(module, block: block, label: SchedParkedDriversLabel, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: true, ids: ids)
+end 'emitSchedArmParkedDriver'
+
+// ⭐⭐ **THE DISARM — step the gate DOWN first, then clear the slot.** The mirror of the arm, and safe in
+// both orders for a reason the arm does not have: this M is AWAKE by the time it runs here, so a completer
+// that signals in between wakes nobody and merely leaves the auto-reset event set — one extra lap of the
+// drive loop, which re-tests everything anyway. Down-first is chosen so the gate stops admitting a driver the
+// instant that driver stops listening.
+export function emitSchedDisarmParkedDriver(module StdModule, block IrBlock, p ValueId, ids ValueMinter)
+	_ = emitGlobalAccumulate(module, block: block, label: SchedParkedDriversLabel, delta: emitConst(module, block: block, value: OneFewer, ids: ids), multiM: true, ids: ids)
+	emitStoreField(module, block: block, record: p, offset: POffParkedDriverOwner, value: emitConst(module, block: block, value: ParkedDriverNone, ids: ids))
+end 'emitSchedDisarmParkedDriver'
 
 // ==========================================================================
 // `__sched_any_executing`

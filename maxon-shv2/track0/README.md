@@ -27,6 +27,7 @@ produced the binary*.
 | `validate.sh` | **the C# BOOTSTRAP** (`$REPO/bin/maxon.exe`) | is the bootstrap's per-P sharded allocator + multi-M scheduler correct above one P? |
 | `pin-matrix.sh` | **shv2** (`maxon-shv2/.maxon/maxon-shv2.exe`) | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS` and at the default — while a SPAWNED one reaches a worker M? |
 | `refcount-race.sh` | **shv2** | does a contended refcount word survive, and can the pin be removed to break it? |
+| `awaitany-index-race.sh` | **shv2** | does a driver with nothing runnable OBSERVE a promise another M answered, or sleep through it — read as the SELECT LATENCY, in the exit code (W219) |
 
 ⭐⭐ **AND ONE PROGRAM HERE HAS NO DRIVER ON PURPOSE: `runnext-starvation-probe.maxon`
 (MC1).** Every program the three drivers run asserts something about the SHIPPED
@@ -120,6 +121,56 @@ it themselves is separate work nobody has done.
   `pin-matrix.sh`'s header carries that reading, what the same sabotage does to
   the spec suite (3–4 red of 7,097, intermittently), and why the sabotage is
   *"share the region"* rather than *"put it back on the P"*.
+- **`awaitany-index-torture.maxon`** (W219) — the only program here that measures
+  a **LATENCY** rather than an aggregate, a leak or a crash, and the only one
+  whose subject is what a driver does when it has nothing to run. It is
+  `specs-shv2/await-any.md`'s `over-service-replies` in a loop: `Slow` sleeps
+  (`slowSleepMs`, 25) and `Quick` answers at once, so `awaitAny` must come back
+  with index 1 within a millisecond. Before W219 the netpoll's blind waits were
+  plain `osSleepMs` calls — objects nobody can signal — so a driver parked on
+  `Slow`'s deadline slept through `Quick`'s reply and then answered the WRONG
+  INDEX, both promises having completed by the time it looked. See **W219's
+  readings** below, which are the only copy of those numbers.
+  ⭐ **THE READING IS THE EXIT CODE AND THAT IS MEASURED, NOT STYLISTIC**: a
+  `print`-instrumented build of the same tree read 150/150 clean while the exit
+  code read 13/160. The probe was the bug's hiding place.
+  ⚠ **AND THREE CONSECUTIVE FULL SUITES SAMPLED NONE OF IT** — `over-service-replies`
+  passes either way, because it asserts the index and not the time it took. That
+  is why this is committed as a standing instrument rather than left as a spec
+  case's footnote.
+
+### ⭐⭐ W219's READINGS — THE ONE COPY, AND EVERYTHING ELSE CITES IT
+
+⛔ **THIS SECTION EXISTS BECAUSE THE FIRST CUT HAD FIVE COPIES AND TWO OF THEM
+DISAGREED** — one comment said the deadline was 25 ms and another said 80, both
+citing this program, whose `slowSleepMs` is 25; the rate read "9 of 10" in the
+driver script and "9 of 12" in three other places. The runtime comments now say
+*"`track0/README.md` owns the measurement"* and stop.
+
+All rows `MAXON_MAX_PROCS=16` unless stated, on the 16-processor box:
+
+| what | before W219 | after |
+|---|---|---|
+| `awaitany-index-torture` (`slowSleepMs = 25`), 12 runs | **10 red** — 6 the wrong index, 4 late at 15-32 ms | — |
+| the same, 180 runs across procs 1 / 4 / 16 | — | **180 clean, worst latency 0 ms** |
+| the same at procs 1 | 12 clean of 12 | 12 clean of 12 |
+| the same built with `slowSleepMs = 80`, 10 runs | **9 red**, the late ones reading **92-94 ms** | **10 clean, 0 ms** |
+| a send-and-await loop, 1,200 awaits, WALL ms at procs 1 / 4 / 16 | 44 / 542 / 896 | **18 / 14 / 15** (×39 at 4, ×60 at 16) |
+
+⭐ **THE WAKE IS THE LOAD-BEARING HALF, AND THE CONTROL SAYS SO.** With the
+completion wake removed and the interruptible wait KEPT — one line — the
+reproducer reads **17 of 30 red at procs 16** (12 late, 5 wrong index). The
+re-test before blocking narrows the window; only the signal closes it.
+
+⚠ **THE PROCESSOR COUNT IS THE LEVER**, which is why `procs=16` is the gate and
+`procs=1` is only a control: the window needs a worker M to have taken both
+handlers off `main`, so at one processor `main` runs them itself and the arm is
+blameless. A driver pointed at one processor measures nothing.
+
+⚠ **AND THE WALL ROW IS NOT A THROUGHPUT BONUS — IT IS THE SAME DEFECT.**
+`Sleep(1)` returns on Windows' scheduler tick, so every await in a send-and-await
+loop paid one. Process CPU reads 0-16 ms in BOTH arms of that row at every count:
+the before arm's wall time was spent NOT RUNNING.
 - **`validate.sh`** — compiles `alloc-torture` once with the BOOTSTRAP (a plain
   build + a `--debugstream` build), then runs the four checks below.
 

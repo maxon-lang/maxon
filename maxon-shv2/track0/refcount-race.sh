@@ -35,8 +35,13 @@ REPO="$(cd "$HERE/../.." && pwd)"
 
 # ⛔ THE SHV2 BINARY, NOT `bin/maxon.exe` — `validate.sh` drives the C# bootstrap
 # and measures a different compiler's runtime entirely.
+# ⛔ THE DEFAULT ALREADY ENDS IN `.exe`, SO THE FALLBACK STRIPS IT — it does not add
+# one. It read `MAXON="$MAXON.exe"` until W219, which on macOS/Linux (where the binary
+# has NO extension) produced `maxon-shv2.exe.exe` and then reported "no shv2 binary" at
+# a path that never existed on any platform. Windows took the `-x` branch and never
+# reached it, which is why it survived.
 MAXON="${MAXON:-$REPO/maxon-shv2/.maxon/maxon-shv2.exe}"
-[ -x "$MAXON" ] || MAXON="$MAXON.exe"
+[ -x "$MAXON" ] || MAXON="${MAXON%.exe}"
 
 REPS="${1:-12}"
 PROCS_LIST="${PROCS_LIST:-1 2 4 12}"

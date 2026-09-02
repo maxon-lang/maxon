@@ -566,11 +566,31 @@ let TimerOffGt = 8
 let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 
 // ⭐ **HOW LONG A DRIVER WAITS ON ANOTHER M BEFORE RE-CHECKING (G1).** It bounds the LATENCY of noticing that
-// a worker finished the green thread this driver is awaiting; the wait itself ends at `loophdr`'s status test,
-// so this is a poll interval and not a timeout. One millisecond is the smallest `Sleep` that yields the CPU
-// rather than spinning on it, which is what a driver with genuinely nothing to do should do.
+// a worker finished the green thread this driver is awaiting; the wait itself ends at `loophdr`'s status test.
 //
-// ⚠ It is reached ONLY when more than one M is live, i.e. never at the default `MAXON_MAX_PROCS=1`.
+// ⭐⭐ **IT STOPPED BEING A POLL INTERVAL AND BECAME A TIMEOUT AT W219, AND THE NUMBER DID NOT MOVE.** It used
+// to bound an `osSleepMs` — a wait on no object, which nothing can end early — so the completion it exists to
+// notice was noticed one interval late however soon it happened. `buildGtDriveLoop`'s `driverPark` now waits
+// on this P's own event with this value as the TIMEOUT, so a completer ends the wait at once and this bounds
+// only the case where nobody signals.
+//
+// ⛔ **AND ONE MILLISECOND WAS NEVER ONE MILLISECOND ON WINDOWS**, which is what made the arm measurable:
+// `Sleep(1)` returns on the next scheduler tick, ~15.6 ms. **MEASURED** with `sleepwait` converted and this
+// arm still sleeping, `awaitany-index-torture` at `MAXON_MAX_PROCS=16`: 3 of 60 runs late, every one of them
+// at **exactly 15 ms** — `maxon-shv2/track0/README.md` owns that reading and the rest of W219's numbers.
+// That is this constant's real granularity, and it is why both arms had to change.
+//
+// ⛔⛔ **IT NOW MEASURES TWO DIFFERENT WAITS, AND ONLY ONE OF THEM IS INTERRUPTIBLE.** `awaitOtherM` takes
+// the shared driver park; `confirmWait` — the deadlock corroboration's not-proved edge — deliberately keeps
+// the plain `osSleepMs`, because `SchedRuntime.DeadlockConfirmPolls` was bisected against this constant's
+// TICK and an early return would shorten the window that stands between a live program and exit 92. That
+// block carries the whole argument, including why no signal can arrive on that edge at all.
+//
+// ⚠ **AND IT IS *NOT* "reached only when more than one M is live" — that sentence was FALSE BEFORE THIS RUNG
+// AND IS LOAD-BEARING NOW.** `confirmWait` is reached from `confirmQuiet`'s not-proved edge, which at ONE
+// processor runs `DeadlockConfirmPolls - 1` times before every scheduler-deadlock abort. The old claim read
+// as if a single-processor program never paid this interval at all; it pays it fifteen times, and that is
+// exactly the budget the constant above was bisected against.
 let OtherWorkerPollMs = 1
 
 // The empty-store sentinel `__gt_timer_earliest` returns: a real deadline is `now_ns() + ms*1e6`, a huge
@@ -3280,9 +3300,10 @@ function buildGtTimerCheck(module StdModule)
 	module.functions.push(func)
 end 'buildGtTimerCheck'
 
-// Emit `ceil((earliest - now) / 1e6)` into `block` and return the deltaMs id — the millisecond delta both the
-// timer-only Sleep and the timer-bounded process wait block for. Rounding UP guarantees ≥1 ms, so a
-// sub-millisecond remainder cannot busy-spin. Factored so the two netpoll blocks that compute it stay one fact.
+// Emit `ceil((earliest - now) / 1e6)` into `block` and return the deltaMs id — the millisecond delta the
+// timer-only driver park and the timer-bounded process and IO waits use as their TIMEOUT. Rounding UP
+// guarantees ≥1 ms, so a sub-millisecond remainder cannot busy-spin. Factored so the THREE netpoll blocks
+// that compute it stay one fact: `ioBounded`, `sleepwait` and `procWaitBounded`.
 function emitCeilMs(module StdModule, block IrBlock, ids ValueMinter, earliest ValueId, now ValueId) returns ValueId
 	let delta = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(delta, lhs: earliest, rhs: now, opcode: StdBinOpcode.sub, operandType: StdType.i64))
@@ -3336,8 +3357,17 @@ end 'emitIoEventWait'
 // each occurrence consumes the entry that caused it.
 //
 // Factored so the two netpoll blocks that wait on children (bounded and unbounded) share one spelling of the
-// whole protocol; `cur` is where it starts and every arm converges on `cont`.
-function emitProcWait(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, timeoutMs ValueId, cont IrBlock)
+// whole protocol; `cur` is where it starts, the CLAIM-WINNING arms converge on `cont`, and the loser goes to
+// `sharePark` (see `shareWait`).
+//
+// ⛔⛔ **`sharePark` IS W219's THIRD BLIND WAIT, AND IT IS A PARAMETER BECAUSE THE PARK BELONGS TO THE
+// CALLER.** A loser of the poller claim used to `osSleepMs` — a wait on no object — which is exactly the
+// defect W219 closed on the netpoll's other two arms: a driver sharing here can have its own promise
+// answered by another M and will not observe it until the sleep expires. The cure is the caller's existing
+// `driverPark`, taken as a block rather than rebuilt here, because a second copy of the arm / Dekker re-test
+// / wait / disarm sequence is the one thing this file's own header calls the failure the pair exists to
+// prevent. It takes the interval as its block argument, exactly as the caller's other two entries do.
+function emitProcWait(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, timeoutMs ValueId, cont IrBlock, sharePark IrBlock)
 	var shareWait = module.addBlock(func, label: b"pwshare")
 	var snapshot = module.addBlock(func, label: b"pwsnap")
 	var copyHdr = module.addBlock(func, label: b"pwcopyhdr")
@@ -3357,10 +3387,19 @@ function emitProcWait(module StdModule, func IrFunction, cur IrBlock, ids ValueM
 	let lostClaim = emitCasLost(module, block: cur, result: claimResult, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(lostClaim, thenBlockId: shareWait.id, elseBlockId: snapshot.id))
 
-	// shareWait: somebody else is inside the blocking wait. Sleep briefly and let the netpoll decide again.
+	// shareWait: somebody else is inside the blocking wait. REAP FIRST, then park briefly and let the netpoll
+	// decide again.
+	//
+	// ⭐ **THE REAP MOVED FROM AFTER THE WAIT TO BEFORE IT, AND OVER A LOOP THAT IS THE SAME PLACE.** It is
+	// `recheck`'s call, which the claim-winning arms still reach on their own road; a sharer polls the
+	// children it was not allowed to block on, which is what keeps its wait a latency and not a correctness
+	// gap. Doing it before rather than after is what lets this arm end in the shared park — whose disarm
+	// returns to the drive loop's top, not to `cont` — instead of needing a second copy of the park with a
+	// different continuation.
+	module.appendOp(shareWait, op: StdOp.call(ids.mint(), callee: GtProcCheckName, args: ValueIdArray.create()))
 	let shareMs = emitConst(module, block: shareWait, value: ProcWaiterShareMs, ids: ids)
-	module.appendOp(shareWait, op: StdOp.osSleepMs(shareMs))
-	module.setTerminator(shareWait, op: StdOp.branch(recheck.id))
+	module.setTerminator(shareWait, op: StdOp.branch(sharePark.id))
+	shareWait.branchEdges.push(BranchEdge.create(sharePark.id, argIds: argsOf(shareMs)))
 
 	// snapshot: under the lock, read the count and copy that many handles into the poller's buffer.
 	emitSchedLockEnter(module, block: snapshot, ids: ids)
@@ -3412,8 +3451,8 @@ function emitProcWait(module StdModule, func IrFunction, cur IrBlock, ids ValueM
 	module.appendOp(release, op: StdOp.atomicCas(ids.mint(), addrId: releaseAddr, expectedId: emitConst(module, block: release, value: GtProcPollerClaimed, ids: ids), replacementId: emitConst(module, block: release, value: GtProcPollerFree, ids: ids)))
 	module.setTerminator(release, op: StdOp.branch(recheck.id))
 
-	// recheck: BOTH arms reap. A sharer polls the children it was not allowed to block on, which is what keeps
-	// its sleep a latency and not a correctness gap.
+	// recheck: the claim-winning road reaps. ⚠ The SHARER reaps too, at `shareWait` — before its park rather
+	// than after, for the reason stated there — so both roads still poll, and this is not the only site.
 	module.appendOp(recheck, op: StdOp.call(ids.mint(), callee: GtProcCheckName, args: ValueIdArray.create()))
 	module.setTerminator(recheck, op: StdOp.branch(cont.id))
 end 'emitProcWait'
@@ -3569,6 +3608,61 @@ enum DriveExit
 	liveCountZero
 end 'DriveExit'
 
+// ⭐⭐⭐ **"HAS THIS DRIVE FINISHED?" — STATED ONCE, BECAUSE SINCE W219 IT IS ASKED FROM TWO BLOCKS.**
+// `loopHdr` asks it at the top of every lap. `driverParkRecheck` asks it again AFTER the driver has published
+// itself as parked, which is the second half of the Dekker pair the interruptible wait depends on: without a
+// re-test there, a promise answered between `loopHdr`'s test and the arm is a wakeup the completer skips
+// (it read the gate before the arm) and a status the driver never re-reads (it tested before the answer).
+//
+// ⛔ **AND IT IS ONE EMITTER RATHER THAN TWO COPIES BECAUSE THE COPIES WOULD BE PER-`DriveExit`-ARM.** Three
+// predicates written twice is six places for *"what ends this loop"* to disagree, in the one loop whose
+// wrong answer is a promise the caller reads as complete when it is not. `paramTypesOf` and `returnTypeOf`
+// are factored here for the same reason one screen down.
+//
+// ⛔ **IT TERMINATES `block` ITSELF AND RETURNS NOTHING, WHICH IS WHAT KEEPS THE SELECT'S INDEX OFF A
+// FUNCTION BOUNDARY.** An earlier cut answered `(reached, foundIndex)` with `0 as ValueId` on the two arms
+// that have no index — and in this builder **`0` is a live parameter id** (`targetGt`/`promiseArray`), so
+// that don't-care read as *"parameter 0"* at any call site that forgot to check the exit first. Terminating
+// here means the index never leaves the scope that minted it, and it also states the branch's two targets
+// once instead of at both callers.
+//
+// `carriesTheAnswer` is a property of the CALL SITE and not of the `DriveExit`: `loophdr` branches to `done`,
+// which takes the index as a block argument, while the netpoll's re-test branches to a disarm block that
+// takes none — it re-laps, and the next lap's scan answers again.
+//
+// ⚠ **`zeroConst` IS PASSED IN RATHER THAN MINTED HERE.** Both callers are dominated by `entry`, which
+// already holds one, and minting a second would put a redundant `const` in `loophdr` — i.e. move the emitted
+// image of every green-thread golden in the corpus to say nothing new.
+function emitDriveExitTest(module StdModule, block IrBlock, exit DriveExit, ids ValueMinter, targetGt ValueId, targetStatus ValueId, promiseArray ValueId, zeroConst ValueId, reachedBlock IrBlock, elseBlock IrBlock, carriesTheAnswer bool)
+	// ⚠ **THE SELECT'S SCAN RE-READS THE ARRAY EVERY TIME, WHICH IS NOT A MISSED HOIST.** The record belongs
+	// to the caller and a green thread driven by this loop may `push` to it, so length and buffer are live
+	// state exactly as the queues and the timer store are — which is also why this loop is phi-free.
+	var foundIndex = 0 as ValueId
+
+	match exit 'scanBeforeTheExitTest'
+		anyCompleted then foundIndex = emitAnyCompletedIndex(module, block: block, record: promiseArray, ids: ids)
+		statusEquals or liveCountZero then break 'scanBeforeTheExitTest'
+	end 'scanBeforeTheExitTest'
+
+	let reached = match exit 'reachedBy'
+		statusEquals gives emitCmp(module, block: block, a: emitLoadField(module, block: block, record: targetGt, offset: GtOffStatus, ids: ids), b: targetStatus, pred: StdCmpPred.eq, ids: ids)
+		anyCompleted gives emitCmp(module, block: block, a: foundIndex, b: emitConst(module, block: block, value: NoCompletedPromise, ids: ids), pred: StdCmpPred.ne, ids: ids)
+		liveCountZero gives emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtLiveCountLabel, ids: ids), b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	end 'reachedBy'
+
+	module.setTerminator(block, op: StdOp.condBranch(reached, thenBlockId: reachedBlock.id, elseBlockId: elseBlock.id))
+
+	// ⭐ **THE ANSWER TRAVELS AS A BLOCK ARGUMENT, on the one edge that can carry it.** Nothing has to re-run
+	// the scan at `done`, and nothing has to park the index in a `.data` word — which a NESTED `awaitAny` (one
+	// green thread selecting while another drives it) would clobber.
+	if carriesTheAnswer 'theSelectHandsItsIndexOn'
+		match exit 'handTheAnswerOn'
+			anyCompleted then block.branchEdges.push(BranchEdge.create(reachedBlock.id, argIds: argsOf(foundIndex)))
+			statusEquals or liveCountZero then break 'handTheAnswerOn'
+		end 'handTheAnswerOn'
+	end 'theSelectHandsItsIndexOn'
+end 'emitDriveExitTest'
+
 // ⭐ `<name>(…)` — THE SHARED COOPERATIVE DRIVE, and the only place a switch is driven. `selfGt` = the
 // running driver (this M's `currentGt`: GT0 for a top-level await/sleep, a nested GT for a nested one). It
 // loops: take a ready GT, publish it, switch into it, and on switch-back RECYCLE its stack ONLY IF it
@@ -3692,29 +3786,10 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// `specs-shv2/await-any.md`'s `no-park-when-one-is-already-complete` is that case, and it is sharp
 	// because with nothing else runnable a test placed after the drive would reach `nothingLeft` and abort.
 	//
-	// ⚠ **AND IT RE-READS THE ARRAY EVERY ITERATION, WHICH IS NOT A MISSED HOIST.** The record belongs to the
-	// caller and a green thread driven by the loop below may `push` to it, so length and buffer are live
-	// state exactly as the queues and the timer store are — this loop is phi-free because each iteration
-	// reloads what it reads.
-	var foundIndex = 0 as ValueId
-	match exit 'scanBeforeTheExitTest'
-		anyCompleted then foundIndex = emitAnyCompletedIndex(module, block: loopHdr, record: promiseArray, ids: ids)
-		statusEquals or liveCountZero then break 'scanBeforeTheExitTest'
-	end 'scanBeforeTheExitTest'
-
-	let reached = match exit 'reachedBy'
-		statusEquals gives emitCmp(module, block: loopHdr, a: emitLoadField(module, block: loopHdr, record: targetGt, offset: GtOffStatus, ids: ids), b: targetStatus, pred: StdCmpPred.eq, ids: ids)
-		anyCompleted gives emitCmp(module, block: loopHdr, a: foundIndex, b: emitConst(module, block: loopHdr, value: NoCompletedPromise, ids: ids), pred: StdCmpPred.ne, ids: ids)
-		liveCountZero gives emitCmp(module, block: loopHdr, a: emitLoadGlobalWord(module, block: loopHdr, label: GtLiveCountLabel, ids: ids), b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	end 'reachedBy'
-	module.setTerminator(loopHdr, op: StdOp.condBranch(reached, thenBlockId: doneBlock.id, elseBlockId: drive.id))
-	// ⭐ **THE ANSWER TRAVELS TO `done` AS A BLOCK ARGUMENT, on the one edge that can carry it.** Nothing has
-	// to re-run the scan there, and nothing has to park the index in a `.data` word — which a NESTED
-	// `awaitAny` (one green thread selecting while another drives it) would clobber.
-	match exit 'handTheAnswerToDone'
-		anyCompleted then loopHdr.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(foundIndex)))
-		statusEquals or liveCountZero then break 'handTheAnswerToDone'
-	end 'handTheAnswerToDone'
+	// The test itself is `emitDriveExitTest`, which terminates this block and which the netpoll's
+	// `driverParkRecheck` asks a second time — see there for why a second asking is required rather than
+	// merely cheap.
+	emitDriveExitTest(module, block: loopHdr, exit: exit, ids: ids, targetGt: targetGt, targetStatus: targetStatus, promiseArray: promiseArray, zeroConst: zeroConst, reachedBlock: doneBlock, elseBlock: drive, carriesTheAnswer: true)
 
 	// ⭐⭐ **WHAT THIS DRIVER RUNS NEXT IS TWO QUESTIONS, AND THE ORDER BETWEEN THEM IS THE POLICY (SV1).**
 	// FIRST this green thread's own coroutine queue (`__gt_coro_next`), because a coroutine can be run by
@@ -3886,15 +3961,94 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// ⭐⭐ **ONE READING IS NOT A DEADLOCK — the corroboration term (A1).** `SchedRuntime.POffQuietPolls`
 	// carries why a census this runtime cannot take under a lock has to be confirmed rather than believed,
 	// and why erring LATE is the only acceptable direction: a false 92 kills a program that was working.
+	// ⛔⛔⛔ **THE NOT-PROVED EDGE KEEPS THE PLAIN SLEEP, AND THAT IS W219's ONE DELIBERATE NON-CONVERSION.**
+	// `SchedRuntime.DeadlockConfirmPolls` ends *"a poll is not a millisecond … re-bisect it if the poll
+	// changes"*, and its 16 was bisected against `Sleep(1)`'s real ~35 ms tick. An interruptible wait here
+	// would let any `SetEvent` for this P — including the stray ones `POffWakeEvent` records as harmless —
+	// return in microseconds, so sixteen CONSECUTIVE quiet polls could elapse in no time at all and
+	// `RuntimeAbort.schedulerDeadlock` would start firing on live programs. That constant's own table calls
+	// that the unacceptable direction: *"a late abort costs a third of a second, and an early one kills a
+	// correct program."*
+	//
+	// ⭐⭐ **AND THE CONVERSION WOULD BUY NOTHING HERE, WHICH IS WHY THIS IS A REASON RATHER THAN A
+	// COMPROMISE.** This edge is reached only when `__sched_any_executing` has just answered ZERO — no M is
+	// running anything — on an arm that is itself reached only when there is no timer, no parked child and no
+	// read in flight ANYWHERE (all three stores are global). Nothing can complete a promise, because
+	// completing one takes an M that is executing; nothing can publish a green thread, for the same reason;
+	// and no timer or child can fire because none exists. ⇒ **there is no party that could signal us**, so an
+	// interruptible wait would be waiting on a signal that cannot arrive, at the price of the one window that
+	// stands between a working program and exit 92.
+	//
+	// ⚠ `someoneRunning`'s edge is the opposite case and takes the park: another M IS executing, so it is
+	// exactly the party that may answer this driver's promise.
+	var confirmWait = module.addBlock(func, label: b"confirmwait")
 	let proved = emitSchedConfirmQuiet(module, cur: confirmQuiet, p: driverProc, ids: ids)
-	module.setTerminator(confirmQuiet, op: StdOp.condBranch(proved, thenBlockId: nothingLeft.id, elseBlockId: awaitOtherM.id))
+	module.setTerminator(confirmQuiet, op: StdOp.condBranch(proved, thenBlockId: nothingLeft.id, elseBlockId: confirmWait.id))
+	module.appendOp(confirmWait, op: StdOp.osSleepMs(emitConst(module, block: confirmWait, value: OtherWorkerPollMs, ids: ids)))
+	module.setTerminator(confirmWait, op: StdOp.branch(loopHdr.id))
 	match exit 'nothingLeftMeans'
 		statusEquals or anyCompleted then emitRuntimeAbort(module, func: func, block: nothingLeft, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
 		liveCountZero then module.setTerminator(nothingLeft, op: StdOp.branch(doneBlock.id))
 	end 'nothingLeftMeans'
+	// ⭐⭐⭐ **THE DRIVER'S TWO BLIND WAITS, AS ONE INTERRUPTIBLE PARK (W219).** `awaitOtherM` and `sleepwait`
+	// are the two arms where this driver has nothing to run and nothing to WAIT ON — no parked child, no read
+	// in flight, only a party on another M that may answer its promise. Both used to be a plain `osSleepMs`,
+	// which waits on no object and therefore cannot be ended early; both are now the same four blocks, and
+	// they differ ONLY in the timeout, which arrives as a block argument.
+	//
+	//   • `awaitOtherM` — no timer at all, another M executing. Its `OtherWorkerPollMs` was a POLL INTERVAL
+	//     and is now a bound on how long a missed signal can cost.
+	//   • `sleepwait` — a timer deadline. Its delta was the whole wait and is now the timeout.
+	//
+	// ⛔ **WRITING THEM AS TWO PARKS WOULD BE THE DEKKER PAIR IMPLEMENTED TWICE**, in the file whose own
+	// header calls a lost wakeup *"the one failure the Dekker pair exists to prevent"* — and the two copies
+	// would sit forty lines apart with nothing making them agree.
+	//
+	// ⚠ **AND THE MEASUREMENT SAYS BOTH ARMS ARE LIVE.** With only `sleepwait` converted, the reproducer
+	// still read **3 of 60 runs late at `MAXON_MAX_PROCS=16`, every one of them at exactly 15 ms** — which is
+	// `Sleep(1)`'s real granularity on Windows, i.e. `awaitOtherM`. One arm fixed is one arm's latency.
+	var driverPark = module.addBlock(func, label: b"driverpark")
+	var driverParkRecheck = module.addBlock(func, label: b"driverparkrecheck")
+	var driverParkWait = module.addBlock(func, label: b"driverparkwait")
+	var driverParkDisarm = module.addBlock(func, label: b"driverparkdisarm")
+	let parkTimeoutMs = ids.mint()
+	driverPark.blockArgs.push(IrBlockArg.create(parkTimeoutMs, argType: StdType.i64))
+
 	let pollMs = emitConst(module, block: awaitOtherM, value: OtherWorkerPollMs, ids: ids)
-	module.appendOp(awaitOtherM, op: StdOp.osSleepMs(pollMs))
-	module.setTerminator(awaitOtherM, op: StdOp.branch(loopHdr.id))
+	module.setTerminator(awaitOtherM, op: StdOp.branch(driverPark.id))
+	awaitOtherM.branchEdges.push(BranchEdge.create(driverPark.id, argIds: argsOf(pollMs)))
+
+	// driverPark: publish this driver on its own P, so a completer can find it. See
+	// `SchedRuntime.POffParkedDriverOwner` for what the slot means, why it is NOT `POffIdleFlag`, and why the
+	// completer compares the owner rather than following it.
+	emitSchedArmParkedDriver(module, block: driverPark, p: driverProc, owner: owner, ids: ids)
+	module.setTerminator(driverPark, op: StdOp.branch(driverParkRecheck.id))
+
+	// driverParkRecheck: the Dekker pair's second half. The arm's `lock xadd` on `__sched_parked_drivers` is
+	// the StoreLoad barrier, so a completer that answered a promise before this test either published its
+	// answer where this test sees it, or read a gate this driver had already raised — and in that second case
+	// its `SetEvent` is already pending on an AUTO-RESET event, which the wait below takes at once. Without
+	// this re-test both can miss, which is the lost wakeup the whole pair exists to prevent.
+	//
+	// ⚠ **IT ASKS ONLY THE EXIT CONDITION, NOT "IS THERE WORK?".** This driver is not published as an idle M
+	// — `POffParkedDriverOwner` carries why it must not be — so no publisher reads it and no publisher signals
+	// it. A green thread queued during this wait is picked up when the timeout expires, exactly as it was
+	// before this rung; what changed is the condition the loop is actually waiting on.
+	emitDriveExitTest(module, block: driverParkRecheck, exit: exit, ids: ids, targetGt: targetGt, targetStatus: targetStatus, promiseArray: promiseArray, zeroConst: zeroConst, reachedBlock: driverParkDisarm, elseBlock: driverParkWait, carriesTheAnswer: false)
+
+	// driverParkWait: the wait itself — this P's own auto-reset event, with the caller's interval as the
+	// TIMEOUT. The result is unread for `buildSchedWorkerLoop`'s reason: signalled and timed-out lead to the
+	// same re-check, and which of them happened is a question the loop top answers better than a return code.
+	let parkEvent = emitLoadField(module, block: driverParkWait, record: driverProc, offset: POffWakeEvent, ids: ids)
+	let parkWaitResult = ids.mint()
+	module.appendOp(driverParkWait, op: StdOp.osWaitHandle(parkWaitResult, handleId: parkEvent, timeoutMsId: parkTimeoutMs))
+	module.setTerminator(driverParkWait, op: StdOp.branch(driverParkDisarm.id))
+
+	// driverParkDisarm: EVERY road out of the park passes through here, including the re-test that never
+	// waited — a slot left published on a driver that has gone back to running is a `SetEvent` delivered to
+	// nobody on every later completion, and a gate count that never comes down.
+	emitSchedDisarmParkedDriver(module, block: driverParkDisarm, p: driverProc, ids: ids)
+	module.setTerminator(driverParkDisarm, op: StdOp.branch(loopHdr.id))
 
 	// timerDecide: if the earliest deadline has passed → firenow, else → sleepwait.
 	//
@@ -3914,7 +4068,28 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.appendOp(firenow, op: StdOp.call(checkResult, callee: GtTimerCheckName, args: argsOf(now)))
 	module.setTerminator(firenow, op: StdOp.branch(loopHdr.id))
 
-	// sleepwait: pc == 0, earliest > now → plain Sleep on the timer delta, then re-check from the LOOP TOP.
+	// sleepwait: pc == 0, earliest > now → the shared driver park above, with the timer delta as its TIMEOUT,
+	// then re-check from the LOOP TOP.
+	//
+	// ⛔⛔⛔ **IT WAS `osSleepMs(delta)` UNTIL W219, AND THAT WAS A WRONG ANSWER, NOT A SLOW ONE.** A plain
+	// `Sleep` waits on NO OBJECT: nothing can end it early, so a driver that found nothing runnable with a
+	// deadline out at the sleeping handler's delay did not observe a promise ANOTHER M answered until that
+	// whole delay had elapsed — and by then its own deadline had fired too, so `__gt_any_completed` scanned an
+	// array in which BOTH promises read `completed` and answered the one that finished SECOND.
+	// **`maxon-shv2/track0/README.md` owns the measurement**, on `awaitany-index-torture.maxon`; it is quoted
+	// nowhere else, because five copies of one reading is how two of them come to disagree.
+	//
+	// ⛔ **THE CURE IS NOT A SHORTER SLEEP.** Capping the delta at the poll granularity turns this into a 1 ms
+	// busy-poll and reads clean, which is the shape this scheduler's measured cost is dominated by — the
+	// wakeup traffic `__sched_nmspinning` exists to remove. What the arm needed was a WAITABLE OBJECT with the
+	// deadline as its TIMEOUT, and this P already owns exactly one.
+	//
+	// ⚠ **THREE ARMS WAITED ON NOTHING AND ALL THREE NOW SHARE `driverPark`** — this one, `awaitOtherM`, and
+	// `emitProcWait`'s `shareWait` (the loser of the `__gt_proc_poller` claim, which had precisely this
+	// defect one store over). The netpoll's remaining blocking waits are NOT of this class and are unchanged:
+	// `haveProcs`' child wait and the IO wait each block on a real object and are ended by the very source
+	// they are waiting for. ⛔ `confirmWait` is the one arm that waits on nothing BY DESIGN — see its own
+	// block for why converting it would trade a latency win for spurious exit 92s.
 	//
 	// ⛔⛔ **IT USED TO BRANCH STRAIGHT BACK TO `netpoll`, AND THAT WAS A MULTI-M WRONG ANSWER (A1).** The
 	// note here read *"no GT is enqueued yet, so re-entering netpoll cannot reach `nothingLeft` — the timer is
@@ -3934,9 +4109,12 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// the deferred slots are drained and both work sources are consulted. The three proc/IO waits already did,
 	// each for a version of this reason (*"a just-woken GT sits in the run queue, and netpoll would read the
 	// now-empty stores as a false deadlock"*); this was the one arm that did not, and it had the same reason.
+	//
+	// The delta is computed from the same `now`/`earliest` reading `timerDecide` chose this arm on, so the
+	// wait cannot outlast a deadline that was already due when it was measured.
 	let sleepMs = emitCeilMs(module, block: sleepwait, ids: ids, earliest: earliest, now: now)
-	module.appendOp(sleepwait, op: StdOp.osSleepMs(sleepMs))
-	module.setTerminator(sleepwait, op: StdOp.branch(loopHdr.id))
+	module.setTerminator(sleepwait, op: StdOp.branch(driverPark.id))
+	sleepwait.branchEdges.push(BranchEdge.create(driverPark.id, argIds: argsOf(sleepMs)))
 
 	// haveProcs (pc >= 1): block on the children. No timer bounds the wait → INFINITE; else bound it by the timer.
 	// ⭐ A parked child IS a wakeup source, so this M is not quiesced however long the wait runs (A1).
@@ -3950,7 +4128,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// just-woken GT sits in the run queue, and netpoll would read the now-empty stores as a false deadlock).
 	let infiniteConst = ids.mint()
 	module.appendOp(procInfinite, op: StdOp.const(infiniteConst, value: WaitInfinite, valueType: StdType.i64))
-	emitProcWait(module, func: func, cur: procInfinite, ids: ids, timeoutMs: infiniteConst, cont: loopHdr)
+	emitProcWait(module, func: func, cur: procInfinite, ids: ids, timeoutMs: infiniteConst, cont: loopHdr, sharePark: driverPark)
 
 	// procTimerDecide: a timer exists. If it is ALREADY due, fire it first (firenow) without blocking; else block
 	// on the children bounded by the timer delta.
@@ -3966,7 +4144,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// below it in the same block.
 	var procTimersAfter = module.addBlock(func, label: b"proctimersafter")
 	let boundedMs = emitCeilMs(module, block: procWaitBounded, ids: ids, earliest: earliest, now: now)
-	emitProcWait(module, func: func, cur: procWaitBounded, ids: ids, timeoutMs: boundedMs, cont: procTimersAfter)
+	emitProcWait(module, func: func, cur: procWaitBounded, ids: ids, timeoutMs: boundedMs, cont: procTimersAfter, sharePark: driverPark)
 	let nowAfter = ids.mint()
 	module.appendOp(procTimersAfter, op: StdOp.call(nowAfter, callee: GtNowNsName, args: ValueIdArray.create()))
 	let timerCheckResult = ids.mint()
@@ -4929,7 +5107,7 @@ function buildGtRunnerDone(module StdModule)
 	var freeStack = module.addBlock(func, label: b"runnerfreestack")
 	var arrive = module.addBlock(func, label: b"runnerarrive")
 	var reclaim = module.addBlock(func, label: b"runnerreclaim")
-	let doneBlock = module.addBlock(func, label: b"runnerdone")
+	var doneBlock = module.addBlock(func, label: b"runnerdone")
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
@@ -4948,6 +5126,10 @@ function buildGtRunnerDone(module StdModule)
 	let stackBase = emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids)
 	let stackZero = emitConst(module, block: entry, value: 0, ids: ids)
 	let noStack = emitCmp(module, block: entry, a: stackBase, b: stackZero, pred: StdCmpPred.eq, ids: ids)
+	// ⚠ Read HERE, in the block that dominates everything, because the teardown arrival below may hand the
+	// struct to `__gt_reclaim` — see the wake at `runnerdone` for what it is for and why the pointer is safe
+	// to carry past the reclaim.
+	let owner = emitLoadField(module, block: entry, record: gt, offset: GtOffOwner, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(noStack, thenBlockId: arrive.id, elseBlockId: freeStack.id))
 
 	let stackSize = emitLoadField(module, block: freeStack, record: gt, offset: GtOffStackSize, ids: ids)
@@ -4959,6 +5141,35 @@ function buildGtRunnerDone(module StdModule)
 
 	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtReclaimName, args: argsOf(gt)))
 	module.setTerminator(reclaim, op: StdOp.branch(doneBlock.id))
+
+	// ⭐⭐⭐ **TELL A PARKED DRIVER THAT SOMETHING IT MIGHT BE WAITING FOR HAS FINISHED (W219).** This is the
+	// ONE door every finished green thread and every answered service reply passes through, on the M that
+	// finished it and exactly once — `__gt_cell_complete` calls it the instant it has written a reply's
+	// `completed`, and `emitGtRunOne`'s hand-off calls it when a thread's body returns. A driver blocked in
+	// `__gt_drive_until`'s netpoll re-tests its exit condition on the way round, so one signal is the whole of
+	// what it needs.
+	//
+	// ⛔⛔ **`owner` IS READ IN `entry` AND USED HERE, AND THAT IS NOT A MISSED SINK.** The arrival above may
+	// hand this struct to `__gt_reclaim`, after which every field of it is the allocator's — so the pointer
+	// has to be taken while the struct is provably live. It is passed as a VALUE and never dereferenced (see
+	// `SchedRuntime.POffParkedDriverOwner`), so a green thread that has itself been reclaimed since costs a
+	// spurious `SetEvent` at worst.
+	//
+	// ⚠ **THE STORELOAD BARRIER THE WAKE NEEDS IS `emitGtTeardownArrive`'s `lock xadd`, THREE LINES UP.** The
+	// caller's *"status = completed"* store must be visible before `__sched_wake_parked_drivers` reads the
+	// parked-driver gate, or the pair can both miss — the completer reading a stale 0 and skipping the signal
+	// while the driver reads a stale status and blocks. That arrival is unconditional on every road here, so
+	// the barrier is too. `SchedRuntime.SchedParkedDriversLabel` states the pair from the other end.
+	//
+	// ⚠ **A GREEN THREAD's `owner` IS ITSELF**, so this walk finds nothing when one finishes. That is right
+	// for the AWAIT drivers — an `async` frame is a coroutine of its own owner and is run by that owner's
+	// driver chain, and a `spawn` produces a SERVICE that nothing awaits — and it is a deliberate gap for the
+	// third: `__gt_drain_exit` waits on `__gt_live_count` reaching zero, which a worker finishing a green
+	// thread decrements, and no owner relation connects the two. **That drain is therefore still bounded by
+	// its park's timeout rather than woken**, exactly as it was before this rung. It is the reply CELLS that
+	// this walk is for, and a cell's owner is the green thread whose driver is doing the awaiting
+	// (`__gt_cell_alloc` copies it off the sender).
+	module.appendOp(doneBlock, op: StdOp.call(ids.mint(), callee: SchedWakeParkedDriversName, args: argsOf(owner)))
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)

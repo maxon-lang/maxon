@@ -1,0 +1,174 @@
+// Track-0 AWAIT-ANY INDEX torture — the standing instrument for the driver's
+// UNINTERRUPTIBLE timed wait.
+//
+// ⭐⭐⭐ WHAT IT MEASURES, AND WHY IT IS AN EXIT CODE AND NOT A PRINT. The
+// program is `specs-shv2/await-any.md`'s `over-service-replies` run in a loop
+// with the SELECT LATENCY encoded in the exit status. Two services are sent to
+// in each round: `Slow` sleeps and `Quick` answers at once, so
+// `__Builtins.awaitAny` must come back with index 1 within a millisecond. A
+// driver whose netpoll `sleepwait` arm is a plain `Sleep` on the timer delta
+// comes back with the SLEEP's duration instead — and, because both replies are
+// then complete, with index 0.
+//
+// ⛔⛔ `print`-BASED INSTRUMENTATION MAKES THIS BUG VANISH, MEASURED: a build
+// that printed each round's latency read 150/150 clean while the same tree read
+// 13/160 through the exit code. A `print` is a syscall on the driver's own M
+// and it perturbs exactly the window this program is about. ⇒ NOTHING here
+// prints. The whole reading is the exit status, and `awaitany-index-race.sh`
+// is what tabulates it.
+//
+//   exit 150 + min(worstMs, 99)    the worst SELECT LATENCY in ms — so a clean
+//                                  run is 150-152 and a driver that slept through
+//                                  the reply is ~175. Capped at 249.
+//   exit 250                       a round answered the WRONG INDEX (see below)
+//   exit 60                        a reply decoded wrong — the program itself is
+//                                  broken, not the scheduler
+//
+// ⛔ THE CAP IS 99 AND NOT 100, AND THAT IS THE WHOLE REASON THE TWO VERDICTS ARE
+// DISTINGUISHABLE. An earlier cut billed a wrong-index round a 100 ms "latency"
+// and capped latency at 100, so 250 meant *either* a wrong index *or* a round that
+// merely took 100 ms or more — while this file and the driver script both asserted
+// it meant the first. One code, two meanings, three places claiming one.
+//
+// ⭐ THE WRONG INDEX IS THE SHARPER HALF OF THE SAME DEFECT, and it is why this
+// program is named for the index rather than for the latency. When the driver
+// sleeps the whole timer delta, `Slow`'s deadline fires during that sleep, so by
+// the time the exit test runs BOTH replies are complete — and the scan answers
+// the FIRST completed slot it finds, which is slot 0. So a late select does not
+// merely arrive late: it returns the promise that finished SECOND. It is tracked
+// as its own flag rather than as a large latency, so it gets its own exit code
+// and cannot be confused with a slow but CORRECT answer.
+//
+// ⚠ IT IS A RACE AND A SINGLE RUN PROVES NOTHING. The window is main's driver
+// reaching the netpoll's timer park — nothing runnable, `Slow`'s timer pending —
+// BEFORE `Quick`'s reply lands, which needs worker Ms to have taken both handlers
+// off main. So the failure rate rises with `MAXON_MAX_PROCS` and is ~0 at 1,
+// which is why the driver script gates on 16.
+//
+// ⭐ THE NUMBERS LIVE IN `maxon-shv2/track0/README.md` ("W219's READINGS"), and
+// in exactly one place. This header states what the program DOES; a reading
+// copied into it is a reading that will disagree with its original.
+
+typealias Integer = int(i64.min to i64.max)
+typealias RoundTally = int(0 to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+// ⭐ ROUNDS × `slowSleepMs` IS THE RUN LENGTH, and each round is one chance at
+// the race. 16 × 25 ms ≈ 400 ms per process, which keeps a 500-run bar under
+// four minutes while giving the window sixteen tries per process.
+let rounds = 16
+
+// ⚠ SHORT ENOUGH THAT A RUN IS CHEAP, LONG ENOUGH THAT A LOST WAKEUP IS
+// UNMISTAKABLE. Windows' `Sleep` granularity is ~15.6 ms, so a delta of 25 ms
+// cannot be confused with scheduler jitter, and the clean answer (0-1 ms) is two
+// orders of magnitude below it.
+let slowSleepMs = 25
+
+// ⚠ THE PASS/FAIL THRESHOLD IS THE DRIVER SCRIPT'S AND NOT THIS PROGRAM'S. A
+// clean select is 0-1 ms and a lost wakeup is `slowSleepMs`, two orders apart,
+// so the program reports the NUMBER and `awaitany-index-race.sh` decides where
+// the line is — one place, and it is the place that also holds the run count.
+//
+// The latency verdict is `exitBase + min(worstMs, worstCap)`, which leaves
+// 150-249 — clear of 101 (the runtime's leak gate), 139 (a segfault), 92 (the
+// scheduler deadlock abort) and 75 (the green-thread leak report).
+let exitBase = 150
+let worstCap = 99
+
+// The WRONG INDEX gets the one code the latency scale cannot reach, so the two
+// verdicts are never the same number. See the header.
+let wrongIndexExit = 250
+
+// The program's own consistency failure — `Slow` replies 1 and `Quick` replies
+// 2, so every round's drain must total 3 whatever order they arrived in.
+let decodeFailureExit = 60
+let repliedSum = 3
+
+let nanosPerMilli = 1000000
+
+type Slow
+	var replies as RoundTally
+
+	static function create() returns Self
+		return Self{replies: 0}
+	end 'create'
+
+	// The sleep is what puts a TIMER in the store, which is the only reason
+	// main's driver reaches the netpoll arm this program is about.
+	export function value(ms Integer) returns Integer
+		self.replies = self.replies + 1
+		sleep(ms)
+		return 1
+	end 'value'
+end 'Slow'
+
+type Quick
+	var replies as RoundTally
+
+	static function create() returns Self
+		return Self{replies: 0}
+	end 'create'
+
+	// Answers without yielding, so its reply cell is completed on whatever M
+	// picked the handler up — which for `MAXON_MAX_PROCS > 1` is a DIFFERENT M
+	// from the one main's driver is blocked on.
+	export function value() returns Integer
+		self.replies = self.replies + 1
+		return 2
+	end 'value'
+end 'Quick'
+
+function main() returns ExitCode
+	// Spawned ONCE and re-sent to every round: a fresh pair per round would
+	// measure `__svc_spawn` as much as the select.
+	let slow = spawn Slow.create()
+	let quick = spawn Quick.create()
+
+	var worstMs = 0
+	var sawWrongIndex = false
+	var r = 0
+
+	while r < rounds 'eachRound'
+		var ps = ReplyPromiseArray.create()
+		ps.push(slow.value(slowSleepMs))
+		ps.push(quick.value())
+
+		let started = Clock.nowNanos()
+		let ready = __Builtins.awaitAny(ps)
+		let waitedMs = Clock.elapsedNanos(started) / nanosPerMilli
+
+		// The two verdicts are tracked SEPARATELY — see the header for the exit
+		// code that conflated them and what it cost.
+		if ready != 1 'thelosingreplywon'
+			sawWrongIndex = true
+		end 'thelosingreplywon'
+
+		if waitedMs > worstMs 'aworseround'
+			worstMs = waitedMs
+		end 'aworseround'
+
+		// ⚠ BOTH REPLIES ARE DRAINED. `awaitAny` retires nothing, so the loser is
+		// still in the array and still owned — dropping it un-awaited is the exit
+		// gate's 75, which would mask this program's own reading.
+		var sum = 0
+
+		for p in ps 'drainboth'
+			sum = sum + (try await p otherwise 0)
+		end 'drainboth'
+
+		if sum != repliedSum 'arepliedwrong'
+			return decodeFailureExit as ExitCode
+		end 'arepliedwrong'
+
+		r = r + 1
+	end 'eachRound'
+
+	if sawWrongIndex 'thescananswereddthelosingslot'
+		return wrongIndexExit as ExitCode
+	end 'thescananswereddthelosingslot'
+
+	let capped = worstCap if worstMs > worstCap else worstMs
+
+	return (exitBase + capped) as ExitCode
+end 'main'
