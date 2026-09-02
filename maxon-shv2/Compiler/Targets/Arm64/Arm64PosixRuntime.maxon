@@ -215,16 +215,33 @@ export let PosixEnvUnset = 0
 // `FUTEX_WAIT` here). One conversion, because two of them lowering the same millisecond count differently is
 // a wait that runs for a thousandth of its timeout.
 //
+// ⛔⛔⛔ **IT READS `ms` EXACTLY ONCE, IN ITS FIRST INSTRUCTION, AND EVERY LATER INSTRUCTION READS THE COPY —
+// BECAUSE `ms` IS ONE OF THE REGISTERS IT CLOBBERS AT HALF ITS CALL SITES.** The conversion used to open
+// `mov x1, #1000` and then read `ms` twice (the `udiv`'s dividend and the `msub`'s minuend), which is
+// correct for a caller that passes x0 and a WRONG ANSWER for one that passes x1: the divisor overwrote the
+// timeout, so `udiv x2, x1, x1` answered 1 second and `msub x3, x2, x1, x1` answered 0 nanoseconds, and
+// **every bounded wait on both POSIX lanes ran for exactly 1.000 s whatever it asked for**. MEASURED on
+// arm64-macOS: `sleep(10)` took 1.01 s, and `async-sleep.interleave` returned 12 rather than 21 because a
+// driver that slept through the 10 ms deadline found BOTH timers due on one pass and fired them in
+// insertion order. `mrt_host_wait_one`'s timed arm passes x1 on Darwin AND on Linux; `mrt_host_sleep_ms`
+// passes x0 on both, which is why the OS-thread park was right and only the event wait was wrong.
+//
+// ⇒ **The cure is the COPY, not a rule about which register a caller may use.** A convention that says
+// *"pass ms in x0"* is a fact written down at four call sites and checked at none; taking an owned copy
+// first makes the clobber list below true for ANY input register, including one this function writes.
+// (`mov x2, x2` when a caller does pass x2 is a self-move the encoder emits and the CPU discards.)
+//
 // ⚠ It CLOBBERS x1..x4. Every caller places its own arguments after it, never before.
 export function arm64PosixMillisToTimespec(asm Arm64RuntimeAsm, ms Arm64Register, secSlot StackSize, nsecSlot StackSize)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: ms)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixMillisPerSecond)
-	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x2, lhs: ms, rhs: Arm64Register.x1)
-	arm64EmitMsub(asm.code, rd: arm64RuntimeReg(Arm64Register.x3), rn: arm64RuntimeReg(Arm64Register.x2), rm: arm64RuntimeReg(Arm64Register.x1), ra: arm64RuntimeReg(ms))
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x3, lhs: Arm64Register.x2, rhs: Arm64Register.x1)
+	arm64EmitMsub(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), rn: arm64RuntimeReg(Arm64Register.x3), rm: arm64RuntimeReg(Arm64Register.x1), ra: arm64RuntimeReg(Arm64Register.x2))
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: PosixNanosPerMilli)
-	arm64EmitRuntimeRrr(asm, opcode: Arm64OpMul, dest: Arm64Register.x3, lhs: Arm64Register.x3, rhs: Arm64Register.x4)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpMul, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x4)
 
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: secSlot)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: nsecSlot)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: secSlot)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: nsecSlot)
 end 'arm64PosixMillisToTimespec'
 
 let PosixMillisPerSecond = 1000
