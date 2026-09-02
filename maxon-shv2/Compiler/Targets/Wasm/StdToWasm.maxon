@@ -721,6 +721,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		tlsAlloc to osEnterBackgroundPriority then break 'k'
 		osFileOpenWriteExecutable then break 'k'
 		osEnvBlock to osEnvBlockFree then break 'k'
+		loadAcquire or storeRelease then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1235,6 +1236,10 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		globalAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		loadIndirect(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		storeIndirect then break 'def'
+		// G3: the ordered pair reads and writes exactly what its plain twin does, so the result local has
+		// the same valtype and the store defines none.
+		loadAcquire(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
+		storeRelease then break 'def'
 		osAllocPages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		// W35: a stream write defines the BYTE COUNT — an i64 like every other Std-tier integer, so the
 		// emitter widens the i32 length it wrote back to the machine width (see `emitOsWriteStream`).
@@ -1571,6 +1576,7 @@ type WasmFuncEmitter
 			tlsAlloc to osEnterBackgroundPriority then panic("emitStraightLineTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
 			osFileOpenWriteExecutable then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 			osEnvBlock to osEnvBlockFree then panic("emitStraightLineTerminator: an environment-block read or release is a body op, never a terminator")
+			loadAcquire or storeRelease then panic("emitStraightLineTerminator: an ordered load or store is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1663,6 +1669,7 @@ type WasmFuncEmitter
 			tlsAlloc to osEnterBackgroundPriority then panic("emitDispatcherTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
 			osFileOpenWriteExecutable then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 			osEnvBlock to osEnvBlockFree then panic("emitDispatcherTerminator: an environment-block read or release is a body op, never a terminator")
+			loadAcquire or storeRelease then panic("emitDispatcherTerminator: an ordered load or store is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1692,6 +1699,22 @@ type WasmFuncEmitter
 			globalAddr(resultId, label) then self.emitGlobalAddr(resultId, label: label)
 			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
 			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
+			// ⭐⭐ **G3 — THE ORDERED PAIR IS THE PLAIN PAIR ON THIS LANE, AND THE ARGUMENT IS THE COMPONENT
+			// MODEL RATHER THAN THE INSTRUCTION SET.** A release/acquire orders one thread's writes against
+			// ANOTHER THREAD's reads, and a WASI Preview2 component has exactly one thread: shv2 emits no
+			// `thread.spawn`, declares no `shared` memory, and imports nothing that starts a thread — the
+			// atomics the threads proposal defines are not even in the emitted feature set. With no second
+			// observer there is nothing to order against, which is the identical argument `StdOp.atomicCas`
+			// already makes on this lane for the CAS it lowers to a plain load/compare/store.
+			//
+			// ⛔ **AND IT LAPSES THE DAY THE LANE GROWS A SECOND THREAD, NOT THE DAY IT GROWS ATOMICS.** The
+			// replacement is exact and already specified — `i64.atomic.load` / `i64.atomic.store`, whose
+			// sequentially-consistent ordering subsumes acquire/release — so this arm becomes two opcodes,
+			// not a redesign. What would be a silent wrong answer is a `thread.spawn` landing while this arm
+			// still reads as "wasm needs no barrier"; the condition is a SECOND THREAD, stated here so the
+			// next reader tests the right thing.
+			loadAcquire(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
+			storeRelease(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
 			osAllocPages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
 			osWriteStdout(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput)
 			rdataAddr(resultId, label) then self.emitRdataAddr(resultId, label: label)
@@ -3199,6 +3222,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		tlsAlloc to osEnterBackgroundPriority then panic("decideDispatcher: a TLS op, an event signal or the priority door is a body op, never a terminator")
 		osFileOpenWriteExecutable then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 		osEnvBlock to osEnvBlockFree then panic("decideDispatcher: an environment-block read or release is a body op, never a terminator")
+		loadAcquire or storeRelease then panic("decideDispatcher: an ordered load or store is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

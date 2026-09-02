@@ -723,6 +723,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// The priority door defines the class `GetPriorityClass` answers in EAX — an integer, so a GPR,
 		// exactly as `osCpuCount` classes `GetActiveProcessorCount`'s.
 		osEnterBackgroundPriority(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// G3: an ordered access classes exactly as its plain twin does — by the type it reads — and the
+		// ordered store defines nothing, exactly as `storeIndirect` defines nothing.
+		loadAcquire(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+		storeRelease then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1094,6 +1098,10 @@ export type ScaledIndexFolds
 			osAllocPages to osEnterBackgroundPriority then break 'mem'
 			osFileOpenWriteExecutable then break 'mem'
 			osEnvBlock to osEnvBlockFree then break 'mem'
+			// G3: the ordered pair addresses a STRUCT FIELD off a plain pointer, never a scaled element
+			// address, so there is nothing for the indexed form to absorb. Declining to fuse is always safe:
+			// the address op then emits its own `lea` and the access reads it.
+			loadAcquire or storeRelease then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 

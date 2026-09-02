@@ -190,6 +190,24 @@ export function arm64EmitStoreWord64At(asm Arm64RuntimeAsm, src Arm64Register, b
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
 end 'arm64EmitStoreWord64At'
 
+// ⭐⭐⭐ **THE STORE-RELEASE TWIN — `add scratch, Xn, #byteOffset` then `stlr Xt, [scratch]` (G3).** A plain
+// `str` announces nothing: on this ISA the stores before it may still be invisible to another core when it
+// lands. `STLR` orders every earlier memory access before itself, which is what a hand-assembled runtime
+// needs at the exact moment it publishes a word another OS thread polls.
+//
+// ⚠ **THE `add` IS NOT AVOIDABLE AND THE SCRATCH IS THE CALLER'S.** `STLR` is a load/store-exclusive-group
+// encoding with no displacement field at all (`TargetOp.arm64LoadAcquire` states why the `FEAT_LRCPC2`
+// offset forms are not used), so the field address has to exist in a register first. The scratch is a
+// PARAMETER rather than a fixed x16 for `arm64EmitStoreWord64Unaligned`'s reason: a hand-assembled chunk
+// knows which of its own registers is dead and the helper cannot.
+//
+// ⚠ It is the SAME encoder the isel uses (`arm64EmitOrderedAccess`), so a change to the instruction reaches
+// the compiled and the hand-assembled publication together.
+export function arm64EmitStoreReleaseWord64At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset Imm32, scratch Arm64Register)
+	arm64EmitAddRuntimeImm(asm, dest: scratch, base: base, imm: byteOffset)
+	arm64EmitOrderedAccess(asm.code, byteOpcode: Arm64OpStlrB, rt: arm64RuntimeReg(src), rn: arm64RuntimeReg(scratch), width: X64AccessWidth.word64)
+end 'arm64EmitStoreReleaseWord64At'
+
 // ⭐ **THE ADDRESS OF A NUL-TERMINATED `.rdata` CONSTANT IN x0** — the shared half of "hand libSystem, or the
 // panic runtime, a fixed string". The constant rides the SAME immortal, byte-deduped blob channel a String
 // literal's payload takes (`registerStringBlob`), addressed with the mandated ADRP+ADD pair, so no runtime

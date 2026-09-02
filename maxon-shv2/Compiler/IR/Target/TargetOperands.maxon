@@ -509,6 +509,11 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		imulHighReg(src) then pushUse(buf, vreg: src)
 		// `fneg` is a real 2-operand instruction — a PLAIN def beside `arm64Fabs`, for its reason.
 		arm64Fneg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		// G3: `LDAR` is `loadRegBaseDisp`'s operand shape (a PLAIN def off one address use — the
+		// destination may legitimately reuse the base, which dies at the load) and `STLR` is
+		// `storeBaseDispReg`'s (two uses, no def).
+		arm64LoadAcquire(dest, base, _) then pushDefFromUse(buf, dest: dest, src: base)
+		arm64StoreRelease(base, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
 	end 'operands'
 end 'targetOpOperands'
 

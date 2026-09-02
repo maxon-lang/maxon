@@ -1732,6 +1732,40 @@ export union TargetOp
 	// `arm64Fabs` in the arm64 float band, where every `arm64Ret to arm64Fcsel` range arm would have
 	// swallowed it silently. Each of those matches gained an explicit `arm64Fneg` arm instead.
 	arm64Fneg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// --- G3: the ORDERED accesses, arm64's half of `StdOp.storeRelease` / `StdOp.loadAcquire` ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `arm64Fneg`, per the band-append invariant every entry above
+	// states — NOT beside the arm64 memory band, where an `arm64Ret to …` range arm would swallow them.
+	//
+	// `STLR Xt, [Xn]` (0xC89FFC00) and `LDAR Xt, [Xn]` (0xC8DFFC00) — a store-RELEASE and a load-ACQUIRE.
+	// The release orders every earlier memory access before itself; the acquire orders every later one after
+	// itself. Together they are what makes a green thread's `gt.result` / `gt.threw` visible to the second M
+	// that observes `gt.status == completed`.
+	//
+	// ⭐⭐ **THEY ARE PREFERRED OVER `DMB ISH` AND THE DIFFERENCE IS NOT ONLY COST.** A `DMB` is a FULL
+	// barrier — it orders loads against stores in both directions, which is strictly more than a publication
+	// needs and is the expensive half — and it is a SEPARATE instruction, so it can drift away from the
+	// access it was paired with (a later pass splitting the block between them leaves a barrier ordering
+	// nothing). `STLR`/`LDAR` carry the ordering IN the access, so there is no pairing to preserve.
+	//
+	// ⛔ **THERE IS NO OFFSET FIELD, AND THE ISA IS WHY.** Both are in the load/store-exclusive encoding
+	// group, whose only addressing form is the bare base register (`Rs`/`Rt2` are the fixed 0b11111 an
+	// exclusive pair would use). `ARMv8.4`'s `STLUR`/`LDAPUR` do add a 9-bit offset, and are deliberately NOT
+	// used: they are `FEAT_LRCPC2`, present on this host and NOT guaranteed on an arm64-linux box shv2
+	// targets, so the base-only form is the one that runs everywhere. ⇒ `StdToArm64Conversion` folds
+	// `base + offset` into the IP scratch through `lowerAddSubImm`, exactly as `addressFor` already folds an
+	// out-of-band displacement, and this op sees only the finished address.
+	//
+	// ⚠ **THE `width` IS THE ACCESS SIZE FIELD, and its 64-bit form is the only one a producer emits today** —
+	// the green thread's status word is an `i64`. The encoder derives the `size` bits from it rather than
+	// pinning 64, because the field exists in the encoding and a narrower ordered access is one enum value
+	// away rather than a second op.
+	//
+	// Metadata mirrors `loadRegBaseDisp`/`storeBaseDispReg`: `isMemory: true`, the store `isStore: true`, no
+	// implicit register at all (neither instruction touches a scratch — the fold above did that, and its
+	// x16 write is an ordinary `arm64AddImm`), and no flags.
+	arm64LoadAcquire(dest TargetVReg, base TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64StoreRelease(base TargetVReg, src TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

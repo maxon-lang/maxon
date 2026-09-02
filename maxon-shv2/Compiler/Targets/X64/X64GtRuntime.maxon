@@ -243,6 +243,16 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffResult as Imm32, srcReg: X64Register.r8)
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffThrew as Imm32, srcReg: X64Register.r10)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: GtStatusCompleted)
+	// ⭐⭐ **THIS `mov` IS THE PUBLICATION, AND ON x64 IT IS ALREADY A STORE-RELEASE (G3).** An awaiting
+	// driver on another M spins on `gt.status == completed` and then reads the two words stored just above,
+	// so the flag must not become visible before them. x86-64 is TOTAL STORE ORDER — stores are never
+	// reordered with other stores — so an ordinary `mov` gives exactly that, and nothing extra is emitted
+	// here. (`mfence` would order STORE→LOAD, a sequential-consistency obligation this publication does not
+	// have.) The weakly-ordered lanes are where the instruction has to change:
+	// `Arm64GtRuntime.buildArm64GtTrampolineChunk` emits an `STLR` at this exact point and says so.
+	//
+	// ⚠ There is no COMPILER half to worry about either, unlike the Std-tier publication
+	// (`GtRuntime.emitGtPublishCompleted`): these are hand-assembled bytes, so no pass can reorder them.
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffStatus as Imm32, srcReg: X64Register.rax)
 
 	// context_switch(from = gt, to = gt.waiter) — never returns (the GT is completed).

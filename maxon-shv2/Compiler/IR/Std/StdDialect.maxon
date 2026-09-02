@@ -2477,6 +2477,48 @@ export union StdOp
 	// Full call-barrier metadata: both ARE indirect calls once lowered.
 	osEnvBlock(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 	osEnvBlockFree(blockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- The ORDERED memory band (G3) — the one publication a second OS thread reads ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osEnvBlockFree`, per the band-append invariant every
+	// entry above states: a mid-band insert is silently swallowed by a `… to X` range arm. Both carry
+	// `category: memory`, placing them logically beside `loadIndirect`/`storeIndirect` independent of this
+	// tail position.
+	//
+	// ⭐⭐⭐ **`storeRelease` / `loadAcquire` ARE `storeIndirect` / `loadIndirect` PLUS AN ORDERING
+	// OBLIGATION, AND NOTHING ELSE.** Same four fields, same widths, same field displacement. What they add
+	// is the half-barrier a publication needs: **a release store orders every EARLIER memory access before
+	// itself, and an acquire load orders every LATER one after itself.** A writer that publishes with
+	// `storeRelease` and a reader that observes with `loadAcquire` therefore agree on everything the writer
+	// wrote before publishing — which is the entire property `gt.result` / `gt.threw` depend on.
+	//
+	// ⛔⛔ **THEY EXIST BECAUSE `StdOp.atomicCas`'s NEIGHBOURING NOTE PREDICTED THE EXACT SHAPE THAT WOULD
+	// NEED THEM AND IT ARRIVED.** That note licenses no fence for the Treiber stack (*"on arm64 the CAS
+	// publishes with `STLXR`, a store-RELEASE"*) and names the shape to watch for: *"a store-load pair with
+	// no CAS between them"*. A green thread's `completed` publication IS that pair — three plain stores and
+	// a plain load, with no atomic anywhere between them — and it stopped being latent when the scheduler
+	// grew genuinely concurrent worker Ms on two weakly-ordered lanes (`pthread_create` on arm64-macOS,
+	// `clone` on arm64-linux). See `GtRuntime.emitGtStoreStatus` for the publication and its checker.
+	//
+	// ⭐⭐ **AN ORDERED FLAVOUR RATHER THAN A STANDALONE FENCE OP, AND THE REASON IS THE ISA.** A fence would
+	// be `DMB ISH` on arm64 — a FULL barrier ordering every access in both directions — where `STLR`/`LDAR`
+	// order exactly the half each side needs, in one instruction, with no separate op to sit at the wrong
+	// side of a branch. It is also the shape that costs x64 **nothing**: x86-64 is TSO, so an ordinary `mov`
+	// already IS a release store and an acquire load, and both lower to the identical instruction the plain
+	// ops lower to — byte-for-byte the same emitted code, where a fence op would have had to decide between
+	// emitting a needless `mfence` and emitting nothing at all under a name that says otherwise.
+	//
+	// ⚠ **THE FIELD DISPLACEMENT IS KEPT, AND THAT IS WHAT MAKES x64 AND wasm FREE.** `atomicCas`/`atomicRmw`
+	// carry no offset — an atomic names one word — and every caller of theirs computes an address first. Had
+	// these copied that, x64 would have paid an extra `lea`/`add` at every ordered access for an offset its
+	// addressing mode carries anyway. Only arm64 pays: `STLR`/`LDAR` are base-register-only forms with no
+	// offset field at all, so its lowering folds `base + offset` into the IP scratch exactly as
+	// `StdToArm64Conversion.addressFor` already does for an out-of-band displacement.
+	//
+	// Metadata is `loadIndirect`/`storeIndirect`'s, field for field, and for their reasons — `isPure: false`
+	// above all, which is what forbids a pass from moving, duplicating or dropping one. `clobbersFlags:
+	// false` is exact on both lanes: `mov`, `STLR` and `LDAR` write no condition flags.
+	loadAcquire(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	storeRelease(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2783,6 +2825,9 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		div to osEnterBackgroundPriority then operands.recordNeither()
 		osFileOpenWriteExecutable then operands.recordNeither()
 		osEnvBlock to osEnvBlockFree then operands.recordNeither()
+		// The ordered memory band (G3) — memory accesses, so no arithmetic shape, exactly as their plain
+		// twins have none.
+		loadAcquire or storeRelease then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -2871,6 +2916,13 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 		storeIndirect to osEnterBackgroundPriority then load.recordNotALoad()
 		osFileOpenWriteExecutable then load.recordNotALoad()
 		osEnvBlock to osEnvBlockFree then load.recordNotALoad()
+		// ⛔⛔ **AN ACQUIRE LOAD IS `recordNotALoad`, AND THAT IS THE WHOLE POINT OF IT.** This classifier's
+		// one reader is `loopInvariantCodeMotion`, which HOISTS a load whose address the loop does not
+		// write. A green thread's status word is written by another OS THREAD, never by the loop that spins
+		// on it, so the hoist test would answer "invariant" and the drive loop would read one stale word for
+		// ever. That is precisely the reordering `loadAcquire` exists to forbid, so it must not be offered
+		// to the pass as a hoistable load at all. `storeRelease` is not a load in the first place.
+		loadAcquire or storeRelease then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3210,6 +3262,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// The priority door takes NO operands — it asks the OS to change this process and then asks what it
 		// became, exactly as `osCpuCount` asks a question rather than reading a value.
 		osEnterBackgroundPriority then break 'u'
+		// G3: the ordered band reads exactly what its plain twin reads — the address, plus the value a
+		// store writes. Both `resultId`s are DEFS, reported by `stdOpDefinedValue`.
+		loadAcquire(_, addrId, _, _) then referenced.insert(addrId)
+		storeRelease(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -3421,6 +3477,10 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		tlsSlotLoad(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osSetEvent gives DefinedValueLookup.none
 		osEnterBackgroundPriority(resultId) gives DefinedValueLookup.defines(resultId)
+		// G3: the ordered load defines the word it read; the ordered store defines nothing — `loadIndirect`
+		// and `storeIndirect` exactly.
+		loadAcquire(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		storeRelease gives DefinedValueLookup.none
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -3661,6 +3721,10 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		tlsSlotLoad(resultId, tebOffset) gives StdOp.tlsSlotLoad(resultId, tebOffsetId: remappedValue(tebOffset, subst: subst))
 		osSetEvent(handle) gives StdOp.osSetEvent(remappedValue(handle, subst: subst))
 		osEnterBackgroundPriority(resultId) gives StdOp.osEnterBackgroundPriority(resultId)
+		// G3: the exact mirror of `collectStdOpUses`'s two arms — every read is a rewrite, the load's result
+		// id is a DEF carried through unchanged, and neither `offset` nor `valueType` names a value.
+		loadAcquire(resultId, addrId, offset, valueType) gives StdOp.loadAcquire(resultId, addrId: remappedValue(addrId, subst: subst), offset: offset, valueType: valueType)
+		storeRelease(addrId, offset, valueId, valueType) gives StdOp.storeRelease(remappedValue(addrId, subst: subst), offset: offset, valueId: remappedValue(valueId, subst: subst), valueType: valueType)
 	end 'r'
 end 'remapStdOpUses'
 
@@ -3835,6 +3899,10 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		currentThreadToken to osEnterBackgroundPriority then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
 		osFileOpenWriteExecutable then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
 		osEnvBlock to osEnvBlockFree then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+		// G3: cloned like their plain twins — an ordered load defines its result, an ordered store defines
+		// nothing. Inlining copies the op unchanged, which preserves its ordering with it.
+		loadAcquire(resultId, addrId, offset, valueType) then return StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
+		storeRelease then return op
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -4079,6 +4147,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		witnessCall to osEnterBackgroundPriority then break 'term'
 		osFileOpenWriteExecutable then break 'term'
 		osEnvBlock to osEnvBlockFree then break 'term'
+		loadAcquire or storeRelease then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 

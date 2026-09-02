@@ -2195,6 +2195,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// the four one-operand forms this family has.
 		imulHighReg(src) then encodeGrp3Reg(code, ext: Grp3ExtImul, reg: resolveGpr(src))
 		arm64Fneg then panic("emitTargetOp: an arm64 `fneg` reached the x64 encoder — the arm64 backend encodes the arm64 band; x64 spells the flip as `negF64RegReg`")
+		arm64LoadAcquire or arm64StoreRelease then panic("emitTargetOp: an arm64 `LDAR`/`STLR` reached the x64 encoder — x64 is TSO, so `StdToX64Conversion` lowers the ordered pair to the ordinary `mov` forms and never mints these")
 	end 'emit'
 end 'emitTargetOp'
 

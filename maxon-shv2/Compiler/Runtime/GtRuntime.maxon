@@ -2067,6 +2067,11 @@ function ioCompletionShape(target Target) returns IoCompletionShape
 end 'ioCompletionShape'
 
 export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesIocp bool, usesStreaming bool, rawFree ByteArray, target Target)
+	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
+	// the end. Taken from the module rather than assumed to be zero: the runtime installs run after the whole
+	// user program is already lowered into this module.
+	let firstFuncIndex = module.funcCount()
+
 	// The tag records exist only in a traced build; an untraced one registers no rdata and emits no calls.
 	let tags = GtTraceTags.register(globalData) if asyncTrace else GtTraceTags.none()
 
@@ -2168,6 +2173,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// all six functions to `DeadFunctionElimination`, whose only edge into them is the `funcAddr`/`call` pair
 	// `LowerMaxonToStd.lowerServiceSpawn` emits.
 	installMailboxRuntime(module)
+
+	assertCompletedPublicationIsOrdered(module, firstFuncIndex: firstFuncIndex)
 end 'installGtRuntime'
 
 // ⚠⚠ **THE RUN-QUEUE LOCK IS UNCONDITIONAL AS OF G1, AND IT WAS GATED ON `usesIocp` BY A PREMISE THAT HAS
@@ -3559,8 +3566,9 @@ function buildGtAnyCompleted(module StdModule)
 	let emptySlot = emitCmp(module, block: scanBody, a: gt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(scanBody, op: StdOp.condBranch(emptySlot, thenBlockId: advance.id, elseBlockId: checkStatus.id))
 
-	// checkStatus: the one word this whole primitive turns on.
-	let status = emitLoadField(module, block: checkStatus, record: gt, offset: GtOffStatus, ids: ids)
+	// checkStatus: the one word this whole primitive turns on. ACQUIRE — the thread that completed it may
+	// be on another M (`emitGtLoadPublishedStatus`).
+	let status = emitGtLoadPublishedStatus(module, block: checkStatus, gt: gt, ids: ids)
 	let completedConst = emitConst(module, block: checkStatus, value: GtStatusCompleted, ids: ids)
 	let isDone = emitCmp(module, block: checkStatus, a: status, b: completedConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(checkStatus, op: StdOp.condBranch(isDone, thenBlockId: found.id, elseBlockId: advance.id))
@@ -3646,7 +3654,7 @@ function emitDriveExitTest(module StdModule, block IrBlock, exit DriveExit, ids 
 	end 'scanBeforeTheExitTest'
 
 	let reached = match exit 'reachedBy'
-		statusEquals gives emitCmp(module, block: block, a: emitLoadField(module, block: block, record: targetGt, offset: GtOffStatus, ids: ids), b: targetStatus, pred: StdCmpPred.eq, ids: ids)
+		statusEquals gives emitCmp(module, block: block, a: emitGtLoadPublishedStatus(module, block: block, gt: targetGt, ids: ids), b: targetStatus, pred: StdCmpPred.eq, ids: ids)
 		anyCompleted gives emitCmp(module, block: block, a: foundIndex, b: emitConst(module, block: block, value: NoCompletedPromise, ids: ids), pred: StdCmpPred.ne, ids: ids)
 		liveCountZero gives emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtLiveCountLabel, ids: ids), b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	end 'reachedBy'
@@ -4260,8 +4268,7 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool, asy
 		awaitedTraceId = ids.mint()
 		alreadyDone = ids.mint()
 		module.appendOp(entry, op: StdOp.loadIndirect(awaitedTraceId, addrId: promise, offset: GtOffTraceId, valueType: StdType.i64))
-		let statusOnEntry = ids.mint()
-		module.appendOp(entry, op: StdOp.loadIndirect(statusOnEntry, addrId: promise, offset: GtOffStatus, valueType: StdType.i64))
+		let statusOnEntry = emitGtLoadPublishedStatus(module, block: entry, gt: promise, ids: ids)
 		module.appendOp(entry, op: StdOp.cmp(alreadyDone, lhs: statusOnEntry, rhs: completedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	end 'readAwaitTraceState'
 
@@ -4619,6 +4626,197 @@ function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, wan
 	return emitCmp(module, block: block, a: status, b: wantConst, pred: StdCmpPred.eq, ids: ids)
 end 'emitGtStatusEquals'
 
+// ⭐⭐⭐ **PUBLISH `completed` — THE ONE STORE IN THIS RUNTIME A SECOND OS THREAD RACES, AND THE ONLY
+// SPELLING OF IT (G3).**
+//
+// A finishing green thread writes THREE words: `gt.result`, `gt.threw`, and then `gt.status = completed`.
+// The first two are the DATA and the third is the FLAG that announces them, with no lock and no atomic
+// anywhere between — so on a weakly-ordered ISA nothing stops the flag from becoming visible to another M
+// before the two words it announces. The awaiter would then read `gt.result` before it was written: **a
+// WRONG AWAITED VALUE, not a crash**, on a lane no golden can see.
+//
+// ⛔⛔ **IT WAS LATENT UNTIL THE SCHEDULER GREW A SECOND OS THREAD THAT RUNS MAXON CODE, AND IT IS NOT ANY
+// MORE.** `StdDialect`'s atomics note tracked this for two rungs as "a store-load pair with no CAS between
+// them … there is no second observer". There is now: `osThreadCreate` is a real `pthread_create` on
+// arm64-macOS and a real `clone` on arm64-linux, and a `spawn` program measures six to seven concurrently
+// active worker Ms on this host. ⇒ the release half is HERE and the acquire half is
+// `emitGtLoadPublishedStatus` below; **neither is a fix on its own** — a barrier on one side orders one
+// thread's accesses against nothing.
+//
+// ⚠ **THE STORE ORDER IS STILL LOAD-BEARING AND THE RELEASE DOES NOT REPLACE IT.** A release orders the
+// EARLIER accesses before itself; it says nothing about accesses that come after. So `result` and `threw`
+// must still be written BEFORE this call, exactly as `GtCellCompleteName` states.
+//
+// ⚠ **THE TWO HAND-ASSEMBLED TRAMPOLINES PUBLISH THE SAME WORD AND CANNOT COME THROUGH HERE**, being raw
+// machine code rather than Std ops (`Arm64GtRuntime.buildArm64GtTrampolineChunk`,
+// `X64GtRuntime.buildGtTrampolineChunk`). Each emits its own ordered store at its own site and says so;
+// `assertCompletedPublicationIsOrdered` below can see neither, which is stated at that checker.
+function emitGtPublishCompleted(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	let completed = emitConst(module, block: block, value: GtStatusCompleted, ids: ids)
+	module.appendOp(block, op: StdOp.storeRelease(gt, offset: GtOffStatus, valueId: completed, valueType: StdType.i64))
+end 'emitGtPublishCompleted'
+
+// ⭐⭐⭐ **OBSERVE A GREEN THREAD'S STATUS — the ACQUIRE half of the publication above, and the only
+// spelling of a read that a `completed` answer can come out of (G3).**
+//
+// Every reader of this word that can see another M's `completed` reads it through here: the drive loop's
+// exit test, the select's scan, the runner's hand-off gate, the `gtIsComplete` peek and the await's entry
+// probe. The acquire is what makes `gt.result` / `gt.threw` — written before the release store — visible to
+// the thread that saw the flag.
+//
+// ⚠ **IT IS THE SAME EMITTER FOR THE DRIVE LOOP, WHOSE WANTED STATUS IS A PARAMETER RATHER THAN A
+// CONSTANT** (`__gt_drive_until(targetGt, targetStatus)`), and that is deliberate: the ordering is a
+// property of the READ, not of what the read is then compared against. Giving the loop its own plain load
+// because its comparand happens not to be `completed` in the source is exactly the four-call-sites
+// convention this pair exists to abolish — and it is the ONE reader `assertCompletedPublicationIsOrdered`
+// structurally cannot see, so it is the one that would have stayed wrong.
+//
+// ⚠ **NOT `emitLoadField`.** That helper is the runtime's generic field read and must stay generic; the
+// status word is not a generic field, and a caller who reaches for the generic door gets a plain load.
+//
+// ⚠ **NEITHER OF THE PAIR IS EXPORTED, AND THE SELF-COMPILE IS WHAT SAYS SO** (E3092): every Std-tier
+// access to a green thread's status word is in THIS FILE. `MailboxRuntime` writes the word too, but only
+// the `ready`/`waiting` transitions, which are published under `__sched_lock` and are a different question
+// — see the `completed` note above for why the two are not one rule.
+function emitGtLoadPublishedStatus(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
+	let status = ids.mint()
+	module.appendOp(block, op: StdOp.loadAcquire(status, addrId: gt, offset: GtOffStatus, valueType: StdType.i64))
+	return status
+end 'emitGtLoadPublishedStatus'
+
+// ⭐⭐⭐ **THE CHECK — because "publish `completed` with a release" must not be a CONVENTION FOUR CALL SITES
+// ARE TRUSTED TO HONOUR.** That is this project's signature failure written at the scheduler's most
+// dangerous word: the shape that produced the bug this pass fixes was a fact stated in a comment, honoured
+// at three sites, and checked at none.
+//
+// It walks the functions `installGtRuntime` just built and REFUSES two spellings:
+//
+//   • a plain `storeIndirect` of the constant `completed` into `GtOffStatus` — a PUBLICATION with no
+//     release, which is the defect itself;
+//   • a plain `loadIndirect` from `GtOffStatus` whose result is compared against the constant `completed` —
+//     an OBSERVATION with no acquire, which is the same defect read from the other end.
+//
+// Both tests require the OFFSET **and** the constant together, which is what makes them exact: `GtOffStatus`
+// is 0x10, an offset three other structs in this file also use, and `2` is an ordinary small integer. Only
+// the pair names the publication.
+//
+// ⚠ **TWO POPULATIONS ARE OUTSIDE ITS REACH, AND NEITHER IS AN OVERSIGHT.**
+//   1. **`__gt_drive_until`'s exit test**, whose wanted status arrives as a PARAMETER — there is no constant
+//      in that function to pair the load with. Nothing structural can see it, which is exactly why the read
+//      has one emitter (`emitGtLoadPublishedStatus`) rather than a rule about comparands.
+//   2. **The two hand-assembled trampolines**, which are machine-code bytes and never Std ops at all. Each
+//      publishes at ONE site, in a function of twenty instructions, and names its ordering in the
+//      instruction it emits.
+// ⇒ the check is the backstop for the population that GROWS — a fifth reader, a second reply path — and the
+// single-homed emitters are the mechanism for the rest. Neither is claimed to be the whole guarantee.
+//
+// ⚠ It is a PANIC and not a diagnostic: no program can provoke it, because the ops it inspects are the
+// compiler's own emission. A user-facing error code would name a rule a user cannot break.
+function assertCompletedPublicationIsOrdered(module StdModule, firstFuncIndex FuncIndex)
+	for index in firstFuncIndex upto module.funcCount() 'eachFunc'
+		assertOneFuncPublishesInOrder(module, func: module.getFunc(index))
+	end 'eachFunc'
+end 'assertCompletedPublicationIsOrdered'
+
+// One function's two passes: collect the ids that MEAN `completed` and the ids that came out of a plain
+// status read, then look for either forbidden pairing. TWO passes and not one, because a `const` may be
+// defined in a block the store or the compare does not follow in layout order — dominance is not what this
+// question is about.
+//
+// ⚠ **THE OP LIST IS `module.liveOpIndices`, WHICH IS ALSO WHY TERMINATORS ARE COVERED.** A private block
+// walk here would be a third copy of that walk and would have missed exactly what the private ones miss:
+// `IrBlock` keeps its terminator outside `opRefs`, so a hand-rolled loop sees no `ret`, no `condBranch` and
+// no `switch` at all.
+function assertOneFuncPublishesInOrder(module StdModule, func IrFunction)
+	let opIndices = module.liveOpIndices(func)
+	var completedConsts = ValueIdArray.create()
+	var plainStatusLoads = ValueIdArray.create()
+
+	for opIdx in opIndices 'collect'
+		collectCompletedWordDefs(publicationOpAt(module, opIdx: opIdx), completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+	end 'collect'
+
+	// Nothing in this function names the constant, so neither pairing can exist in it — every `__gt_subp_`
+	// entry point and most of the scheduler take this exit before the second walk.
+	if completedConsts.count() == 0 'namesNoCompletedWord'
+		return
+	end 'namesNoCompletedWord'
+
+	for opIdx in opIndices 'check'
+		requireOrderedCompletedAccess(publicationOpAt(module, opIdx: opIdx), func: func, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+	end 'check'
+end 'assertOneFuncPublishesInOrder'
+
+// The op at an index `liveOpIndices` just handed out — so an out-of-range answer is a broken module rather
+// than a bad argument, and both walks above say so once instead of twice.
+function publicationOpAt(module StdModule, opIdx OpIndex) returns StdOp
+	return try module.ops.get(opIdx) otherwise panic("assertCompletedPublicationIsOrdered: opIdx {opIdx} from `liveOpIndices` is not in module.ops")
+end 'publicationOpAt'
+
+// Pass one: the two id sets. Exhaustive over `StdOp` with no bare `default`, so an op appended to the union
+// has to be classified here rather than silently escaping the check.
+function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
+	match op 'k'
+		const(resultId, value, _) then pushIfCompletedConst(completedConsts, resultId: resultId, value: value)
+		binOp to unaryOp then break 'k'
+		cmp to globalAddr then break 'k'
+		loadIndirect(resultId, _, offset, _) then pushIfStatusOffset(plainStatusLoads, resultId: resultId, offset: offset)
+		storeIndirect to storeRelease then break 'k'
+	end 'k'
+end 'collectCompletedWordDefs'
+
+function pushIfCompletedConst(completedConsts ValueIdArray, resultId ValueId, value ParsedInt)
+	if value == GtStatusCompleted 'meansCompleted'
+		completedConsts.push(resultId)
+	end 'meansCompleted'
+end 'pushIfCompletedConst'
+
+function pushIfStatusOffset(plainStatusLoads ValueIdArray, resultId ValueId, offset ByteOffset)
+	if offset == GtOffStatus 'readsTheStatusWord'
+		plainStatusLoads.push(resultId)
+	end 'readsTheStatusWord'
+end 'pushIfStatusOffset'
+
+// Pass two: the two refusals. Exhaustive for `collectCompletedWordDefs`' reason.
+function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
+	match op 'k'
+		const to unaryOp then break 'k'
+		cmp(_, lhs, rhs, _, _) then requireOrderedObservation(func, lhs: lhs, rhs: rhs, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+		binOpImm to loadIndirect then break 'k'
+		storeIndirect(_, offset, valueId, _) then requireOrderedPublication(func, offset: offset, valueId: valueId, completedConsts: completedConsts)
+		osAllocPages to storeRelease then break 'k'
+	end 'k'
+end 'requireOrderedCompletedAccess'
+
+function requireOrderedPublication(func IrFunction, offset ByteOffset, valueId ValueId, completedConsts ValueIdArray)
+	if offset != GtOffStatus 'notTheStatusWord'
+		return
+	end 'notTheStatusWord'
+	if not completedConsts.contains(valueId) 'notTheCompletedConstant'
+		return
+	end 'notTheCompletedConstant'
+
+	panic("assertCompletedPublicationIsOrdered: '{String.from(func.name)}' publishes `completed` into a green thread's status word with a PLAIN store. That store announces `gt.result`/`gt.threw` to another OS thread, and a plain store on a weakly-ordered ISA may become visible before the words it announces — a wrong awaited value, not a crash. Emit it through `emitGtPublishCompleted`, which is the release store")
+end 'requireOrderedPublication'
+
+// ⚠ **`Array.contains` AND NOT A `Set`, NOR A THIRD PRIVATE LINEAR SCAN.** Each list holds a handful of
+// ids — the `completed` constants a function names and the status words it reads — so the stdlib's own
+// linear membership is both the cheapest structure and the one already written. (`SemanticCheck` and
+// `HallCondition` each carry a private copy of that scan; neither is this pass's to consolidate.)
+//
+// ⚠ **BOTH OPERAND ORDERS ARE TESTED, and that is not defensive symmetry**: `emitGtStatusEquals` puts the
+// loaded word on the LEFT and `emitDriveExitTest` puts it there too, but `foldConstOperands` reorders around
+// a constant operand, and a check that knew one spelling would go quiet the day a fold ran first.
+function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
+	let lhsIsPlainRead = plainStatusLoads.contains(lhs) and completedConsts.contains(rhs)
+	let rhsIsPlainRead = plainStatusLoads.contains(rhs) and completedConsts.contains(lhs)
+	if not (lhsIsPlainRead or rhsIsPlainRead) 'notTheCompletedTest'
+		return
+	end 'notTheCompletedTest'
+
+	panic("assertCompletedPublicationIsOrdered: '{String.from(func.name)}' tests a green thread's status word against `completed` after reading it with a PLAIN load. Without the acquire, `gt.result`/`gt.threw` may still be unwritten on this M when the flag reads as set. Read it through `emitGtLoadPublishedStatus`, which is the acquire load")
+end 'requireOrderedObservation'
+
 // ⭐⭐ **`__gt_is_complete(gt) -> 1 when that green thread has reached `completed`, 0 otherwise** — the
 // floor of `__Builtins.gtIsComplete(promise.inner)`. See `GtIsCompleteName` for what it is for, why it must
 // have no side effect, and why it is target-neutral.
@@ -4644,7 +4842,7 @@ function buildGtIsComplete(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
-	let status = emitLoadField(module, block: entry, record: gt, offset: GtOffStatus, ids: ids)
+	let status = emitGtLoadPublishedStatus(module, block: entry, gt: gt, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(emitGtStatusEquals(module, block: entry, status: status, want: GtStatusCompleted, ids: ids)))
 
 	module.functions.push(func)
@@ -4720,8 +4918,9 @@ function buildGtCellComplete(module StdModule)
 
 	emitStoreField(module, block: entry, record: cell, offset: GtOffResult, value: result)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffThrew, value: threw)
-	let completed = emitConst(module, block: entry, value: GtStatusCompleted, ids: ids)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffStatus, value: completed)
+	// ⭐ The RELEASE that makes the two stores above visible to the awaiting M — see
+	// `emitGtPublishCompleted`, which is also why the store ORDER here still matters.
+	emitGtPublishCompleted(module, block: entry, gt: cell, ids: ids)
 
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(cell)))
 	module.setTerminator(entry, op: StdOp.retVoid)
@@ -5762,7 +5961,12 @@ export function emitGtRunOne(module StdModule, run IrBlock, handOff IrBlock, g V
 	let switchResult = ids.mint()
 	module.appendOp(run, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: twoArgs(selfGt, second: g)))
 	emitStoreField(module, block: run, record: m, offset: MOffCurrentGt, value: selfGt)
-	let gStatus = emitLoadField(module, block: run, record: g, offset: GtOffStatus, ids: ids)
+	// ⚠ ACQUIRE, THOUGH THIS ONE READ IS SAME-THREAD: the trampoline wrote `completed` on THIS M, just
+	// before the switch that landed here, so program order already covers it. It comes through the ordered
+	// door anyway because the alternative is a carve-out — "this reader of `completed` is plain because of
+	// where it runs" — and a carve-out is what a later maintainer copies. One instruction, on a path that
+	// has just performed a context switch.
+	let gStatus = emitGtLoadPublishedStatus(module, block: run, gt: g, ids: ids)
 	let gCompleted = emitGtStatusEquals(module, block: run, status: gStatus, want: GtStatusCompleted, ids: ids)
 	// ⭐ GIVE UP ONLY A COMPLETED g. A merely-parked (waiting) g keeps its stack — it will resume on it.
 	module.setTerminator(run, op: StdOp.condBranch(gCompleted, thenBlockId: handOff.id, elseBlockId: continuation.id))
@@ -7401,6 +7605,7 @@ export let SubpReqErrKind = 64 as ByteOffset
 export let SubpReqErrData = 72 as ByteOffset
 export let SubpReqErrLimit = 80 as ByteOffset
 export let SubpReqDetach = 88 as ByteOffset  // 1 ⇒ answer the child's PID and let it go, rather than a handle
+
 // The child's whole environment, as the NUL-separated `NAME=VALUE` block CreateProcessA reads, or 0 to
 // inherit this process's. ⚠ ZERO IS THE INHERIT ANSWER AND THE SLAB ZERO-FILLS, so the two entry points that
 // have no environment to pass (`__gt_subp_stream_spawn` and the two `runProcess(cmd)` shapes) say nothing at

@@ -282,7 +282,22 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	arm64EmitStoreWord64At(asm, src: Arm64IntReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffResult)
 	arm64EmitStoreWord64At(asm, src: Arm64FlagReturnReg, base: Arm64GtTrampGtReg, byteOffset: GtOffThrew)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64GtTrampFuncPtrReg, value: GtStatusCompleted)
-	arm64EmitStoreWord64At(asm, src: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffStatus)
+	// ⛔⛔ **`STLR`, NOT `STR` — THIS IS THE PUBLICATION, AND THE TWO STORES ABOVE ARE WHAT IT PUBLISHES
+	// (G3).** An awaiting driver on ANOTHER M spins on `gt.status == completed` and then reads `gt.result` /
+	// `gt.threw`. On this weakly-ordered ISA a plain `str` here lets the flag become visible before the two
+	// words it announces, and the awaiter reads a result the thread had not written yet — **a wrong awaited
+	// value, not a crash**, which no golden on this lane could see. The store-release orders both of them
+	// before itself. Its acquire partner is `GtRuntime.emitGtLoadPublishedStatus`, which every reader of this
+	// word goes through; neither half is a fix alone.
+	//
+	// ⚠ **IT WAS LATENT UNTIL THE Ms BECAME REAL AND IT IS NOT ANY MORE.** MAC3 made `osThreadCreate` a real
+	// `pthread_create` here (and L4 a real `clone` on arm64-linux), and a `spawn` program measures six to
+	// seven concurrently ACTIVE worker Ms on this host. `StdOp.atomicCas`'s note tracked exactly this shape
+	// — "a store-load pair with no CAS between them" — as the one to watch for.
+	//
+	// ⚠ **THE ARG-BUFFER REGISTER IS THE SCRATCH**: `STLR` has no displacement field, so the field address
+	// must be materialised, and that register's last read was the argument-marshalling loop far above.
+	arm64EmitStoreReleaseWord64At(asm, src: Arm64GtTrampFuncPtrReg, base: Arm64GtTrampGtReg, byteOffset: GtOffStatus, scratch: Arm64GtTrampArgBufReg)
 
 	// __gt_context_switch(from = gt, to = gt.waiter) — never returns; the driver that ran this thread set
 	// its waiter before handing it the processor.

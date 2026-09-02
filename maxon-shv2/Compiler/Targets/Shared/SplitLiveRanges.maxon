@@ -4925,6 +4925,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		imulHighReg gives false
 		// arm64 `fneg` reads a register. Not rematerializable.
 		arm64Fneg gives false
+		// G3: an ordered load reads MEMORY another thread writes — the opposite of rematerializable.
+		arm64LoadAcquire or arm64StoreRelease gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -5761,6 +5763,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		// `opIsConstMaterialization` answers false, so this never reaches here; named rather than swallowed.
 		imulHighReg panic("constDefInfo: def is not a constant materialization")
 		arm64Fneg panic("constDefInfo: def is not a constant materialization")
+		arm64LoadAcquire or arm64StoreRelease panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -6015,6 +6018,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// EC18 — one register operand to substitute, exactly as `divideReg` has.
 		imulHighReg(src) then return TargetOp.imulHighReg(substituteVReg(src, from: from, to: to))
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), width: width)
+		arm64StoreRelease(base, src, width) then return TargetOp.arm64StoreRelease(substituteVReg(base, from: from, to: to), src: substituteVReg(src, from: from, to: to), width: width)
 	end 'rewrite'
 end 'substituteValueInOp'
 

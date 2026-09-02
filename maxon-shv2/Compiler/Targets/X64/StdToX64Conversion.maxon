@@ -337,6 +337,7 @@ export let PeekPipeStackArgWords = 2 as MachineWord  // args 5-6, both real stac
 
 let CreateProcessInheritHandlesSlot = 0  // arg5 bInheritHandles = FALSE
 let CreateProcessCreationFlagsSlot = 1  // arg6 dwCreationFlags = 0
+
 // ⚠ The comment here read `= NULL` and had not been true since the attached family started building
 // blocks: the slot carries a real operand — `__gt_subp_attached_spawn` passes the caller's block for
 // `EnvSource.block` and a constant 0 only for `EnvSource.parent`.
@@ -1080,6 +1081,8 @@ type StdToX64Lowering
 			// `GetEnvironmentStringsA` takes no arguments and `FreeEnvironmentStringsA` one, so neither
 			// lands anything on the stack — `osCommandLine`'s case exactly.
 			osEnvBlock to osEnvBlockFree gives 0
+			// G3: an ordered load/store is one instruction with no argument marshalling at all.
+			loadAcquire or storeRelease gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1270,6 +1273,7 @@ type StdToX64Lowering
 				tlsAlloc to osEnterBackgroundPriority then break 'term'
 				osFileOpenWriteExecutable then break 'term'
 				osEnvBlock to osEnvBlockFree then break 'term'
+				loadAcquire or storeRelease then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1374,6 +1378,8 @@ type StdToX64Lowering
 				tlsAlloc to osEnterBackgroundPriority then break 'isTheCompare'
 				osFileOpenWriteExecutable then break 'isTheCompare'
 				osEnvBlock to osEnvBlockFree then break 'isTheCompare'
+				// G3: `mov` writes no flags, so neither ordered access can be the last flag-writer.
+				loadAcquire or storeRelease then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1467,6 +1473,22 @@ type StdToX64Lowering
 			globalAddr(resultId, label) then self.lowerGlobalAddr(resultId, label: label, dstBlock: dstBlock)
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
+			// ⭐⭐⭐ **G3 — THE ORDERED PAIR LOWERS TO THE PLAIN PAIR'S INSTRUCTION, AND THAT IS THE ISA'S
+			// ANSWER RATHER THAN A GAP.** x86-64 is TOTAL STORE ORDER: stores are never reordered with other
+			// stores, loads are never reordered with other loads, and a load is never reordered ahead of an
+			// earlier load — so an ordinary `mov [m], r` ALREADY has release semantics and an ordinary
+			// `mov r, [m]` ALREADY has acquire semantics. The only barrier x64 needs a fence for is
+			// STORE→LOAD (`mfence`), which is a SEQUENTIAL-CONSISTENCY obligation and not one release/acquire
+			// makes. Emitting anything extra here would be a stall bought for nothing.
+			//
+			// ⛔ **WHAT STILL HAS TO BE TRUE IS THE COMPILER HALF, AND IT IS NOT LEFT TO THIS ARM.** The
+			// hardware ordering is worthless if a PASS moves the access across the publication, so the two
+			// Std ops declare `isPure: false` and `isMemory`/`isStore` exactly as their plain twins do, and
+			// `classifyLoadOperands` additionally refuses to offer an acquire load to the loop hoist. That is
+			// why the ordering is a property of the OP and not of this lowering: dropping the flavour here is
+			// correct on x64 precisely because nothing above here dropped it.
+			loadAcquire(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
+			storeRelease(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstBlock: dstBlock)
 			osWriteStdout(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput, dstBlock: dstBlock)
 			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(TargetVReg.virtual(resultId), label: label))
@@ -1659,6 +1681,7 @@ type StdToX64Lowering
 			tlsAlloc to osEnterBackgroundPriority then panic("lowerStdToX64: a TLS op, an event signal or the priority door appeared as a block terminator (lowering bug — none of them is a terminator)")
 			osFileOpenWriteExecutable then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToX64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+			loadAcquire or storeRelease then panic("lowerStdToX64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -4242,6 +4265,7 @@ type StdToX64Lowering
 			tlsAlloc to osEnterBackgroundPriority gives false
 			osFileOpenWriteExecutable gives false
 			osEnvBlock to osEnvBlockFree gives false
+			loadAcquire or storeRelease gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -4402,6 +4426,7 @@ type StdToX64Lowering
 			tlsAlloc to osEnterBackgroundPriority panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a TLS op, an event signal or the priority door, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osFileOpenWriteExecutable panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osEnvBlock to osEnvBlockFree panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an environment-block read or release, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			loadAcquire or storeRelease panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an ordered load or store, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

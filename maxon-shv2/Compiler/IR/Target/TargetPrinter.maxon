@@ -805,6 +805,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		imulHighReg gives false
 		// `fneg` is arm64's own instruction (x64 spells the flip as `negF64RegReg`).
 		arm64Fneg gives true
+		arm64LoadAcquire or arm64StoreRelease gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -1052,6 +1053,8 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		// masks and a golden that spelled them would be showing the model rather than the instruction.
 		imulHighReg(src) gives "imulHighReg {vregName(src)}"
 		arm64Fneg(dest, src) gives "fneg {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64LoadAcquire(dest, base, width) gives "ldar.{accessWidthName(width)} {arm64VregName(dest)}, [{arm64VregName(base)}]"
+		arm64StoreRelease(base, src, width) gives "stlr.{accessWidthName(width)} [{arm64VregName(base)}], {arm64VregName(src)}"
 	end 'op'
 end 'formatTargetOp'
 

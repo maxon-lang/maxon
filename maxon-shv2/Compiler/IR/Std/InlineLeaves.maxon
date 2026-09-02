@@ -182,6 +182,7 @@ function leafOpRole(op StdOp) returns LeafOpRole
 		osCommandLine to osEnterBackgroundPriority then break 'kind'
 		osFileOpenWriteExecutable then break 'kind'
 		osEnvBlock to osEnvBlockFree then break 'kind'
+		loadAcquire or storeRelease then break 'kind'
 	end 'kind'
 
 	return LeafOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else LeafOpRole.body
@@ -803,6 +804,7 @@ type LeafInliner
 				retVoid to osEnterBackgroundPriority then break 'kind'
 				osFileOpenWriteExecutable then break 'kind'
 				osEnvBlock to osEnvBlockFree then break 'kind'
+				loadAcquire or storeRelease then break 'kind'
 			end 'kind'
 		end 'eachOp'
 		return self.sitePositions.count()
@@ -855,6 +857,7 @@ type LeafInliner
 			retVoid to osEnterBackgroundPriority then self.refuseNotTheSplitCall()
 			osFileOpenWriteExecutable then self.refuseNotTheSplitCall()
 			osEnvBlock to osEnvBlockFree then self.refuseNotTheSplitCall()
+			loadAcquire or storeRelease then self.refuseNotTheSplitCall()
 		end 'site'
 		var pred = self.blockAt(predRef)
 		pred.opRefs.truncate(tail)
@@ -1211,6 +1214,7 @@ type LeafInliner
 			witnessCall to osEnterBackgroundPriority then refuseNotATerminator(calleeFunc)
 			osFileOpenWriteExecutable then refuseNotATerminator(calleeFunc)
 			osEnvBlock to osEnvBlockFree then refuseNotATerminator(calleeFunc)
+			loadAcquire or storeRelease then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -1325,6 +1329,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 		call to osEnterBackgroundPriority then refuseNotAParamOp()
 		osFileOpenWriteExecutable then refuseNotAParamOp()
 		osEnvBlock to osEnvBlockFree then refuseNotAParamOp()
+		loadAcquire or storeRelease then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

@@ -633,6 +633,7 @@ type RangeCheckEmitter
 				call to osEnterBackgroundPriority then self.refuseNonParamAheadOfAGuard(pos)
 				osFileOpenWriteExecutable then self.refuseNonParamAheadOfAGuard(pos)
 				osEnvBlock to osEnvBlockFree then self.refuseNonParamAheadOfAGuard(pos)
+				loadAcquire or storeRelease then self.refuseNonParamAheadOfAGuard(pos)
 			end 'op'
 		end 'eachPrefixOp'
 	end 'requireGuardHeadHoldsOnlyParams'
@@ -1357,6 +1358,7 @@ type RangeCheckEmitter
 				atomicCas to osEnterBackgroundPriority then break 'c'
 				osFileOpenWriteExecutable then break 'c'
 				osEnvBlock to osEnvBlockFree then break 'c'
+				loadAcquire or storeRelease then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1594,6 +1596,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		atomicCas to osEnterBackgroundPriority gives false
 		osFileOpenWriteExecutable gives false
 		osEnvBlock to osEnvBlockFree gives false
+		loadAcquire or storeRelease gives false
 	end 'term'
 end 'retMatchesValue'
 

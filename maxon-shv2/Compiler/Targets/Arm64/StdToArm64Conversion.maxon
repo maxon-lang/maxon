@@ -642,6 +642,8 @@ type StdToArm64Lowering
 			// MAC4: two register arguments through the shared `creat`, exactly as `osFileOpenWrite` above.
 			osFileOpenWriteExecutable gives 0
 			osEnvBlock to osEnvBlockFree gives 0
+			// G3: an ordered access marshals nothing — one `add` into the IP scratch and one instruction.
+			loadAcquire or storeRelease gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -723,6 +725,10 @@ type StdToArm64Lowering
 			globalAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaGlobal(TargetVReg.virtual(resultId), label: label))
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstRef: dstRef)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstRef: dstRef)
+			// G3: `LDAR`/`STLR` — the ordered pair, whose address the fold above has to materialise because
+			// neither instruction has a displacement field. This is the lane the ops exist for.
+			loadAcquire(resultId, addrId, offset, valueType) then self.lowerLoadAcquire(resultId, addrId: addrId, offset: offset, valueType: valueType, dstRef: dstRef)
+			storeRelease(addrId, offset, valueId, valueType) then self.lowerStoreRelease(addrId, offset: offset, valueId: valueId, valueType: valueType, dstRef: dstRef)
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstRef: dstRef)
 			osWriteStdout(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardOutput, dstRef: dstRef)
 			rdataAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaRdata(TargetVReg.virtual(resultId), label: label))
@@ -1045,6 +1051,7 @@ type StdToArm64Lowering
 			osEnterBackgroundPriority then panic("lowerStdToArm64: an `osEnterBackgroundPriority` op appeared as a block terminator (lowering bug — the priority door is a value-producing body op)")
 			osFileOpenWriteExecutable then panic("lowerStdToArm64: an `osFileOpenWriteExecutable` op appeared as a block terminator (lowering bug — an open is a value-producing body op, exactly like its two siblings)")
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToArm64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+			loadAcquire or storeRelease then panic("lowerStdToArm64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1370,6 +1377,42 @@ type StdToArm64Lowering
 		let mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.storeBaseDispReg(mem.base, disp: mem.disp, src: TargetVReg.virtual(valueId), width: width))
 	end 'lowerStoreIndirect'
+
+	// ⭐⭐⭐ **G3 — THE ADDRESS AN ORDERED ACCESS NEEDS: A BARE BASE REGISTER, WITH THE FIELD OFFSET ALREADY
+	// FOLDED IN.** `LDAR`/`STLR` are load/store-EXCLUSIVE-group encodings, whose only addressing form is
+	// `[Xn]` — there is no displacement field to put `offset` in. So an ordered access at a non-zero field
+	// offset costs one extra `add` into the IP scratch, and at offset 0 costs nothing.
+	//
+	// ⚠ **IT IS `addressFor`'s FOLD AND NOT A SECOND COPY OF IT.** That function already answers "this
+	// displacement has no direct form here — put `base + disp` in x16", through `lowerAddSubImm`, so the
+	// reach of the fold (the add/sub immediate band, then the `movz`/`movk` ladder) is stated once. Asking
+	// it for a width whose scaled form CANNOT hold the displacement would be a lie about why the fold
+	// happened; asking `arm64DispHasScaledForm` here would be that predicate written twice. What this does
+	// instead is state the ordered forms' OWN rule — zero offset or fold — which is a different rule from
+	// `addressFor`'s and therefore its own two lines.
+	//
+	// ⚠ **x16 IS SAFE ACROSS THE PAIR FOR `addressFor`'s REASON, WHICH IS THE STANDING ONE**
+	// (`Arm64Scratch`'s header): nothing a post-isel pass splices writes x16 — a spliced wide-frame address
+	// fold writes x17 — so no reload can land between the `add` and the access that reads it.
+	function orderedAccessBase(addrId ValueId, offset ByteOffset, dstRef BlockRef) returns TargetVReg
+		let base = TargetVReg.virtual(addrId)
+		let disp = memoryDisplacement(offset)
+		if disp == 0 'alreadyTheAddress'
+			return base
+		end 'alreadyTheAddress'
+
+		let scratch = arm64PhysReg(Arm64Scratch)
+		self.lowerAddSubImm(scratch, src: base, imm: disp, isSub: false, dstRef: dstRef)
+		return scratch
+	end 'orderedAccessBase'
+
+	function lowerLoadAcquire(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64LoadAcquire(TargetVReg.virtual(resultId), base: self.orderedAccessBase(addrId, offset: offset, dstRef: dstRef), width: accessWidthFor(valueType)))
+	end 'lowerLoadAcquire'
+
+	function lowerStoreRelease(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64StoreRelease(self.orderedAccessBase(addrId, offset: offset, dstRef: dstRef), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
+	end 'lowerStoreRelease'
 
 	// Lower a Std `div`/`mod` to `sdiv`/`udiv` (+ `msub` for the remainder). NO zero-divisor guard: AArch64
 	// `sdiv`/`udiv` return 0 on a zero divisor (defined behaviour, unlike x64's `idiv` #DE), and the spec

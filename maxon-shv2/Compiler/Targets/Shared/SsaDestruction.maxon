@@ -364,6 +364,8 @@ function isCaptureMove(op TargetOp) returns bool
 		imulHighReg gives false
 		// arm64 `fneg` is not a `movRegReg`, so it is not a call-result capture move.
 		arm64Fneg gives false
+		// G3: an ordered access is not a `movRegReg`, so it is not a call-result capture move.
+		arm64LoadAcquire or arm64StoreRelease gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -537,6 +539,8 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		imulHighReg then return false
 		// arm64 `fneg` is not a move at all, so never a physical self-move.
 		arm64Fneg then return false
+		// G3: an ordered access is not a move at all, so never a physical self-move.
+		arm64LoadAcquire or arm64StoreRelease then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -833,6 +837,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 		leaRegBaseIndexScale to arm64AddLsl then panic("retargetTerminatorOp: a scaled-index address or access is a body op, not a terminator — it names no block")
 		imulHighReg then panic("retargetTerminatorOp: a high multiply is a body op, not a terminator — it names no block")
 		arm64Fneg then panic("retargetTerminatorOp: a float negate is a body op, not a terminator — it names no block")
+		arm64LoadAcquire or arm64StoreRelease then panic("retargetTerminatorOp: an ordered load/store is a body op, not a terminator — it names no block")
 	end 'term'
 end 'retargetTerminatorOp'
 

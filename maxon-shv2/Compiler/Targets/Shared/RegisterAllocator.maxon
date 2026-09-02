@@ -1385,6 +1385,8 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		imulHighReg then break 'hint'
 		// arm64 `fneg` is 3-address like the rest of its band: not a move, nothing to coalesce.
 		arm64Fneg then break 'hint'
+		// G3: an ordered access is not a move, so there is nothing to coalesce.
+		arm64LoadAcquire or arm64StoreRelease then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -2371,6 +2373,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// EC18 — one register operand to colour, exactly as `divideReg` has.
 		imulHighReg(src) then return TargetOp.imulHighReg(colorVRegWith(src, alloc: alloc))
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), width: width)
+		arm64StoreRelease(base, src, width) then return TargetOp.arm64StoreRelease(colorVRegWith(base, alloc: alloc), src: colorVRegWith(src, alloc: alloc), width: width)
 	end 'rewrite'
 end 'colorTargetOp'
 

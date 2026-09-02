@@ -120,6 +120,27 @@ let Arm64OpLdaxr = 0xC85FFC00
 let Arm64OpStlxr = 0xC800FC00
 let Arm64StlxrRsShift = 16
 
+// ⭐⭐ **G3 — `LDAR` / `STLR`: THE SAME ORDERING WITHOUT THE RESERVATION.** They are the exclusive pair
+// above with the exclusive part removed: `o2` set (the acquire/release bit), `Rs` and `Rt2` fixed at the
+// 0b11111 an unexclusive form uses, and no status register — so there is nothing to retry and no loop.
+// A `STLR` orders every earlier access before itself and an `LDAR` every later one after itself, which is
+// exactly what `StdOp.storeRelease`/`StdOp.loadAcquire` promise, at ONE instruction and with none of the
+// full-barrier cost a `DMB ISH` would carry.
+//
+// ⚠ **THESE TWO WORDS CARRY size = 0b00, i.e. `LDARB`/`STLRB`, AND THE 64-BIT FORM IS THE SAME WORD WITH
+// `Arm64OrderedSize64` OR'd IN.** The size field is bits 31:30 of every word in this encoding group, so
+// stating the narrow form once and the widening bit once is the only spelling in which the two widths
+// cannot come to disagree about the fixed 0b11111 `Rs`/`Rt2` fields they share.
+//
+// ⛔ **NEITHER HAS AN OFFSET FIELD**, so `StdToArm64Conversion` folds `base + offset` into x16 before the
+// access. See `TargetOp.arm64LoadAcquire` for why the `FEAT_LRCPC2` offset forms are deliberately unused.
+let Arm64OpLdarB = 0x08DFFC00
+
+// EXPORTED: the hand-assembled green-thread trampoline publishes `completed` with the same instruction the
+// isel emits, so the two cannot come to disagree about which store is the ordered one.
+export let Arm64OpStlrB = 0x089FFC00
+let Arm64OrderedSize64 = 0xC0000000
+
 // `MRS Xt, TPIDRRO_EL0` — the READ-ONLY thread ID register. On Darwin the kernel points it at the current
 // thread's TSD base and stores the CPU number in the low three bits, which is why the read is masked.
 let Arm64OpMrsTpidrro = 0xD53BD060
@@ -1428,6 +1449,8 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64Fsqrt(dest, src) then emitArm64Rr(code, opcode: Arm64OpFsqrtD, rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64Fabs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFabsD, rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64Fneg(dest, src) then emitArm64Rr(code, opcode: Arm64OpFnegD, rd: arm64FpField(dest), rn: arm64FpField(src))
+		arm64LoadAcquire(dest, base, width) then arm64EmitOrderedAccess(code, byteOpcode: Arm64OpLdarB, rt: arm64GprField(dest), rn: arm64GprField(base), width: width)
+		arm64StoreRelease(base, src, width) then arm64EmitOrderedAccess(code, byteOpcode: Arm64OpStlrB, rt: arm64GprField(src), rn: arm64GprField(base), width: width)
 		arm64Frint(dest, src, mode) then emitArm64Rr(code, opcode: arm64FrintOpcode(mode), rd: arm64FpField(dest), rn: arm64FpField(src))
 		// `fcsel` is an ordinary FP 3-register form once its condition is folded into the opcode word,
 		// so it rides `emitArm64Rrr` unchanged — the same trick `arm64Frint` uses for its rounding mode.
@@ -1735,6 +1758,22 @@ end 'arm64EmitStlxr'
 //
 // ⚠ **A RETRY RE-READS `Xexpected`, NOT x16.** The comparand must be the caller's value on every trip —
 // re-comparing against the last observation would make the loop succeed against whatever it just saw.
+// ⭐ **G3 — ONE `LDAR`/`STLR`, WIDTH-DISPATCHED.** The two opcodes differ only in the L bit, and the two
+// widths only in the `size` field, so ONE emitter carries both axes rather than four hand-written words
+// that could come to disagree about the fixed 0b11111 fields.
+//
+// ⚠ **GPR-ONLY, AND THAT IS THE ISA.** There is no floating-point `LDAR`; an ordered f64 would be an
+// integer `LDAR` into a GPR plus an `FMOV`. Nothing asks for one — every producer is a scheduler status
+// word — and `arm64GprField` refuses an FP vreg at its own site rather than encoding a wrong register
+// number, so the day one appears it is a panic and not a silent misread.
+export function arm64EmitOrderedAccess(code ByteArray, byteOpcode MachineWord, rt MachineWord, rn MachineWord, width X64AccessWidth)
+	let sized = match width 'w'
+		byte gives byteOpcode
+		word64 gives byteOpcode or Arm64OrderedSize64
+	end 'w'
+	emitArm64Insn(code, insn: sized or (rn shl Arm64RnShift) or rt)
+end 'arm64EmitOrderedAccess'
+
 export function arm64EmitAtomicCas(code ByteArray, dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
 	let loopTop = code.count()
 	arm64EmitLdaxr(code, rn: addrReg)
