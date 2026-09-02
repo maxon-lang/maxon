@@ -593,7 +593,7 @@ export type IrFunction
 	// (`scale-test` charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
 	//
 	// ⭐⭐ **`declaredAt` IS REQUIRED, AND THAT IS WHAT MAKES PROVENANCE A CONSTRUCTED FACT RATHER THAN A
-	// CONVENTION.** THREE readers decide behaviour on whether `sourceFilePath` is empty:
+	// CONVENTION.** FOUR readers decide behaviour on whether `sourceFilePath` is empty:
 	//
 	//   * `TargetPrinter.isRuntimeFunction` withholds the green-thread stack guard from the runtime's own
 	//     scaffolding.
@@ -601,6 +601,11 @@ export type IrFunction
 	//     an installer that ran twice (a panic).
 	//   * `DeadFunctionElimination.markCompilerOwnedRoot` tells those same two apart (A1w) for a name the
 	//     compiler ROOTS rather than emits — the half of that rule with no pair to count.
+	//   * `SplitLiveRanges.relievePressure` relieves a full-pool register overflow here instead of REFUSING
+	//     it (E5001), because that refusal is an instruction to an author and this function has none — and
+	//     the diagnostic cannot even be built for one, every route it chases ending in a parser table.
+	//     ⚠ It is the ONE reader that wants the WIDE set rather than `isRuntimeFunction`'s conjunction: a
+	//     synthesized builtin body wearing no `__` prefix has no author either.
 	//
 	// None of the three can be satisfied by a caller's good intentions: this used to hardcode an empty path
 	// and leave every caller to overwrite it a few lines later, so a caller that forgot would have made a

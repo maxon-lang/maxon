@@ -396,13 +396,21 @@ end 'PeakRank'
 //    FULL-pool overflow, and it is free: the store runs once before the loop, the reload once
 //    after it.
 //
-//  • `forced` — relief at a CONFINED point, permitted at any loop depth. The value cannot survive
-//    the ops it is live across in a register those ops clobber, so MEMORY is the only home left to
-//    it — the allocator makes no choice and searches nothing. Rule 2 admits it because the code is
-//    CHEAP AGAINST THE OP IT BRACKETS: a load and a store against a call that costs far more.
-//    Refusing it would send the author to hand-write the same load and store (a value hoisted into
-//    an array is loaded and stored at each use) — strictly worse code, for an error the compiler
-//    could have avoided emitting.
+//  • `forced` — MEMORY IS THE ONLY HOME LEFT, so the spill is permitted at any loop depth and the
+//    allocator makes no choice and searches nothing. ⚠ **THREE DIFFERENT THINGS MAKE IT THE ONLY HOME,
+//    AND ONLY THE FIRST IS THE ABI'S** — each is stated at its own site, because collapsing them into
+//    "the ABI forces it" would claim a justification two of them do not have:
+//      · a CONFINED point — the value cannot survive in a register the ops it is live across clobber.
+//        Rule 2 admits it because the code is CHEAP AGAINST THE OP IT BRACKETS: a load and a store
+//        against a call that costs far more. Refusing it would send the author to hand-write the same
+//        load and store (a value hoisted into an array is loaded and stored at each use) — strictly
+//        worse code, for an error the compiler could have avoided emitting.
+//      · the COLORER'S EVICTION REPAIR, where the register is not clobbered at all, merely TAKEN, and
+//        what makes memory the only home is that the alternative is a compiler panic on a program that
+//        fits the machine — see `SplitDriver.repairByEvictingOccupant`.
+//      · a FULL-POOL peak in a function the COMPILER EMITTED, where the refusal (E5001) is an
+//        instruction to an author who does not exist — see `SplitDriver.relievePressure`'s
+//        `noAuthorToRefuse`.
 //
 //    PLACEMENT is not SCOPE. This says the spill code may land inside a loop; `SplitScope` says which
 //    uses it serves. A value read only AFTER the clobber gets the store/reload bracket around it; one
@@ -471,11 +479,16 @@ type SplitAnchor
 		return Self{blockLocal: 0, seq: 0, placement: SpillPlacement.cold}
 	end 'create'
 
-	// Become the cut this PEAK names: its op, and the placement its overflow kind entitles it to.
-	export function takePeak(peak PressurePeak)
+	// Become the cut this PEAK names: its op, and the placement the DRIVER decided for it.
+	//
+	// The placement is passed rather than derived here because it is not a property of the peak alone:
+	// `placementOf` is the rule for a peak in AUTHORED code, and a full-pool peak in a function the
+	// compiler emitted overrides it (see `relievePressure`'s `noAuthorToRefuse`). Deriving it in here
+	// would put that decision in two places, and the one in here cannot see whose code it is.
+	export function takePeak(peak PressurePeak, cutPlacement SpillPlacement)
 		self.blockLocal = peak.blockLocal
 		self.seq = peak.peakSeq
-		self.placement = placementOf(peak)
+		self.placement = cutPlacement
 	end 'takePeak'
 
 	// Become a FORCED cut at one op — the colorer's repair, which has no peak. `forced` rather than
@@ -2738,11 +2751,11 @@ export type SplitDriver
 			// that takes the confined one. The path that does read it — the unrelievable retry below — keeps
 			// it by never reassigning. Discarding the ranked peak here is safe: `PressureAnchor.takePeak`
 			// copied the three scalars it needs out of it, so nothing holds its live row.
-			var choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work)
+			var choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work, placement: placementOf(peak))
 			if (not choiceFound(choice)) and (not peak.clobberOnly) 'theAbiHasNotFinishedYet'
 				let confined = confinedOverflowAtPeak(funcLiveness, peak: peak, pool: self.pool, scratch: work)
 				if confined.found 'dischargeTheForcedWorkFirst'
-					let bracketed = chooseVictim(module, index: index, liveness: funcLiveness, peak: confined, pool: self.pool, scratch: work)
+					let bracketed = chooseVictim(module, index: index, liveness: funcLiveness, peak: confined, pool: self.pool, scratch: work, placement: placementOf(confined))
 					if choiceFound(bracketed) 'relievable'
 						peak = confined
 						choice = bracketed
@@ -2752,10 +2765,36 @@ export type SplitDriver
 						// confined one reach `victimAtPeak` is deliberate: an unrelievable confined peak panics as
 						// a splitter bug, and this one was synthesized here rather than found by the analysis, so
 						// it may not be held to that invariant. The honest report is the overflow that was ranked.
-						work.anchor.takePeak(peak)
+						work.anchor.takePeak(peak, cutPlacement: placementOf(peak))
 					end 'nothingThereEither'
 				end 'dischargeTheForcedWorkFirst'
 			end 'theAbiHasNotFinishedYet'
+
+			// ⭐⭐ **E5001 IS AN INSTRUCTION TO AN AUTHOR, AND A FUNCTION THE COMPILER EMITTED HAS NONE.**
+			// A full-pool overflow is REFUSED rather than relieved because the only relief that works inside a
+			// loop is a reload before every use, and paying that per iteration behind the author's back is what
+			// this design will not do silently (`isColdSpillable`). That argument ends where the author does.
+			// A function whose `sourceFilePath` is empty was never parsed — the runtime's own scaffolding and
+			// the synthesized builtin bodies — so there is no line to name, no value the author can see and
+			// nothing to rewrite. The diagnostic cannot even be BUILT for one: every route `defRangeOf` chases
+			// ends in a table only the parser fills, so it panics on the first blocking value (RULE 3). Here the
+			// bracket is therefore the only home left, for the reason `repairAtExhaustion`'s cure (b) states
+			// rather than the ABI's: the alternative is a compiler failure on code that fits the machine
+			// everywhere else, and this code is the compiler's own.
+			//
+			// MEASURED (`sleep(10)` in `main`, x64-windows, `d62e05459e`): `__gt_timer_check`'s pop-min walk
+			// holds 18 GPRs at a point inside its loop against a pool of 14, and every one of the 18 is defined
+			// or read inside that loop, so the cold gate refused all of them — and no program using a green
+			// thread could be compiled at all.
+			//
+			// STRICTLY ADDITIVE. It runs only where `chooseVictim` has ALREADY answered `none`, which is
+			// precisely the state that used to reach E5001, so no program that compiles today can take a
+			// different decision because of it. Termination is unchanged: the forced bracket makes the victim
+			// dead across the peak exactly as the cold split does (`splitScopeAt` picks which uses it rewrites),
+			// so the potential Φ still falls by at least one every iteration.
+			if (not choiceFound(choice)) and func.sourceFilePath.isEmpty() 'noAuthorToRefuse'
+				choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work, placement: SpillPlacement.forced)
+			end 'noAuthorToRefuse'
 
 			// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
 			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
@@ -3654,6 +3693,17 @@ function noVictimAtPeak(project Project, module TargetModule, func IrFunction, f
 		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full {peak.witnessClass.name} pool of {classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
+	// ⛔ **E5001 IS NEVER RAISED FOR A FUNCTION THE COMPILER EMITTED**, and this is where that contract is
+	// enforced rather than hoped for. `relievePressure` has already retried such a function's full-pool peak
+	// under the FORCED bracket (`noAuthorToRefuse`), which is total over the values a function defines — every
+	// one of them has a store anchor, and one whose store does not fit the pool yet is relieved by a later
+	// iteration. So arriving here with no victim is a splitter bug, and reporting it as user register pressure
+	// is not an option that exists: the message names a source line the function does not have, and
+	// `defRangeOf` panics building it (RULE 3) rather than emitting one.
+	if func.sourceFilePath.isEmpty() 'emittedByTheCompiler'
+		panic("noVictimAtPeak: '{String.from(func.name)}' is a function the COMPILER emitted — it has no source and so no author — yet `chooseVictim` refused every one of the {peak.pressure} {peak.witnessClass.name} value(s) at its FULL-POOL peak, under the forced bracket `relievePressure` retries such a function with. That bracket is total over the values a function defines: each has a store anchor (an op def or a phi block entry), and reloading every use makes it dead across the peak whatever `killsValueAtPeak` says. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `isSpillable` — look first at `storeFitsPool`, the one gate that can still refuse under a forced placement. It must never surface as E5001: there is nobody to address that error to, and no source span to anchor it at.")
+	end 'emittedByTheCompiler'
+
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 end 'noVictimAtPeak'
 
@@ -4381,6 +4431,12 @@ end 'zeroRow'
 // at a FULL-pool peak that is the HOT overflow (E5001, `raiseRegisterPressure`); at a CONFINED one it
 // is a splitter bug (`noVictimAtPeak`).
 //
+// `placement` is the DRIVER's, not the peak's: it is `placementOf(peak)` for every peak in code an
+// author wrote, and `forced` for a full-pool peak in code the COMPILER emitted, which has no author
+// E5001 could instruct (`relievePressure`'s `noAuthorToRefuse`). It is what tiers 3 and 4 gate on, so
+// "CONFINED-only" below means "forced-placement only" — the two coincide everywhere an author is
+// involved, which is everywhere the wording was written for.
+//
 // FOUR TIERS, IN STRICT ORDER — and the order is the whole cost model:
 //
 //  1. REMAT of a constant that the eviction-point split KILLS. Free: re-emitting `mov r, imm` before
@@ -4420,7 +4476,7 @@ end 'zeroRow'
 // to the lowest id). Iterating `0 upto valueCount` instead — testing each id for liveness — was
 // O(values) per split for an answer of size O(pressure), and every eligibility question it then
 // asked walked the whole function. That is what the `UseIndex` retires.
-function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, scratch SplitScratch) returns SpillChoice
+function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, scratch SplitScratch, placement SpillPlacement) returns SpillChoice
 	let topo = liveness.cfg.topo
 	// Every candidate below is of the peak's own file (the class gate in the loop), so the pool a
 	// store anchor is measured against is THAT file's — 14 for an int, 16 for a float, never the 30
@@ -4429,7 +4485,7 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 	// The cut this peak names, re-pointed on the ONE anchor the function owns. `relievePressure` reads
 	// it back for the mutation, which is the same cut and must not be a second derivation of it.
 	var anchor = scratch.anchor
-	anchor.takePeak(peak)
+	anchor.takePeak(peak, cutPlacement: placement)
 	var usedAtPeak = usesAtPeakOp(module, liveness: liveness, peak: peak, scratch: scratch)
 	var candidates = scratch.candidates
 	bitsetCollectRow(peak.liveBefore, base: 0, wordsPerRow: liveness.wordsPerRow, out: candidates)
@@ -4762,8 +4818,14 @@ function isForcedPlacement(placement SpillPlacement) returns bool
 	end 'p'
 end 'isForcedPlacement'
 
-// The placement a peak's relief is entitled to: a clobber-only overflow gets the FORCED
-// store/reload bracket (any loop depth); a full-pool overflow gets only a COLD split.
+// The placement a peak's relief is entitled to IN CODE AN AUTHOR WROTE: a clobber-only overflow gets
+// the FORCED store/reload bracket (any loop depth); a full-pool overflow gets only a COLD split,
+// because refusing it is a message to the author and the message is the remedy.
+//
+// It takes the PEAK alone, so it cannot answer for the one case where whose code it is decides: a
+// full-pool peak in a function the compiler emitted also gets the forced bracket, because there is no
+// author to refuse to. That override is `relievePressure`'s (`noAuthorToRefuse`) — the only party that
+// holds the function — and it passes the result in rather than re-deriving it here.
 function placementOf(peak PressurePeak) returns SpillPlacement
 	return SpillPlacement.forced if peak.clobberOnly else SpillPlacement.cold
 end 'placementOf'

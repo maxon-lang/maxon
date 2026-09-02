@@ -42,6 +42,16 @@ run. The working set is simply larger than the machine, and no spiller can fix t
 restructuring the programmer can do: hold the working set in an array (array elements are never
 promoted into registers, so the spill stays spilled).
 
+⛔ **CASE 3 IS THE ONLY ONE THAT ASKS THE AUTHOR FOR ANYTHING, AND THAT IS PRECISELY WHY IT STOPS AT THE
+EDGE OF WHAT AN AUTHOR WROTE.** The refusal only makes sense against a restructuring somebody can perform.
+A function the COMPILER emitted — the green-thread runtime, the memory manager, the synthesized builtin
+bodies — has no source file, no line numbers, and no value the author can see, so there is nobody to
+address and nothing to rewrite; the diagnostic cannot even be constructed, because every route
+`defRangeOf` chases ends in a table only the parser fills. There the per-use reload is not a cost the
+compiler is declining to pay silently, it is the only remaining way to emit the program at all, so the
+splitter takes it and case 3 does not apply. See `the-runtime-overflows-its-own-pool-and-is-relieved`,
+which is a four-line program: the whole overflow is inside `__gt_timer_check`.
+
 The diagnostic is the feature, not the error path. Because SSA interference is chordal, the
 per-program-point `maxlive` **is** the exact minimum register count for the program as lowered —
 so E5001 fires **iff** the loop truly does not fit the full pool, never on a loop that a smarter
@@ -1624,6 +1634,39 @@ function main() returns ExitCode
 	let c = sink(s)
 	let total = b0 + b1 + b2 + b3 + c
 	return 0 if total == 214 else 99
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: the-runtime-overflows-its-own-pool-and-is-relieved -->
+<!-- targets: x64-windows -->
+⭐⭐ **E5001 IS AN INSTRUCTION TO AN AUTHOR, AND THE COMPILER'S OWN EMITTED CODE HAS NONE — so case 3 above
+does not reach it, and this four-line program is what proves it.** `sleep` installs the green-thread
+runtime, whose `__gt_timer_check` walks a min-heap of parked deadlines: a 21-block function with a nested
+sift-down, holding **18 GPRs against x64's pool of 14** at a point inside its outer loop, every one of the
+18 defined or read inside that loop. Under case 3's rule the cold-spill gate refuses all 18 and the
+allocator raises E5001 — against a function with no source file, no line numbers, and no value the author
+can see or delete. The diagnostic cannot even be BUILT for it: `defRangeOf`'s four routes all end in
+tables only the parser fills, so it PANICS on the first blocking value (RULE 3) and no binary is produced.
+MEASURED on the parent of the change that greens this: **every program using a green thread failed to
+compile**, this one included, and so did the compiler's own self-compile.
+
+⇒ The splitter now retries such a peak under the FORCED bracket — a reload before every use, paid per
+iteration — because that cost is the only alternative to refusing, and refusing is a message to nobody
+(`SplitLiveRanges.relievePressure`, `noAuthorToRefuse`). The relief is worth exactly what it costs and no
+more: the four splits it takes here are inside the scheduler's timer walk, which runs once per netpoll
+pass, not in anything the program wrote.
+
+⚠ **THE GATE IS `x64-windows` FOR TWO REASONS AT ONCE, AND EITHER ALONE WOULD BE ENOUGH**: it is a
+green-thread substrate lane (see `async-scheduler`'s *Targets*), and 18 values only exceed a pool of
+FOURTEEN — arm64's is wide enough that the same walk never overflows, so the case would pass there
+without discriminating anything.
+```maxon
+function main() returns ExitCode
+	sleep(1)
+	return 0
 end 'main'
 ```
 ```exitcode

@@ -39,9 +39,18 @@
 // a phi to the earliest incoming value it copies, and a splitter-minted value (a reload / a
 // rematerialized constant) chased through `SplitLineage` to the ORIGINAL user value it derives
 // from. Only a value with genuinely NO user ancestry after all four is a compiler DEFECT, so
-// `defRangeOf` PANICS naming it rather than emitting a misleading location. At M5 that is
-// unreachable — the routes cover every value that can block an allocation — so the panic is a
-// backstop that guards the invariant the whole contract rests on.
+// `defRangeOf` PANICS naming it rather than emitting a misleading location.
+//
+// ⛔⛔ **THE FOUR ROUTES COVER EVERY VALUE OF A FUNCTION THAT WAS PARSED, AND NOTHING MORE — THIS NOTE
+// USED TO SAY "unreachable at M5" AND IT WAS REACHED.** Every one of them ends in a table only the
+// parser fills (`ParamOriginTable`, `ValueOriginTable`, `project.opRanges`), so for a function the
+// COMPILER emitted they ALL answer nothing and the panic fires on the FIRST live value, whatever it is.
+// MEASURED: a four-line `sleep(1)` program, where `__gt_timer_check`'s heap walk holds 18 GPRs against
+// a pool of 14 — no green-thread program could be compiled, the compiler's own self-compile included.
+// ⇒ **WHAT MAKES THE PANIC A BACKSTOP IS NOT THE ROUTES, IT IS THAT E5001 IS NEVER RAISED FOR A
+// FUNCTION WITHOUT SOURCE**, and that is `SplitLiveRanges`' guarantee, not this file's: such a peak is
+// relieved by the forced bracket instead of refused (`relievePressure`'s `noAuthorToRefuse`), and
+// `noVictimAtPeak` panics as a splitter bug rather than calling in here if it ever is not.
 //
 // ⚠ **THE PANIC IS A BACKSTOP, NOT THE ENFORCEMENT, AND IT NEVER WAS.** Reaching this file at all is
 // already the decision that the author must act; a value the author cannot act on has to be relieved
@@ -497,8 +506,9 @@ end 'classifyValue'
 // RULE 3: after chasing parameters, split lineage, op origins, and phi incomings, a value that
 // resolves to NO span has genuinely no user ancestry — a compiler-introduced value RULE 3
 // forbids from blocking an allocation. This PANICS naming it rather than emitting a location
-// the user cannot act on. At M5 it is unreachable (the four routes cover every blocking value);
-// it is the backstop guarding the E5001 contract.
+// the user cannot act on. It is the backstop guarding the E5001 contract, and what keeps it
+// unreached is the CALLER's guarantee that no source-less function ever raises E5001 — not a
+// property of the four routes, which cannot answer for such a function at all (see the file header).
 function defRangeOf(project Project, module TargetModule, func IrFunction, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow BitWordCount, lineage SplitLineage) returns SourceRange
 	var ranges = SourceRangeArray.create()
 	var visited = BitWordArray.create()
