@@ -2113,6 +2113,14 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// rather than another raiser on `strayToken` is argued on the union arm.
 		expectedDeclaration(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{got}'", line: line, column: column, filePath: path)
 		expectedNewlineAfterBlockLabel(got, line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{got}'", line: line, column: column, filePath: path)
+		// The FOURTH shape of E2001, and the runnable oracle's exact sentence for it. See
+		// `ParseError.bareTryInAClosure` for why a closure earns a different sentence from the one a declared
+		// function earns for the same situation, and why the difference is the REMEDY rather than the rule.
+		bareTryInAClosure(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedToken, message: "try without otherwise requires the enclosing function to have 'throws'", line: line, column: column, filePath: path)
+		mismatchedEndLabel(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserMismatchedEndLabel, message: "Mismatched end label: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
+		testOutsideTestFile(fileName, testFileName, line, column) then reportPositioned(project, code: ErrorCode.parserTestOutsideTestFile, message: "a 'test' declaration is only allowed in a file whose name ends in '.test.maxon'; rename '{fileName}' to '{testFileName}', or move this declaration into one", line: line, column: column, filePath: path)
+		testEmptyName(line, column) then reportPositioned(project, code: ErrorCode.parserTestEmptyName, message: "a 'test' declaration's name cannot be empty", line: line, column: column, filePath: path)
+		duplicateTestName(first, second, symbol, line, column) then reportPositioned(project, code: ErrorCode.semanticDuplicateTestName, message: "duplicate test name: '{first}' and '{second}' both compile to '{symbol}'", line: line, column: column, filePath: path)
 		// The THIRD shape of E2001, and byte-for-byte both reference compilers' sentence — the bootstrap
 		// emits it for the free-function and the `static function` spellings alike (measured), v1 at
 		// `Parser.maxon:18362`. `closure-self/error-self-in-free-function-closure`'s `maxoncstderr` golden

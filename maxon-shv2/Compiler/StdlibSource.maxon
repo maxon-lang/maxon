@@ -463,6 +463,19 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	var names = FunctionNameSet.create()
 
 	markReachable(UserEntryName.toByteArray(), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+
+	// ⭐⭐ **EVERY `test` IS A ROOT HERE TOO, AND IT HAS TO BE, BECAUSE THE TWO WALKS ARE CHECKED AGAINST EACH
+	// OTHER.** `DeadFunctionElimination.seedRoots` roots tests over the STD module; this walk roots them over
+	// the MAXON one, and `requireUnreachableStdlibStayedDead` PANICS when the second walk reaches a stdlib
+	// body the first declared unreachable. A test that calls `print` or an `Expect` matcher is exactly that
+	// shape — nothing reaches it from `main` — so a root missing here is a compiler abort on the first test
+	// that calls the library, not a lost prune.
+	for func in module.functions 'eachFunction'
+		if isTestFunctionName(func.name) 'aTest'
+			markReachable(func.name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		end 'aTest'
+	end 'eachFunction'
+
 	for callee in initCallees 'eachInitializerRoot'
 		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachInitializerRoot'

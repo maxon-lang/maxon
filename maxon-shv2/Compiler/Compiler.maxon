@@ -1544,7 +1544,7 @@ function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray) retur
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
-			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) 'isSource'
+			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) and not isTestSourceName(name) 'isSource'
 				into.push(entry)
 			end 'isSource'
 		end 'isFile'
@@ -1632,6 +1632,43 @@ end 'loadOneSourceFile'
 // the whole compiler.
 let BuildManifestName = "build.maxon"
 let MaxonSourceExtension = ".maxon"
+
+// ⭐⭐ **A `test` DECLARATION'S FILE IS A SOURCE CATEGORY, NOT A FLAG INSIDE THE FILE** (see
+// `docs/LANGUAGE_REFERENCE.md`, "Test Declarations"). A `*.test.maxon` file carries the project's tests and
+// is therefore NOT swept into an ordinary build: which declarations a build carries is answerable from the
+// file list alone, with nothing to read a body for. `maxon test` names those files explicitly, which is the
+// same act that lets `maxon build <ignored>/prog.maxon` compile an ignored file — naming a path overrides
+// every exclusion this walk applies (`loadSourceFiles`), and it is how the spec runner compiles a case's
+// `example.test.maxon` at all.
+//
+// ⚠ **MATCHED CASE-INSENSITIVELY, WHICH IS THE BOOTSTRAP'S RULE MEASURED RATHER THAN MIRRORED BYTE FOR
+// BYTE** (`maxon-sharp/Compiler/SourceCollector.cs:84` `TestFileSuffix`, `:93` `IsTestFile`, compared
+// `OrdinalIgnoreCase`). A byte-exact match here would be one clause NARROWER than the authority it copies,
+// which is the shape `scripts/stale-binary-gate.sh`'s CHECK 5c exists to catch: `Suite.TEST.maxon` would
+// join an ordinary build on this compiler and not on the one that compiles it.
+let TestSourceSuffix = ".test.maxon"
+
+// ⭐ **THE ONE PLACE THAT ANSWERS "IS THIS FILE A TEST FILE?"** — the WALK asks it to leave such a file out
+// of an ordinary build, and `Parser.readTestDeclarationHead` asks it to refuse a `test` written anywhere
+// else (E2058). Two readers, one rule: a walk and a diagnostic that disagreed about which files may hold a
+// test would let a declaration be legal in a file no build compiles.
+export function isTestSourceName(name String) returns bool
+	return name.toLower().endsWith(TestSourceSuffix)
+end 'isTestSourceName'
+
+// ⭐ **THE NAME A FILE WOULD HAVE TO TAKE FOR A `test` TO BE LEGAL IN IT** — the fix E2058 names, derived
+// from the rule above rather than spelled a second time in the diagnostic. `regular.maxon` becomes
+// `regular.test.maxon`; a name carrying no `.maxon` at all (a path the caller named outright) simply gains
+// the whole suffix, which is still the true answer to "what would this have to be called?".
+export function testSourceNameFor(name String) returns String
+	if not name.endsWith(MaxonSourceExtension) 'noExtensionToReplace'
+		return "{name}{TestSourceSuffix}"
+	end 'noExtensionToReplace'
+
+	let bytes = name.toByteArray()
+	let stem = try bytes.slice(0, endIndex: bytes.count() - MaxonSourceExtension.toByteArray().count()) otherwise panic("testSourceNameFor: '{name}' ends with '{MaxonSourceExtension}', so it is at least that many bytes long")
+	return "{String.from(stem)}{TestSourceSuffix}"
+end 'testSourceNameFor'
 
 // A directory holding this file is not part of any program, and neither is anything beneath it. The
 // name is the bootstrap's and the repo's — five directories carry one today — and the file's CONTENTS

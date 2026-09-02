@@ -245,6 +245,7 @@ end 'requireUnreachableStdlibStayedDead'
 // PARSED method, so parsed-ness there is the ordinary case rather than the error.
 function seedRoots(globalData GlobalDataTable, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
 	markLiveFunction(UserEntryName.toByteArray(), byName: index.byName, reached: reached, worklist: worklist)
+	seedTestRoots(index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
@@ -278,6 +279,28 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 		markLiveFunction(reloc.funcName, byName: index.byName, reached: reached, worklist: worklist)
 	end 'eachRdataSlot'
 end 'seedRoots'
+
+// ⭐⭐ **A FOURTH KIND OF ROOT: EVERY `test` DECLARATION.** Nothing CALLS a test — that is what a test IS,
+// a body the program reaches by no edge — so this walk would drop every one of them and the binary would
+// hold no tests at all. `specs-shv2/test-declaration.md`'s `survives-dead-function-elimination` pins exactly
+// that, through its minted golden: the exit code cannot see it, because `main` returns 0 whether the test
+// survived or not.
+//
+// ⚠ **IT IS RECOGNISED BY ITS NAME, AND THE NAME IS UNFORGEABLE.** `__test_` is in the space
+// `Parser.requireUnreservedName` refuses to any declared name (E2051), so no source can wear the prefix and
+// there is no side channel here to keep in step with the parser — see `Project.isTestFunctionName`.
+//
+// ⚠ **IT IS NOT A `markCompilerOwnedRoot`, AND THE PROVENANCE PREMISE IS THE OPPOSITE ONE.** Those roots
+// assert the name is the COMPILER's and refuse a parsed declaration of it. A test's body is the AUTHOR's;
+// only its NAME is minted. So it goes through the plain `markLiveFunction`, exactly as `main` does — and a
+// module that declares no test roots nothing here.
+function seedTestRoots(index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray)
+	for func in index.functions 'eachFunction'
+		if isTestFunctionName(func.name) 'aTest'
+			markLiveFunction(func.name, byName: index.byName, reached: reached, worklist: worklist)
+		end 'aTest'
+	end 'eachFunction'
+end 'seedTestRoots'
 
 // Root one of the names the compiler owns, refusing a declaration that took it. The provenance test is
 // the SAME one `refuseDuplicateFunctionName` makes and reads the same field for the same reason: a parsed

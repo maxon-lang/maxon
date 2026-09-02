@@ -32,10 +32,18 @@
 // ⚠ NOT every `.maxon` file under the project root either — only the ones `maxon build` actually
 // compiles. `maxon-shv2/track0/` carries a `.maxonignore` and its program is not in the binary, so an
 // edit to it cannot change a single verdict. `collectMaxonSources` is what answers that, and is used
-// here rather than re-spelled: it excludes the build manifest AND every `.maxonignore`d subtree, which
-// is two of the three clauses. The two it does NOT carry — `*.test.maxon` and the compiler's own
-// `.maxon/` output directory — are applied on top, HERE, because they are what is left of the gap
-// between "a source of this project" and "a source of THIS BINARY".
+// here rather than re-spelled: it excludes the build manifest, every `.maxonignore`d subtree AND —
+// since the `test` declaration landed — every `*.test.maxon`, which is three of the four clauses. The
+// one it does NOT carry, the compiler's own `.maxon/` output directory, is applied on top, HERE,
+// because it is what is left of the gap between "a source of this project" and "a source of THIS
+// BINARY".
+//
+// ⚠ **THE `*.test.maxon` CLAUSE IS STILL ASKED HERE, AND IT IS NOW A BELT ON TOP OF THE WALK'S BRACES —
+// BUT IT IS ASKED THROUGH `Compiler.isTestSourceName` RATHER THAN SPELLED AGAIN.** The walk excludes
+// those files today, so this arm cannot fire; what it must never become is a SECOND answer to "is this
+// a test file?", because the two would then be free to drift on the case rule the paragraph at
+// `caseFolded` records losing once already. One predicate, two readers — the shape the walk and the
+// parser's own E2058 already share.
 //
 // ⭐ **THE `.maxonignore` CLAUSE USED TO BE APPLIED HERE TOO, AND ITS REMOVAL IS THE POINT.** It was a
 // hand-written mirror of `MaxonIgnore.IsIgnored`, in a file whose header already records losing a
@@ -84,12 +92,6 @@ let CompilerOutputDirName = ".maxon"
 // installed copy. Detected, never guessed from the path's spelling: a released binary's own path can
 // be anything at all, and the one fact that distinguishes it is whether its sources are there.
 let SourceRootMarkerDirName = "Compiler"
-
-// A `*.test.maxon` holds `test` declarations and is left out of a production build
-// (`SourceCollector.ExclusionFor`), so it is not in the binary either.
-//
-// Written in lower case because the comparison against it goes through `caseFolded`. See there.
-let TestFileSuffix = ".test.maxon"
 
 // What one executable's freshness came out as.
 //
@@ -164,10 +166,12 @@ function stalenessOf(binary FilePath) returns StalenessVerdict
 end 'stalenessOf'
 
 // Whether `maxon build` compiled `source` into the binary, given that `collectMaxonSources` has
-// already dropped the build manifest and every `.maxonignore`d subtree. See this file's header for why
-// the remaining two clauses live here rather than in that walk.
+// already dropped the build manifest, every `.maxonignore`d subtree and every `*.test.maxon`. See this
+// file's header for why the output-directory clause lives here rather than in that walk, and for why
+// the test-file clause is still asked — through that walk's OWN predicate — although the walk now
+// answers it first.
 function isCompiledInto(source FilePath, sourceRoot FilePath) returns bool
-	if caseFolded(source.filename()).endsWith(TestFileSuffix) 'testFile'
+	if isTestSourceName(source.filename()) 'testFile'
 		return false
 	end 'testFile'
 
@@ -206,12 +210,14 @@ function isUnderCompilerOutputDirectory(source FilePath, sourceRoot FilePath) re
 	return false
 end 'isUnderCompilerOutputDirectory'
 
-// One path component, lower-cased for comparison against `CompilerOutputDirName` or
-// `TestFileSuffix` — which are therefore both spelled in lower case.
+// One path component, lower-cased for comparison against `CompilerOutputDirName` — which is therefore
+// spelled in lower case.
 //
 // ⚠ **THE AUTHORITY FOLDS CASE ON EVERY PLATFORM, AND A MIRROR THAT DOES NOT IS A FALSE REFUSAL.**
 // `SourceCollector.IsTestFile` and `SourceCollector.IsInCompilerOutputDir` both compare
-// `OrdinalIgnoreCase`, so `Api.Test.maxon` is NOT in the binary. MEASURED both ways: the bootstrap
+// `OrdinalIgnoreCase`, so `Api.Test.maxon` is NOT in the binary. The test half of that lesson now lives
+// in `Compiler.isTestSourceName`, which folds case for exactly this reason; what is left here is the
+// output-directory half. MEASURED both ways: the bootstrap
 // answers `Skipped 1 test file(s)` for exactly that name, while a byte-exact `endsWith` here called
 // it a source of this binary, found it newer and REFUSED THE WHOLE SUITE over a file the build had
 // never read. That is the same shape as the `.maxon/` output directory this file's header already

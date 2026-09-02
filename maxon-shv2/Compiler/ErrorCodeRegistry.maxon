@@ -42,6 +42,8 @@ export enum ErrorCode
 	parserExpressionError = "E2004"
 	// The parser reached end-of-file with a construct still open.
 	parserUnexpectedEof = "E2007"
+	// A block's 'end' label does not match the label its header opened.
+	parserMismatchedEndLabel = "E2008"
 	// A specific token was required here. Reports as: Expected 'X' but got 'Y'.
 	parserExpectedToken = "E2010"
 	// An integer literal does not fit the range of its type.
@@ -129,6 +131,16 @@ export enum ErrorCode
 	// A generic instantiation supplies the wrong number of type arguments -- 'Pair with Integer'
 	// where 'type Pair uses A, B' expects two (P1.6-A).
 	genericArityMismatch = "E2056"
+	// A `test` declaration appears in a file whose name does not end in `.test.maxon`. Tests are
+	// confined to those files by ONE rule checked in ONE place, so which declarations a build
+	// carries is answerable from the file list alone -- no flag, no attribute, nothing to read the
+	// body for. The message names the fix: rename the file, or move the declaration.
+	parserTestOutsideTestFile = "E2058"
+	// A `test` declaration's name is the empty character literal (`test ''`). The name is the
+	// test's whole identity -- it is what the reporter prints and what `end ''` must match -- and
+	// an empty one names nothing. Refused at the declaration rather than at the report, where an
+	// unnamed failure would be the least useful place to discover it.
+	parserTestEmptyName = "E2059"
 	// '__line__' or '__file__' appeared somewhere other than a function parameter's default
 	// value -- in an ordinary expression, or as a struct FIELD default, which is a different
 	// thing despite the shared '= <expr>' spelling.
@@ -843,6 +855,16 @@ export enum ErrorCode
 	// write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
 	// and it stays available.
 	semanticArrayResizeManagedElement = "E3106"
+	// Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has
+	// two names -- the prose one the reporter prints, and the mangled `__test_<sanitized>` one that
+	// reaches the symbol table -- and the sanitizer maps every character outside [A-Za-z0-9_] to
+	// `_`, so `adds two` and `adds-two` collide even though they read differently.
+	// The message names BOTH prose names and the symbol they share, because the collision is
+	// invisible in either name alone.
+	// Refusing it is independently worth doing: two tests with the same DISPLAY name are
+	// unreportable -- a reader of the report cannot tell which one failed -- so this rejects the
+	// identical-prose case for its own reason, not merely as a symbol-table accident.
+	semanticDuplicateTestName = "E3107"
 	// The BUFFER surface's `set` (`arr.managed.set(index, value:)`) is called on an array whose
 	// ELEMENT TYPE IS MANAGED -- a struct, a `String`, a nested container, a boxed union. That
 	// setter is bounded by CAPACITY rather than by length (a 2026-07-30 user ruling), so it can

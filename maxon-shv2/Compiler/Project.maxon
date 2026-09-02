@@ -6635,6 +6635,70 @@ export function staticMemberRegistrationName(sourceName ByteArray) returns ByteA
 	return overloadRegistrationName(sourceName, suffix: StaticMemberNameSuffix.toByteArray())
 end 'staticMemberRegistrationName'
 
+// ⭐⭐ **A `test` DECLARATION'S SECOND NAME, AND WHY IT NEEDS ONE.** A test is named by a quoted PROSE name
+// (`test 'adds two numbers'`), and a prose name cannot be a symbol — it reaches name mangling, the
+// executable's symbol table, the `.mxdbg` sidecar and every panic stack trace. So a test compiles to an
+// ordinary function whose registration name is `__test_<sanitized>`, and the prose stays the name the
+// runner prints.
+//
+// ⚠ **THE PREFIX IS IN THE RESERVED SPACE ON PURPOSE, AND THAT IS WHAT MAKES `isTestFunctionName` SOUND.**
+// `Parser.requireUnreservedName` refuses any DECLARED name under `__` (E2051), so no source can write a
+// function called `__test_anything` — which is what lets the three reachability seeds that must root a test
+// (`DeadFunctionElimination.seedRoots`, `StdlibSource.reachableMaxonFunctionNames`) recognise one from its
+// NAME alone, with no side channel to keep in step with the parser.
+let TestFunctionNamePrefix = b"__test_"
+
+// The character every byte outside `[A-Za-z0-9_]` sanitizes to. One byte, named, because it is what makes
+// `adds two` and `adds-two` collide — the collision E3107 exists to refuse.
+let TestNameSanitizedByte = 95 as Byte
+
+// The symbol alphabet's three ASCII runs, named for `ConditionalCompilation.AsciiUpperA`'s reason: a bare
+// `b >= 97 and b <= 122` states a range and says nothing about which range.
+let AsciiDigitZero = 48 as Byte
+let AsciiDigitNine = 57 as Byte
+let AsciiCapitalA = 65 as Byte
+let AsciiCapitalZ = 90 as Byte
+let AsciiSmallA = 97 as Byte
+let AsciiSmallZ = 122 as Byte
+
+// ⭐ **THE MINT: the registration name a `test` named `prose` takes.** Every character outside
+// `[A-Za-z0-9_]` becomes `_`, which is `docs/LANGUAGE_REFERENCE.md`'s rule and the bootstrap's
+// (`SanitizeTestName`). THE one producer — `Parser.parseTestDeclaration` mints with it and the declaration
+// SWEEP files the same declaration under it, and two spellings of the derivation would file a test under a
+// name the real parse never registers.
+export function testFunctionRegistrationName(prose ByteArray) returns ByteArray
+	var name = ByteArray.create()
+	for b in TestFunctionNamePrefix 'eachPrefixByte'
+		name.push(b)
+	end 'eachPrefixByte'
+
+	for b in prose 'eachProseByte'
+		name.push(b if byteIsTestNameSafe(b) else TestNameSanitizedByte)
+	end 'eachProseByte'
+
+	return name
+end 'testFunctionRegistrationName'
+
+// `[A-Za-z0-9_]` — the alphabet a symbol may hold, asked one byte at a time.
+function byteIsTestNameSafe(b Byte) returns bool
+	if b >= AsciiDigitZero and b <= AsciiDigitNine 'aDigit'
+		return true
+	end 'aDigit'
+
+	if b >= AsciiCapitalA and b <= AsciiCapitalZ 'aCapital'
+		return true
+	end 'aCapital'
+
+	return (b >= AsciiSmallA and b <= AsciiSmallZ) or b == TestNameSanitizedByte
+end 'byteIsTestNameSafe'
+
+// ⭐ **IS THIS FUNCTION A TEST?** — read off the name, because the name is the only thing that survives
+// every tier down to the symbol table, and because the prefix is unforgeable (see above). The reachability
+// seeds ask it: nothing CALLS a test, so a test is a root rather than something a walk arrives at.
+export function isTestFunctionName(name ByteArray) returns bool
+	return bytesStartWith(name, prefix: TestFunctionNamePrefix)
+end 'isTestFunctionName'
+
 // ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES PARAMETER `paramIndex`'s DEFAULT VALUE**
 // (BATCH2 slice 4) — `__paramDefault#greet#0`. See `SignatureIndex.ParamDefaultInfo` for what the mechanism
 // is and why a default is a FUNCTION rather than a replayed expression; this is only where its name is

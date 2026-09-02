@@ -918,6 +918,43 @@ export union ParseError implements Error
 	// `expectedDeclaration` beside it, for the same reason: a token stood where the layout admits
 	// exactly one thing.
 	expectedNewlineAfterBlockLabel(got String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **A BARE `try` INSIDE A CLOSURE, WHOSE ENCLOSING FUNCTION IS THE LIFTED CLOSURE ITSELF.** Renders
+	// as **E2001** `try without otherwise requires the enclosing function to have 'throws'`, positioned at
+	// the `try`.
+	//
+	// ⚠ **IT IS A SEPARATE VARIANT FROM THE `errorTypeMismatch` SENTENCE THE SAME SITUATION EARNS IN A
+	// DECLARED FUNCTION, AND THE DIFFERENCE IS THAT THE OTHER SENTENCE'S REMEDY IS UNWRITABLE HERE.** That
+	// one offers *"add 'otherwise' to handle it, or declare 'throws {E}'"* — and a closure CANNOT declare
+	// one: a function type is `function(T) returns U` with no throws clause, which is the whole content of
+	// **E3101**. Telling an author to write a clause the grammar has no place for is a wrong answer wearing
+	// a diagnostic's clothes, so the closure gets the sentence that names the only move it has. The wording
+	// and the code are both the runnable oracle's, measured
+	// (`maxon-sharp`, `try risky()` in a non-throwing function), and
+	// `test-uncaught-throw/error.closure-in-a-test-is-not-a-test` pins it byte for byte — that case is what
+	// makes the distinction observable, because a closure inside a `test` is the one place where the
+	// enclosing body DOES relax and the closure still must not.
+	bareTryInAClosure(line LineNumber, column ColumnNumber)
+	// ⭐ **A BLOCK'S `end` LABEL DOES NOT REPEAT THE LABEL ITS HEADER OPENED.** Renders as **E2008**,
+	// positioned at the `end` — where `match`'s own mismatch is anchored, and for its reason.
+	//
+	// ⚠ **IT IS NOT `matchMismatchedBlockId`, WHICH IS E2043, AND THE REGISTRY DISTINGUISHES THE TWO IN SO
+	// MANY WORDS**: E2008 is *"a block's 'end' label"*, E2043 is *"a match arm's block label"*. `got` is
+	// hand-spelled by the raiser rather than routed through `tokenDisplayText`, for the reason spelled out
+	// at `parseMatch`'s own mismatch: a label is a `charLiteral` whose VALUE is the label and may
+	// legitimately be empty, so there is no kind to fall back to.
+	mismatchedEndLabel(expected String, got String, line LineNumber, column ColumnNumber)
+	// ⭐ **A `test` DECLARATION OUTSIDE A `*.test.maxon` FILE.** Renders as **E2059**'s neighbour **E2058**,
+	// positioned at the `test` keyword. It carries BOTH spellings of the file's name because the message
+	// names the fix rather than the rule: rename `regular.maxon` to `regular.test.maxon`.
+	testOutsideTestFile(fileName String, testFileName String, line LineNumber, column ColumnNumber)
+	// ⭐ **`test ''`.** Renders as **E2059**, positioned at the empty name literal. The name is the test's
+	// whole identity — it is what the reporter prints and what `end ''` must match — so an empty one names
+	// nothing, and it is refused at the declaration rather than at the report.
+	testEmptyName(line LineNumber, column ColumnNumber)
+	// ⭐ **TWO `test` DECLARATIONS IN ONE FILE WHOSE PROSE NAMES SANITIZE ALIKE.** Renders as **E3107**,
+	// positioned at the SECOND declaration's name. It names BOTH prose names and the symbol they share,
+	// because the collision is invisible in either name alone.
+	duplicateTestName(first String, second String, symbol String, line LineNumber, column ColumnNumber)
 	// ⭐ **`self` WHERE THERE IS NO INSTANCE — a `static function`, a free function, or a closure inside
 	// either.** Renders as **E2001** `'self' can only be used inside instance methods`, positioned at the
 	// `self` token (or at the bare self-field name that needs the receiver).
@@ -2848,6 +2885,52 @@ let ReservedNamePrefix = b"__"
 // because shadowing is the whole reason that reservation exists and only one of these namespaces can
 // shadow anything. It is a scalar and not a bool for the reason `NamePosition` is one: the caller states
 // what its declaration IS, and the rule over that is this door's alone.
+// ⭐ **WHICH KEYWORD OPENED THE DECLARATION `parseFunction` IS READING.** The two share their whole BODY —
+// the per-function reset block, the parameter binding, the body parse, the close, the registration — and
+// differ only in their HEAD (what is consumed before the body) and in whether the closing `end` label is
+// checked. So they are one routine with a stated form rather than two, which is what keeps a `test` from
+// growing its own copy of ~120 lines of per-function column resets that must never fall out of step.
+enum DeclaredHeadForm
+	// `function <name> (…) [returns T] [throws E]`.
+	declaredFunction
+	// `test '<prose name>'` — no parameters, no `returns`, and an IMPLIED `throws TestFailure` nobody writes.
+	testDeclaration
+end 'DeclaredHeadForm'
+
+// ⭐⭐ **WHAT KIND OF BODY THE PARSER IS INSIDE.** Two rules read it and both are about the ERROR CHANNEL a
+// bare `try` re-publishes into, which is a property of the function being parsed and of nothing else:
+//
+//   • a `test` body admits a bare `try` on ANY error type and substitutes the handler
+//     (`emitUncaughtTestThrow`) — `specs-shv2/test-uncaught-throw.md`;
+//   • a CLOSURE body cannot declare `throws` at all (E3101), so the remedy the ordinary refusal offers is
+//     unwritable there and it earns the oracle's own sentence instead (`ParseError.bareTryInAClosure`).
+//
+// ONE field with three states rather than two bools, because the states are exclusive by construction: a
+// closure written inside a test body is a closure, which is exactly the distinction
+// `test-uncaught-throw/error.closure-in-a-test-is-not-a-test` exists to pin.
+// One `test` declaration a file has already minted a symbol for — the pair E3107 compares and names. Its
+// own type rather than two parallel arrays for the reason `EnumLayout.addCase` states about its columns: a
+// pusher that recorded a symbol and forgot the prose would name the WRONG earlier test in the message.
+type MintedTest
+	export let symbol as ByteArray
+	export let prose as ByteArray
+
+	export static function create(symbol ByteArray, prose ByteArray) returns MintedTest
+		return Self{symbol: symbol, prose: prose}
+	end 'create'
+end 'MintedTest'
+
+typealias MintedTestArray = Array with MintedTest
+
+enum EnclosingBodyKind
+	// An ordinary `function`, a method, or a synthesized parameter-default helper.
+	declaredFunction
+	// A `test` declaration's body.
+	testBody
+	// A lifted closure literal's body, whatever kind of body it was written inside.
+	closureBody
+end 'EnclosingBodyKind'
+
 enum DeclaredNameNamespace
 	// A local, a parameter, a field, a function, a type — everything reached by writing the bare name,
 	// which is exactly how an instance method's implicit `self` is reached. A binding here would shadow it.
@@ -6111,6 +6194,43 @@ let SpawnKeywordName = b"spawn"
 module function tokenIsTheSpawnKeyword(tok Token) returns bool
 	return tok.kind == TokenKind.identifier and tok.value.equals(SpawnKeywordName)
 end 'tokenIsTheSpawnKeyword'
+
+// ⭐⭐ **`test`'s SPELLING — AN IDENTIFIER, NEVER A KEYWORD, FOR `module`'s AND `spawn`'s REASON AND WITH
+// ITS OWN MEASUREMENT.** `test` stands as an ORDINARY IDENTIFIER in a declaration position **34 times** in
+// `maxon-shv2/` + `stdlib/` today — `plain(test ValueId)` (`Parser.maxon:9027`), `let test = try
+// self.emitCompare` (`:38475`), `function selectableThisRun(test SpecTest, …)`
+// (`Testing/SpecTestRunner.maxon:1166`), `for test in tests` (`Testing/GoldenTracking.maxon:398`) — so a
+// `keywordMap` row would break this compiler's own source on the day it landed, exactly as `spawn`'s would
+// have. **The self-compile IS that measurement's gate**, for free: an over-greedy recognizer turns it red.
+//
+// The recognition is EXACT rather than heuristic, on `atModuleModifier`'s terms: the word opens a
+// declaration iff the very next token is a CHARACTER LITERAL — the test's quoted prose name — AND the
+// cursor stands where a declaration may start. Both halves are needed and neither suffices:
+// `match test 'check'` is also an identifier followed by a character literal, and only the position tells
+// the two apart, which is `test-declaration/test-stays-an-ordinary-identifier`'s whole content.
+//
+// ✅ **NO LEXER CHANGE.** `'adds two numbers'` already lexes as `TokenKind.charLiteral` (`Lexer.maxon:215`),
+// which is the same token every block label is.
+let TestKeywordName = b"test"
+
+// ⭐ **THE ERROR TYPE EVERY `test` IMPLICITLY THROWS** (`stdlib/Testing.maxon`'s `public enum TestFailure`).
+// A String because that is what a `ThrowsClause` carries; it is the corpus's own spelling read back, and
+// the one place this compiler names it, so a rename in the library is a compile error here rather than a
+// clause silently naming nothing.
+let TestImpliedThrowsTypeName = "TestFailure"
+
+// The case a failing test raises — `stdlib/Testing.maxon`'s `public enum TestFailure  assertion`. Its TAG
+// is read off that declaration rather than assumed (`EnumLayout.tagOfCase`); this is only the name.
+let TestFailureAssertionCaseName = b"assertion"
+
+// ⭐ **THE ONE CALL THE COMPILER WRITES INTO A TEST BINARY** — `stdlib/Testing.maxon`'s
+// `__TestReport.threw`, whose own doc comment says so from the other side (*"The compiler emits this call;
+// no program writes it"*). The registration name of a `static` member is its qualified spelling, and this
+// one is uncontested, so the bytes here are the bytes the declaration registered under.
+//
+// ⚠ It is spelled ONCE, here, because a callee name that disagrees with a declaration is not a compile
+// error — it is a backend `call to unknown function` with no source position at all.
+let TestReportThrewCallee = b"__TestReport.threw"
 
 // The one annotation the language has, and its spelling — matched as an IDENTIFIER after the `@`, never as a
 // keyword, so `heap` stays a perfectly good name for a variable or a function. See `parseAnnotatedBinding`.
@@ -13152,6 +13272,16 @@ export type Parser
 	// E2049. `parseArmBody` sets it around its `parseStatement` call; `parseTry` reads it to raise the
 	// block-form diagnostics at the right position. Saved/restored so nested constructs unwind it.
 	var inMatchArmBody as bool
+	// ⭐ **WHICH KIND OF BODY IS BEING PARSED (see `EnclosingBodyKind`).** Written where a body BEGINS —
+	// `parseFunction`, `parseDefaultHelperBody` and `parseClosureExpression` — and saved/restored by the
+	// closure, which is the one re-entrant door into a body: a closure written mid-body must not leave the
+	// enclosing function looking like a closure after its `end`.
+	var enclosingBodyKind as EnclosingBodyKind
+	// ⭐ **EVERY `test` THIS FILE HAS ALREADY MINTED A SYMBOL FOR (E3107).** The collision is between two
+	// PROSE names that sanitize alike, so the record has to carry both spellings — the symbol to compare and
+	// the prose to name in the message, which is invisible in the symbol alone. Per FILE because that is what
+	// the rule is about, and a `Parser` is per file.
+	var mintedTests as MintedTestArray
 	// ⭐ **THE LAST `named` FIELD READ** (P1.4b wave 2c) — so `throw <boxed-union field>` can MOVE the box out
 	// of its container (`emitThrowError` nulls the recorded `(box, offset)`) rather than reject it, the
 	// transfer shv2 has no `__mm_incref` to make by sharing. Four SCALAR fields rather than a struct so a
@@ -13547,6 +13677,8 @@ export type Parser
 			lastDispatchedMemberIndex: 0,
 			lastDispatchedReceiver: 0,
 			inMatchArmBody: false,
+			enclosingBodyKind: EnclosingBodyKind.declaredFunction,
+			mintedTests: MintedTestArray.create(),
 			lastFieldReadValid: false,
 			lastFieldReadValue: 0,
 			lastFieldReadBox: 0,
@@ -13904,6 +14036,21 @@ export type Parser
 				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, messageMethodNameOut: noMessageMethodsAtFileScope)
 				continue
 			end 'isFunction'
+
+			// ⭐⭐ **A `test` DECLARATION — GATED ON DEPTH 0, AND UNLIKE `function` IT HAS TO BE.** `test` is an
+			// ordinary IDENTIFIER (see `TestKeywordName`), and `match test 'check'` inside a body is the
+			// identical two tokens — claimed here it would count a block open that the `match`'s own `end`
+			// then closes, leaving `depth` one short for the rest of the file and every depth-0 gate above
+			// silently stopping. At depth 0 nothing but a declaration can stand here, which is the same
+			// argument the `type`/`enum` arms below make about their own reserved-but-nameable keywords.
+			//
+			// It opens a block closed by its own `end`, counted BEFORE the head is read exactly as the
+			// `function` arm counts one; the body is then walked by this same loop.
+			if depth == 0 and self.testDeclarationAt(self.pos) 'isTestDecl'
+				depth = depth + 1
+				self.recordScannedTest(entries, throwsEntries: throwsEntries)
+				continue
+			end 'isTestDecl'
 
 			if self.atTypeAliasDeclaration() 'isTypeAlias'
 				self.recordScannedTypeAlias(aliases, functionAliases: functionAliases, genericAliases: genericAliases)
@@ -14369,6 +14516,35 @@ export type Parser
 	// past the one modifier that can sit between the tier and the keyword. `export static function create`
 	// puts `static` where the tier would otherwise be, so a method's tier is one token further back; the
 	// caller has already read that bit for the receiver question and hands it here rather than re-peeking.
+	// ⭐⭐ **THE SWEEP'S HALF OF A `test` DECLARATION, and the two walks MUST agree about it.** The real parse
+	// registers a test as an ordinary function named `__test_<sanitized>` that returns nothing and declares
+	// `throws TestFailure`; this publishes exactly those facts whole-program, off the same one mint
+	// (`testFunctionRegistrationName`), so nothing can file the declaration under a name the other never
+	// writes.
+	//
+	// ⚠ **THE `throws` ENTRY IS THE LOAD-BEARING HALF.** A clause the source does not write is one the sweep
+	// cannot read, and `ProgramSignatures.throwsOf` answers `none` for a name with no entry — which is what
+	// a caller, the error-flag ABI and every gate keyed on "does this function throw?" would then read about
+	// a function that does.
+	//
+	// ⚠ **NO `freeFunctionNameOut` ENTRY, DELIBERATELY.** That record exists to settle two contests about
+	// what a written CALL means — `utils.helper()` as a directory-qualified free call (N1b), and one bare
+	// name declared in two directories (N1c). Nothing calls a test: it is reached as a ROOT and by no edge,
+	// so entering it in that contest could only make two directories' identically-named tests refuse each
+	// other over a spelling no source can write.
+	function recordScannedTest(entries FuncReturnTypeEntryArray, throwsEntries ThrowsClauseEntryArray)
+		// Cursor is ON the `test` keyword — `testDeclarationAt` established both tokens — so this lands on
+		// the prose name, which is where `declaredFunctionVisibility` expects to be asked from.
+		self.advance()
+		let nameTok = self.current()
+		let visibility = self.declaredFunctionVisibility(false)
+		self.advance()
+
+		let name = testFunctionRegistrationName(nameTok.value)
+		entries.push(FuncReturnTypeEntry.create(name, returnType: MaxonReturnType.void, declaredSurface: sharedEmptyDeclaredSurface, visibility: visibility))
+		throwsEntries.push(ThrowsClauseEntry.create(name, clause: ThrowsClause.throwing(TestImpliedThrowsTypeName), takesReceiver: false))
+	end 'recordScannedTest'
+
 	function declaredFunctionVisibility(hasStaticModifier bool) returns Visibility
 		if self.pos == 0 'noKeywordBeforeTheName'
 			return Visibility.file
@@ -18638,6 +18814,34 @@ export type Parser
 		return self.kindAt(index) == TokenKind.identifier and self.tokenAt(index).value.equals(ModuleModifierName)
 	end 'moduleModifierAt'
 
+	// ⭐⭐ **DOES A `test` DECLARATION OPEN AT `index`?** — `atModuleModifier`'s shape one construct over, and
+	// its exactness argument transferred: the word `test` is the declaration opener iff the very next token
+	// is the quoted prose NAME. See `TestKeywordName` for the measurement that forbids a `keywordMap` row.
+	//
+	// ⚠ **IT DOES NOT ASK WHETHER `index` IS A DECLARATION POSITION — ITS CALLERS ESTABLISH THAT, AND BOTH
+	// MUST.** `dispatchTopLevel` is a declaration position by construction; the tolerant SWEEP asks only at
+	// block depth 0, exactly as it does for `let`/`var`/`type`/`enum`. Asked anywhere else it would claim
+	// `match test 'check'` — the identical two tokens — which is the shape
+	// `test-declaration/test-stays-an-ordinary-identifier` pins.
+	//
+	// ONE predicate for both walks, for `atTopLevelBindingKeyword`'s reason: a shape taught to the real parse
+	// and not to the sweep would leave the sweep counting a block the real parse opened, and every depth-0
+	// gate below it would stop firing.
+	//
+	// ⚠ **`module test 'x'` IS REFUSED WHILE `export test` AND `public test` COMPILE — AND THAT ASYMMETRY IS
+	// THE REFERENCE'S, MEASURED, NOT AN ARTEFACT OF THIS PORT.** `export`/`public` are real lexer keywords, so
+	// `consumeOptionalVisibility` takes them before the head fork is reached; `module` is a CONTEXTUAL keyword
+	// gated on `declarationOpensAt(TokenKind)`, which structurally cannot see another contextual one, so it is
+	// never consumed and the `test` arm never runs. MEASURED against `./bin/maxon.exe test` on a probe project,
+	// all four spellings: bare / `export` / `public` all pass, and `module test 'a name'` gives
+	// `error E2001: probe.test.maxon:1:1: Expected function declaration, got 'module'` — the same code, the
+	// same sentence and the same position shv2 gives.
+	// ⇒ **Do not "fix" this into a divergence.** It is a refusal either way, a test's visibility means nothing
+	// (nothing calls a test), and making `module test` compile here would put shv2 alone in accepting it.
+	function testDeclarationAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.identifier and self.tokenAt(index).value.equals(TestKeywordName) and self.kindAt(index + 1) == TokenKind.charLiteral
+	end 'testDeclarationAt'
+
 	// ⭐⭐ **IS THE CURSOR ON THE `spawn` PREFIX OPERATOR? (SV1)** — `atModuleModifier`'s shape one construct
 	// over, and its exactness argument transfers unchanged: an identifier spelled `spawn` is the operator iff
 	// the very next token opens a NAME, because two adjacent name tokens begin no expression the grammar has.
@@ -20556,8 +20760,15 @@ export type Parser
 
 		if self.at(TokenKind.function) 'isFunction'
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
-			try self.parseFunction(visibility, takesReceiver: false)
-		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
+			try self.parseFunction(visibility, takesReceiver: false, form: DeclaredHeadForm.declaredFunction)
+		end 'isFunction' else if self.testDeclarationAt(self.pos) 'isTest'
+			// ⭐ **THE DECLARATION POSITION HALF OF `test`'s CONTEXTUAL RULE, and this arm IS that half.**
+			// `testDeclarationAt` asks only about the two tokens; standing here is what says the cursor is
+			// somewhere a declaration may begin, which is the other half and the one that tells `test 'x'`
+			// apart from `match test 'check'`. It takes no receiver for a file-scope function's reason, and
+			// it mints no type name — a test declares a FUNCTION, so there is no `recordTypeName`.
+			try self.parseFunction(visibility, takesReceiver: false, form: DeclaredHeadForm.testDeclaration)
+		end 'isTest' else if self.at(TokenKind.typealias) 'isTypeAlias'
 			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, tupleOwner: TupleAliasOwner.fileScope, recordFunctionSignature: true, visibility: visibility)
 			self.recordTypeName(nameIndex, kind: form, visibility: self.typeAliasVisibility(visibility))
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
@@ -23682,7 +23893,7 @@ export type Parser
 			throw ParseError.unsupported("a `static function` on `{layout.kindWord()} {String.from(layout.name)}` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)", line: tok.line, column: tok.column)
 		end 'staticMethod'
 
-		try self.parseFunction(visibility, takesReceiver: true)
+		try self.parseFunction(visibility, takesReceiver: true, form: DeclaredHeadForm.declaredFunction)
 	end 'parseEnumMethod'
 
 	// Is the token at `index` the `end` that CLOSES an enum/union body — as opposed to a case NAMED `end`?
@@ -24814,7 +25025,7 @@ export type Parser
 			throw ParseError.unexpectedToken(TokenKind.function.rawValue, got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'notFunction'
 
-		try self.parseFunction(visibility, takesReceiver: not isStatic)
+		try self.parseFunction(visibility, takesReceiver: not isStatic, form: DeclaredHeadForm.declaredFunction)
 	end 'parseTypeMember'
 
 	// ⭐ **ONLY A `type` BODY MAY DECLARE STORAGE (W65).** An `extension` adds BEHAVIOUR to types other
@@ -24855,32 +25066,15 @@ export type Parser
 	// the call is an ordinary direct call, the receiver is an ordinary argument, `slotCallArgs` slots it at
 	// position 0 because it is positional, and the register ABI hands it to the callee in argument
 	// register 0.
-	function parseFunction(visibility Visibility, takesReceiver bool) throws ParseError
-		try self.consume(TokenKind.function)
-		// ⭐ A KEYWORD MAY BE THE DECLARED NAME (D8) — `export static function from (path String)` is
-		// `stdlib/FilePath.maxon:34`. Nothing but a name may stand here, so a keyword written here is one;
-		// see `consumeNameToken`. The token scans that re-derive block structure learn the same fact through
-		// `keywordIsAName`'s declaration-name shape, or a `function while(…)` would read as a block nothing
-		// closes.
-		let nameTok = try self.consumeNameToken(NamePosition.declaration)
-		// The BARE name only — a method's `Type.` qualification is applied below by
-		// `declaredMethodName`, so `Point.create` is checked as `create` and the reserved test never
-		// sees the type prefix (`Self` is fine; a `__method` name is not).
-		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
-		// `Point.create` inside `type Point`, the bare token at file scope. The SAME derivation the
-		// declaration sweep records the signature under, so the key an `IrFunction` carries and the
-		// key `mintCallResult` types a call from are one name — for the FIRST declaration of it. A later
-		// OVERLOAD of the same name registers under a mangled variant of this one (`overloadRegistrationName`
-		// below), while the sweep keeps publishing the BARE name; the two are reconciled at the call site by
-		// `SemanticCheck.resolveOverloadedCalls`.
-		//
-		// ⚠ **"THE SWEEP CANNOT SEE PARAMETER TYPES" WAS THE SENTENCE HERE AND IT IS NO LONGER TRUE.** It
-		// publishes each declaration's parameter types beside its return type
-		// (`ProgramSignatures.overloadedDeclsOf`), which is what lets a call read the return type of the
-		// overload it MEANS. What it still keys by the bare name is the return type ITSELF and the four
-		// ownership/ABI facts `requireOverloadableName` refuses on — so the registration name a declaration
-		// takes is still the parser's, and the sweep's tables are still one entry per key.
-		let sourceName = self.declaredMethodName(nameTok)
+	// ⭐⭐ **AND IT READS A `test` DECLARATION TOO (see `DeclaredHeadForm`).** The two forms share everything
+	// from the per-function reset block down — value numbering, the parameter binding, the body parse, the
+	// close, the four registry commits — and differ in exactly two places, both marked below: the HEAD they
+	// consume, and whether the closing `end` label is CHECKED or merely skipped. A second routine for `test`
+	// would be a second copy of ~120 lines of per-function column resets, which is the shape
+	// `parseClosureExpression`'s own header already names as this file's standing hazard ("this list is
+	// written three times ... every miss is silent at the compiler's own build").
+	function parseFunction(visibility Visibility, takesReceiver bool, form DeclaredHeadForm) throws ParseError
+		let isTest = form == DeclaredHeadForm.testDeclaration
 
 		// Parameters are parsed into parallel name/type lists BEFORE the scope reset:
 		// binding them needs the fresh per-function scope + value numbering, which is
@@ -24900,53 +25094,105 @@ export type Parser
 		// read by the same `bindParameters`.
 		var paramTypeStarts = TokenIndexColumn.create()
 
-		// ⭐ **THE RECEIVER IS AN ORDINARY PARAMETER, PUSHED FIRST.** That is the entire mechanism:
-		// it occupies position 0, so it is ValueId 0 by the same Std-ABI seeding every parameter
-		// gets, and no part of the call path, the lowering or the backend learns that methods
-		// exist. It is pushed BEFORE `parseFunctionParameters` so the user's own parameters land
-		// after it — which also means the receiver is inside the ABI count `requireAbiParamCount`
-		// judges, correctly: it occupies an argument slot exactly like a declared parameter.
-		//
-		// It is typed by `enclosingSelfType` — the same `Self` means here, through the same routine that
-		// resolves the `Self` keyword, so a receiver and a `returns Self` cannot come to disagree about
-		// which type encloses them, NOR about whether that type is a struct or an enum (D1): a struct's
-		// receiver is a `structRef` and an enum's is a `named`, which is what routes each to its own
-		// dispatch at the call site.
-		//
-		// Its span is the METHOD NAME, because no source token declares it. That is the choice
-		// `closeFunctionBody` makes for its synthetic `retVoid` and for E3013, and for the same
-		// reason: the name is where a reader looks when something about the function's own shape is
-		// at fault.
-		if takesReceiver 'receiverParam'
-			paramNames.push(SelfParamName)
-			paramTypes.push(try self.enclosingSelfType(nameTok))
-			paramRanges.push(SourceRange.ofToken(nameTok))
-			// The receiver is typed by `enclosingSelfType`, never by a source spelling, so it can never be
-			// the buffer alias — but it occupies position 0 and every column here is indexed by position.
-			paramSurfaces.push(sharedEmptyDeclaredSurface)
-			// Nor is it declared at a type any token spells (W57), and its slot must therefore hold an index that
-			// names no type BY TOKEN KIND rather than by a claim about what some name means. The cursor has not
-			// moved past the signature's `(` yet, so `self.pos` is that `(` — and `declaredExistentialInstanceAt`
-			// declines anything but an identifier. (The method NAME would have been the natural choice, matching
-			// this parameter's `paramRanges` span, and it is the wrong one: a method named the same as a generic
-			// alias would resolve, and an `extension <interface>` receiver IS existential-tagged, so the slot is
-			// not unreachable.)
-			paramTypeStarts.push(self.pos)
-		end 'receiverParam'
-
-		try self.consume(TokenKind.leftParen)
-		// The height BEFORE the list is read, so `claimDefaultHelpersForRegistrationName` below can tell this
-		// declaration's own captures from every earlier one's — see there, and `DefaultHelperOwner`.
+		// The height BEFORE any list is read, so `claimDefaultHelpersForRegistrationName` below can tell this
+		// declaration's own captures from every earlier one's — see there, and `DefaultHelperOwner`. Read
+		// ahead of the head fork because a `test` declares no parameter and therefore no default: both forms
+		// want the same height, and reading it once is what says so.
 		let firstPendingDefault = self.pendingDefaultHelpers.count()
-		// ⭐⭐ **THE OWNER IS THE KEY THE SWEEP FILED THIS DECLARATION'S DEFAULTS UNDER, NOT THE NAME THE
-		// SOURCE WROTE (W75).** They differ for exactly one shape — a `static` member whose name an instance
-		// member of its type also wears — and there the two members are two keys, `m` and `m#__static`, with a
-		// set of defaults each. Asked under the source name, the static's own drain would read the INSTANCE's
-		// shape out of the by-name registry. `memberRegistrationKey` is the one composition of that contest,
-		// so this is a lookup rather than a second derivation.
-		let sweptOwnerName = self.signatures.memberRegistrationKey(sourceName, takesReceiver: takesReceiver)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sweptOwnerName), paramTypeHint: ClosureParamTypeHint.none)
-		try self.consume(TokenKind.rightParen)
+
+		// ⭐⭐ **THE HEAD FORK, AND THE THREE FACTS IT PRODUCES.** Whatever a head reads, the body below needs
+		// exactly this much from it: the TOKEN every position in this declaration is anchored at, the name the
+		// registries are keyed by, and the key the sweep filed this declaration's defaults under. A `test`
+		// declares no parameters, so its head leaves the five columns above empty and its whole grammar is
+		// `test '<prose>'` followed by a line break.
+		var nameTok = self.current()
+		var sourceName = EmptySourceText
+		var sweptOwnerName = EmptySourceText
+
+		if isTest 'aTestHead'
+			nameTok = try self.readTestDeclarationHead()
+			// The MANGLED name (`__test_<sanitized>`), which is what every registry, the symbol table and
+			// the `.mxdbg` sidecar carry. It goes through the ONE mint so the declaration SWEEP files this
+			// declaration under the very bytes the real parse registers it under.
+			sourceName = testFunctionRegistrationName(nameTok.value)
+			try self.requireUnmintedTestName(sourceName, nameTok: nameTok)
+			// A test takes no parameters, so it can have no defaults and there is no contest to compose: its
+			// own key is its own name.
+			//
+			// ⛔ **THE `.clone()` IS LOAD-BEARING, AND ONLY THE SELF-COMPILE COULD SAY SO.** A bare
+			// `sweptOwnerName = sourceName` MOVES — `sweptOwnerName` is a `var`, and mutability is what
+			// decides move-vs-alias — so the `var name = sourceName` below reads a moved value. shv2's own
+			// checker says exactly that (`E3102: use of moved value 'sourceName'`); the BOOTSTRAP that builds
+			// this compiler does not, so the bootstrap-built binary compiled, all 7,121 spec cases passed and
+			// every golden held. The function path never had the bug because it does not assign `sourceName`
+			// across — `memberRegistrationKey` takes it as a BORROW and returns a fresh key (see below) — so
+			// this is the one arm that had to state the copy.
+			sweptOwnerName = sourceName.clone()
+		end 'aTestHead' else 'aFunctionHead'
+			try self.consume(TokenKind.function)
+			// ⭐ A KEYWORD MAY BE THE DECLARED NAME (D8) — `export static function from (path String)` is
+			// `stdlib/FilePath.maxon:34`. Nothing but a name may stand here, so a keyword written here is one;
+			// see `consumeNameToken`. The token scans that re-derive block structure learn the same fact through
+			// `keywordIsAName`'s declaration-name shape, or a `function while(…)` would read as a block nothing
+			// closes.
+			nameTok = try self.consumeNameToken(NamePosition.declaration)
+			// The BARE name only — a method's `Type.` qualification is applied below by
+			// `declaredMethodName`, so `Point.create` is checked as `create` and the reserved test never
+			// sees the type prefix (`Self` is fine; a `__method` name is not).
+			try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
+			// `Point.create` inside `type Point`, the bare token at file scope. The SAME derivation the
+			// declaration sweep records the signature under, so the key an `IrFunction` carries and the
+			// key `mintCallResult` types a call from are one name — for the FIRST declaration of it. A later
+			// OVERLOAD of the same name registers under a mangled variant of this one
+			// (`overloadRegistrationName` below), while the sweep keeps publishing the BARE name; the two are
+			// reconciled at the call site by `SemanticCheck.resolveOverloadedCalls`.
+			//
+			// ⚠ **"THE SWEEP CANNOT SEE PARAMETER TYPES" WAS THE SENTENCE HERE AND IT IS NO LONGER TRUE.** It
+			// publishes each declaration's parameter types beside its return type
+			// (`ProgramSignatures.overloadedDeclsOf`), which is what lets a call read the return type of the
+			// overload it MEANS. What it still keys by the bare name is the return type ITSELF and the four
+			// ownership/ABI facts `requireOverloadableName` refuses on — so the registration name a
+			// declaration takes is still the parser's, and the sweep's tables are still one entry per key.
+			sourceName = self.declaredMethodName(nameTok)
+			// ⭐ **THE RECEIVER IS AN ORDINARY PARAMETER, PUSHED FIRST.** That is the entire mechanism:
+			// it occupies position 0, so it is ValueId 0 by the same Std-ABI seeding every parameter
+			// gets, and no part of the call path, the lowering or the backend learns that methods
+			// exist. It is pushed BEFORE `parseFunctionParameters` so the user's own parameters land
+			// after it — which also means the receiver is inside the ABI count `requireAbiParamCount`
+			// judges, correctly: it occupies an argument slot exactly like a declared parameter.
+			//
+			// It is typed by `enclosingSelfType` — the same `Self` means here, through the same routine that
+			// resolves the `Self` keyword, so a receiver and a `returns Self` cannot come to disagree about
+			// which type encloses them, NOR about whether that type is a struct or an enum (D1): a struct's
+			// receiver is a `structRef` and an enum's is a `named`, which is what routes each to its own
+			// dispatch at the call site.
+			//
+			// Its span is the METHOD NAME, because no source token declares it. That is the choice
+			// `closeFunctionBody` makes for its synthetic `retVoid` and for E3013, and for the same
+			// reason: the name is where a reader looks when something about the function's own shape is
+			// at fault.
+			if takesReceiver 'receiverParam'
+				paramNames.push(SelfParamName)
+				paramTypes.push(try self.enclosingSelfType(nameTok))
+				paramRanges.push(SourceRange.ofToken(nameTok))
+				// The receiver is typed by `enclosingSelfType`, never by a source spelling, so it can never be
+				// the buffer alias — but it occupies position 0 and every column here is indexed by position.
+				paramSurfaces.push(sharedEmptyDeclaredSurface)
+				// Nor is it declared at a type any token spells (W57), and its slot must therefore hold an index that
+				// names no type BY TOKEN KIND rather than by a claim about what some name means. The cursor has not
+				// moved past the signature's `(` yet, so `self.pos` is that `(` — and `declaredExistentialInstanceAt`
+				// declines anything but an identifier. (The method NAME would have been the natural choice, matching
+				// this parameter's `paramRanges` span, and it is the wrong one: a method named the same as a generic
+				// alias would resolve, and an `extension <interface>` receiver IS existential-tagged, so the slot is
+				// not unreachable.)
+				paramTypeStarts.push(self.pos)
+			end 'receiverParam'
+
+			try self.consume(TokenKind.leftParen)
+			sweptOwnerName = self.signatures.memberRegistrationKey(sourceName, takesReceiver: takesReceiver)
+			try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sweptOwnerName), paramTypeHint: ClosureParamTypeHint.none)
+			try self.consume(TokenKind.rightParen)
+		end 'aFunctionHead'
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
 		// the whole-program struct registry is complete — the step `parseTypeReference` could not take in
@@ -24964,14 +25210,59 @@ export type Parser
 		let returnType = self.resolveNamedStructReturn(try self.parseOptionalReturnType())
 		// The `throws E` clause (P1.4b) — stamped onto the function so the body parse (`throw`/propagate)
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
-		let throwsClause = try self.parseOptionalThrowsClause()
+		//
+		// ⭐⭐ **A `test` DECLARES `throws TestFailure` AND NOBODY WRITES IT.** It is SUBSTITUTED here rather
+		// than parsed, because there is no clause in the source to parse: `test '<prose>'` is the whole
+		// header, and the language forbids writing the clause at all
+		// (`docs/LANGUAGE_REFERENCE.md`, "Test Declarations"). That one substitution is what makes a
+		// forgotten `try` on an assertion **E3057 at compile time** — the assertion throws `TestFailure`, so
+		// omitting the `try` is the ordinary unhandled-throwing-call refusal — and what lets a test body
+		// spell a bare `try` with no `otherwise` at all.
+		//
+		// ⚠ **IT CANNOT BE A REFUSAL INSIDE `parseOptionalThrowsClause`**, which is the natural place to put
+		// "a test may not write one": that reader is SHARED with the tolerant declaration sweep, whose
+		// `otherwise return` would swallow the judgement and report nothing — the same argument
+		// `requireSignatureLineEnd` makes two lines down. There is nothing left to refuse anyway: the line
+		// break `readTestDeclarationHead` already required means a `throws` keyword here is E2001.
+		//
+		// ⚠ **THE PLACEHOLDER IS THE NULLARY CASE, AND THE REASON IS LEGIBILITY — NOT COST. MEASURED.**
+		// `ThrowsClause` is `none | throwing(name String)`, and this seeded the PAYLOAD case and then
+		// overwrote it for every non-test, which reads as though a test's clause were the default. A
+		// review flagged the discarded payload as a per-declaration allocation; **the ladder says it is
+		// not one** — `phase:parse` reads 648,023 allocations at rung 0 both before and after this edit,
+		// to the digit, because the payload is a module-`let` `String` that is retained rather than built.
+		// ⇒ Each arm now states its own clause, and nothing here claims a saving that was not measured.
+		var throwsClause = ThrowsClause.none
+		if isTest 'anImpliedThrowsClause'
+			throwsClause = ThrowsClause.throwing(TestImpliedThrowsTypeName)
+		end 'anImpliedThrowsClause' else 'aWrittenThrowsClause'
+			throwsClause = try self.parseOptionalThrowsClause()
+		end 'aWrittenThrowsClause'
 
 		try self.requireSignatureLineEnd()
 
 		// ⭐ **THE NAME EVERY REGISTRY BELOW IS KEYED BY** — the source name for the first declaration of it,
 		// a mangled variant for a later overload (D7). Decided HERE: the parameter list is complete and
 		// struct-resolved, and nothing has yet been recorded under a name.
-		let name = try self.overloadRegistrationNameFor(sourceName, paramTypes: paramTypes, paramNames: paramNames, takesReceiver: takesReceiver, nameTok: nameTok)
+		//
+		// ⚠ **A `test` IS NOT OVERLOADABLE AND DOES NOT ASK.** An overload set is selected on ARGUMENT types
+		// and a test takes no arguments, so two tests of one name are a duplicate rather than a set — which
+		// is what `requireUnmintedTestName` has already refused above, in the terms that name both prose
+		// spellings. Asking here would file the second one under a mangled variant of a name no call site
+		// can ever mean.
+		//
+		// ⚠ **EACH ARM STATES ITS OWN NAME, AND NEITHER MAY MOVE `sourceName` — `bindParameters` READS IT
+		// 380 LINES BELOW.** Seeding with `sourceName` and overwriting moves it, which shv2's own checker
+		// calls `E3102: use of moved value 'sourceName'`; the BOOTSTRAP that builds this compiler does not
+		// make that check, so nothing but the SELF-COMPILE could report it — not the 7,121-case suite, not
+		// the goldens, not the wasm lane. The overload arm only BORROWS it; the test arm has to COPY,
+		// because a test's registration name IS its source name and both readers outlive this statement.
+		var name = EmptySourceText
+		if isTest 'aTestName'
+			name = sourceName.clone()
+		end 'aTestName' else 'anOverloadableName'
+			name = try self.overloadRegistrationNameFor(sourceName, paramTypes: paramTypes, paramNames: paramNames, takesReceiver: takesReceiver, nameTok: nameTok)
+		end 'anOverloadableName'
 		// ⭐ **AN OVERLOAD MEMBER'S DEFAULTS FOLLOW ITS REGISTRATION NAME (W74)** — the sweep published one
 		// helper name for the whole set, and each member has to emit a helper of its own.
 		self.claimDefaultHelpersForRegistrationName(firstPendingDefault, sourceName: sweptOwnerName, registrationName: name)
@@ -25357,6 +25648,12 @@ export type Parser
 		self.collectCellLocalNames(self.pos)
 		try self.bindParameters(func, funcName: sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
 
+		// ⭐ **WHICH KIND OF BODY IS ABOUT TO BE PARSED (see `EnclosingBodyKind`)** — written where the body
+		// BEGINS, and re-written for every declaration so a `test` cannot leave the next `function` looking
+		// like one. The two rules that read it are both about the error channel a bare `try` re-publishes
+		// into; nothing else in the parse asks.
+		self.enclosingBodyKind = EnclosingBodyKind.testBody if isTest else EnclosingBodyKind.declaredFunction
+
 		self.skipNewlines()
 		// ⭐⭐ **A STDLIB BODY NO PATH FROM `main` REACHES IS SKIPPED WHOLE — the ops, and with them every
 		// diagnostic that is a property of the ops.** See `Parser.bodyDemand` for the measurement and for why
@@ -25383,14 +25680,102 @@ export type Parser
 			end 'nothingUnused'
 		end 'bodyReached'
 
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
+		// ⭐ **THE SECOND OF THE TWO PLACES THE FORMS DIFFER: a `test`'s `end` LABEL IS CHECKED.** Every block
+		// in the language repeats its opener's label at its `end`, and a test's label IS its name — the one
+		// the reporter prints — so a mismatch there is a test whose two halves name two different tests.
+		// A `function`'s label stays OPTIONAL and unchecked, which is what it has always been; widening that
+		// is a separate change with its own blast radius across every committed spec.
+		let endTok = try self.consume(TokenKind.end)
+		if isTest 'aTestsEndLabelRepeatsItsName'
+			try self.requireEndLabelMatches(nameTok.value, endTok: endTok)
+		end 'aTestsEndLabelRepeatsItsName' else 'anOptionalLabel'
+			self.skipOptionalLabel()
+		end 'anOptionalLabel'
 
 		self.publishExistentialInstances(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false)
 		self.commitRangeChecks(name)
 	end 'parseFunction'
+
+	// ⭐⭐ **READ A `test` DECLARATION'S HEAD — `test '<prose>'` and the line break behind it — and hand back
+	// the NAME TOKEN, which is what every position in the declaration is then anchored at.**
+	//
+	// Three refusals live here and nowhere else, and each is a property of the HEAD rather than of the body:
+	// the file it stands in (E2058), an empty name (E2059), and anything at all after the name (E2001).
+	// The third is what refuses `test 'x'(v int)` and `test 'x' returns int` — the two shapes the language
+	// forbids — and it is the ORDINARY block-label layout rule (`requireNewlineAfterBlockLabel`), not a pair
+	// of rules of its own: a test's name IS a block label, closed by an `end` that repeats it, so "the label
+	// ends its line" already says everything the two refusals need to say. That is also what keeps a
+	// malformed test a PARSE error rather than a test that silently passes.
+	function readTestDeclarationHead() returns Token throws ParseError
+		// `testDeclarationAt` established both tokens at the dispatch, so neither read can fail here: the
+		// keyword is an ordinary identifier (see `TestKeywordName`) and the prose name is the `charLiteral`
+		// behind it.
+		let testTok = self.current()
+		self.advance()
+		let nameTok = try self.consume(TokenKind.charLiteral)
+
+		// Anchored at the KEYWORD, not the name: what is wrong is that the declaration stands here at all.
+		let fileName = self.filePath.filename()
+		if not isTestSourceName(fileName) 'notATestFile'
+			throw ParseError.testOutsideTestFile(fileName, testFileName: testSourceNameFor(fileName), line: testTok.line, column: testTok.column)
+		end 'notATestFile'
+
+		// The name is the test's whole identity — what the reporter prints, and what `end ''` must repeat —
+		// so an empty one names nothing. Refused at the declaration rather than at the report, which is the
+		// least useful place to discover an unnamed failure.
+		if nameTok.value.isEmpty() 'unnamed'
+			throw ParseError.testEmptyName(nameTok.line, column: nameTok.column)
+		end 'unnamed'
+
+		try self.requireNewlineAfterBlockLabel()
+
+		return nameTok
+	end 'readTestDeclarationHead'
+
+	// ⭐ **E3107 — TWO TESTS IN ONE FILE WHOSE PROSE NAMES SANITIZE ALIKE.** Asked at the mint, so the
+	// declaration that collides is the one blamed and the incumbent is only named.
+	//
+	// ⚠ **A LINEAR SCAN, AND THE REASON IS THE BOUND — NOT THAT NOTHING ELSE FITS.** It is Θ(t²) in the
+	// tests of ONE file (`mintedTests` is a `Parser` field, and `Queries.fileReader` builds a fresh `Parser`
+	// per path), and t is the tests a human wrote into one file: a handful, where a scan of contiguous bytes
+	// beats hashing and the array is the SAME single per-file allocation a map would be.
+	//
+	// ⛔ **AN EARLIER VERSION OF THIS COMMENT SAID A MAP COULD NOT ANSWER THIS, AND THAT WAS FALSE TWICE
+	// OVER — recorded because a false reason is what invites the wrong edit later.** It argued "an
+	// allocation per file for a membership question a `Set` cannot answer anyway", but `MintedTestArray`
+	// is already that allocation, and the type that fits was never considered: `Map with ByteArray,
+	// ByteArray` (symbol ⇒ the earlier test's prose) answers membership AND hands back the prose the
+	// message must name, in one O(1) `get`. It exists and this very file uses the shape
+	// (`MutableVarPositionByName`, `Parser.maxon:9433`). ⇒ **If t ever stops being a handful — a generated
+	// test file would do it — that Map is the change, and nothing here argues against it.**
+	function requireUnmintedTestName(symbol ByteArray, nameTok Token) throws ParseError
+		for minted in self.mintedTests 'eachMintedTest'
+			if minted.symbol.equals(symbol) 'collides'
+				throw ParseError.duplicateTestName(String.from(minted.prose), second: String.from(nameTok.value), symbol: String.from(symbol), line: nameTok.line, column: nameTok.column)
+			end 'collides'
+		end 'eachMintedTest'
+
+		self.mintedTests.push(MintedTest.create(symbol, prose: nameTok.value))
+	end 'requireUnmintedTestName'
+
+	// ⭐ **E2008 — A BLOCK'S `end` LABEL MUST REPEAT THE LABEL ITS HEADER OPENED.** Positioned at the `end`,
+	// where `parseMatch` anchors its own mismatch and for its reason (both references anchor it there).
+	//
+	// ⛔ **`got` IS HAND-SPELLED, NOT ROUTED THROUGH `tokenDisplayText`** — the identical rule `parseMatch`
+	// states at length: that helper's fallback rests on "an empty value means the KIND implies the text",
+	// which is false of a block label, whose value IS the label and may legitimately be empty. Through the
+	// helper, `end ''` would report `got 'character literal'` — a reader hunting for a string that is not in
+	// the file.
+	function requireEndLabelMatches(expected ByteArray, endTok Token) throws ParseError
+		let closeTok = try self.consume(TokenKind.charLiteral)
+		if closeTok.value.equals(expected) 'repeatsIt'
+			return
+		end 'repeatsIt'
+
+		throw ParseError.mismatchedEndLabel(String.from(expected), got: String.from(closeTok.value), line: endTok.line, column: endTok.column)
+	end 'requireEndLabelMatches'
 
 	// ⛔ **A BODY THAT DROPS AN OPAQUE `T` MUST CARRY THE LAYOUT DESCRIPTOR THAT DROP READS (W10).** Asked once
 	// the whole body has been emitted, because "was a drop emitted" is a fact about the WHOLE body — and asked
@@ -26625,6 +27010,11 @@ export type Parser
 		self.functionCarriesFixedElementCountParam = needsCountParam
 		self.functionDroppedOpaqueWithoutDescriptor = false
 		self.functionStoredOpaqueWithoutDescriptor = false
+		// ⭐ A synthesized helper is an ordinary declared function (see `EnclosingBodyKind`). Written here for
+		// the reason every reset beside it is written here: the helpers are drained at the END of the file, so
+		// without it a file whose LAST declaration is a `test` would parse every default helper as though it
+		// were inside one.
+		self.enclosingBodyKind = EnclosingBodyKind.declaredFunction
 		// Named apart from the total, because it is the total MINUS this that places the layout slot — the
 		// `[layout][count]` step `layoutDescriptorSlotValueId` takes, spelled here the way `parseFunction`
 		// spells it.
@@ -33746,7 +34136,18 @@ export type Parser
 			// Uncaught `try f()` / `try await p` — re-publish the callee's flag to this function's caller. The
 			// flag is re-emitted VERBATIM, so the propagated error type MUST match this function's `throws`
 			// type or the caller decodes one enum's ordinals as another's (E3059, checked here).
-			try self.checkPropagateType(func, throwsClause: self.tryTargetThrows(target), tryTok: tryTok)
+			let calleeThrows = self.tryTargetThrows(target)
+
+			// ⭐⭐ **INSIDE A `test` BODY THERE IS NO SUCH THING AS AN UNCAUGHT THROW — the compiler writes the
+			// handler the author would otherwise have had to** (`specs-shv2/test-uncaught-throw.md`). The
+			// substitution happens HERE, on the no-`otherwise` path and nowhere else, which is what makes an
+			// `otherwise` the author DID write always win.
+			if self.testBodyAbsorbs(calleeThrows) 'anUncaughtThrowInATest'
+				try self.emitUncaughtTestThrow(flag, throwsClause: calleeThrows, tryTok: tryTok)
+				return TryHandler.terminated
+			end 'anUncaughtThrowInATest'
+
+			try self.checkPropagateType(func, throwsClause: calleeThrows, tryTok: tryTok)
 			self.emitScopeDrops(self.currentBlock, floor: WholeFunctionScopeFloor, anchor: tryTok)
 			self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.propagateError(flag), range: SourceRange.ofToken(tryTok))
 			return TryHandler.terminated
@@ -33780,6 +34181,138 @@ export type Parser
 		self.dropArmScopedOwned(ownedFloor, exitBlock: self.currentBlock, anchor: tryTok)
 		return handler
 	end 'parseOtherwiseHandler'
+
+	// ⭐⭐ **DOES THIS BARE `try` LAND IN A `test` BODY ON A *FOREIGN* ERROR?** — the whole condition of the
+	// relaxation, and it is a NARROWING of the propagation-type check rather than a rule of its own, which is
+	// why it is asked at that check's own door and nowhere else.
+	//
+	// Two clauses, and each is doing work:
+	//
+	//   • **the body must be the TEST's own.** A closure written inside a test body is a separate function
+	//     whose errors go to whoever calls it — which may be nobody, and may be long after the test finished
+	//     — so there is nothing for the test to fail on its behalf. `EnclosingBodyKind` answers that
+	//     precisely; `error.closure-in-a-test-is-not-a-test` is the pin.
+	//   • **the callee's error must not already be `TestFailure`.** An assertion throws exactly what a test
+	//     throws, so it propagates plainly and earns no report — which is what makes a report MEAN
+	//     "something unexpected".
+	//
+	// A callee that throws nothing (`none`) reaches no error edge here at all, so there is nothing to absorb.
+	function testBodyAbsorbs(throwsClause ThrowsClause) returns bool
+		if self.enclosingBodyKind != EnclosingBodyKind.testBody 'notATestBody'
+			return false
+		end 'notATestBody'
+
+		return match throwsClause 'calleeThrows'
+			none gives false
+			throwing(propagated) gives not propagated.equals(TestImpliedThrowsTypeName)
+		end 'calleeThrows'
+	end 'testBodyAbsorbs'
+
+	// ⭐⭐ **THE SUBSTITUTED HANDLER, EMITTED AS IR** — the exact code `specs-shv2/test-uncaught-throw.md`
+	// says a bare `try` on a foreign error compiles to:
+	//
+	//     try <call> otherwise (e) 'uncaught throw in test'
+	//         __TestReport.threw("<E>", errorCase: "{e}", file: "<this file>", line: <the try's line>)
+	//         throw TestFailure.assertion
+	//     end 'uncaught throw in test'
+	//
+	// Three properties follow from that shape and each is the reason for a line below:
+	//
+	//   • **a test still throws exactly `TestFailure`.** The foreign error is reported and DROPPED — never
+	//     propagated — so the runner has one error type to handle.
+	//   • **the report reaches the runner before the failure does**, so a test that fails on an unexpected
+	//     error says WHICH error rather than only that an assertion failed.
+	//   • **`file` and `line` locate the `try` that threw** — the line a reader has to open — not the test's
+	//     first line and not anything inside the callee. Hence `tryTok` for both.
+	//
+	// ⛔⛔ **THE CALL IS SYNTHESIZED AT THE IR TIER AND MUST NOT BE ROUTED THROUGH THE SOURCE-CALL DOOR.**
+	// `requireCalleeIsNotReservedName` refuses a `__` callee whose bytes an AUTHOR typed, wherever it stands,
+	// and that refusal is pinned shut by `stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code`.
+	// It is a rule about PROVENANCE, not about a spelling — so the compiler's own emission goes past it by
+	// being the compiler's, and no name-keyed exemption is added to weaken it.
+	//
+	// ⚠ **`"{e}"` IS THE LANGUAGE'S OWN INTERPOLATION, NOT A SECOND WAY TO SPELL AN ERROR VALUE.** It goes
+	// through `materializeInterpExpr`, which is the same machinery a reader gets by writing
+	// `otherwise (e) … print("{e}")` themselves: the live case name for a union and for a plain enum, the
+	// declared raw value for an enum that has one (`enumInterpRendering`).
+	function emitUncaughtTestThrow(flag ValueId, throwsClause ThrowsClause, tryTok Token) throws ParseError
+		let range = SourceRange.ofToken(tryTok)
+		let errorTypeName = try throwsClauseName(throwsClause) otherwise panic("emitUncaughtTestThrow: `testBodyAbsorbs` has already matched this clause's `throwing` arm, so it cannot be `none` here")
+		let errorType = self.tryErrorEnumType(throwsClause)
+		// ⛔⛔ **THE ENROLMENT BELOW IS ARM-SCOPED, AND CAPTURING THE FLOOR IS WHAT SAYS SO.** A BOXED foreign
+		// error is enrolled as an owned binding (`recoverCaughtErrorValue`) so the drops below release it — but
+		// the enrolment belongs to THIS terminated edge and to nothing after it. Left standing it outlives the
+		// `try`: `finishTerminatedTry` restores the pre-try move mark, whose height no longer matches, and the
+		// compiler PANICS in `restoreMoveMark` on a perfectly correct program — MEASURED, on the two-line
+		// program `test 'x'  try f() end 'x'` where `f` throws a payload-carrying union. The floor/drain pair is
+		// `parseOtherwiseHandler`'s own, for its stated reason: every catching form that DISCARDS the error
+		// brackets its enrolment the same way, and a fourth one that did not is exactly the drift that pair
+		// exists to prevent.
+		let ownedFloor = self.ownedBindings.count()
+		let caught = self.recoverCaughtErrorValue(flag, errorType: errorType, anchor: tryTok)
+
+		var args = ValueIdArray.create()
+		args.push(self.emitStringLiteral(errorTypeName.toByteArray(), range: range))
+		args.push(try self.emitCaughtErrorText(caught, tryTok: tryTok, range: range))
+		// The file names ITSELF the way every other emitted string does — root-relative and `/`-joined, which
+		// is what `__file__` expands to. An absolute path would be a fact about the machine that ran the
+		// compiler; see `sourceFileDisplayPath`.
+		args.push(self.emitStringLiteral(self.sourceFileDisplayPath(), range: range))
+		args.push(self.emitLiteral(tryTok.line as ParsedInt, valueType: MaxonType.integer, range: range))
+		_ = self.emitRuntimeCall(TestReportThrewCallee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+
+		// ⭐ **AND THEN THE TEST FAILS.** The hand-off drop set releases everything this frame still owns —
+		// the interpolation result, and a BOXED foreign error's box, which `recoverCaughtErrorValue` enrolled
+		// for exactly this moment — while the thrown scalar itself owns no heap and moves out inertly. It is
+		// the same two lines `emitThrowError` ends on, because it is the same throw.
+		let failure = self.emitTestFailureAssertion(range)
+		self.emitHandoffExitDrops(failure, anchor: tryTok)
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(failure, errorIsBoxed: false), range: range)
+
+		// The block is terminated by the line above, so this drops nothing — it DRAINS, which is the half that
+		// matters: the tracking must be back at the floor before `finishTerminatedTry` rewinds the move mark.
+		self.dropArmScopedOwned(ownedFloor, exitBlock: self.currentBlock, anchor: tryTok)
+	end 'emitUncaughtTestThrow'
+
+	// The caught error as a VALUE the report can render. A scalar enum's is the flag's decoded ordinal; a
+	// BOXED union's IS the flag — a box pointer — and it is enrolled as an owned binding here, so the throw
+	// that follows releases it through the ordinary hand-off drop rather than leaking a box on the one path
+	// that catches it. The same split `declareCaughtError` makes, minus the naming: nothing binds an `e`
+	// here, because no source wrote one.
+	function recoverCaughtErrorValue(flag ValueId, errorType MaxonType, anchor Token) returns ValueId
+		if not self.throwsTypeIsBoxedUnion(errorType) 'aScalarEnum'
+			return self.decodeScalarCaughtError(flag, errorType: errorType, anchor: anchor)
+		end 'aScalarEnum'
+
+		self.enrollCaughtBox(flag, eType: errorType, binding: VarInfo.createValueBinding(EmptySourceText, varType: errorType, mutable: false, boundValue: flag))
+		return flag
+	end 'recoverCaughtErrorValue'
+
+	// `"{e}"` for the caught error — the ONE interpolation the compiler writes on an author's behalf, built
+	// out of the very parts `parseStringInterpolation` builds a written one from, so the report and a
+	// `print("{e}")` in the same program cannot render one error two ways.
+	function emitCaughtErrorText(caught ValueId, tryTok Token, range SourceRange) returns ValueId throws ParseError
+		var partBufs = ValueIdArray.create()
+		var partLens = ValueIdArray.create()
+		var scratchIds = ValueIdArray.create()
+		try self.materializeInterpExpr(caught, exprTok: tryTok, format: InterpFormatSpec.absent(), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+	end 'emitCaughtErrorText'
+
+	// `TestFailure.assertion` as a VALUE, through the SAME emitter the source expression `TestFailure.assertion`
+	// goes through (`emitEnumTagLiteral`): the value of a payload-free enum case IS its tag, carried as a
+	// `named(E)`-tagged value over an `integer` literal op, and a second construction of that pairing would be
+	// the one shape `maxonTypeToStdType` panics on.
+	//
+	// The TAG is read off the corpus's own declaration rather than assumed to be zero. `stdlib/Testing.maxon`
+	// is loaded into every compile, so the layout is always there; a rename or a reordering of its cases is a
+	// positioned compiler panic here instead of a throw that encodes a tag nothing decodes.
+	function emitTestFailureAssertion(range SourceRange) returns ValueId
+		match self.signatures.enumFor(TestImpliedThrowsTypeName.toByteArray(), readerFilePath: self.filePath) 'declared'
+			declared(layout) then return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfCase(TestFailureAssertionCaseName), range: range)
+			undeclared then panic("emitTestFailureAssertion: '{TestImpliedThrowsTypeName}' declares no enum — `stdlib/Testing.maxon` is loaded into every compile, and a `test` declaration cannot be parsed without it")
+		end 'declared'
+	end 'emitTestFailureAssertion'
 
 	// The `otherwise` forms that bind no `e` and open no block: `ignore`, a single-statement `return`/`break`/
 	// `continue`/`throw`/`panic`, or a fallback VALUE. Split out of `parseOtherwiseHandler` so its caller can
@@ -34022,11 +34555,23 @@ export type Parser
 			return
 		end 'scalarUnnamed'
 
-		let bias = self.emitLiteral(ErrorFlagOrdinalBias, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
-		let eValue = self.mintValueOfType(errorType)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: bias, op: MaxonBinOp.sub), range: SourceRange.ofToken(anchor))
+		let eValue = self.decodeScalarCaughtError(flag, errorType: errorType, anchor: anchor)
 		_ = try self.scope.declareValueBinding(bindingName, varType: errorType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
 	end 'declareCaughtError'
+
+	// ⭐ **A SCALAR ENUM ERROR'S VALUE, RECOVERED FROM THE FLAG.** The flag carries `ordinal + bias`
+	// (`ErrorFlagOrdinalBias`, the encode's own reservation of 0 for "no error in flight"), so the decode is
+	// the one subtraction — and it is a routine rather than four inline lines because the SUBSTITUTED
+	// handler a `test` body gets (`emitUncaughtTestThrow`) needs exactly this value and must not decode it a
+	// second way. A second spelling of an ABI decode is the shape that reads one enum's ordinals as
+	// another's.
+	function decodeScalarCaughtError(flag ValueId, errorType MaxonType, anchor Token) returns ValueId
+		let range = SourceRange.ofToken(anchor)
+		let bias = self.emitLiteral(ErrorFlagOrdinalBias, valueType: MaxonType.integer, range: range)
+		let eValue = self.mintValueOfType(errorType)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: bias, op: MaxonBinOp.sub), range: range)
+		return eValue
+	end 'decodeScalarCaughtError'
 
 	// ⭐⭐ **DECLARE A SYNTHESIZED-ERROR-UNION `(e)` BINDING — the THIRD shape of caught error, and the only one
 	// that owns nothing.** `e` is bound to the FLAG itself and typed `integer`, exactly as v1 binds it: the
@@ -35207,10 +35752,31 @@ export type Parser
 	// the registry `throwsTypeIsBoxedUnion` resolves through) and not a hand-listed set of bad shapes.
 	function requireErrorTypeFitsEnclosing(func IrFunction, errorType String, door ErrorExitDoor, anchor Token) throws ParseError
 		match func.throwsTypeName 'enclosing'
-			none then throw ParseError.errorTypeMismatch(noEnclosingThrowsDetail(errorType, door: door), line: anchor.line, column: anchor.column)
+			none then try self.refuseErrorWithNoEnclosingClause(errorType, door: door, anchor: anchor)
 			throwing(enclosing) then try self.rejectIfDifferentThrows(errorType, enclosing: enclosing, door: door, anchor: anchor)
 		end 'enclosing'
 	end 'requireErrorTypeFitsEnclosing'
+
+	// ⭐⭐ **THE `none` ARM'S TWO SENTENCES, AND THE DIFFERENCE BETWEEN THEM IS THE REMEDY.** The rule is one
+	// rule — an error type leaving a function that declares no `throws` has nowhere to go — and the
+	// comparison never branches. What branches is what the author can DO about it:
+	//
+	//   • in a DECLARED function, either move works: convert the error with an `otherwise`, or declare the
+	//     clause. That is `noEnclosingThrowsDetail`'s sentence, on E3059, and four committed goldens pin it.
+	//   • in a CLOSURE only the first move exists. A function type is `function(T) returns U` with no throws
+	//     clause — **E3101**'s whole content — so telling the author to declare one names a program the
+	//     grammar has no place for. The oracle's own sentence (E2001, measured) is the one that fits, and
+	//     `test-uncaught-throw/error.closure-in-a-test-is-not-a-test` pins it byte for byte.
+	//
+	// ⚠ **THE CLOSURE ARM IS THE `try` DOOR'S ONLY.** A `throw` inside a closure is refused by the sentence
+	// its own door has always given it: `door` picks the sentence here exactly as it does one function down.
+	function refuseErrorWithNoEnclosingClause(errorType String, door ErrorExitDoor, anchor Token) throws ParseError
+		if self.enclosingBodyKind == EnclosingBodyKind.closureBody and door == ErrorExitDoor.propagate 'aClosureHasNoClauseToDeclare'
+			throw ParseError.bareTryInAClosure(anchor.line, column: anchor.column)
+		end 'aClosureHasNoClauseToDeclare'
+
+		throw ParseError.errorTypeMismatch(noEnclosingThrowsDetail(errorType, door: door), line: anchor.line, column: anchor.column)
+	end 'refuseErrorWithNoEnclosingClause'
 
 	// The comparison itself — ONE `equals`, for both doors. The PROPAGATE mismatch keeps its dedicated
 	// `propagateTypeMismatch` arm (whose sentence the corpus pins byte-for-byte); the THROW mismatch rides the
@@ -70665,6 +71231,12 @@ export type Parser
 		let savedLastFieldReadBox = self.lastFieldReadBox
 		let savedLastFieldReadOffset = self.lastFieldReadOffset
 		let savedInMatchArmBody = self.inMatchArmBody
+		// ⭐⭐ **A CLOSURE BODY IS A CLOSURE BODY, WHATEVER IT WAS WRITTEN INSIDE (see `EnclosingBodyKind`).**
+		// It is a scalar, so the save aliases nothing — and it is the reason this field exists at all: the
+		// `test` body relaxation must NOT follow the keyword down into a nested function, whose errors go to
+		// whoever calls it (which may be nobody, and may be long after the test finished). Restored below for
+		// the reason `loops`/`matches` are: a closure written mid-body resumes the ENCLOSING body afterwards.
+		let savedEnclosingBodyKind = self.enclosingBodyKind
 		let savedFuncIndex = self.artifact.currentFuncIndex
 		// The two closure columns and the capture-collection set are per-function and per-CLOSURE, so they
 		// swap with the rest of the context — a nested closure collects its own captures without disturbing
@@ -70861,6 +71433,7 @@ export type Parser
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueWitnessIds = ValueIdArray.create()
+		self.enclosingBodyKind = EnclosingBodyKind.closureBody
 		// ⛔⛔ **`declaringWitnessParamBase`/`Count` ARE DELIBERATELY NOT RESET HERE, AND THIS COMMENT IS WHERE
 		// A SWEEP WOULD PUT THEM BACK (W58).** They were reset — "a lifted closure reserves no witness
 		// parameters, so a dispatch inside one has none to name" — which is true of the closure's ABI and is
@@ -71115,6 +71688,7 @@ export type Parser
 		self.lastFieldReadBox = savedLastFieldReadBox
 		self.lastFieldReadOffset = savedLastFieldReadOffset
 		self.inMatchArmBody = savedInMatchArmBody
+		self.enclosingBodyKind = savedEnclosingBodyKind
 		self.artifact.setCurrentFuncIndex(savedFuncIndex)
 		self.valueIsCapturingClosure = savedValueIsCapturingClosure
 		self.valueClosureEnv = savedValueClosureEnv
