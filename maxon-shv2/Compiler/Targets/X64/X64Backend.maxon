@@ -216,7 +216,10 @@ let OpcodeSyscallSecondByte = 0x05
 // three atomics below are in it.
 let LockPrefix = 0xF0
 let OpcodeCmpxchgRmReg = 0xB1  // cmpxchg r/m64, r64 (0F B1 /r) — reg field = the SOURCE stored on a match
-let OpcodeXaddRmReg = 0xC1  // xadd r/m64, r64 (0F C1 /r) — reg field = the addend IN and the prior value OUT
+// EXPORTED: the syscall bracket's exit (`X64GtRuntime.emitGtExitSyscall`) is the one hand-assembled caller
+// that wants `xadd`'s two answers at once — it clears the in-call bit and reads what the bit was, which is
+// how it learns whether a processor was taken while it was in the kernel, in ONE instruction.
+export let OpcodeXaddRmReg = 0xC1  // xadd r/m64, r64 (0F C1 /r) — reg field = the addend IN and the prior value OUT
 
 // The displacement every atomic's `[base]` operand carries. An atomic names an ADDRESS and nothing else —
 // `StdOp.atomicCas`/`atomicRmw` have no field-offset operand, unlike `loadIndirect`/`storeIndirect` — so
@@ -1165,6 +1168,26 @@ export function encodeCmpRegBaseDisp(code ByteArray, destReg X64Register, base X
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeCmpRegRm, regField: destReg, base: base, disp: disp, wide: true)
 end 'encodeCmpRegBaseDisp'
 
+// ⭐⭐ **`lock <op> [base + disp], reg` — `encodeLockedMemReg`'s DISPLACED TWIN, and the displacement is the
+// whole difference between them.** That one serves `StdOp.atomicCas`/`atomicRmw`, whose operand is a bare
+// ADDRESS (`AtomicWordDisp` is 0, because those ops carry no field offset at the Std tier). The syscall
+// bracket (`X64GtRuntime.emitGtEnterSyscall`/`emitGtExitSyscall`) names a FIELD of the M struct from
+// hand-assembly, and flattening the offset would cost a `lea` on the hottest bracketed path there is.
+//
+// ⛔ **THE PREFIX IS NOT OPTIONAL HERE AND IS NOT A PARAMETER.** `SchedRuntime.MOffSyscallState` has TWO
+// writers — the machine itself and `__sched_retake`'s compare-and-swap — so an unlocked read-modify-write
+// could lose the thief's mark and leave a machine believing it still owns a processor that has been handed to
+// somebody else. An encoder that could be asked for the unlocked form would be an encoder somebody could ask
+// wrongly; the unlocked `add r/m, r` has no caller in this compiler and is deliberately not spelled.
+//
+// ⭐ It routes through `encodeModRmBaseDisp` for `encodeLockedMemReg`'s stated reason — the rsp/r12 SIB and
+// rbp/r13 zero-disp8 traps come for free, and an address register coloured into rbp would otherwise encode as
+// RIP-RELATIVE and read a constant out of the code stream.
+export function encodeLockedRmwBaseDispReg(code ByteArray, twoByteEscape bool, opcode MachineWord, base X64Register, disp Imm32, reg X64Register)
+	code.push(LockPrefix)
+	encodeModRmBaseDisp(code, twoByteEscape: twoByteEscape, opcode: opcode, regField: reg, base: base, disp: disp, wide: true)
+end 'encodeLockedRmwBaseDispReg'
+
 // `mov [base + disp], srcReg8` — an 8-BIT store (88 /r), how the panic runtime's hex
 // formatter writes one ASCII digit into its frame buffer. The REX prefix is FORCED for the
 // AH/CH/DH/BH-vs-SPL/BPL/SIL/DIL trap `encodeModRmBaseDisp` documents.
@@ -2005,7 +2028,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// stack is too small for the kernel's deep usage, so the call runs on the global system stack. The shim
 		// is a runtime no-op off a GT stack (`currentGt == 0 || stackBase == 0` → direct), so wrapping every call
 		// is correct; a non-GT module lays out no `__sched_tls_teb_offset` to reference, so it stays a bare `iatCall`.
-		iatCall(slotIndex) then emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, slotIndex: slotIndex, usesGt: usesGt)
+		iatCall(slotIndex) then emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, slotIndex: slotIndex, usesGt: usesGt)
 		cqo then encodeCqo(code)
 		// The two group-3 divides differ in the /ext field and in nothing else — same F7 opcode, same
 		// implicit RDX:RAX pair — which is why one op with a signedness field encodes both.

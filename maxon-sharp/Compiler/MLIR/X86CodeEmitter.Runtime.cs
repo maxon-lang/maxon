@@ -1,6 +1,7 @@
 using MaxonSharp.Compiler.Ir.Dialects;
 using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 using static MaxonSharp.Compiler.Ir.Runtime.RuntimeEmitter;
+using static MaxonSharp.Compiler.Ir.Runtime.SubprocessStdin;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -8340,7 +8341,8 @@ public partial class X86CodeEmitter {
   //   +0x00  hWrite                pipe write end into child stdin
   //   +0x08  dataPtr               payload to write
   //   +0x10  dataLen               payload length
-  // total = 0x18 (round to 0x20)
+  //   +0x18  delayMs               Sleep() before the first write (0 = write now)
+  // total = 0x20
   //
   // Result struct (mm_raw_alloc'd by wait_collect, freed by result_release):
   //   +0x00  statusKind            0 exited, 1 signalled, 2 timedOut
@@ -8407,6 +8409,7 @@ public partial class X86CodeEmitter {
   private const int FeedCtxOffHWrite = 0x00;
   private const int FeedCtxOffDataPtr = 0x08;
   private const int FeedCtxOffDataLen = 0x10;
+  private const int FeedCtxOffDelayMs = 0x18;
   private const int FeedCtxSize = 0x20;
 
   // Result struct field offsets
@@ -8426,6 +8429,17 @@ public partial class X86CodeEmitter {
   private const int StdioKindInherit = 1;
   private const int StdioKindCollect = 2;
   private const int StdioKindFile = 3;
+
+  // StdinKindHold, StdinKindDelayed, StdinDelayedFeedMs and StdinKindsWantingPipe
+  // come from Runtime/SubprocessStdinContract.cs, shared with ARM64CodeEmitter —
+  // see the `using static` at the head of this file. They lived here AND there
+  // until the two copies had already drifted in spelling, and that file records
+  // why a second copy is a wrong answer rather than a build break.
+  //
+  // StdioKindCollect stays local because it is a genuine dual meaning of one wire
+  // value, not a duplicate: on stdin, kind 2 is `bytes` (feed the child these
+  // bytes); on stdout/stderr it is `collect` (capture what the child writes). The
+  // output-side uses below want the output-side name.
 
   // Flags bits
   private const int SpawnFlagHideWindow = 1;
@@ -10034,12 +10048,19 @@ public partial class X86CodeEmitter {
   // then closes the write end so the child sees EOF. Single WriteFile loop
   // for arbitrarily-large payloads (Windows pipes block when full, which is
   // fine here because the child's read is what unblocks us).
+  //
+  // ⭐ THE DELAY (`StdinKind.delayed`) IS SPENT HERE, ON THIS THREAD, and that is
+  // the whole reason it is not spent in the parent: the spawning thread goes
+  // straight on to WaitForSingleObject on the child, so the wait for the child
+  // and the wait before feeding it OVERLAP instead of adding up. A caller that
+  // spawns a `delayed` child is blocked for exactly as long as that child lives
+  // and not one tick longer.
   // --------------------------------------------------------------------------
   private void EmitMaxonSubprocessFeedThreadEntry() {
     EmitRuntimeFunctionStart("__subp_feed_thread", 1, 0x40);
     // [rbp-0x08] ctx ptr; [rbp-0x10] dataPtr; [rbp-0x18] remaining; [rbp-0x20] hWrite; [rbp-0x28] bytesWritten
 
-    // Feed thread only calls WriteFile and CloseHandle — no allocator
+    // Feed thread only calls Sleep, WriteFile and CloseHandle — no allocator
     // calls — so it doesn't need a scheduler TLS binding.
 
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
@@ -10049,6 +10070,15 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x10, X86Register.Rcx, 8);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FeedCtxOffDataLen);
     EmitMovMemReg(-0x18, X86Register.Rcx, 8);
+
+    // Hold the pipe open, unwritten, for delayMs before the first byte. The
+    // handle is already the child's stdin, so this is the child's read blocking
+    // in the kernel — not a pipe that does not exist yet.
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FeedCtxOffDelayMs);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "__subp_feed_no_delay");
+    EmitCallImportOnSystemStack("kernel32.dll", "Sleep");
+    DefineLabel("__subp_feed_no_delay");
 
     DefineLabel("__subp_feed_loop");
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
@@ -10769,10 +10799,13 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitCmpRegImm(X86Register.Rax, StdioKindInherit);
     EmitJcc("e", "rt_subp_sc_stdin_inherit");
-    EmitCmpRegImm(X86Register.Rax, StdioKindCollect);             // bytes payload (Subprocess uses kind=collect for stdin bytes? actually kind 2 is collect for stdout/stderr; for stdin we use kind 3 to mean "file" and kind … rethink)
-    // For stdin: kind 2 means "bytes". (Subprocess.maxon: collect is the
-    // OUTPUT side; for stdin we use the stdinKind int 2 for "bytes".)
-    EmitJcc("e", "rt_subp_sc_stdin_bytes");
+    // Every kind that wants a pipe shares this one arm; what separates them is
+    // whether a payload is copied (the `hold` test further down) and whether the
+    // feed thread waits before pushing it (the delay written into the feed ctx).
+    foreach (int pipeKind in StdinKindsWantingPipe) {
+      EmitCmpRegImm(X86Register.Rax, pipeKind);
+      EmitJcc("e", "rt_subp_sc_stdin_bytes");
+    }
     EmitCmpRegImm(X86Register.Rax, StdioKindFile);
     EmitJcc("e", "rt_subp_sc_stdin_file");
     // none / discard: redirect to NUL
@@ -10832,6 +10865,16 @@ public partial class X86CodeEmitter {
     // STARTUPINFOW.hStdInput = child's read end
     EmitMovRegMem(X86Register.Rax, SlotHStdinReadChild, 8);
     EmitMovMemReg(SlotSI + 0x50, X86Register.Rax, 8);
+
+    // `hold` (kind 4) has the pipe and stops here: it is DEFINED as a stdin pipe
+    // nobody writes to, so the payload is not merely absent, there is none to
+    // look for. Asked as a kind test rather than left to the empty-cstring check
+    // below, because that check would make the contract "whatever the caller put
+    // in the data slot" and a `hold` spawn that ever carried bytes would quietly
+    // feed them and close the pipe — the exact opposite of what it asks for.
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitCmpRegImm(X86Register.Rax, StdinKindHold);
+    EmitJcc("e", "rt_subp_sc_stdin_payload_empty");
 
     // Copy stdin payload (managed bytes at arg -0x38) into a fresh
     // mm_raw_alloc'd buffer so the feed thread outlives the caller's
@@ -11547,6 +11590,19 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.Rax, FeedCtxOffDataPtr, X86Register.Rcx);
     EmitMovRegMem(X86Register.Rcx, SlotStdinPayloadLen, 8);
     EmitMovIndirectMemReg(X86Register.Rax, FeedCtxOffDataLen, X86Register.Rcx);
+    // How long the feed thread holds the pipe open before writing. mm_raw_alloc
+    // does not zero, so this field is written on BOTH arms rather than left to
+    // whatever the block last held — a garbage delay would park the child for an
+    // arbitrary time on an ordinary `bytes` spawn.
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);                    // stdinKind (arg slot, still live)
+    EmitCmpRegImm(X86Register.Rcx, StdinKindDelayed);
+    EmitJcc("e", "rt_subp_sc_stdin_feed_delayed");
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJmp("rt_subp_sc_stdin_feed_delay_set");
+    DefineLabel("rt_subp_sc_stdin_feed_delayed");
+    EmitMovRegImm(X86Register.Rcx, StdinDelayedFeedMs);
+    DefineLabel("rt_subp_sc_stdin_feed_delay_set");
+    EmitMovIndirectMemReg(X86Register.Rax, FeedCtxOffDelayMs, X86Register.Rcx);
     // Mirror payload into the struct so release_handle can free it on
     // detached spawns (where wait_collect never runs).
     EmitMovRegMem(X86Register.Rcx, SlotStdinPayloadCopy, 8);

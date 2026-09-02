@@ -61,11 +61,33 @@ typealias Byte = int(0 to u8.max)
 
 // Stdin discriminator passed across the builtin boundary. Raw values match
 // the runtime contract (see X86/ARM64 emitters and the parent plan).
+//
+// ⭐ `hold` IS THE FIFTH VALUE AND IT WAS ALREADY IN ONE RUNTIME BEFORE IT HAD A SURFACE SPELLING:
+// shv2 built it for `StreamingSubprocess`, which wants a stdin pipe with NO payload queued. `bytes`
+// cannot say that — its arm always carries one — so an empty `bytes` payload is NOT the same request.
+// The number is 4 because that is the value shv2's runtime already decodes; that runtime's constant
+// is `SubpStdinHold` (`maxon-shv2/Compiler/Runtime/GtRuntime.maxon`), renamed from `SubpStdinPipe`
+// when this surface spelling arrived, because a value the language can spell should not answer to a
+// second name inside one compiler.
+//
+// ⚠ `delayed` IS THE ONE VALUE NO RUNTIME HAD BEFORE THIS SURFACE SPELLING. **ALL THREE EMITTERS
+// DECODE BOTH VALUES NOW** — the bootstrap's x64 and arm64 emitters and shv2's `emitSubpStdinSetup`.
+// ⛔ **THIS PARAGRAPH USED TO SAY THE OPPOSITE — that shv2 tested for `bytes` and `pipe`, sent
+// everything else down its non-pipe arm, and therefore handed a `delayed` spawn the null device and an
+// instant EOF — and that it was left unclosed "because closing it means editing shv2's runtime".** It
+// WAS closed, in the same change that added these two values: `emitSubpStdinKindWantsPipe` is now the
+// one place the pipe question is asked, and `SubpSlotStdinFeedAt` carries the not-before time. The
+// stale sentence is recorded rather than deleted because a comment that names a defect the code no
+// longer has is worse than no comment: it sends the next reader looking for a divergence to work
+// around. ⇒ **the divergence to watch for now is a NEW kind added to this enum and to fewer than
+// three emitters**, which is what the two `…WantingPipe` sets exist to make a one-line change.
 enum StdinKind
 	none = 0
 	inherit = 1
 	bytes = 2
 	file = 3
+	hold = 4
+	delayed = 5
 end 'StdinKind'
 
 // Stdout / stderr discriminator passed across the builtin boundary. Shared
@@ -209,6 +231,37 @@ end 'SpawnEnvironment'
 /// - `inherit` — pass through the parent's stdin.
 /// - `bytes(s)` — write `s` to stdin, then close.
 /// - `file(p)` — read stdin from a file on disk.
+/// - `hold` — stdin is a pipe the parent opens, hands the read end of to the
+///   child, and then holds open WITHOUT EVER WRITING TO IT, until the child is
+///   reaped. A read in the child therefore BLOCKS IN THE KERNEL instead of
+///   seeing EOF, which is what `none` and a spent `bytes` payload both give.
+///
+/// - `delayed(s)` — `hold`'s pipe for about a second, then `s`, then close. A
+///   read in the child BLOCKS for that long and then COMPLETES, so the child
+///   both enters a real kernel wait and still terminates on its own.
+///
+/// ⭐ `hold` IS THE ONLY ARM THAT LEAVES THE CHILD BLOCKED RATHER THAN ANSWERED,
+/// and it exists because nothing else can express that. `none` opens the null
+/// device (instant EOF), `bytes("")` writes nothing and then closes (also EOF —
+/// and the two runtimes disagree about even that; see `StdinKind`), and
+/// `inherit` hands over whatever the parent's own stdin happens to be, which is
+/// not a property any caller controls. A caller that needs a child to be stuck
+/// in a real blocking syscall has this and no other way to ask for it.
+///
+/// ⭐⭐ `delayed` EXISTS BECAUSE `hold` ALONE CANNOT BE ASSERTED ON. A child parked
+/// forever can only ever end at its spawner's timeout, so the only observation
+/// `hold` supports is "it did not finish" — which is also what a hang, a crash
+/// loop and a deadlock look like. `delayed` ends the wait, so the child exits
+/// normally and what it PRINTED, and in what ORDER against whatever ran while it
+/// was parked, becomes the observable.
+///
+/// ⚠ THE DELAY IS FIXED AND THE CALLER CANNOT NAME IT (`StdinDelayedFeedMs`, one
+/// per emitter, in the runtime that performs the write).
+/// The spawn contract carries a `limit` alongside stdout's and stderr's kinds and
+/// NONE alongside stdin's, so there is no slot to put a per-call duration in; a
+/// caller-chosen delay is a change to the builtin's arity, which is declared in
+/// each compiler's parser as well as in both emitters. The payload rides the
+/// existing `stdinData` slot and IS the caller's, so only the duration is fixed.
 ///
 /// Each variant routes its payload through the `subprocessSpawn` stdio
 /// triple; the runtime stubs currently fail spawns with -1 until the real
@@ -218,6 +271,8 @@ public union InputSource
 	inherit
 	bytes(data String)
 	file(path FilePath)
+	hold
+	delayed(data String)
 end 'InputSource'
 
 /// Where the child's stdout (or stderr) is sent.
@@ -495,10 +550,12 @@ end 'Subprocess'
 // Internal helpers — argv blob, executable resolution, runtime triple plumbing
 // =============================================================================
 
-// Stdio-kind discriminator carried into spawn. Narrowed to the four values
-// the contract defines so an out-of-range value can't be produced by an
-// accidental assignment.
-typealias StdioKindValue = int(0 to 3)
+// Stdio-kind discriminator carried into spawn. Narrowed to the values the
+// contract defines so an out-of-range value can't be produced by an accidental
+// assignment. The upper bound is stdin's, which has two kinds more than the
+// output side (`StdinKind.hold`, `StdinKind.delayed`); an output slot never
+// produces either.
+typealias StdioKindValue = int(0 to 5)
 
 // Spawn-flags bitfield. Bits past the documented 3 are reserved.
 typealias SpawnFlagsValue = int(0 to 7)
@@ -759,6 +816,8 @@ function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, data: "", limit: 0)
 		bytes(data) gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: data, limit: 0)
 		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: 0)
+		hold gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: 0)
+		delayed(data) gives StdioRuntimeTriple.create(StdinKind.delayed.rawValue, data: data, limit: 0)
 	end 's'
 end 'stdinTripleFromSource'
 

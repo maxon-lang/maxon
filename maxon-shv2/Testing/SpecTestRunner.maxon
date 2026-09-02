@@ -781,12 +781,18 @@ end 'inheritedWorkingDir'
 // ⚠ `environment` DEFAULTS FOR EXACTLY THAT REASON AND NOT FOR `workingDirectory`'s: every spawn here but
 // ONE wants the parent's environment unchanged, and the one that differs is the RUN step, where a case's
 // `<!-- procs: N -->` marker names the processor count its program must start on (`runEnvironmentFor`).
-export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit) returns ProcessCapture throws SubprocessError
+//
+// ⚠ `standardInput` DEFAULTS FOR THE SAME REASON AS `environment`, and its one differing caller is the
+// same one: every spawn this harness makes wants `Subprocess`'s own default (the null device, so a read
+// answers at once with EOF), and the RUN step alone may be told otherwise by a case's
+// `<!-- stdin: … -->` marker (`runStdinFor`).
+export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
 	var config = Configuration.create(exe)
 	config.arguments = argv
 	config.timeoutMs = timeoutMs
 	config.workingDirectory = workingDirectory
 	config.environment = environment
+	config.standardInput = standardInput
 
 	let collected = try Subprocess.runConfiguration(config)
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
@@ -3563,7 +3569,7 @@ function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
-	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(pending.compiled.test.procs)) otherwise (e) 'runSpawnFailed'
+	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(pending.compiled.test.procs), standardInput: runStdinFor(pending.compiled.test.stdin)) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
 
@@ -3609,6 +3615,48 @@ end 'runEnvironmentFor'
 // from the host's environment into the Linux machine. See `runEnvironmentFor` for the measurement that
 // nothing else does.
 let OrbForwardedEnvName = "ORBENV"
+
+// ⭐ **WHAT A `<!-- stdin: delayed -->` CASE'S PROGRAM READS.** One line, so a `readLine()` returns and
+// the case can pin its LENGTH (5) as evidence that the read completed rather than being cut short by
+// EOF — a distinction `""` cannot carry, since that is also what a closed pipe gives.
+//
+// The trailing newline is not decoration: a reader looking for a line terminator would otherwise sit
+// through the whole delay and then block AGAIN until the pipe closed, which would make the case's timing
+// a property of the runtime's buffering instead of of the delay.
+let SpecStdinDelayedLine = "hello\n"
+
+// ⭐⭐ **WHAT A CASE'S `<!-- stdin: … -->` MARKER MEANS AT THE SPAWN: one descriptor, in one child, and
+// nothing else changed.**
+//
+// `InputSource.hold` is a pipe whose read end the child gets and whose write end this process keeps
+// without ever writing to it, for exactly as long as the child's handle lives. So a read on fd 0 in the
+// child BLOCKS IN THE KERNEL, which no other `InputSource` arm can produce — `none` opens the null device
+// and answers at once, `bytes` answers and then closes, and `inherit` would hand the case whatever the
+// suite was launched with, making the result a property of the terminal rather than of the case.
+//
+// `InputSource.delayed` is that same pipe with an end: the runtime holds it open for about a second, then
+// writes the line and closes. The child's read therefore blocks in the kernel AND RETURNS, so the program
+// exits on its own and the case pins an answer instead of a timeout.
+//
+// ⚠ **THE DELAY COSTS THIS WORKER NOTHING BEYOND THE CHILD'S OWN LIFETIME, because the child cannot end
+// before it is fed.** Whoever waits, waits for the same instant. On Windows the delay is spent on the
+// stdin feed thread the `bytes` path already creates, so it overlaps the wait outright; on POSIX it is
+// spent on the spawning thread, which has no work of its own in that window anyway — `Subprocess`'s wait
+// reaps the child BEFORE it drains either output pipe. So a `delayed` case takes about a second and
+// nothing else is delayed by it: each worker is its OWN PROCESS (`SpecWorkerPool`), so the other eleven
+// neither share this thread nor wait on it.
+//
+// ⛔ **IT MAY NOT BE DONE BY LEAVING THE PIPE TO THE PARENT'S OWN STDIN**, for `runEnvironmentFor`'s
+// reason one field over: that would make the answer a property of how the SUITE was invoked — a pipe
+// under CI, a terminal by hand, a closed descriptor under a daemon — and three invocations of the same
+// case would be asserting three different things.
+function runStdinFor(stdin SpecStdin) returns InputSource
+	return match stdin 's'
+		closed gives InputSource.none
+		held gives InputSource.hold
+		delayed gives InputSource.delayed(SpecStdinDelayedLine)
+	end 's'
+end 'runStdinFor'
 
 // Whether the one `wsl` entry happened at all. A launch that never got off the ground is not one test's
 // failure — every test the batch was carrying has to be told, in its own record, which is what keeps

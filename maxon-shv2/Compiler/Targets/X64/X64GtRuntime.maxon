@@ -397,17 +397,21 @@ end 'emitLoadCurrentMOrBailless'
 // `StdToX64Conversion.stdOpOutgoingArgBytes` reserves the GT frame with, so the copy and the reservation
 // cannot disagree about how many words the kernel reads — the property those constants' own headers exist
 // to hold. This function maps slots to them; it does not restate them.
-function gtShimStackArgWords(slotIndex RelocSlotIndex) returns StackSize
+// ⚠ **THE SCAN IS DONE ONCE PER SHIM AND ITS ANSWER FEEDS BOTH TABLES.** It used to BE
+// `gtShimStackArgWords`, walking the enum to reach one `match`; W213-C3 added a second per-slot question (the
+// syscall classification below) and a second copy of this walk beside it would be one loop written twice —
+// and, worse, two chances for the two tables to be asked about different slots.
+function iatSlotOfIndex(slotIndex RelocSlotIndex) returns IatSlot
 	for slot in IatSlot.allCases 'each'
 		if iatSlotIndex(slot) == slotIndex 'found'
-			return gtShimStackArgWordsOf(slot)
+			return slot
 		end 'found'
 	end 'each'
 
-	panic("gtShimStackArgWords: slot index {slotIndex} names no IatSlot — every `iatCall` relocation is minted from `iatSlotIndex(IatSlot.…)`, so an index outside the enum means the op carried a hand-built number")
-end 'gtShimStackArgWords'
+	panic("iatSlotOfIndex: slot index {slotIndex} names no IatSlot — every `iatCall` relocation is minted from `iatSlotIndex(IatSlot.…)`, so an index outside the enum means the op carried a hand-built number")
+end 'iatSlotOfIndex'
 
-// The stack-argument word count of ONE import, exhaustive over `IatSlot`. See `gtShimStackArgWords`.
+// The stack-argument word count of ONE import, exhaustive over `IatSlot`. See the header above `iatSlotOfIndex`.
 function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 	return match slot 'k'
 		// --- the imports the kernel reads stack arguments for: the counts live with the arg layout ---
@@ -513,10 +517,246 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
+// ==========================================================================
+// ⭐⭐⭐ THE SYSCALL BRACKET (W213-C3) — WHICH IMPORTS MAY COST THIS MACHINE ITS PROCESSOR
+// ==========================================================================
+
+// ⛔⛔ **THE CLASSIFICATION IS MANDATORY, AND HERE IS THE CASE THAT PROVES IT RATHER THAN THE PRINCIPLE THAT
+// SUGGESTS IT.** `EnterCriticalSection` **is** reached through this shim — from `__mbox_send`, `__mbox_recv`,
+// `__gt_timer_add`, and `__slab_lock` on EVERY allocation a green thread makes. Bracket it and:
+//
+//   1. a green thread on M1/P1 blocks acquiring `__sched_lock`, because another machine holds it;
+//   2. `__sysmon` sees the same generation past the threshold and `__sched_handoffp` takes P1 away;
+//   3. M1 finally acquires the lock, leaves the call and finds `MSyscallStolen`;
+//   4. `__sched_syscall_regain` waits for a processor — **while M1 holds `__sched_lock`**;
+//   5. the lock is now held for ever by a machine that cannot run. **Whole-scheduler deadlock.**
+//
+// ⇒ **the rule this table encodes is *"`blocking` means it can wait an unbounded time on something OUTSIDE
+// the scheduler"*, and its contrapositive is a REQUIREMENT ON THE RUNTIME: a `blocking` import may never be
+// called with `__sched_lock` held.** Every scheduler-internal call under that lock — the timer walk's
+// `WaitForMultipleObjects`, the process walk's `GetExitCodeProcess`, the register's `CloseHandle`, the
+// completion loop's own imports — is `schedulerBound` below, which is what makes the requirement checkable by
+// reading one table rather than by tracing every lock bracket.
+//
+// ⚠ **THE `match` IS TOTAL OVER `IatSlot` AND HAS NO `default` ARM, WHICH IS `gtShimStackArgWordsOf`'s OWN
+// STATED RULE ONE FUNCTION UP AND FOR THE SAME MEASURED REASON.** That table's silent `return 0` once handed
+// `CreateFileA` a frame too small and let the kernel read whatever was on the stack; a `default gives
+// schedulerBound` here would be the same defect wearing a `match`'s clothes — a new blocking import would
+// silently keep costing its processor, and nothing would say so.
+enum SyscallClass
+	// May block for an unbounded time on something OUTSIDE the scheduler — a device, a peer, a child, a user.
+	// BRACKETED: `__sysmon` may take this machine's processor away while the call is in flight.
+	blocking
+	// Blocks only on the scheduler's own machinery, or is bounded and short. NOT bracketed.
+	schedulerBound
+end 'SyscallClass'
+
+// The syscall class of ONE import, exhaustive over `IatSlot`. See the header above.
+function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
+	return match slot 'k'
+		// --- `blocking`: the calls a green thread can sit inside for an unbounded time ---
+		//
+		// ⭐ **`WriteFile` IS THE HOTTEST BRACKETED SLOT THERE IS — every `print` from a green thread — which is
+		// why the bracket has to stay at one exchange each way and must not touch `__sched_lock`.** It is here
+		// and not with the bounded family because a write to a pipe whose reader has stopped reading blocks
+		// exactly as long as the reader takes, which is a property of the far end and not of this process.
+		WriteFile gives SyscallClass.blocking
+		// ⭐⭐ **`ReadFile` IS THIS RUNG'S SUBJECT.** `__con_read_stdin` is a plain synchronous read of standard
+		// input with no overlapped IO and no park (`ConsoleRuntime`), so a green thread inside it holds its OS
+		// thread in the kernel until the user presses return — which is what
+		// `specs-shv2/sched-syscall-handoff.md`'s ordering case measures.
+		ReadFile gives SyscallClass.blocking
+		// The file-system family. Every one of them can reach a cold disk, a network share or a stalled device.
+		CreateFileA gives SyscallClass.blocking
+		CreateFileW gives SyscallClass.blocking
+		CreateNamedPipeW gives SyscallClass.blocking
+		GetFileSizeEx gives SyscallClass.blocking
+		DeleteFileA gives SyscallClass.blocking
+		MoveFileExA gives SyscallClass.blocking
+		FindFirstFileA gives SyscallClass.blocking
+		FindNextFileA gives SyscallClass.blocking
+		CreateDirectoryA gives SyscallClass.blocking
+		GetCurrentDirectoryA gives SyscallClass.blocking
+		GetFileAttributesA gives SyscallClass.blocking
+		// The file-MAPPING pair, which fault pages in from the same devices.
+		OpenFileMappingA gives SyscallClass.blocking
+		MapViewOfFile gives SyscallClass.blocking
+		// Spawning a child image and peeking a child's pipe both wait on another process.
+		CreateProcessA gives SyscallClass.blocking
+		PeekNamedPipe gives SyscallClass.blocking
+		// The socket family. `getaddrinfo` waits on DNS, `connect`/`send`/`recv` on a peer, `closesocket` on
+		// whatever `SO_LINGER` was set to, and `WSAStartup` loads and initialises the provider stack.
+		WSAStartup gives SyscallClass.blocking
+		getaddrinfo gives SyscallClass.blocking
+		socket gives SyscallClass.blocking
+		connect gives SyscallClass.blocking
+		send gives SyscallClass.blocking
+		recv gives SyscallClass.blocking
+		closesocket gives SyscallClass.blocking
+
+		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
+		//
+		// ⛔ The lock pair is the deadlock this table's header sets out in five steps. Do not move them.
+		EnterCriticalSection gives SyscallClass.schedulerBound
+		LeaveCriticalSection gives SyscallClass.schedulerBound
+		InitializeCriticalSection gives SyscallClass.schedulerBound
+		// ⛔⛔ **THE THREE WAITS ARE THE SECOND DEADLOCK, NOT AN OPTIMISATION LEFT ON THE TABLE.** They are
+		// shimmed ONLY through the drive loop — `__gt_await` / `__gt_await_any` on a green thread, and the
+		// worker's park — which is the scheduler WAITING FOR ITS OWN WORK. A processor taken from them is a
+		// processor taken from the very thing that would have used it, and the wait is already bounded by
+		// `__gt_timer_earliest` and by the park timeouts.
+		//
+		// ⛔⛔ **AND A SECOND, INDEPENDENT REASON THAT LIVES IN ANOTHER FILE: THE DEADLOCK CENSUS'S ARGUMENT FOR
+		// HAVING NO RETAKE BRACKET IS *"a machine in a bracketed call is never `MQuiescedWaiting`"*, AND THESE
+		// THREE ARMS ARE THE WHOLE OF WHY THAT IS TRUE.** A machine publishes `MQuiescedWaiting` immediately
+		// before parking, and it parks by calling one of these three. Move any of them to `blocking` and
+		// `__sysmon` can take a processor from a machine that already advertises quiescence, at which point
+		// `__sched_any_executing` sees nothing executing mid-handoff and aborts a live program with exit 92 —
+		// with no compile error between the two files. The argument itself is stated once, at
+		// `SchedRuntime.buildSchedRetake`'s census note; this arm names it so the arm cannot be moved without
+		// meeting it.
+		WaitForSingleObject gives SyscallClass.schedulerBound
+		WaitForMultipleObjects gives SyscallClass.schedulerBound
+		Sleep gives SyscallClass.schedulerBound
+		// ⚠ **THIS ARM IS INERT AND SAYS SO RATHER THAN BEING LEFT TO LOOK LIVE**, exactly as the same slot's
+		// stack-arg arm does one function up: the completion loop is hand-assembled and calls
+		// `GetQueuedCompletionStatus` DIRECTLY (`StdToX64Conversion`), so it never reaches this shim. It is
+		// classified anyway because this `match` is TOTAL — and `schedulerBound` is the right answer if it ever
+		// did, since that loop is the scheduler waiting on its own completions.
+		GetQueuedCompletionStatus gives SyscallClass.schedulerBound
+		// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
+		ExitProcess gives SyscallClass.schedulerBound
+		GetStdHandle gives SyscallClass.schedulerBound
+		AddVectoredExceptionHandler gives SyscallClass.schedulerBound
+		VirtualAlloc gives SyscallClass.schedulerBound
+		VirtualFree gives SyscallClass.schedulerBound
+		QueryPerformanceCounter gives SyscallClass.schedulerBound
+		QueryPerformanceFrequency gives SyscallClass.schedulerBound
+		GetSystemTimeAsFileTime gives SyscallClass.schedulerBound
+		GetTickCount64 gives SyscallClass.schedulerBound
+		QueryThreadCycleTime gives SyscallClass.schedulerBound
+		GetExitCodeProcess gives SyscallClass.schedulerBound
+		TerminateProcess gives SyscallClass.schedulerBound
+		CloseHandle gives SyscallClass.schedulerBound
+		SetHandleInformation gives SyscallClass.schedulerBound
+		CreateIoCompletionPort gives SyscallClass.schedulerBound
+		SetFileCompletionNotificationModes gives SyscallClass.schedulerBound
+		CancelIoEx gives SyscallClass.schedulerBound
+		FindClose gives SyscallClass.schedulerBound
+		CreateEventA gives SyscallClass.schedulerBound
+		SetEvent gives SyscallClass.schedulerBound
+		// ⚠ **`CreateThread` IS THE ONE THAT LOOKS LIKE IT BELONGS ABOVE AND DOES NOT.** Its only caller is
+		// `__sched_startm`'s spawn arm, which runs INSIDE `__sched_lock` — so bracketing it would be the
+		// header's five-step deadlock reached by a second road. It is bounded in any case: creating a thread
+		// commits a stack and returns, and nothing about it waits on another party.
+		CreateThread gives SyscallClass.schedulerBound
+		GetLastError gives SyscallClass.schedulerBound
+		GetCurrentProcessId gives SyscallClass.schedulerBound
+		GetCommandLineA gives SyscallClass.schedulerBound
+		GetModuleFileNameA gives SyscallClass.schedulerBound
+		GetEnvironmentVariableA gives SyscallClass.schedulerBound
+		GetEnvironmentStringsA gives SyscallClass.schedulerBound
+		FreeEnvironmentStringsA gives SyscallClass.schedulerBound
+		GetActiveProcessorCount gives SyscallClass.schedulerBound
+		SetPriorityClass gives SyscallClass.schedulerBound
+		GetPriorityClass gives SyscallClass.schedulerBound
+		TlsAlloc gives SyscallClass.schedulerBound
+		TlsSetValue gives SyscallClass.schedulerBound
+		freeaddrinfo gives SyscallClass.schedulerBound
+	end 'k'
+end 'gtShimSyscallClassOf'
+
+// ⭐⭐⭐ **`entersyscall`, INLINE — *"this machine is about to be unreachable; its processor may be taken."***
+// Emitted immediately before `encodeIatCall`, after the TIB has been repointed at the system stack, which is
+// the last point at which anything is free to clobber.
+//
+// ⛔ **IT CANNOT BE A CALL, AND THAT IS NOT A PERFORMANCE ARGUMENT.** In the pre-call window
+// rcx/rdx/r8/r9 hold live Win64 arguments and the stack arguments are already laid out at their exact
+// displacements; a `call` would need shadow space carved out of a frame whose shape the kernel is about to
+// read. Inline it is TWO instructions plus the three-instruction TLS walk, all of it in rax and r11 — the two
+// registers the shim already treats as dead here (rax has just been destroyed by the TIB repoint, and r11's
+// last use was the stack-arg copy shuttle).
+//
+// ⭐⭐ **ONE `lock add` DOES BOTH HALVES, BECAUSE THE GENERATION AND THE STATE SHARE A WORD.**
+// `MSyscallEnterDelta` steps the generation AND sets the in-call bit in a single indivisible step, so there is
+// no interval in which a new call is announced without its generation or the other way round — which is what
+// an earlier two-word cut of this got wrong (`SchedRuntime.MOffSyscallState` carries the ABA that cost).
+//
+// ⛔ **THE `lock` PREFIX IS REQUIRED AND IS NOT AN ABUNDANCE OF CAUTION.** This word's other writer is
+// `__sched_retake`'s compare-and-swap; an unlocked read-modify-write here could lose the thief's mark and
+// leave this machine believing it still owns a processor that has been handed to somebody else.
+//
+// ⚠ **THE M IS RELOADED FROM TLS RATHER THAN CARRIED**, because the guard's copy lived in rax and the TIB
+// repoint destroyed it. It cannot be null and it cannot bail: `emitLoadCurrentMOrBailless` carries the proof,
+// which is the shim's own guard three loads above.
+function emitGtEnterSyscall(code ByteArray, rdataRelocs RdataRelocationArray)
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax)
+	encodeMovRegImm32(code, dest: ShimGtReg, value: MSyscallEnterDelta as MachineWord)
+	encodeLockedRmwBaseDispReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, base: X64Register.rax, disp: MOffSyscallState as Imm32, reg: ShimGtReg)
+end 'emitGtEnterSyscall'
+
+// ⭐⭐⭐ **`exitsyscall`, INLINE, WITH A CALL OUT ONLY WHEN THE PROCESSOR IS GONE.** Emitted at the very END of
+// the shim — after the TIB restore, after `add rsp, reserve`, and after RSP has been switched back to the GT
+// stack and the caller's r10 popped — which is where it must be for two independent reasons:
+//
+//   • **A CALL FROM THE SYSTEM STACK WOULD DESTROY ITS OWN RETURN ADDRESS.** At that point RSP is the system
+//     stack's TOP, and any shimmed import the callee makes re-enters this shim, which sets RSP to that same
+//     top and overwrites the word the `call` had just pushed. Nesting the shim is not safe and this is not the
+//     rung that makes it safe; running the slow path from the GT stack sidesteps it entirely.
+//   • **THE FAST PATH COSTS THE SAME EITHER WAY.** It is one TLS walk, one `lock xadd`, one `and` and one
+//     branch, and the registers it needs (rcx and r11) are dead on both roads.
+//
+// ⭐⭐ **`lock xadd` ANSWERS BOTH QUESTIONS AT ONCE, WHICH IS WHY THERE IS NO RETRY LOOP AND NO `cmpxchg`.**
+// Subtracting `MSyscallInCall` clears the in-call bit, and the instruction hands back the PRIOR word — whose
+// stolen bit is the entire verdict. A `cmpxchg` retry would have been correct too, and was rejected for two
+// reasons: it claims `rax`, which holds the kernel's RESULT, and it needs a backward branch inside a chunk
+// whose label table is forward-only.
+//
+// ⛔⛔ **THE STOLEN BIT IS DELIBERATELY *NOT* CLEARED HERE — `__sched_syscall_regain` clears it.** Leaving it
+// set is what marks this machine as *"holding a green thread with no processor"* for the two parties that must
+// see that state: `__sched_retake`, which requires exactly `MSyscallInCall` and therefore skips it, and
+// `__sched_stop_workers`, which must NOT join a machine that may never come back.
+// `SchedRuntime.MOffSyscallState` carries both halves.
+//
+// ⚠ **`rax` IS THE KERNEL'S RESULT AND SURVIVES BOTH ROADS.** The exchange deliberately uses rcx; the slow
+// path parks the result in its own frame across the call.
+//
+// ⚠ **THE 0x30 FRAME IS 0x20 OF WIN64 SHADOW SPACE PLUS ONE SAVED WORD, ROUNDED TO KEEP RSP 16-ALIGNED AT THE
+// `call`** — shv2's frame invariant at every call site, which the shim's own entry comment states and which
+// the `sub` here must not break.
+function emitGtExitSyscall(code ByteArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, fixups ChunkRel32FixupArray)
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg)
+	// `mov reg, imm64` and not the 32-bit form: `-MSyscallInCall` is NEGATIVE, and `mov ecx, imm32`
+	// ZERO-extends — it would add 0x00000000FFFFFFFF to the word rather than subtracting one from it.
+	encodeMovRegImm64(code, dest: ShimTibScratchReg, value: (0 - MSyscallInCall) as MachineWord)
+	encodeLockedRmwBaseDispReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, base: ShimGtReg, disp: MOffSyscallState as Imm32, reg: ShimTibScratchReg)
+	// rcx now holds the PRIOR word. Its stolen bit is the verdict; everything above it is the generation and
+	// is none of this side's business, which is what the mask is for.
+	encodeGrp1RegImm32(code, ext: Grp1ExtAnd, reg: ShimTibScratchReg, imm: MSyscallStolen as Imm32)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: ShimDoneLabel)
+
+	encodePrologue(code, stackSize: exitSyscallSlowFrameBytes(), probeScratchIsFree: false)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: ExitSyscallSavedResultDisp, srcReg: X64Register.rax)
+	encodeCallDirect(code, callFixups: callFixups, targetName: SchedSyscallRegainName)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rsp, disp: ExitSyscallSavedResultDisp, wide: true)
+	encodeEpilogue(code, stackSize: exitSyscallSlowFrameBytes())
+end 'emitGtExitSyscall'
+
+// The slow path's own frame: Win64 shadow space plus one word for the kernel's result, rounded up to the
+// stack alignment so RSP is 16-aligned at the `call`. Derived from the three constants that decide it rather
+// than written as `0x30`, for the reason the shim's `frameSize` is derived from its two — and a FUNCTION
+// rather than a `let` because a global initializer may not call one (E2045).
+function exitSyscallSlowFrameBytes() returns StackSize
+	return alignUp(ShadowSpaceBytes + SpillSlotBytes, alignment: StackFrameAlignment)
+end 'exitSyscallSlowFrameBytes'
+// Where in that frame the result waits — immediately above the shadow space, which is the first byte the
+// callee may not touch.
+let ExitSyscallSavedResultDisp = ShadowSpaceBytes as Imm32
+
 // Emit an `iatCall`, wrapped in the system-stack shim iff the module carries the GT scheduler (see the header).
-export function emitGtGatedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, slotIndex RelocSlotIndex, usesGt bool)
+export function emitGtGatedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex, usesGt bool)
 	if usesGt 'shim'
-		emitGtShimmedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, slotIndex: slotIndex)
+		emitGtShimmedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, slotIndex: slotIndex)
 	end 'shim' else 'plain'
 		encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 	end 'plain'
@@ -539,8 +779,13 @@ end 'emitGtGatedIatCall'
 //   add rsp,0x58 ; pop r10 ; mov rsp,r10 ; pop r10 ; jmp done                  (switch back to the GT stack)
 //   direct: call [CreateProcessA]
 //   done:
-function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, slotIndex RelocSlotIndex)
-	let stackArgWords = gtShimStackArgWords(slotIndex)
+function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex)
+	// ⭐ **THE SLOT IS RESOLVED ONCE AND ASKED TWO QUESTIONS** — how many stack argument words it takes, and
+	// whether it may cost this machine its processor. Both are COMPILE-TIME constants here, so the syscall
+	// bracket below is emitted or not emitted per import with no runtime dispatch whatever.
+	let slot = iatSlotOfIndex(slotIndex)
+	let stackArgWords = gtShimStackArgWordsOf(slot)
+	let bracketed = gtShimSyscallClassOf(slot) == SyscallClass.blocking
 	// reserve = (16-aligned shadow + stack args) + one pushed word — lands RSP 16-aligned at the `call` after
 	// the two pushes. Matches the C# bootstrap's `EmitSystemStackEnter(frameSize)` doing `sub rsp, frameSize+8`.
 	// ⚠ THE STRIDE IS `SpillSlotBytes` — the SAME constant `win64OutgoingArgDisp` places the ISEL's arg stores
@@ -584,7 +829,9 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.rax, wide: true)
 	encodePushReg(code, reg: ShimGtRspReg)
 	// sub rsp, reserve — the outgoing-arg frame on the system stack. Shadow space plus one import's
-	// stack-argument words (`gtShimStackArgWords`, seven at the widest), so it is well inside one
+	// stack-argument words (`gtShimStackArgWordsOf`, SIX at the widest — `CreateProcessStackArgWords`;
+	// the "seven" this line used to say is `CreateFileA`/`W`'s ARGUMENT count, of which three land on
+	// the stack, and the two are not the same number), so it is well inside one
 	// page; r11 is LIVE across it (currentGt, reloaded from below after the call), hence no
 	// certificate — a shim whose reservation ever reached a page would panic rather than eat it.
 	encodePrologue(code, stackSize: reserve, probeScratchIsFree: false)
@@ -606,6 +853,14 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// before the call, which clobbers the caller-saved rax anyway).
 	emitRepointTibToSystemStack(code, topReg: X64Register.rax)
 
+	// ⭐⭐ **THE SYSCALL BRACKET'S NEAR SIDE (W213-C3), FOR A `blocking` IMPORT ONLY.** It is emitted HERE —
+	// after the TIB repoint and immediately before the call — because rax and r11 are dead at exactly this
+	// point and nowhere earlier: rax carried the M through the guard and the system-stack top through the
+	// switch, and r11 was the stack-arg copy shuttle. See `emitGtEnterSyscall`.
+	if bracketed 'armTheHandoff'
+		emitGtEnterSyscall(code, rdataRelocs: rdataRelocs)
+	end 'armTheHandoff'
+
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 
 	// Restore the TIB to this GT's own bounds. Reload the M (the call clobbered both r11 and rax), read
@@ -626,6 +881,14 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodePopReg(code, reg: ShimGtRspReg)  // r10 = the saved GT rsp (points at the pushed caller-r10)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)
 	encodePopReg(code, reg: ShimGtRspReg)  // restore the caller's r10
+
+	// ⭐⭐ **THE SYSCALL BRACKET'S FAR SIDE (W213-C3), ON THE GT STACK.** It is the LAST thing the shimmed road
+	// does — `emitGtExitSyscall` carries why it may not run one instruction earlier, on the system stack — and
+	// its own not-stolen arm branches straight to `done`, so the `jmp` below serves only the slow path.
+	if bracketed 'collectTheHandoff'
+		emitGtExitSyscall(code, rdataRelocs: rdataRelocs, callFixups: callFixups, fixups: shimFixups)
+	end 'collectTheHandoff'
+
 	encodeJmp(code, rel32Fixups: shimFixups, targetBlockId: ShimDoneLabel)
 
 	// direct: the non-switched call (main thread / no scheduler).

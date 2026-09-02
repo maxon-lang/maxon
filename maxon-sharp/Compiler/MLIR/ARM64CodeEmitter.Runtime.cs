@@ -1,5 +1,6 @@
 using MaxonSharp.Compiler.Ir.Dialects;
 using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
+using static MaxonSharp.Compiler.Ir.Runtime.SubprocessStdin;
 
 namespace MaxonSharp.Compiler.Ir;
 
@@ -7736,6 +7737,33 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
+  // StdinKindBytes, StdinKindHold, StdinKindDelayed, StdinDelayedFeedMs and
+  // StdinKindsWantingPipe come from Runtime/SubprocessStdinContract.cs, shared
+  // with X86CodeEmitter — see the `using static` at the head of this file. They
+  // lived here AND there until the two copies had already drifted in spelling
+  // (kind 2 was `StdinKindBytes` here and `StdioKindCollect` there), and that
+  // file records why a second copy is a wrong answer rather than a build break.
+
+  // Stays local: it is not part of the contract, only the arithmetic that splits
+  // `StdinDelayedFeedMs` into a `timespec`'s two fields on this target. The nanos
+  // half of that conversion is `TimerNanosPerMilli`.
+  private const int StdinDelayedMillisPerSecond = 1000;
+
+  /// Fall through when stdinKind (spawn local 0xC8) asks for a parent↔child pipe,
+  /// and branch to `skip` when it does not. THE ONE PLACE that question is asked:
+  /// the pipe, the child's dup2 and the parent's post-spawn step must agree about
+  /// it exactly, and three copies of the test is three chances for one of them to
+  /// learn about a new kind and the others not to.
+  private void EmitSubpStdinPipeWanted(string skip, string wanted) {
+    EmitLoadFromStack(ARM64Register.X0, 0xC8, 8);
+    foreach (int pipeKind in StdinKindsWantingPipe) {
+      EmitCmpImm(ARM64Register.X0, pipeKind);
+      EmitBranchCond(ARM64ConditionCode.Eq, wanted);
+    }
+    EmitBranch(skip);
+    DefineLabel(wanted);
+  }
+
   /// maxon_subprocess_spawn(argvBlob, argc, cwd, env, envInherit, stdinKind,
   ///   stdinData, stdoutKind, stdoutData, stdoutLimit, stderrKind, stderrData,
   ///   stderrLimit, flags) -> handle | -1.
@@ -7750,6 +7778,9 @@ public partial class ARM64CodeEmitter {
     string skipInPipe = $"__subp_sp_skipipe_{n}";
     string skipStdinPipe = $"__subp_sp_skstdinpipe_{n}";
     string skipWriteStdin = $"__subp_sp_skwrstdin_{n}";
+    string holdStdin = $"__subp_sp_holdstdin_{n}";
+    string delaySleep = $"__subp_sp_delaysleep_{n}";
+    string feedStdinNow = $"__subp_sp_feedstdin_{n}";
     string skipChdir = $"__subp_sp_skchdir_{n}";
     string inheritEnv = $"__subp_sp_envinh_{n}";
     string envReady = $"__subp_sp_envrdy_{n}";
@@ -7764,6 +7795,8 @@ public partial class ARM64CodeEmitter {
     //   0xC0 inPipe(rd@0xC0,wr@0xC4)  0xC8 stdinKind  0xD0 stdinData
     //   0xD8 ownedEnvp (the vector THIS spawn built, or 0 when envp is the process's own environ)
     //   0xE0 posix_spawnp result, held across the ownedEnvp free
+    //   0xE8 heldStdinFd — the stdin write end this handle KEEPS (StdinKindHold), or -1
+    //   0xF0/0xF8 timespec for StdinKindDelayed's nanosleep (the frame's last 16 bytes)
     // Args 8..13 (stack): [x29 + 0x100 + (i-8)*8]; stderrKind=arg10 @ 0x110.
 
     // Default pipe read/write fds to -1 (4-byte) so non-collect/non-bytes streams
@@ -7773,6 +7806,9 @@ public partial class ARM64CodeEmitter {
     EmitStoreToStack(0x58, ARM64Register.X0, 4);
     EmitStoreToStack(0xC0, ARM64Register.X0, 4);
     EmitStoreToStack(0xC4, ARM64Register.X0, 4);
+    // A sync spawn keeps no stdin descriptor unless it was asked for `hold`, and the
+    // handle field is 8 bytes wide, so the "none" answer is written here at that width.
+    EmitStoreToStack(0xE8, ARM64Register.X0, 8);
     // Nothing owned yet, on every path out — the free below is unconditional and reads this slot.
     EmitStoreToStack(0xD8, ARM64Register.Xzr, 8);
 
@@ -7814,10 +7850,9 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("pipe");
     DefineLabel(skipErrPipe);
 
-    // stdin pipe (bytes = 2): the parent feeds the payload after spawn.
-    EmitLoadFromStack(ARM64Register.X0, 0xC8, 8);
-    EmitCmpImm(ARM64Register.X0, 2);
-    EmitBranchCond(ARM64ConditionCode.Ne, skipInPipe);
+    // stdin pipe: `bytes` (the parent feeds a payload after spawn), `hold` (the
+    // parent feeds nothing, ever) and `delayed` (the parent feeds late) all need one.
+    EmitSubpStdinPipeWanted(skipInPipe, $"__subp_sp_wantipipe_{n}");
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 0xC0, isAdd: true);
     EmitCallImport("pipe");
     DefineLabel(skipInPipe);
@@ -7852,10 +7887,8 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("posix_spawn_file_actions_addclose");
     DefineLabel(skipErrDup);
 
-    // stdin bytes(2) → dup2(inPipe.read → fd0) + close write end in child
-    EmitLoadFromStack(ARM64Register.X0, 0xC8, 8);
-    EmitCmpImm(ARM64Register.X0, 2);
-    EmitBranchCond(ARM64ConditionCode.Ne, skipStdinPipe);
+    // stdin bytes(2) / hold(4) / delayed(5) → dup2(inPipe.read → fd0) + close write end in child
+    EmitSubpStdinPipeWanted(skipStdinPipe, $"__subp_sp_wantidup_{n}");
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 0x60, isAdd: true);
     EmitLoadFromStack(ARM64Register.X1, 0xC0, 4);               // inPipe read
     EmitMovRegImm(ARM64Register.X2, 0);                          // → fd 0
@@ -7957,14 +7990,53 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("close");
     DefineLabel(skipCloseErr);
 
-    // stdin bytes(2): close the parent's read end, write the payload to the write
-    // end, then close it (the child sees EOF on fd0). Bounded spec payloads fit the
-    // pipe buffer, so the single write() can't block.
-    EmitLoadFromStack(ARM64Register.X0, 0xC8, 8);
-    EmitCmpImm(ARM64Register.X0, 2);
-    EmitBranchCond(ARM64ConditionCode.Ne, skipWriteStdin);
+    // stdin bytes(2) / hold(4) / delayed(5): the parent's copy of the child's READ
+    // end is dead for all three, so it is closed before they diverge. `bytes` then
+    // writes its payload and closes the write end, so the child sees EOF on fd0;
+    // `hold` writes nothing and keeps the write end, which is the whole of what it
+    // asks for — a child that reads fd0 BLOCKS in the kernel until the handle is
+    // released; `delayed` waits and then does exactly what `bytes` does, so the
+    // child's read blocks and then completes. Bounded spec payloads fit the pipe
+    // buffer, so the single write() can't block.
+    EmitSubpStdinPipeWanted(skipWriteStdin, $"__subp_sp_wantiwr_{n}");
     EmitLoadFromStack(ARM64Register.X0, 0xC0, 4);               // inPipe read (parent's copy)
     EmitCallImport("close");
+    EmitLoadFromStack(ARM64Register.X0, 0xC8, 8);
+    EmitCmpImm(ARM64Register.X0, StdinKindHold);
+    EmitBranchCond(ARM64ConditionCode.Eq, holdStdin);
+
+    // `delayed`: hold the pipe open, unwritten, for StdinDelayedFeedMs and then
+    // fall into the `bytes` write below. The child's stdin already IS this pipe,
+    // so the wait is the child's own read blocking in the kernel.
+    //
+    // ⚠ SPENT ON THIS THREAD RATHER THAN A pthread, and that costs the caller
+    // nothing: `maxon_subprocess_wait_collect` WAITS FOR THE CHILD BEFORE IT
+    // DRAINS EITHER PIPE, so between here and the child's exit this thread has
+    // no work of its own — a feed thread would buy a stack and a lifetime to
+    // manage for zero wall-clock. (x64/Windows spends it on the feed thread that
+    // path already has, which is that lane's equally free answer.) A child whose
+    // stdout could exceed the pipe buffer would deadlock — but it would deadlock
+    // for the same reason without any delay at all, because nobody reads it
+    // until it exits.
+    //
+    // The sleep is RESTATED each iteration rather than resumed from a remainder,
+    // so no second timespec is needed: a signal-interrupted wait restarts, which
+    // makes it slightly longer and never shorter, and the contract is "about a
+    // second".
+    EmitCmpImm(ARM64Register.X0, StdinKindDelayed);
+    EmitBranchCond(ARM64ConditionCode.Ne, feedStdinNow);
+    DefineLabel(delaySleep);
+    EmitMovRegImm(ARM64Register.X0, StdinDelayedFeedMs / StdinDelayedMillisPerSecond);
+    EmitStoreToStack(0xF0, ARM64Register.X0, 8);                 // tv_sec
+    EmitMovRegImm(ARM64Register.X0, (StdinDelayedFeedMs % StdinDelayedMillisPerSecond) * TimerNanosPerMilli);
+    EmitStoreToStack(0xF8, ARM64Register.X0, 8);                 // tv_nsec
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 0xF0, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);                          // no remainder wanted
+    EmitCallImport("nanosleep");
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Ne, delaySleep);
+    DefineLabel(feedStdinNow);
+
     // strlen(stdinData) → x9 (byte scan; payload carries no embedded NUL).
     EmitLoadFromStack(ARM64Register.X10, 0xD0, 8);              // p = stdinData
     EmitMovRegImm(ARM64Register.X9, 0);                          // len = 0
@@ -7985,6 +8057,18 @@ public partial class ARM64CodeEmitter {
     // close the write end → child sees EOF on fd0.
     EmitLoadFromStack(ARM64Register.X0, 0xC4, 4);
     EmitCallImport("close");
+    EmitBranch(skipWriteStdin);
+
+    // `hold`: record the write end on the handle instead of closing it, so it stays
+    // open for exactly as long as the handle does and release_handle is the single
+    // place that ends it — on the timeout path and on every error path alike.
+    // SIGN-EXTENDED, like every other descriptor that reaches the handle: the slot
+    // is 4 bytes and still holds -1 if `pipe()` failed, and a zero-extending load
+    // would turn that into 4294967295 — a positive number release_handle's `fd >= 0`
+    // test would accept and hand to close().
+    DefineLabel(holdStdin);
+    EmitLoadIndirectSignExtend(ARM64Register.X0, ARM64Register.X29, 0xC4, 4);
+    EmitStoreToStack(0xE8, ARM64Register.X0, 8);
     DefineLabel(skipWriteStdin);
 
     // build handle (unified layout, shared with the streaming path)
@@ -8005,10 +8089,13 @@ public partial class ARM64CodeEmitter {
     EmitStoreIndirect(ARM64Register.X9, SubpHOffOutLimit, ARM64Register.X1, 8);
     EmitLoadFromStack(ARM64Register.X1, 0x120, 8);             // stderrLimit
     EmitStoreIndirect(ARM64Register.X9, SubpHOffErrLimit, ARM64Register.X1, 8);
-    // Unified-handle tail: sync spawns have no streaming stdin / line buffers,
-    // so mark stdinWriteFd closed and zero the line-buffer quads. release_handle
-    // then skips them (fd < 0, buffers NULL).
-    EmitMovRegImm(ARM64Register.X1, -1);
+    // Unified-handle tail: sync spawns have no streaming line buffers, so zero the
+    // line-buffer quads (release_handle then skips them). stdinWriteFd is -1 for
+    // every sync spawn BUT `hold`, which is defined by keeping that descriptor —
+    // hence the slot (frame +0xE8, written by the stdin setup above) rather than
+    // the immediate this used to be, so release_handle closes it there exactly as
+    // it does for a streaming handle.
+    EmitLoadFromStack(ARM64Register.X1, 0xE8, 8);
     EmitStoreIndirect(ARM64Register.X9, SubpHOffStdinFd, ARM64Register.X1, 8);
     foreach (int off in new[] { 0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60 })
       EmitStoreIndirect(ARM64Register.X9, off, ARM64Register.Xzr, 8);
@@ -8466,12 +8553,14 @@ public partial class ARM64CodeEmitter {
   // synchronous Subprocess.run path so the single maxon_subprocess_release_handle
   // cleans up either shape:
   //   +0x00 pid           +0x08 stdoutReadFd   +0x10 stderrReadFd   +0x18 argv[]
-  //   +0x20 stdinWriteFd  (-1 for sync spawns / once close_stdin runs)
+  //   +0x20 stdinWriteFd  (-1 for sync spawns other than `hold` / once close_stdin runs)
   //   +0x28 stdoutBuf     +0x30 stdoutLen      +0x38 stdoutCap      +0x40 stdoutEof
   //   +0x48 stderrBuf     +0x50 stderrLen      +0x58 stderrCap      +0x60 stderrEof
   //   +0x68 stdoutLimit   +0x70 stderrLimit    (the caller's capture ceilings)
-  // Sync spawns leave stdinWriteFd=-1 and the line-buffer fields 0; release_handle
-  // closes any fd >= 0 and frees any non-null line buffer + argv + the struct.
+  // Sync spawns leave the line-buffer fields 0, and stdinWriteFd -1 unless they were
+  // asked for `StdinKindHold` (which is DEFINED by keeping that descriptor open for
+  // the child's whole life); release_handle closes any fd >= 0 and frees any
+  // non-null line buffer + argv + the struct.
   // The two limits carry OutputDestination.collect(limit) from the spawn call
   // through to wait_collect, which is where the capture buffer is sized. They
   // mirror the x64 handle's SubpOffStdoutLimit/SubpOffStderrLimit; before they

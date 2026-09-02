@@ -782,6 +782,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(SchedStealCountName) 'schedStealCount'
 		usage.usesGt = true
 	end 'schedStealCount'
+	// ⭐ **THE RETAKE COUNT RIDES THE STEAL COUNT'S ANSWER EXACTLY, AND FOR THE IDENTICAL REASON.** It is the
+	// same walk of `__sched_procs` over a sibling field (`POffRetakeCount`), so without the scheduler there is
+	// nothing to walk and asking the question IS asking for the machinery. It has no bit of its own for the
+	// same reason its band-mate has none: the body is installed inside `installSchedRuntime` behind `usesGt`,
+	// and `DeadFunctionElimination` drops it from every program that never calls it.
+	if callee.equals(SchedRetakeCountName) 'schedRetakeCount'
+		usage.usesGt = true
+	end 'schedRetakeCount'
 	// ⭐ **THE ALLOCATOR'S TRAFFIC COUNTERS.** The `__mm_counter_` band is a STRICT SUBSET of the `__mm_` one
 	// the first arm of this function already matched, so `usesHeap` is set by the time this line runs — which
 	// is exactly the transitive declaration the counters need (see `usesMmCounters`) and the reason the band

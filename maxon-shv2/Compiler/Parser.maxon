@@ -5239,6 +5239,22 @@ let BuiltinsSchedStealCountName = b"__Builtins.schedStealCount"
 // rule: the number is a fact about THIS intrinsic's contract, and the two only happen to agree.
 let SchedStealCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedRetakeCount()` — THE FIFTH SCHEDULER QUERY (W213-C3), and the only way a program can
+// observe that a PROCESSOR HANDOFF happened.** It answers the sum of every processor's retake counter, which
+// rises exactly when `__sysmon` takes a processor away from a machine stuck in a blocking kernel call.
+//
+// ⛔⛔ **IT EXISTS BECAUSE THE ORDERING CASE IT SERVES CAN BE GREENED BY THE WRONG CURE.** Routing a blocking
+// read through the existing IOCP park road would reorder `sched-syscall-handoff`'s two lines without a
+// processor ever being retaken — a real improvement, and a different rung's. This number is what makes
+// `retaken=yes` a claim about the MECHANISM rather than about the output.
+//
+// ⚠ **NEITHER REFERENCE DECLARES IT**, exactly as neither declares `schedStealCount`: shv2's handoff is
+// shv2's own. `SchedRuntime.SchedRetakeCountName` owns what it costs; this file only routes the name.
+let BuiltinsSchedRetakeCountName = b"__Builtins.schedRetakeCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedRetakeCountArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedProcessorCount()` — THE FOURTH SCHEDULER QUERY, AND THE ONLY ONE WHOSE ANSWER IS
 // NOT AN OUTCOME.** It reports how many Ps `MAXON_MAX_PROCS` resolved to — `min(requested, cpuCount())`,
 // settled once in `__sched_init_procs` before any green thread runs. Its two SCHEDULER band-mates both
@@ -74709,6 +74725,15 @@ export type Parser
 			if callee.equals(BuiltinsSchedStealCountName) 'schedStealCount'
 				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedStealCountName, runtimeName: SchedStealCountName, arity: SchedStealCountArity, calleeTok: anchor)
 			end 'schedStealCount'
+
+			// ⭐ **THE FIFTH SCHEDULER QUERY (W213-C3)**, beside the one whose shape it shares exactly: that one
+			// says whether machines ever took work off each other, this one says whether a machine ever had its
+			// PROCESSOR taken while it was stuck in the kernel. Same door again — an `int` answer, no arguments,
+			// nothing to own — and, like the steal count, it sets `usesGt`, because a retake count has no
+			// meaning without a scheduler to have done the retaking. See `SchedRuntime.SchedRetakeCountName`.
+			if callee.equals(BuiltinsSchedRetakeCountName) 'schedRetakeCount'
+				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedRetakeCountName, runtimeName: SchedRetakeCountName, arity: SchedRetakeCountArity, calleeTok: anchor)
+			end 'schedRetakeCount'
 
 			// ⭐ **THE FOURTH SCHEDULER QUERY**, and the only one that asks about the SETTING rather than about
 			// the outcome: how many Ps `MAXON_MAX_PROCS` resolved to. Same door again — an `int` answer, no

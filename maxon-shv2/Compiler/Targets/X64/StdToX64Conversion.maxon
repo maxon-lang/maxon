@@ -306,7 +306,7 @@ let WriteFileBytesWrittenSlot = 1
 // stack — one true stack argument. lpNumberOfBytesWritten (slot 1) is an out-param the kernel WRITES through
 // the r9 pointer, so it needs a reserved scratch slot but is NOT a stack argument. The GT syscall shim copies
 // exactly `WriteFileStackArgWords` words — the low, real-argument slots — from the GT frame onto the system
-// stack (`X64GtRuntime.gtShimStackArgWords`); this file reserves those PLUS the scratch slot. Both the shim's
+// stack (`X64GtRuntime.gtShimStackArgWordsOf`); this file reserves those PLUS the scratch slot. Both the shim's
 // copy count and the reservation derive from this one constant, so the shim can never silently disagree with
 // the arg layout about how many words CreateProcessA/WriteFile pass on the stack.
 export let WriteFileStackArgWords = 1 as MachineWord  // lpOverlapped (slot 0)
@@ -349,7 +349,7 @@ let CreateProcessOutgoingSlots = CreateProcessStackArgWords
 // --- P1.5 dogfood slice 1a: the IOCP-substrate imports' outgoing stack-argument counts ---
 // Stated ONCE per import, exactly as `WriteFileStackArgWords`/`CreateProcessStackArgWords` are — the SAME
 // constant sizes the GT-frame reservation (`stdOpOutgoingArgBytes`) AND the syscall shim's per-call copy
-// (`gtShimStackArgWords`), so the two can never disagree about how many words each kernel call reads off the
+// (`gtShimStackArgWordsOf`), so the two can never disagree about how many words each kernel call reads off the
 // stack. All are REAL stack arguments the kernel reads (no out-param scratch slot on the stack — ReadFile's
 // bytes-read out-param is the 4th argument in r9, a register). EXPORTED because the shim reads them.
 export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBufferSize, nInBufferSize, nDefaultTimeOut, lpSecurityAttributes

@@ -636,9 +636,146 @@ let MOffParkedDriverOwner = MOffIdleNext + (PointerSlotBytes as ByteOffset)
 // GT's owner is never 0 — see the walk, which states that invariant and what would break without it.
 let ParkedDriverNone = 0 as ParsedInt
 
-// The three head scalars, the inline GT, the idle tail and the driver-park slot. Derived, never written down
-// as a number, for `PStructSize`'s reason.
-let MStructSize = ((MOffParkedDriverOwner as ParsedInt) + PointerSlotBytes) as ParsedInt
+// ==========================================================================
+// ⭐⭐⭐ THE SYSCALL BRACKET'S WORDS (W213-C3) — "IS THIS MACHINE INSIDE A KERNEL CALL, AND MAY ITS PROCESSOR
+// BE TAKEN AWAY?"
+// ==========================================================================
+//
+// ⭐⭐⭐ **THE STATE IS ON THE MACHINE, NOT ON THE PROCESSOR AND NOT ON THE GREEN THREAD — AND THAT IS THIS
+// RUNG'S ONE STRUCTURAL DECISION.** Go marks the *G* `_Gsyscall` and mediates ownership through a lock bit in
+// the G's status word (`_Gscan`), because a Go P is found through `pp.m` and a Go G through `mp.curg`. shv2
+// has neither back-pointer: a P carries no `m` field, and `GtOffStatus` is stored UNCONDITIONALLY by the
+// hand-assembled trampoline and by the IOCP completion loop — which is precisely why `GtOffTeardown` had to be
+// a field of its own (see its header), and why a lock bit there would not survive either.
+//
+// ⇒ **the machine already owns all three facts** — `MOffCurrentP`, `MOffCurrentGt` and this word — so
+// `__sched_retake` walks `__sched_allm` and reads the triple off ONE struct. That also makes the roster the
+// thing sysmon iterates, which is what `__sched_any_executing` and `__sched_stop_workers` already do and for
+// the same reason: a question about MACHINES is answered by the list of machines.
+//
+// ⛔⛔⛔ **THE WORD CARRIES A GENERATION, AND THAT IS THE WHOLE OF WHY THE PROTOCOL IS SOUND — A BARE
+// `Active` IS NOT A UNIQUE TOKEN.** The first cut of this rung kept the state and the generation in two
+// words and had sysmon compare-and-swap `Active → Stolen`. **That is an ABA, and it was caught in review
+// before it shipped:** between sysmon reading the generation and reaching its CAS — a dozen instructions,
+// but sysmon is an ordinary preemptible OS thread on a ~15 ms quantum — the victim can leave call *N* on
+// the fast path, find nothing runnable, `wpark`, RELEASE its processor onto `__sched_pidle`, have another
+// machine claim it, be handed a different processor, and enter call *N+1*. Its state word reads `Active`
+// again, so the CAS SUCCEEDS — against a different call, on a processor a second machine is now running.
+// The handoff that follows would start a machine on a ring another machine already owns: two lock-free
+// writers on one ring and one allocator shard, which is `emitSchedClaimProc`'s heap corruption arriving by
+// a new road.
+//
+// ⇒ **the value sysmon compare-and-swaps must be one NO SUBSEQUENT CALL CAN PRESENT**, which is what Go's
+// generation counter is for and why `setBlockOnExitSyscall` re-validates `g→m→p` under a lock bit at all.
+// shv2 folds the generation INTO the state word instead:
+//
+//     bit 0       MSyscallInCall   this machine is inside a bracketed kernel call
+//     bit 1       MSyscallStolen   sysmon has taken this machine's processor
+//     bits 2..63  the GENERATION, stepped on every entersyscall
+//
+// ⭐⭐ **THE GENERATION IS STRICTLY MONOTONE BECAUSE NOTHING EVER SUBTRACTS FROM IT.** `entersyscall` adds
+// `MSyscallEnterDelta` (one generation step plus the in-call bit); `exitsyscall` subtracts `MSyscallInCall`;
+// `__sched_syscall_regain` subtracts `MSyscallStolen`. Not one of the three touches bits 2 and up except to
+// increase them. So a word `v` observed with the in-call bit set names exactly ONE call for the life of the
+// process, and sysmon's `CAS(word, v, v + MSyscallStolen)` succeeding is a PROOF that the machine is still
+// inside that call. ⚠ At 62 bits the counter wraps after ~4.6e18 bracketed calls; at a million a second
+// that is 146,000 years, so the wrap is not a state this process can reach.
+//
+// ⭐⭐⭐ **AND THAT PROOF IS WHAT MAKES THE PROCESSOR STILL VALID AT THE HANDOFF.** A machine changes
+// `MOffCurrentP` only at `emitSchedAdoptProc` and `emitSchedReleaseProcLocked`, and both run OUTSIDE a
+// bracketed call. So while the in-call bit has been continuously set for ONE generation, the processor
+// cannot have moved — which is exactly what the CAS establishes, and it is why `__sched_retake` may read the
+// processor before the CAS and hand it off after.
+//
+// The whole protocol, in one instruction each way and one CAS:
+//
+//   • **entersyscall** (`X64GtRuntime.emitGtEnterSyscall`): `lock add [M+state], MSyscallEnterDelta`. ONE
+//     instruction. Before it no thief can act on this call; after it one may.
+//   • **the thief** (`__sched_retake`): read `v`; require `v & MSyscallStateMask == MSyscallInCall`; require
+//     `v` to equal the word it recorded a poll ago; then `CAS(word, v, v + MSyscallStolen)` — **the
+//     linearization point** — and only on success `CAS(MOffCurrentP, p, 0)` and `__sched_handoffp(p)`.
+//   • **exitsyscall** (`X64GtRuntime.emitGtExitSyscall`): `lock xadd [M+state], -MSyscallInCall`, whose
+//     answer is the PRIOR word. The stolen bit in that answer is the whole verdict: clear ⇒ this machine
+//     still holds its processor; set ⇒ `__sched_syscall_regain` must obtain another.
+//
+// ⭐ **THE SECOND CAS's ANSWER IS DISCARDED, AND *NOW* THAT IS ARGUED RATHER THAN ASSUMED.** Once the state
+// CAS has succeeded, `p` is this thief's and nobody else's — it is off `__sched_pidle`, marked
+// `PStatusActive`, and named by no machine the moment the CAS lands. The `CAS(MOffCurrentP, p, 0)` can still
+// fail, and in exactly one way: the victim raced ahead, saw the stolen bit and regained a DIFFERENT
+// processor. A plain store would then wipe a processor the machine legitimately holds; as a CAS it simply
+// declines. **Both outcomes leave `p` the thief's, which is why the handoff below is unconditional and the
+// answer is not read.**
+//
+// ⛔ **THE STOLEN BIT OUTLIVES THE CALL, DELIBERATELY, AND `__sched_syscall_regain` IS WHAT CLEARS IT.**
+// Between `exitsyscall` and a regained processor the word reads `MSyscallStolen` alone: the in-call bit is
+// down, so `__sched_retake` skips this machine (it requires exactly `MSyscallInCall`), and the state bits are
+// non-zero, so `__sched_stop_workers` does not join it. **That second property is not incidental** — see
+// `buildSchedSyscallRegain`, where it is what keeps the exit path from blocking for ever on a machine that is
+// waiting for a processor it may never get.
+//
+// ⛔⛔ **THE BIT ARITHMETIC RESTS ON BRACKETED CALLS NEVER NESTING, AND THAT IS AN INVARIANT OF THE SHIM
+// RATHER THAN A HOPE.** Two `entersyscall`s without an intervening exit would add `MSyscallEnterDelta` twice
+// and carry `MSyscallInCall` into the stolen bit — a machine that had never been robbed reading as robbed.
+// It cannot happen: a shimmed import is reached only from Maxon code, the kernel never calls back into it,
+// and the shim could not survive nesting in any case — it sets RSP to the system stack's TOP, so an inner
+// shim would overwrite the outer one's frame (`X64GtRuntime.emitGtExitSyscall` carries that hazard, which is
+// why the slow path runs from the GT stack). ⇒ **anything that ever makes the shim re-entrant owes this
+// encoding a second look**, and the two constraints are one constraint.
+//
+// ⚠ **THE ORDERING, STATED FOR W223's arm64 AUDIT (§7).** Every mutation of this word is a LOCKed
+// read-modify-write or a CAS, so on x64 each is already a full barrier and the protocol needs no fence of its
+// own. On arm64 the same three points need acquire/release on this one word and nothing else: the only other
+// word the protocol touches (`MOffCurrentP`) is reached through a compare-and-swap.
+//
+// `atomicStep` in `MultiMSharing`'s vocabulary, though it is a per-machine FIELD rather than a `.data` slot:
+// two threads write it, and every mutation is `lock add`, `lock xadd` or `StdOp.atomicCas`.
+export let MOffSyscallState = MOffParkedDriverOwner + (PointerSlotBytes as ByteOffset)
+
+// *"This machine is inside a bracketed kernel call."* Bit 0.
+export let MSyscallInCall = 1 as ParsedInt
+// *"sysmon has taken this machine's processor."* Bit 1 — the only bit in this word with a different party on
+// each of its two edges: `__sched_retake` sets it, `__sched_syscall_regain` clears it.
+export let MSyscallStolen = 2 as ParsedInt
+// The two state bits together. A word whose state bits are ALL ZERO is a machine running ordinary Maxon code,
+// which is the slab's zero and therefore already right for a machine before its first shimmed call.
+let MSyscallStateMask = 3 as ParsedInt
+// One generation — the first bit above the state bits, so adding it steps the generation and leaves the state
+// alone, which is the property `MSyscallEnterDelta` is built out of.
+let MSyscallGenStep = 4 as ParsedInt
+// What `entersyscall` adds: a new generation AND the in-call bit, in ONE `lock add`. Stated as the sum of its
+// two terms rather than as `5`, so that widening the state bits moves the delta with them instead of leaving a
+// literal behind that still says five.
+export let MSyscallEnterDelta = MSyscallGenStep + MSyscallInCall
+
+// ⭐ **sysmon's OWN NOTES ABOUT THIS MACHINE — Go's per-P `sysmontick` (`proc.go:6682`), per-M here for the
+// reason the state word above is.** The exact state word it last observed, and the time it first saw it.
+//
+// ⭐⭐ **IT RECORDS THE WHOLE WORD AND NOT A TICK, WHICH IS WHAT COLLAPSED TWO FIELDS INTO ONE.** With the
+// generation folded into the state word, *"the same call"* and *"the same word"* are ONE comparison — so the
+// separate tick this pair used to sit beside is gone, and with it the window in which the two could be read a
+// moment apart and describe different calls.
+//
+// ⛔⛔ **WITHOUT THE COMPARISON `print` WOULD BE INDISTINGUISHABLE FROM A ONE-SECOND READ.** `WriteFile` is
+// bracketed and is the hottest bracketed slot there is; a sysmon that saw the in-call bit on two consecutive
+// polls and concluded *"stuck"* would retake a processor from a machine that had made a thousand short calls
+// in between. Requiring the WORD to be unchanged is what makes the conclusion *"this machine has been inside
+// ONE call since I last looked"*.
+//
+// ⚠ **NEITHER NEEDS ANY SYNCHRONISATION AND NEITHER OWES A `MultiMSharing` CLASS**, because there is exactly
+// one sysmon thread and it is the only reader and the only writer of both. They live on the M rather than in a
+// parallel array so a machine created after sysmon started arrives with its notes zeroed by the same slab
+// allocation that zeroes everything else on it — an array indexed by machine would be a structure whose growth
+// has to be synchronised against `__sched_startm`.
+//
+// ⚠ **A ZERO NOTE CANNOT BE MISTAKEN FOR AN OBSERVATION**, which is what makes the slab's zero safe here: a
+// machine sysmon can act on has the in-call bit set and a generation of at least one, so its word is at least
+// `MSyscallEnterDelta` and never compares equal to an unwritten note.
+let MOffSysmonWord = MOffSyscallState + (PointerSlotBytes as ByteOffset)
+let MOffSysmonWhen = MOffSysmonWord + (PointerSlotBytes as ByteOffset)
+
+// The three head scalars, the inline GT, the idle tail, the driver-park slot and the syscall bracket's three.
+// Derived, never written down as a number, for `PStructSize`'s reason.
+let MStructSize = ((MOffSysmonWhen as ParsedInt) + PointerSlotBytes) as ParsedInt
 
 // ==========================================================================
 // The ProcContext (P) struct
@@ -794,11 +931,36 @@ let POffPendingWaiter = 0x50 as ByteOffset
 // Go's `runnext` — the one green thread a P runs before consulting its local ring.
 //
 // ⛔⛔ **RESERVED AND DELIBERATELY NOT BUILT, AND THE REASON IS NO LONGER A QUOTATION — IT IS A MEASUREMENT
-// ON THIS TREE (MC1).** `proc.go:7530-7541` refuses `runnext` outright when the runtime has no `sysmon`:
-// *"A runnext goroutine shares the same time slice as the current goroutine … To prevent a ping-pong pair
-// of goroutines from starving all others, we depend on sysmon to preempt long-running goroutines … If there
-// is no sysmon, we must avoid runnext entirely or risk starvation."* shv2 is cooperative and has no sysmon
-// — that is **W213**, with `entersyscall`/`handoffp`.
+// ON THIS TREE (MC1), RE-TAKEN AT W213-C3 AND UNCHANGED.** `proc.go:7530-7541` refuses `runnext` outright
+// when the runtime has no `sysmon`: *"A runnext goroutine shares the same time slice as the current
+// goroutine … To prevent a ping-pong pair of goroutines from starving all others, we depend on sysmon to
+// preempt long-running goroutines … If there is no sysmon, we must avoid runnext entirely or risk
+// starvation."*
+//
+// ⛔⛔⛔ **THIS SLOT USED TO SAY IT WAS WAITING FOR *"W213's ARRIVAL"*, AND W213 HAS ARRIVED AND CHANGED
+// NOTHING — WHICH IS THE WHOLE POINT AND IS WHY THE STALE DEPENDENCY IS REPLACED HERE RATHER THAN TICKED
+// OFF.** shv2 now HAS a `__sysmon` (W213-C3): it retakes a processor from a machine stuck in a blocking
+// kernel call. **Read Go's sentence again and the mechanism it names is `preemptone` — PREEMPTION — not
+// `sysmon` as such.** shv2's monitor cannot preempt a green thread that is RUNNING Maxon code, because shv2
+// is cooperative by construction, so the safety mechanism `runqput`'s guard is asking for still does not
+// exist.
+//
+// ⭐⭐ **MEASURED, NOT INFERRED — `maxon-shv2/track0/runnext-starvation-probe.maxon`, ONE PROGRAM, TWO
+// COMPILERS, `MAXON_MAX_PROCS=1`, THREE RUNS EACH, ON A TREE WHOSE `__sysmon` IS LIVE:**
+//
+//   • **shipped (no `runnext`):** `bystander-ran` then `pingpong-done`, **3 of 3**.
+//   • **with an experimental slot** — Go's own two sites, `__sched_runq_put` taking `p.runnext` when it is
+//     free and `__sched_runq_get` consulting it ahead of the ring, and nothing else: `pingpong-done` then
+//     `bystander-ran`, **3 of 3**, the bystander waiting out all 4,000 bounces.
+//
+// ⇒ **the readings are IDENTICAL to MC1's, taken before any monitor existed.** A monitor that can only
+// retake a processor from a SYSCALL has nothing to say about two green threads that never make one, which is
+// exactly the population Go's guard is about. The experimental build was reverted; the probe is what is left
+// of it, and re-running it is how the next rung re-asks this question.
+//
+// ⇒ **the slot stays reserved, and it now waits for PREEMPTION rather than for W213.** That is a
+// substantially larger rung — a cooperative runtime has no signal to deliver and no safe point to deliver it
+// at — and it is the honest name of the dependency.
 //
 // ⭐⭐ **AND THE QUESTION "DOES SHV2'S COOPERATIVE MODEL MAKE GO'S OBJECTION INAPPLICABLE?" WAS ASKED
 // PROPERLY AND ANSWERED NO.** `maxon-shv2/track0/runnext-starvation-probe.maxon` is two services that ready
@@ -812,9 +974,9 @@ let POffPendingWaiter = 0x50 as ByteOffset
 // in it, and nothing but a ring overflow ever puts one there. So the one mechanism shv2 has that Go's
 // argument does not account for is aimed at a different queue from the one that starves.
 //
-// ⇒ **the slot stays reserved, and it stays reserved for W213's arrival rather than for a producer.** The
-// throughput case for it is real (a just-readied thread staying on the M that readied it is the direct cure
-// for cross-M stealing), which is exactly why it may not be taken on the throughput case alone.
+// ⇒ **and it stays reserved for a SAFETY MECHANISM rather than for a producer.** The throughput case for it
+// is real (a just-readied thread staying on the M that readied it is the direct cure for cross-M stealing),
+// which is exactly why it may not be taken on the throughput case alone.
 //
 // ⚠ **AND SHV2 HAS NO FRONT-OF-QUEUE PRODUCER TO PUT IN IT.** The two deferred slots are what would feed it,
 // and only the YIELDER one has a producer — which belongs at the BACK by measurement (see
@@ -888,6 +1050,19 @@ let POffSchedTick = POffPendingYielder + (PointerSlotBytes as ByteOffset)
 // like `schedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
 let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 
+// ⭐⭐ **HOW MANY TIMES THIS PROCESSOR HAS BEEN RETAKEN FROM A MACHINE STUCK IN A KERNEL CALL — the reading
+// `__Builtins.schedRetakeCount()` sums, and the one way a program can observe that a HANDOFF really happened
+// rather than that its output merely came out in a better order (W213-C3).**
+//
+// ⚠ **A PER-P WORD AND NOT A `.data` COUNTER, FOR `POffStealCount`'s REASON EXACTLY** — a `.data` word appears
+// in the `data {` section of every green-thread golden in the corpus, and this is per-processor state. It sits
+// beside the steal count because the two are the same shape asked of the same array, which is why they are
+// summed by ONE parameterised body (`buildSchedPerProcSum`) rather than by two copies of one loop.
+//
+// ⚠ **SYSMON IS ITS ONLY WRITER, SO IT IS A PLAIN LOAD/ADD/STORE.** There is one sysmon thread; nothing else
+// steps it, and a reader that wants it exact reads it after its work has finished, which is when it is.
+let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
+
 // ⭐⭐⭐ **THE DEFERRED PARK SLOT — the THIRD deferred-re-enqueue slot, and the one W218 needed (SV1).** The
 // two above hold a thread that is RUNNABLE and must not be discoverable until its registers are saved; this
 // holds one that is about to WAIT and must not be registered on the store that will wake it until the same
@@ -902,7 +1077,7 @@ let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 //
 // ⚠ It is a `.data`-free slot for `POffStealCount`'s reason: a `.data` word would appear in the `data {`
 // section of every green-thread golden in the corpus.
-let POffPendingPark = POffStealCount + (PointerSlotBytes as ByteOffset)
+let POffPendingPark = POffRetakeCount + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐⭐ **`__sched_pidle`'s LINK — Go's `p.link` as `pidleput`/`pidleget` use it (`proc.go:7425`/`:7454`),
 // and the slot that makes *"a processor with no machine"* a state this runtime can write down (W213-C2).**
@@ -1276,6 +1451,96 @@ let SchedParkedDriversLabel = b"__sched_parked_drivers"
 // and a reader that gets the stale 0 simply parks once more and re-reads at its own timeout.
 let SchedShutdownFlagLabel = b"__sched_shutdown_flag"
 
+// ⭐⭐⭐ **HAS THE SYSTEM MONITOR THREAD BEEN STARTED? — the one-shot that keeps a program which never
+// schedules a GREEN THREAD from carrying an extra OS thread (W213-C3).**
+//
+// ⛔ **THE TRIGGER IS `__sched_wake_or_spawn` AND NOT `__sched_init_procs`, AND IT IS NOT `__sched_startm`'s
+// SPAWN ARM EITHER — BOTH ALTERNATIVES WERE TRIED AND BOTH ARE WRONG.** `__sched_init_procs` runs for every
+// `async`-only program too, and an `async` frame is a COROUTINE that no worker M can ever run (see this file's
+// header), so that placement would start a monitor for a process that can never have a second machine to
+// monitor. The spawn arm is the opposite error: at `MAXON_MAX_PROCS=1` there is never an idle processor to
+// spawn onto, so `__sched_startm` places nobody and the monitor would never start **on exactly the
+// configuration that needs it most** — which is `specs-shv2/sched-syscall-handoff.md`'s `procs: 1` case.
+//
+// ⇒ **the honest trigger is *"this program has published a GREEN THREAD"***, and that is precisely what
+// reaching `__sched_wake_or_spawn` means: the coroutine arm of every publish door skips the wake by
+// construction (`buildSchedPublish`), so only a green thread's publish gets here.
+//
+// ⚠ **THE READ BEFORE THE CAS IS NOT AN OPTIMISATION OF THE CAS — IT IS WHAT KEEPS THE PUBLISH PATH FREE OF A
+// `lock` PREFIX.** `__sched_wake_or_spawn` runs once per publish, which `service-torture` measures in the
+// hundreds of thousands; a `lock cmpxchg` there to re-answer a question that is settled after the first
+// microsecond of the process is the shape `SchedSpinningLabel`'s gate exists to avoid. A stale 0 read costs a
+// lost CAS and nothing else.
+//
+// `atomicStep`: the only mutation is the `atomicCas` at that gate.
+let SchedSysmonStartedLabel = b"__sched_sysmon_started"
+
+// ⭐ **HOW LONG A MACHINE MUST HAVE BEEN INSIDE ONE KERNEL CALL BEFORE ITS PROCESSOR IS TAKEN — Go's 10 ms
+// (`proc.go`'s `retake`), carried unchanged because the quantity it trades off is the same one.** Below it the
+// handoff costs more than the stall it removes (a machine started, a search run and a park paid for a call
+// that was about to return); above it a genuinely blocked machine holds a processor for longer than it needs
+// to. It is compared against `__gt_now_ns`, which is why it is written in nanoseconds.
+let SysmonRetakeAfterNs = 10 * 1000 * 1000 as ParsedInt
+
+// ⭐⭐ **THE MONITOR'S POLL, AND IT DIVERGES FROM GO'S DELIBERATELY.** Go starts at 20 µs and backs off
+// geometrically to a 10 ms cap. shv2 starts at **1 ms** because that is the finest interval `osSleepMs` can
+// express at all — Windows' `Sleep(1)` returns on the scheduler's tick, which `DeadlockConfirmPolls`'s own
+// note measures at ~35 ms in practice — so a sub-millisecond ladder here would be three constants describing
+// a resolution the platform does not have. The back-off and the cap are Go's.
+let SysmonMinPollMs = 1 as ParsedInt
+let SysmonMaxPollMs = 10 as ParsedInt
+
+// How many consecutive polls that retook nothing move the monitor to its long interval. Go's ~50, and the
+// same reasoning: a process that has not blocked in fifty polls is one whose next block can afford to be
+// noticed a few milliseconds late. Any retake snaps the interval straight back to `SysmonMinPollMs`.
+let SysmonIdlePollsBeforeBackoff = 50 as ParsedInt
+
+// ⛔⛔⛔ **A TARGET FORK IN THE SCHEDULER — READ THIS BEFORE THE THREE SITES THAT ASK IT, AND READ THE
+// REMOVAL INSTRUCTION AT THE BOTTOM.**
+//
+// The syscall bracket is emitted by ONE import shim — `X64GtRuntime.emitGtShimmedIatCall`, around an
+// `iatCall`, classified per import by `gtShimSyscallClassOf`. Every other lane has its own shim and no
+// bracket, so on those lanes `MOffSyscallState` is permanently zero: `__sched_retake`'s `rtsyscall` arm declines every
+// machine, `__sched_retake` always answers 0, and `__sysmon` is **an OS thread that wakes a hundred times a
+// second to walk `__sched_allm` and structurally cannot find anything**. MEASURED as exactly that on
+// arm64-macOS, per green-thread program, for the life of the process — one per test process across a
+// twelve-worker suite.
+//
+// ⇒ **the monitor is gated on the lane that brackets, and the gate is asked at THREE sites that must agree**:
+// `installSchedRuntime` (build the four functions at all), `buildSchedWakeOrSpawn` (the lazy start), and
+// `schedRuntimeGlobals` (the `.data` word the start CASes). A start without a global is a word nothing
+// writes; a global without an install is a call to a function that was never built.
+//
+// ⭐ **IT ALSO KEEPS THE arm64 GOLDEN LANES BYTE-IDENTICAL.** `__sched_sysmon_started` would otherwise put a
+// line in the `data {` block of every green-thread golden on lanes this host cannot mint — 5 `arm64-linux`
+// and 12 `arm64-macos` fragments carry that block.
+//
+// ⚠ **KEYED ON THE OS, WHICH IS THIS COMPILER'S CONVENTION FOR A SHAPE QUESTION** (`ioCompletionShape`
+// states it: *"whether a read can be in flight is a property of the platform's IO model, not of its
+// instruction set"*). The same is true here — an IAT and its shim are a Windows mechanism. The `match` is
+// EXHAUSTIVE, so a new operating system cannot be added without answering this question.
+//
+// ⛔⛔ **HOW THIS FORK IS REMOVED, AND IT IS NOT BY DELETING THE GATE ON ITS OWN.** The rung that brackets
+// another lane's shim must flip that lane's arm here **in the same change that adds its bracket** — the two
+// are one edit. Flipping it alone builds a monitor that still finds nothing; adding the bracket alone builds
+// a bracket no monitor reads. ⚠ And an arm64-WINDOWS lane would arrive with `windows` already answering
+// `true` while its own shim had no bracket, which is the one direction this OS key gets wrong: that lane owes
+// its bracket before it may use this answer.
+export function targetBracketsBlockingSyscalls(target Target) returns bool
+	return match target.os 'os'
+		windows gives true
+		linux to wasi gives false
+	end 'os'
+end 'targetBracketsBlockingSyscalls'
+
+// ⭐ **HOW LONG A MACHINE WHOSE PROCESSOR WAS TAKEN WAITS BETWEEN ASKING `__sched_pidle` FOR ANOTHER.** One
+// millisecond, which is `OtherWorkerPollMs`'s value and `OtherWorkerPollMs`'s reason — it is the finest
+// interval `osSleepMs` expresses, and Windows rounds it up to the scheduler tick regardless. It is its own
+// constant rather than a share of the monitor's floor above because the two answer different questions: that
+// one is how often to LOOK FOR a blocked machine, this one is how long a machine that is already unblocked
+// waits to be able to run again.
+let SyscallRegainPollMs = 1 as ParsedInt
+
 // ⭐ **THE ONE LOCK OVER THE RUN QUEUE — a `.data` word holding a slab-allocated CRITICAL_SECTION.** It was
 // `__io_lock`, allocated by `__io_init` and taken only when the program read a pipe, because the IOCP
 // completion thread was then the run queue's only cross-thread mutator. A worker M is a second one, so the
@@ -1443,6 +1708,49 @@ export let SchedSweepDroppedName = b"__sched_sweep_dropped"
 // question has no answer without the machinery. `RuntimeUsage.recordCallUsage` therefore routes it to
 // `usesGt` — asking it installs the scheduler, because asking it is a question ABOUT the scheduler.
 export let SchedStealCountName = b"__sched_steal_count"
+
+// ⭐ `__sched_retake_count() -> i64` — the sum of every P's retake counter, and the floor of
+// `__Builtins.schedRetakeCount()`. Its shape, its cost and its `usesGt` routing are `__sched_steal_count`'s
+// exactly, which is why the two share ONE body (`buildSchedPerProcSum`): both walk `__sched_procs` summing one
+// per-P word, and a second copy of that loop is one fact written twice.
+export let SchedRetakeCountName = b"__sched_retake_count"
+
+// ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
+// WHO CAN USE IT" — Go's `handoffp` (`proc.go:3147`), minus every arm shv2 has no subject for (W213-C3).**
+//
+// ⛔⛔ **ITS GOVERNING INVARIANT IS GO'S FIRST COMMENT AND IT IS THE THING TO GET RIGHT:** *"handoffp must
+// start an M in any situation where findRunnable would return a G to run on pp."* Every arm mirrors one work
+// source `__sched_find_runnable` consults, so a work source added there without an arm here is work stranded
+// on a processor nobody is looking at.
+//
+// ⚠ **IT IS CALLED WITH NO PROCESSOR AND NO MACHINE OF ITS OWN**, from the sysmon thread, which is why it may
+// take `__sched_lock` freely and why it must not touch TLS.
+let SchedHandoffPName = b"__sched_handoffp"
+
+// ⭐⭐ `__sched_retake(now) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`), minus
+// PREEMPTION. Go also preempts a long-RUNNING goroutine here; shv2 is cooperative by construction and has no
+// preemption at all, so that arm is deliberately absent and `POffRunnext`'s reservation note carries what its
+// absence costs.
+let SchedRetakeName = b"__sched_retake"
+
+// ⭐⭐ `__sysmon(arg) -> 0` — the monitor thread's whole life. **No processor, no M, allocation-free after
+// start, and it never runs Maxon user code.** Started once, lazily; see `SchedSysmonStartedLabel`.
+let SchedSysmonName = b"__sysmon"
+
+// ⭐⭐⭐ `__sched_syscall_regain()` — **"sysmon took my processor while I was in the kernel; get me another
+// before I touch the scheduler again."** The one road out of `MSyscallStolen`, called from the syscall shim's
+// post-call path with the green thread's own result already saved.
+//
+// ⛔⛔ **IT WAITS FOR A PROCESSOR RATHER THAN GIVING THE GREEN THREAD AWAY, WHICH IS WHERE IT DIVERGES FROM
+// GO AND THE DIVERGENCE IS FORCED.** Go's `exitsyscallNoP` puts the goroutine on the GLOBAL RUN QUEUE and
+// stops the machine, because in Go any M can resume any G. In shv2 it cannot: a green thread inside a shimmed
+// call has a DRIVER (`GtOffWaiter`, stored by `emitGtRunOne` before every switch-in), that driver is suspended
+// inside `__gt_context_switch` ON THIS MACHINE'S STACK, and when the driver is `main` its GT is this machine's
+// inline scheduler GT (`MOffMainThread`, `stackBase == 0`) and is not merely unpublished but UNMOVABLE.
+// Publishing the green thread would let another machine run it to completion and then context-switch into a
+// context living on a different OS thread's stack. ⇒ **the machine that entered the syscall is the machine
+// that must leave it**, and all it may do is wait for a processor.
+export let SchedSyscallRegainName = b"__sched_syscall_regain"
 
 // ⭐⭐ **`__sched_any_executing() -> 0|1` — "IS ANY M STILL DOING SOMETHING?", THE DEADLOCK DETECTOR'S ONE
 // QUESTION (A1).** It answers 1 as soon as it finds a P that is CLAIMED by an M (`PStatusActive`) whose M is
@@ -1763,7 +2071,7 @@ let ParkTimeoutIdleMs = 100 as ParsedInt
 // *can a program that never spawns a green thread read this word?* The worker COUNTERS can
 // (`__Builtins.schedMaxActiveWorkers()`) and so can the processor count
 // (`__Builtins.schedProcessorCount()`); the P machinery itself is meaningless without a scheduler.
-export function schedRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
+export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
 	// ⭐ **SEEDED TO 1 IN `.data`, NOT BY AN INITIALIZER.** A program with no scheduler runs on exactly one M
@@ -1817,6 +2125,14 @@ export function schedRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntry
 		// Every mutation is `emitGlobalAccumulate(multiM: true)` at the driver's arm and disarm; see
 		// `SchedParkedDriversLabel` for why the same instruction is also the Dekker pair's barrier.
 		pushRuntimeGlobal(out, label: SchedParkedDriversLabel, sharing: MultiMSharing.atomicStep)
+		// ⛔ **GATE SITE 3 OF 3 — see `targetBracketsBlockingSyscalls`.** The monitor's one-shot; its only
+		// mutation is the `atomicCas` at `__sched_wake_or_spawn`'s gate, and on a lane with no bracket that gate
+		// is not emitted, so this word would be a `.data` slot nothing writes — in the `data {` block of every
+		// green-thread golden on lanes this host cannot mint. See `SchedSysmonStartedLabel` for why the read in
+		// front of that CAS is not a second writer.
+		if targetBracketsBlockingSyscalls(target) 'theMonitorExists'
+			pushRuntimeGlobal(out, label: SchedSysmonStartedLabel, sharing: MultiMSharing.atomicStep)
+		end 'theMonitorExists'
 	end 'procsTeardown'
 
 	return out
@@ -1838,11 +2154,33 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedSteal(module)
 	buildSchedFindRunnable(module)
 	buildSchedSweepDropped(module)
-	buildSchedStealCount(module)
+	// The two per-P sums, from ONE body: they differ in the name they answer to and the field they read, and in
+	// nothing else. See `buildSchedPerProcSum`.
+	buildSchedPerProcSum(module, name: SchedStealCountName, offset: POffStealCount)
+	buildSchedPerProcSum(module, name: SchedRetakeCountName, offset: POffRetakeCount)
 	buildSchedAnyExecuting(module)
 	buildSchedWorkerLoop(module)
 	buildSchedStartM(module)
-	buildSchedWakeOrSpawn(module)
+	buildSchedWakeOrSpawn(module, target: target)
+	// ⛔ **GATE SITE 1 OF 3 — see `targetBracketsBlockingSyscalls` for the fork and how it is removed.** All
+	// four are reachable ONLY from the bracket: `__sched_syscall_regain` from the shim's post-call path,
+	// `__sysmon` from the lazy start (gate site 2), and the other two from `__sysmon`. On a lane with no
+	// bracket every one of them is dead — and `__sched_syscall_regain` is dead code that SURVIVES the prune,
+	// because it is a `DeadFunctionElimination` root (the shim calls it from hand-assembly, where no Std
+	// caller reaches it), so its root is gated on the same answer.
+	//
+	// ⚠ **`buildSchedPerProcSum` ABOVE IS DELIBERATELY *NOT* GATED**, and that is the point of putting the
+	// retake counter on a per-P field: `__Builtins.schedRetakeCount()` compiles and answers on EVERY target,
+	// reading a straight 0 where no monitor ever ran. A builtin that exists on one lane only is a worse
+	// divergence than a thread that idles.
+	if targetBracketsBlockingSyscalls(target) 'theSyscallHandoff'
+		// `__sched_handoffp` is `__sched_retake`'s only caller of `__sched_startm`, `__sysmon` is
+		// `__sched_retake`'s only caller, and `__sched_syscall_regain` is the shim's road back.
+		buildSchedHandoffP(module)
+		buildSchedRetake(module)
+		buildSysmon(module)
+		buildSchedSyscallRegain(module)
+	end 'theSyscallHandoff'
 	// The second wake, for the other kind of waiter — see `SchedWakeParkedDriversName` for why the two are
 	// different functions rather than one with a flag.
 	buildSchedWakeParkedDrivers(module)
@@ -2474,7 +2812,9 @@ function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, ids Val
 
 	// Every other tail field is correct at the slab's zero: no handle yet (the caller stores it if there is
 	// one), no spinning credit held, `MQuiescedRunning`, an unseen generation, no confirmations, both links
-	// null.
+	// null — and, since W213-C3, a syscall word of 0, which is *"not in a bracketed call, generation zero"*
+	// and is why a machine created while `__sysmon` is already running cannot be mistaken for one it has
+	// been watching (`MOffSysmonWord`).
 	return m
 end 'emitSchedAllocM'
 
@@ -3499,12 +3839,14 @@ function buildSchedSweepDropped(module StdModule)
 end 'buildSchedSweepDropped'
 
 // ==========================================================================
-// `__sched_steal_count`
+// `__sched_steal_count` and `__sched_retake_count`
 // ==========================================================================
 
-// ⭐⭐ **`__sched_steal_count() -> i64` — THE SUM OF EVERY P's STEAL COUNTER**, and the floor of
-// `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing ever
-// happened, which is what makes `track0/steal-torture.maxon`'s `steals > 0` an assertion rather than a hope.
+// ⭐⭐ **THE SUM OF ONE PER-P COUNTER OVER `__sched_procs`** — the floor of `__Builtins.schedStealCount()`
+// (`POffStealCount`) and of `__Builtins.schedRetakeCount()` (`POffRetakeCount`). Between them they are the
+// only ways a Maxon program can observe that work stealing ever happened and that a processor was ever
+// retaken from a machine stuck in the kernel, which is what makes `track0/steal-torture.maxon`'s
+// `steals > 0` and `sched-syscall-handoff`'s `retaken=yes` assertions rather than hopes.
 //
 // ⚠ **IT SUMS RATHER THAN READING A GLOBAL, AND THAT IS THE `.data` RULE THIS RUNG IS ARRANGED AROUND.** A
 // `__sched_steal_count` word would appear in the `data {` section of every green-thread program's golden, so
@@ -3514,8 +3856,13 @@ end 'buildSchedSweepDropped'
 // ⚠ **IT IS NOT AN ATOMIC READ AND DOES NOT NEED TO BE.** Each counter is one aligned word written by its
 // own P, so every value the walk reads is a value some P really wrote; what a concurrent steal costs is
 // FRESHNESS, not a torn number. A harness reads it after its work has finished, which is when it is exact.
-function buildSchedStealCount(module StdModule)
-	var func = IrFunction.createFromStd(SchedStealCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+//
+// ⭐⭐ **THE BODY IS PARAMETERISED ON THE FIELD, BECAUSE `__sched_retake_count` IS THE SAME WALK (W213-C3).**
+// Both sum ONE per-P word over `__sched_procs`; everything above — why the counter is per-P rather than
+// `.data`, why the walk needs no null test, why the read is not atomic — is true of both, word for word. Two
+// bodies would be that argument written twice, and the second copy is the one that rots.
+function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffset)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -3538,8 +3885,8 @@ function buildSchedStealCount(module StdModule)
 	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
 
-	let stolenHere = emitLoadField(module, block: loopBody, record: emitLoadProc(module, block: loopBody, index: index, ids: ids), offset: POffStealCount, ids: ids)
-	let runningTotal = emitBin(module, block: loopBody, a: total, b: stolenHere, opcode: StdBinOpcode.add, ids: ids)
+	let countedHere = emitLoadField(module, block: loopBody, record: emitLoadProc(module, block: loopBody, index: index, ids: ids), offset: offset, ids: ids)
+	let runningTotal = emitBin(module, block: loopBody, a: total, b: countedHere, opcode: StdBinOpcode.add, ids: ids)
 	let step = emitConst(module, block: loopBody, value: 1, ids: ids)
 	let nextIndex = emitBin(module, block: loopBody, a: index, b: step, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(loopBody, op: StdOp.branch(loopHdr.id))
@@ -3548,7 +3895,7 @@ function buildSchedStealCount(module StdModule)
 	module.setTerminator(doneBlock, op: StdOp.ret(total))
 
 	module.functions.push(func)
-end 'buildSchedStealCount'
+end 'buildSchedPerProcSum'
 
 // ==========================================================================
 // `__sched_any_executing`
@@ -4580,12 +4927,52 @@ end 'emitSchedRaiseHighWater'
 // critical section (`buildSchedWorkerLoop`) — so there is no fence to preserve by staying outside a lock, and
 // the O(1) list is now the cheaper option as well as the only one that can find a P-less machine. The gate
 // above still runs lock-free, so a publish that wakes nobody costs one load exactly as it did.
-function buildSchedWakeOrSpawn(module StdModule)
+// ⭐⭐⭐ **THE SYSTEM MONITOR'S ONE-SHOT START (W213-C3), AND THIS IS THE ONE SITE** — see
+// `SchedSysmonStartedLabel` for why it is here and not at `__sched_init_procs` or at `__sched_startm`'s spawn
+// arm. Reaching `cur` means a GREEN THREAD has been published, which is the whole precondition for a second
+// machine ever to exist and therefore for a processor ever to be worth retaking.
+//
+// ⚠ It is a function of its own rather than three blocks inline because its CALLER is now conditional (gate
+// site 2 of `targetBracketsBlockingSyscalls`), and a caller that branches around half of a block sequence is
+// how a lane comes to emit a terminator twice. It terminates `cur` and lands on `cont` from every arm.
+function emitSchedSysmonLazyStart(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
+	var monitorClaim = module.addBlock(func, label: b"sysmonclaim")
+	var monitorStart = module.addBlock(func, label: b"sysmonstart")
+
+	let sysmonStarted = emitLoadGlobalWord(module, block: cur, label: SchedSysmonStartedLabel, ids: ids)
+	let sysmonUnstarted = emitConst(module, block: cur, value: 0, ids: ids)
+	let mayNeedMonitor = emitCmp(module, block: cur, a: sysmonStarted, b: sysmonUnstarted, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(mayNeedMonitor, thenBlockId: monitorClaim.id, elseBlockId: cont.id))
+
+	// The CAS is what makes the start happen once; the plain load above is what keeps its `lock` prefix off the
+	// publish path after that. A machine that loses this CAS simply carries on — another publisher started it.
+	let monitorAddr = ids.mint()
+	module.appendOp(monitorClaim, op: StdOp.globalAddr(monitorAddr, label: SchedSysmonStartedLabel))
+	let monitorExpected = emitConst(module, block: monitorClaim, value: 0, ids: ids)
+	let monitorReplacement = emitConst(module, block: monitorClaim, value: 1, ids: ids)
+	let wonMonitor = ids.mint()
+	module.appendOp(monitorClaim, op: StdOp.atomicCas(wonMonitor, addrId: monitorAddr, expectedId: monitorExpected, replacementId: monitorReplacement))
+	let lostMonitor = emitCasLost(module, block: monitorClaim, result: wonMonitor, ids: ids)
+	module.setTerminator(monitorClaim, op: StdOp.condBranch(lostMonitor, thenBlockId: cont.id, elseBlockId: monitorStart.id))
+
+	// ⚠ **A `CreateThread` THAT FAILS IS NOT AN ERROR HERE AND THE HANDLE IS DISCARDED.** Without a monitor a
+	// blocking kernel call costs its processor for the duration, which is exactly the behaviour every build
+	// before this rung had; refusing to run at all because a diagnostic thread could not be created would turn
+	// a degradation into a failure. Nothing ever joins it, so nothing needs the handle either.
+	let monitorEntry = ids.mint()
+	module.appendOp(monitorStart, op: StdOp.funcAddr(monitorEntry, funcName: SchedSysmonName))
+	let monitorArg = emitConst(module, block: monitorStart, value: 0, ids: ids)
+	module.appendOp(monitorStart, op: StdOp.osThreadCreate(ids.mint(), entryPtrId: monitorEntry, argId: monitorArg))
+	module.setTerminator(monitorStart, op: StdOp.branch(cont.id))
+end 'emitSchedSysmonLazyStart'
+
+function buildSchedWakeOrSpawn(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var spinCheck = module.addBlock(func, label: b"spincheck")
+	var spinTest = module.addBlock(func, label: b"spintest")
 	var spinClaim = module.addBlock(func, label: b"spinclaim")
 	var startIt = module.addBlock(func, label: b"wakestart")
 	var giveBack = module.addBlock(func, label: b"spinreturn")
@@ -4600,12 +4987,22 @@ function buildSchedWakeOrSpawn(module StdModule)
 	let stopping = emitCmp(module, block: entry, a: shutdown, b: zero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(stopping, thenBlockId: doneBlock.id, elseBlockId: spinCheck.id))
 
+	// ⛔ **GATE SITE 2 OF 3 — THE MONITOR'S LAZY START. See `targetBracketsBlockingSyscalls`.** On a lane
+	// with no bracket the monitor is built at all (gate site 1), so there is nothing to start and no `.data`
+	// word to CAS (gate site 3); `spincheck` then falls straight through to the spinning gate and this
+	// function is byte-for-byte what it was before this rung.
+	if targetBracketsBlockingSyscalls(target) 'theMonitorCanRetake'
+		emitSchedSysmonLazyStart(module, func: func, cur: spinCheck, cont: spinTest, ids: ids)
+	end 'theMonitorCanRetake' else 'noMonitorOnThisLane'
+		module.setTerminator(spinCheck, op: StdOp.branch(spinTest.id))
+	end 'noMonitorOnThisLane'
+
 	// ⭐ **THE RESERVATION IS A LOAN, NOT A COUNT OF THIS THREAD.** Whoever `__sched_startm` wakes takes it
 	// over through `MOffSpinning`; if it places the work with nobody, `spinreturn` gives it back.
-	let spinning = emitLoadGlobalWord(module, block: spinCheck, label: SchedSpinningLabel, ids: ids)
-	let spinZero = emitConst(module, block: spinCheck, value: 0, ids: ids)
-	let alreadyLooking = emitCmp(module, block: spinCheck, a: spinning, b: spinZero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(spinCheck, op: StdOp.condBranch(alreadyLooking, thenBlockId: doneBlock.id, elseBlockId: spinClaim.id))
+	let spinning = emitLoadGlobalWord(module, block: spinTest, label: SchedSpinningLabel, ids: ids)
+	let spinZero = emitConst(module, block: spinTest, value: 0, ids: ids)
+	let alreadyLooking = emitCmp(module, block: spinTest, a: spinning, b: spinZero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(spinTest, op: StdOp.condBranch(alreadyLooking, thenBlockId: doneBlock.id, elseBlockId: spinClaim.id))
 
 	let spinCountAddr = ids.mint()
 	module.appendOp(spinClaim, op: StdOp.globalAddr(spinCountAddr, label: SchedSpinningLabel))
@@ -4653,6 +5050,471 @@ function buildSchedWakeOrSpawn(module StdModule)
 
 	module.functions.push(func)
 end 'buildSchedWakeOrSpawn'
+
+// ==========================================================================
+// ⭐⭐⭐ THE SYSCALL HANDOFF (W213-C3) — `__sched_handoffp`, `__sched_retake`, `__sysmon`,
+// `__sched_syscall_regain`
+// ==========================================================================
+
+// The walk `SchedHandoffPName` describes. `p` arrives OFF `__sched_pidle`, still marked `PStatusActive` and
+// named by no machine — the state `__sched_retake`'s second CAS leaves it in — so nothing else in the runtime
+// can reach it and every arm below has it exclusively.
+//
+// ⭐⭐ **GO'S FIVE ARMS ARE THREE HERE, AND THE TWO THAT ARE MISSING ARE MISSING FOR STATED REASONS RATHER
+// THAN BY OVERSIGHT.**
+//
+//   • **Go's *"no spinning M and no idle P ⇒ start one spinning"*** needs `sched.npidle`, which shv2
+//     deliberately does not keep (`SchedPidleLabel`'s own note argues the omission and names this rung as the
+//     likely reader). It is not needed, because what it buys here is LATENCY and not work conservation: the
+//     default arm below publishes this processor on `__sched_pidle`, which is exactly where every publisher's
+//     `__sched_startm(0)` looks, so work arriving after the put finds it. What Go's arm covers is the window
+//     between the put and the next publish, and paying a `.data` word in every green-thread golden to shorten
+//     that window is the trade `POffStealCount` exists to refuse. ⇒ **the count is still not added, and the
+//     reader that would have justified it turned out not to need it.**
+//   • **Go's *"last P and nobody polling the network"*** has no subject in shv2. Go names a designated
+//     poller through `sched.lastpoll`; shv2's netpoll is run by whichever DRIVER is blocked in
+//     `__gt_drive_until` and by every parked worker on its own 2 ms / 100 ms timeout (`buildSchedWorkerLoop`'s
+//     `wpoll`), so *"nobody is polling"* is not a state this scheduler can be in while any machine is alive.
+//
+// ⚠ **THE DEFAULT ARM'S `pidleput` ASSERTS AN EMPTY RING, AND ARM 1 IS WHAT MAKES THAT TRUE.** Once
+// `M->currentP` has been zeroed no machine can PUSH to this ring — `__sched_runq_put` pushes to the ring of
+// the processor its own machine holds — so a thief may still drain it but nobody can fill it. Arm 1's
+// unlocked read is therefore not merely a hint: an empty answer stays empty all the way to the assertion.
+function buildSchedHandoffP(module StdModule)
+	var func = IrFunction.createFromStd(SchedHandoffPName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var startIt = module.addBlock(func, label: b"hopstart")
+	var recheck = module.addBlock(func, label: b"hoprecheck")
+	var lockedStart = module.addBlock(func, label: b"hoplockedstart")
+	var idleIt = module.addBlock(func, label: b"hopidle")
+
+	emitParams(module, block: entry, count: 1)
+	let p = 0 as ValueId
+
+	// Arm 1 — this processor's own ring, or the global queue, holds a green thread. Both reads are unlocked,
+	// which is `emitSchedAnyRunnable`'s stated exception: they pick an arm, and both arms are correct whatever
+	// they answer. A false positive costs a machine that searches and finds nothing; a false negative is caught
+	// by the locked re-check below.
+	let runnable = emitSchedAnyRunnable(module, block: entry, p: p, ids: ids)
+	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
+	let nothingToRun = emitCmp(module, block: entry, a: runnable, b: entryZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(nothingToRun, thenBlockId: recheck.id, elseBlockId: startIt.id))
+
+	// ⚠ **`__sched_startm` MAY ANSWER `PlacedNobody`, AND THE PROCESSOR IS THEN DROPPED — WHICH IS CORRECT ON
+	// THE ONE ROAD THAT PRODUCES IT AND ONLY THERE.** With a processor handed to it that call answers
+	// `PlacedNobody` from exactly one arm: the shutdown arm, which it reads under `__sched_lock`. A processor
+	// orphaned at teardown is a processor nobody needs — `__gt_drain_at_exit` has already driven every queue
+	// empty before the flag is set — and the alternative (putting it back on `__sched_pidle`) would offer it to
+	// a `__sched_startm` that reads the same flag and places nothing.
+	module.appendOp(startIt, op: StdOp.call(ids.mint(), callee: SchedStartMName, args: argsOf(p)))
+	module.setTerminator(startIt, op: StdOp.retVoid)
+
+	// Arm 3 — Go's *"recheck the global queue under sched.lock"*. Arm 1's read was unsynchronized, and the
+	// global queue is the one tier a party holding no processor can both see and fill (`buildSchedWorkerLoop`'s
+	// final look states the same set from the other side).
+	emitSchedLockEnter(module, block: recheck, ids: ids)
+	let globalHasWork = emitSchedGlobalQueueIs(module, block: recheck, pred: StdCmpPred.ne, ids: ids)
+	let recheckZero = emitConst(module, block: recheck, value: 0, ids: ids)
+	let stillNothing = emitCmp(module, block: recheck, a: globalHasWork, b: recheckZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(recheck, op: StdOp.condBranch(stillNothing, thenBlockId: idleIt.id, elseBlockId: lockedStart.id))
+
+	// The lock is released BEFORE the call: `__sched_startm` takes it itself, and it may `osThreadCreate` and
+	// `osSetEvent` while holding it.
+	emitSchedLockLeave(module, block: lockedStart, ids: ids)
+	module.appendOp(lockedStart, op: StdOp.call(ids.mint(), callee: SchedStartMName, args: argsOf(p)))
+	module.setTerminator(lockedStart, op: StdOp.retVoid)
+
+	// Arm 5 — nothing to run anywhere: park the PROCESSOR, which is Go's `pidleput(pp, 0)` and the sentence
+	// `POffPidleNext` was created to make expressible.
+	var idled = emitSchedPidlePutLocked(module, func: func, cur: idleIt, p: p, holdsWorkLabel: b"hopheldwork", emptyLabel: b"hopidled", ids: ids)
+	emitSchedLockLeave(module, block: idled, ids: ids)
+	module.setTerminator(idled, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedHandoffP'
+
+// The walk `SchedRetakeName` describes: over `__sched_allm`, take the processor away from every machine that
+// has been inside ONE bracketed kernel call for longer than `SysmonRetakeAfterNs` and has work waiting for
+// that processor. Answers how many it took.
+//
+// ⭐⭐⭐ **IT ONLY STEALS WHERE THERE IS WORK TO RUN, AND THAT IS A DIVERGENCE FROM GO THAT MAKES THIS
+// SCHEDULER SAFER RATHER THAN LAZIER.** Go's third arm skips a retake when the P's ring is empty AND a
+// spinning M or an idle P exists AND the block is younger than 10 ms — three terms, two of which need
+// `sched.npidle`. shv2 asks the ONE question those three approximate: **would anything actually run on this
+// processor if it were handed over?** If not, the handoff is pure cost — a machine started, a search run, a
+// park paid — and, worse, it forces the blocked machine through `__sched_syscall_regain` on its way out for
+// no benefit at all. A blocking read on an otherwise idle scheduler therefore costs nothing whatever, which is
+// the common case and is exactly what the old runtime already did correctly.
+//
+// ⛔ **GO ALSO PREEMPTS A LONG-*RUNNING* GOROUTINE HERE AND SHV2 DOES NOT.** shv2 is cooperative by
+// construction; there is no `preemptone` to port and no signal to deliver. `POffRunnext` carries what the
+// absence still costs — it is why a `runnext` slot cannot be taken on the throughput case alone.
+//
+// ⚠ **THE WALK IS UNLOCKED OVER AN APPEND-ONLY LIST, WHICH IS `__sched_any_executing`'s ARGUMENT EXACTLY.**
+// A machine is never removed from `__sched_allm` and never freed, so a cursor cannot be led off it;
+// `emitSchedListPushLocked` publishes a joining machine's link before the head, so no walker reaches a node
+// whose link is unwritten; and the only thing a racing `__sched_startm` can do is prepend a machine this pass
+// does not see — which is a machine that has not entered a kernel call yet and has nothing to retake.
+//
+// ⚠ **THERE IS NO DEADLOCK-CENSUS BRACKET HERE, WHERE GO BRACKETS THIS BODY IN `incidlelocked(±1)`.** Go's
+// `checkdead` counts IDLE LOCKED Ms, so a victim leaving its syscall and parking mid-handoff makes the count
+// reach the deadlock threshold. shv2's census (`__sched_any_executing`) asks a different question — *"has this
+// MACHINE concluded there is nothing runnable anywhere?"* — and the victim of a retake answers NO throughout:
+// it is executing a green thread the whole time (`MQuiescedRunning`, cleared at the driver's `run` arm and at
+// `wrun`), and `__sched_syscall_regain` never publishes `MQuiescedWaiting` either. ⇒ **the state Go's bracket
+// exists to hide cannot be produced here**, and a bracket would be a guard over a case with no subject.
+//
+// ⛔⛔ **BUT THAT ARGUMENT RESTS ON A FACT KEPT IN ANOTHER FILE, AND THIS IS WHERE IT IS WRITTEN DOWN: A
+// MACHINE WHOSE `MOffSyscallState` CARRIES `MSyscallInCall` IS NEVER `MQuiescedWaiting`.** It holds only because
+// the three imports a machine publishes `MQuiescedWaiting` in front of — `WaitForSingleObject`,
+// `WaitForMultipleObjects` and `Sleep`, the worker park and the driver park — are all `schedulerBound` in
+// `X64GtRuntime.gtShimSyscallClassOf` and therefore carry no bracket. **Reclassify any one of them
+// `blocking` and Go's trap arrives here for real**: sysmon would take a parked machine's processor, and that
+// machine already advertises `MQuiescedWaiting`, so the census would see nothing executing mid-handoff and
+// abort a live program with exit 92. That is a wrong answer with no compile error anywhere between the two
+// files, which is why the classification arm carries a pointer back to this paragraph rather than a second
+// copy of it.
+function buildSchedRetake(module StdModule)
+	var func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopHdr = module.addBlock(func, label: b"rthdr")
+	var haveProc = module.addBlock(func, label: b"rtproc")
+	var inSyscall = module.addBlock(func, label: b"rtsyscall")
+	var noteIt = module.addBlock(func, label: b"rtnote")
+	var recordIt = module.addBlock(func, label: b"rtrecord")
+	var oldEnough = module.addBlock(func, label: b"rtold")
+	var worthIt = module.addBlock(func, label: b"rtworth")
+	var claimIt = module.addBlock(func, label: b"rtclaim")
+	var tookIt = module.addBlock(func, label: b"rttook")
+	var nextMachine = module.addBlock(func, label: b"rtnext")
+	var doneBlock = module.addBlock(func, label: b"rtdone")
+
+	emitParams(module, block: entry, count: 1)
+	let now = 0 as ValueId
+
+	let firstMachine = emitLoadGlobalWord(module, block: entry, label: SchedAllMLabel, ids: ids)
+	let cursor = ids.mint()
+	let taken = ids.mint()
+	loopHdr.blockArgs.push(IrBlockArg.create(cursor, argType: StdType.i64))
+	loopHdr.blockArgs.push(IrBlockArg.create(taken, argType: StdType.i64))
+	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(firstMachine, second: entryZero)))
+
+	// `__sched_allm` is 0 before `__sched_init_procs` has run, so a monitor that started ahead of the scheduler
+	// walks nothing — the same zero `__sched_steal_count` and `__sched_any_executing` rest on.
+	let hdrZero = emitConst(module, block: loopHdr, value: 0, ids: ids)
+	let walked = emitCmp(module, block: loopHdr, a: cursor, b: hdrZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: haveProc.id))
+
+	// Every arm below that declines carries the running count through this block arg. Only `rttook` supplies a
+	// different one, which is what makes the count a fact about what this pass DID rather than about how far it
+	// walked.
+	let carriedTaken = ids.mint()
+	nextMachine.blockArgs.push(IrBlockArg.create(carriedTaken, argType: StdType.i64))
+
+	// ⭐⭐⭐ **THE WORD IS READ FIRST, AND THE PROCESSOR IS READ AFTER IT — THE OTHER ORDER IS THE ABA.** Every
+	// test below is a HINT until the compare-and-swap at `rtclaim`; what makes the hints usable is that the CAS
+	// re-presents the EXACT word this block read, so a machine that has moved on since cannot match it. Reading
+	// the word first is what makes the processor read below a fact about THIS call rather than about whatever
+	// the machine happened to hold a moment earlier. `MOffSyscallState`'s header carries the interleaving that
+	// the two-word version of this got wrong.
+	let stateNow = emitLoadField(module, block: haveProc, record: cursor, offset: MOffSyscallState, ids: ids)
+	let stateMask = emitConst(module, block: haveProc, value: MSyscallStateMask, ids: ids)
+	let inCallOnly = emitConst(module, block: haveProc, value: MSyscallInCall, ids: ids)
+	let stateBits = emitBin(module, block: haveProc, a: stateNow, b: stateMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	// EXACTLY `MSyscallInCall` — a machine whose stolen bit is also set has already had its processor taken and
+	// is inside `__sched_syscall_regain` waiting for another, which is the one state this pass must leave alone.
+	let notInCall = emitCmp(module, block: haveProc, a: stateBits, b: inCallOnly, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(haveProc, op: StdOp.condBranch(notInCall, thenBlockId: nextMachine.id, elseBlockId: inSyscall.id))
+	haveProc.branchEdges.push(BranchEdge.create(nextMachine.id, argIds: argsOf(taken)))
+
+	// ⭐⭐ **THE GENERATION TEST IS A COMPARISON OF THE WHOLE WORD**, because the generation lives in it — see
+	// `MOffSysmonWord`. A word that has moved means a DIFFERENT call, so the clock starts again; a word that has
+	// not means this machine has been inside ONE call since the previous poll, which is the only reading that
+	// tells a one-second read from a thousand `print`s.
+	let wordSeen = emitLoadField(module, block: inSyscall, record: cursor, offset: MOffSysmonWord, ids: ids)
+	let sameCall = emitCmp(module, block: inSyscall, a: stateNow, b: wordSeen, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(inSyscall, op: StdOp.condBranch(sameCall, thenBlockId: noteIt.id, elseBlockId: recordIt.id))
+
+	// ⛔ **THE NOTE IS WRITTEN ONLY ON THE ARM THAT DECLINES, AND A BLOCK OF ITS OWN IS WHAT MAKES THAT
+	// POSSIBLE.** Writing `MOffSysmonWhen` unconditionally would restart the clock on every pass, so the
+	// elapsed test below could never be satisfied and no processor would ever be retaken — a mechanism that
+	// compiles, runs and does nothing.
+	emitStoreField(module, block: recordIt, record: cursor, offset: MOffSysmonWord, value: stateNow)
+	emitStoreField(module, block: recordIt, record: cursor, offset: MOffSysmonWhen, value: now)
+	module.setTerminator(recordIt, op: StdOp.branch(nextMachine.id))
+	recordIt.branchEdges.push(BranchEdge.create(nextMachine.id, argIds: argsOf(taken)))
+
+	let since = emitBin(module, block: noteIt, a: now, b: emitLoadField(module, block: noteIt, record: cursor, offset: MOffSysmonWhen, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let threshold = emitConst(module, block: noteIt, value: SysmonRetakeAfterNs, ids: ids)
+	let tooYoung = emitCmp(module, block: noteIt, a: since, b: threshold, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(noteIt, op: StdOp.condBranch(tooYoung, thenBlockId: nextMachine.id, elseBlockId: oldEnough.id))
+	noteIt.branchEdges.push(BranchEdge.create(nextMachine.id, argIds: argsOf(taken)))
+
+	// ⭐ **THE PROCESSOR, READ AFTER THE WORD.** A machine holding none has nothing to take; the read is
+	// unlocked, and what makes it trustworthy is the CAS below, which proves the machine never left the call
+	// this word names — and a machine inside a call touches `MOffCurrentP` at neither of its two writers
+	// (`emitSchedAdoptProc`, `emitSchedReleaseProcLocked`), both of which run outside one.
+	let heldProc = emitLoadField(module, block: oldEnough, record: cursor, offset: MOffCurrentP, ids: ids)
+	let procZero = emitConst(module, block: oldEnough, value: 0, ids: ids)
+	let noProc = emitCmp(module, block: oldEnough, a: heldProc, b: procZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(oldEnough, op: StdOp.condBranch(noProc, thenBlockId: nextMachine.id, elseBlockId: worthIt.id))
+	oldEnough.branchEdges.push(BranchEdge.create(nextMachine.id, argIds: argsOf(taken)))
+
+	// ⭐ The divergence this function's header argues: a processor with nothing to run is not worth taking.
+	let wouldRun = emitSchedAnyRunnable(module, block: worthIt, p: heldProc, ids: ids)
+	let worthZero = emitConst(module, block: worthIt, value: 0, ids: ids)
+	let nothingWaiting = emitCmp(module, block: worthIt, a: wouldRun, b: worthZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(worthIt, op: StdOp.condBranch(nothingWaiting, thenBlockId: nextMachine.id, elseBlockId: claimIt.id))
+	worthIt.branchEdges.push(BranchEdge.create(nextMachine.id, argIds: argsOf(taken)))
+
+	// ⭐⭐⭐ **THE LINEARIZATION POINT, AND IT CAS-es THE EXACT WORD THIS PASS MEASURED.** `stateNow` carries
+	// the call's GENERATION as well as its state bits, so the value below is one **no later call can present**:
+	// every mutation of this word only ever raises the generation (`MOffSyscallState` states the three and why
+	// none of them lowers it). A machine that has left the call — or left it and entered another, on another
+	// processor — therefore fails this CAS and the pass declines.
+	//
+	// ⛔⛔ **AN EARLIER CUT COMPARED A BARE `Active` HERE AND THAT WAS AN ABA.** `Active` recurs on every
+	// subsequent bracketed call, so the CAS could not tell *"the call I measured"* from *"a later one that looks
+	// the same"* — and the handoff below would then start a machine on a processor a DIFFERENT machine was
+	// already running. The generation is what makes success a PROOF of ownership rather than a likelihood.
+	//
+	// ⚠ **THERE IS NO ROAD BACK FROM A WIN**, which is why every decision is taken above this line: see
+	// `MOffSyscallState` for why the protocol has no release arm and why it needs none.
+	let stateAddr = emitFieldAddr(module, block: claimIt, record: cursor, offset: MOffSyscallState, ids: ids)
+	let markStolen = emitConst(module, block: claimIt, value: MSyscallStolen, ids: ids)
+	let toStolen = emitBin(module, block: claimIt, a: stateNow, b: markStolen, opcode: StdBinOpcode.add, ids: ids)
+	let claimed = ids.mint()
+	module.appendOp(claimIt, op: StdOp.atomicCas(claimed, addrId: stateAddr, expectedId: stateNow, replacementId: toStolen))
+	let lostClaim = emitCasLost(module, block: claimIt, result: claimed, ids: ids)
+	module.setTerminator(claimIt, op: StdOp.condBranch(lostClaim, thenBlockId: nextMachine.id, elseBlockId: tookIt.id))
+	claimIt.branchEdges.push(BranchEdge.create(nextMachine.id, argIds: argsOf(taken)))
+
+	// The second CAS, whose ANSWER IS DELIBERATELY DISCARDED — `MOffSyscallState`'s header carries why both
+	// outcomes are correct and why a plain store here would be a wrong answer rather than a slower one.
+	let procAddr = emitFieldAddr(module, block: tookIt, record: cursor, offset: MOffCurrentP, ids: ids)
+	let releasedProc = emitConst(module, block: tookIt, value: 0, ids: ids)
+	module.appendOp(tookIt, op: StdOp.atomicCas(ids.mint(), addrId: procAddr, expectedId: heldProc, replacementId: releasedProc))
+
+	// The counter `__Builtins.schedRetakeCount()` sums. sysmon is its only writer, so a plain read-modify-write.
+	let oneRetake = emitConst(module, block: tookIt, value: 1, ids: ids)
+	emitStoreField(module, block: tookIt, record: heldProc, offset: POffRetakeCount, value: emitBin(module, block: tookIt, a: emitLoadField(module, block: tookIt, record: heldProc, offset: POffRetakeCount, ids: ids), b: oneRetake, opcode: StdBinOpcode.add, ids: ids))
+	// The note is refreshed to the word this CAS just wrote, and the clock restarts. Neither is strictly
+	// required — the stolen bit alone keeps the next pass off this machine, because `rtproc` demands the state
+	// bits be EXACTLY `MSyscallInCall` — but leaving a note that names a word no longer in memory is the kind
+	// of stale fact the next reader has to re-derive.
+	emitStoreField(module, block: tookIt, record: cursor, offset: MOffSysmonWord, value: toStolen)
+	emitStoreField(module, block: tookIt, record: cursor, offset: MOffSysmonWhen, value: now)
+	module.appendOp(tookIt, op: StdOp.call(ids.mint(), callee: SchedHandoffPName, args: argsOf(heldProc)))
+	let takenNow = emitBin(module, block: tookIt, a: taken, b: oneRetake, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(tookIt, op: StdOp.branch(nextMachine.id))
+	tookIt.branchEdges.push(BranchEdge.create(nextMachine.id, argIds: argsOf(takenNow)))
+
+	let nextCursor = emitLoadField(module, block: nextMachine, record: cursor, offset: MOffAllNext, ids: ids)
+	module.setTerminator(nextMachine, op: StdOp.branch(loopHdr.id))
+	nextMachine.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(nextCursor, second: carriedTaken)))
+
+	module.setTerminator(doneBlock, op: StdOp.ret(taken))
+
+	module.functions.push(func)
+end 'buildSchedRetake'
+
+// The loop `SchedSysmonName` describes. See `SysmonMinPollMs` for why the ladder is Go's cap and back-off but
+// not Go's floor.
+//
+// ⭐ **IT IS NOT AN M AND MUST NOT BECOME ONE.** It never calls `emitSchedBecomeM`, so its TLS slot stays 0
+// for its whole life — which is what makes the syscall shim take its DIRECT arm on every kernel call this
+// thread makes (`emitLoadCurrentGtOrBail`'s first test), what routes every allocation `__sched_startm` makes
+// on its behalf to the allocator's raw shard (`SlabRuntime.emitSlabCurrentP`'s bail), and what keeps it off
+// `__sched_allm` — so `__sched_any_executing` never counts it as an executing machine and
+// `__sched_stop_workers` never tries to join it. **Those three are one property, stated once here rather than
+// arranged for three times.**
+//
+// ⚠ **NOTHING JOINS IT AT TEARDOWN, AND THAT IS WHY THE SHUTDOWN READ IS AT THE TOP OF THE LOOP.** It leaves
+// within one poll of the flag being set and then returns from its thread procedure; the process does not wait
+// for it, because a monitor that is asleep is holding nothing anybody needs.
+function buildSysmon(module StdModule)
+	var func = IrFunction.createFromStd(SchedSysmonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopTop = module.addBlock(func, label: b"smonloop")
+	var poll = module.addBlock(func, label: b"smonpoll")
+	var retook = module.addBlock(func, label: b"smonretook")
+	var idled = module.addBlock(func, label: b"smonidle")
+	var backOff = module.addBlock(func, label: b"smonbackoff")
+	var keepPace = module.addBlock(func, label: b"smonkeep")
+	var exitBlock = module.addBlock(func, label: b"smonexit")
+
+	// The `lpParameter` `osThreadCreate` hands this thread carries nothing: the monitor's whole state is the
+	// two block args below plus what it reads out of the roster. It is named rather than left unmentioned so
+	// the arity matches the one thread-entry shape the runtime has.
+	emitParams(module, block: entry, count: 1)
+
+	let delayMs = ids.mint()
+	let idleLaps = ids.mint()
+	loopTop.blockArgs.push(IrBlockArg.create(delayMs, argType: StdType.i64))
+	loopTop.blockArgs.push(IrBlockArg.create(idleLaps, argType: StdType.i64))
+	let firstDelay = emitConst(module, block: entry, value: SysmonMinPollMs, ids: ids)
+	let noLaps = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(loopTop.id))
+	entry.branchEdges.push(BranchEdge.create(loopTop.id, argIds: twoArgs(firstDelay, second: noLaps)))
+
+	let shutdown = emitLoadGlobalWord(module, block: loopTop, label: SchedShutdownFlagLabel, ids: ids)
+	let topZero = emitConst(module, block: loopTop, value: 0, ids: ids)
+	let stopping = emitCmp(module, block: loopTop, a: shutdown, b: topZero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(loopTop, op: StdOp.condBranch(stopping, thenBlockId: exitBlock.id, elseBlockId: poll.id))
+
+	module.appendOp(poll, op: StdOp.osSleepMs(delayMs))
+	let nowNs = ids.mint()
+	module.appendOp(poll, op: StdOp.call(nowNs, callee: GtNowNsName, args: ValueIdArray.create()))
+	let retakes = ids.mint()
+	module.appendOp(poll, op: StdOp.call(retakes, callee: SchedRetakeName, args: argsOf(nowNs)))
+	let pollZero = emitConst(module, block: poll, value: 0, ids: ids)
+	let tookNothing = emitCmp(module, block: poll, a: retakes, b: pollZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(poll, op: StdOp.condBranch(tookNothing, thenBlockId: idled.id, elseBlockId: retook.id))
+
+	// A pass that took something is evidence the process is blocking, so the interval snaps back to its
+	// shortest — the next block is likely and the cost of noticing it late is a stalled processor.
+	let snapBack = emitConst(module, block: retook, value: SysmonMinPollMs, ids: ids)
+	let resetLaps = emitConst(module, block: retook, value: 0, ids: ids)
+	module.setTerminator(retook, op: StdOp.branch(loopTop.id))
+	retook.branchEdges.push(BranchEdge.create(loopTop.id, argIds: twoArgs(snapBack, second: resetLaps)))
+
+	let lapsNow = emitBin(module, block: idled, a: idleLaps, b: emitConst(module, block: idled, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let enoughLaps = emitConst(module, block: idled, value: SysmonIdlePollsBeforeBackoff, ids: ids)
+	let quietEnough = emitCmp(module, block: idled, a: lapsNow, b: enoughLaps, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(idled, op: StdOp.condBranch(quietEnough, thenBlockId: backOff.id, elseBlockId: keepPace.id))
+
+	let longDelay = emitConst(module, block: backOff, value: SysmonMaxPollMs, ids: ids)
+	module.setTerminator(backOff, op: StdOp.branch(loopTop.id))
+	backOff.branchEdges.push(BranchEdge.create(loopTop.id, argIds: twoArgs(longDelay, second: lapsNow)))
+
+	module.setTerminator(keepPace, op: StdOp.branch(loopTop.id))
+	keepPace.branchEdges.push(BranchEdge.create(loopTop.id, argIds: twoArgs(delayMs, second: lapsNow)))
+
+	// A `CreateThread` callback returns a DWORD nobody reads; 0 is the conventional success, which is what
+	// `__sched_worker_loop` answers on its own exit road for the same reason.
+	emitConstReturn(module, block: exitBlock, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildSysmon'
+
+// The loop `SchedSyscallRegainName` describes: take a processor off `__sched_pidle`, or sleep and ask again —
+// and, once it has one, clear the stolen bit `exitsyscall` deliberately left standing.
+//
+// ⭐⭐ **IT DOES NOT JOIN `__sched_midle`, THOUGH THAT WOULD BE WOKEN RATHER THAN POLLED.** A machine on that
+// list is a machine `__sched_startm` may hand a SPINNING CREDIT to (`SpinningTransition.handOverSpinning`),
+// and this machine is not going to search — it is going to resume the green thread it already holds — so it
+// would owe a `stopSpinning` on every road out and would have to run the whole of `wafterwait`'s pop /
+// `MOffNextP` / `emitSchedMidleRemoveLocked` transaction to leave the list again. The poll is two list
+// operations and a sleep against that, on a road reached only when a processor was actually retaken.
+//
+// ⭐⭐⭐ **THE STOLEN BIT IS CLEARED LAST, AND ONLY ONCE A PROCESSOR IS IN HAND.** Until then this machine is
+// *"holding a green thread with no processor"*, and two parties read that state off this word:
+// `__sched_retake`, which requires the state bits to be EXACTLY `MSyscallInCall` and therefore leaves this
+// machine alone, and `__sched_stop_workers`, which must not join it. Clearing the bit earlier would open a
+// window in which the teardown could block for ever on a thread that is still waiting.
+//
+// ⚠ **THE CLEAR IS A PLAIN LOAD/SUB/STORE AND THAT IS ARGUED, NOT ASSUMED.** This word's only other writer is
+// `__sched_retake`'s compare-and-swap, which fires only on state bits of exactly `MSyscallInCall`; ours are
+// `MSyscallStolen`, so no concurrent write to this word is possible while these three ops run. The generation
+// in the high bits is preserved by construction — a subtraction of `MSyscallStolen` touches bit 1 alone.
+//
+// ⛔⛔ **THE SHUTDOWN ESCAPE, AND WHAT THIS GREEN THREAD IS ALLOWED TO DO ON IT.** The loop reads
+// `__sched_shutdown_flag` under the same `__sched_lock` that `__sched_stop_workers` sets it in, so the read is
+// authoritative rather than a race. When it is set, this machine **stops looking and parks for ever** — and
+// that, not a return, is the escape:
+//
+//   • **RETURNING WITHOUT A PROCESSOR IS REFUSED.** A green thread resumed with `M->currentP == 0` is safe on
+//     one of its two roads and not the other: a PUBLISH is fine (`__sched_runq_put` tests `M->currentP` on its
+//     own account and routes a processor-less machine to the global queue, which is the state its own comment
+//     names), but an AWAIT reaches `__sched_find_runnable`, which dereferences `M->currentP` three ops in,
+//     before any test. *"Safe on one road of two"* is not a rule, and gating the other one would put a
+//     processor-less test on the scheduler's hottest function to serve a path taken only at process exit.
+//   • **PARKING COSTS NOTHING AND LOSES NOTHING.** By the time the flag is set, `__gt_drain_at_exit` has
+//     already driven every queue empty and `main` has returned — so the green thread this machine holds has no
+//     consumer left, and finishing it would answer a promise nobody will read.
+//   • **NOTHING WAITS FOR THIS THREAD.** The stolen bit is still set, so `__sched_stop_workers` skips its join
+//     (see there); the thread holds no lock, allocates nothing and steps no counter, so `__mm_leak_check`
+//     reads a still world; and `ExitProcess` ends it. **This is Go's answer too — Go does not join threads at
+//     exit at all.**
+//
+// ⚠ **THE POLL IS ORDERED PROCESSOR-FIRST, SO THE ESCAPE FIRES ONLY WHEN THERE IS GENUINELY NOTHING.** A
+// worker that reaches `wexit` releases its processor onto `__sched_pidle` through the ordinary door, so the
+// common teardown interleaving is that this machine takes one, clears its bit and exits cleanly.
+//
+// ⛔⛔ **AND THE ONE SHAPE THIS RUNG MAKES WORSE IS NAMED HERE RATHER THAN LEFT TO BE FOUND.** A machine that
+// takes the handed-off processor may then blind-wait in `__gt_drive_until` on a promise only THIS green thread
+// can answer. Before this rung the processor was held by the machine that was itself inside the syscall — the
+// one that would produce the answer — so the wait always ended; after a handoff it is held by a different
+// machine, and at one processor that is a hang where it used to be a stall. **`rtworth` (declining to take a
+// processor with nothing to run) narrows it and does not close it: it is a MITIGATION, not a proof.** The
+// closure is a driver that releases its processor across its blind wait, which is a second mechanism in the
+// most delicate code in this runtime and is not this rung.
+//
+// ⚠ **IT PUBLISHES NO QUIESCENCE, AND THAT IS DELIBERATE.** This machine is executing a green thread for the
+// whole of this wait — it merely lacks a processor to continue on — so `MQuiescedRunning` is the honest
+// answer and the deadlock census reads it as executing, which it is.
+function buildSchedSyscallRegain(module StdModule)
+	var func = IrFunction.createFromStd(SchedSyscallRegainName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var tryTop = module.addBlock(func, label: b"rgntry")
+	var gotOne = module.addBlock(func, label: b"rgngot")
+	var noneYet = module.addBlock(func, label: b"rgnwait")
+	var keepLooking = module.addBlock(func, label: b"rgnretry")
+	var giveUp = module.addBlock(func, label: b"rgnexit")
+
+	module.setTerminator(entry, op: StdOp.branch(tryTop.id))
+
+	emitSchedLockEnter(module, block: tryTop, ids: ids)
+	let regained = ids.mint()
+	var popped = emitSchedListPopLocked(module, func: func, cur: tryTop, headLabel: SchedPidleLabel, linkOffset: POffPidleNext, poppedId: regained, unlinkLabel: b"rgnunlink", mergeLabel: b"rgnpopped", ids: ids)
+	let popZero = emitConst(module, block: popped, value: 0, ids: ids)
+	let gotNothing = emitCmp(module, block: popped, a: regained, b: popZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(popped, op: StdOp.condBranch(gotNothing, thenBlockId: noneYet.id, elseBlockId: gotOne.id))
+
+	// The claim is inside the critical section that took the processor off the list, which is the transaction
+	// `emitSchedPidleClaimLocked`'s note requires of both of its other two callers.
+	emitSchedPidleClaimLocked(module, block: gotOne, p: regained, ids: ids)
+	emitSchedLockLeave(module, block: gotOne, ids: ids)
+	let selfMachine = emitLoadCurrentM(module, block: gotOne, ids: ids)
+	emitSchedAdoptProc(module, block: gotOne, m: selfMachine, p: regained)
+	// The stolen bit comes down only now — see this function's header for the two readers that depend on it
+	// having stayed up, and for why these three ops need no atomic.
+	let stolenBit = emitConst(module, block: gotOne, value: MSyscallStolen, ids: ids)
+	emitStoreField(module, block: gotOne, record: selfMachine, offset: MOffSyscallState, value: emitBin(module, block: gotOne, a: emitLoadField(module, block: gotOne, record: selfMachine, offset: MOffSyscallState, ids: ids), b: stolenBit, opcode: StdBinOpcode.sub, ids: ids))
+	module.setTerminator(gotOne, op: StdOp.retVoid)
+
+	// The shutdown read is inside the lock the teardown sets the flag in, which is what makes it a decision
+	// rather than a race — `buildSchedWorkerLoop`'s `wstoptest` reads it in the same place for the same reason.
+	let stopFlag = emitLoadGlobalWord(module, block: noneYet, label: SchedShutdownFlagLabel, ids: ids)
+	let stopZero = emitConst(module, block: noneYet, value: 0, ids: ids)
+	let stopping = emitCmp(module, block: noneYet, a: stopFlag, b: stopZero, pred: StdCmpPred.ne, ids: ids)
+	emitSchedLockLeave(module, block: noneYet, ids: ids)
+	module.setTerminator(noneYet, op: StdOp.condBranch(stopping, thenBlockId: giveUp.id, elseBlockId: keepLooking.id))
+
+	module.appendOp(keepLooking, op: StdOp.osSleepMs(emitConst(module, block: keepLooking, value: SyscallRegainPollMs, ids: ids)))
+	module.setTerminator(keepLooking, op: StdOp.branch(tryTop.id))
+
+	// ⛔ **PARK FOR EVER — the escape this function's header argues.** The wait is bounded by nothing and is
+	// meant to be: the process is ending, nothing joins this machine (its stolen bit is still set), and
+	// `ExitProcess` is what ends the thread. It blocks on the machine's OWN park event rather than sleeping so
+	// that the thread costs no wakeups at all while the exit path finishes.
+	let parkEvent = emitLoadField(module, block: giveUp, record: emitLoadCurrentM(module, block: giveUp, ids: ids), offset: MOffParkEvent, ids: ids)
+	let forever = emitConst(module, block: giveUp, value: WaitInfinite, ids: ids)
+	module.appendOp(giveUp, op: StdOp.osWaitHandle(ids.mint(), handleId: parkEvent, timeoutMsId: forever))
+	module.setTerminator(giveUp, op: StdOp.branch(giveUp.id))
+
+	module.functions.push(func)
+end 'buildSchedSyscallRegain'
 
 // ==========================================================================
 // `__sched_wake_parked_drivers`
@@ -4856,13 +5718,39 @@ function buildSchedStopWorkers(module StdModule)
 	let joinDone = emitCmp(module, block: joinHdr, a: joinCursor, b: joinEndZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(joinHdr, op: StdOp.condBranch(joinDone, thenBlockId: doneBlock.id, elseBlockId: joinBody.id))
 
+	// ⛔⛔ **A MACHINE INSIDE A BLOCKING KERNEL CALL CANNOT BE WOKEN AND MUST NOT BE JOINED (W213-C3).** The
+	// signal walk above sets that machine's event, which it is not waiting on; `WaitInfinite` on its thread
+	// handle then blocks the exit path until the kernel call returns — and the whole subject of
+	// `specs-shv2/sched-syscall-handoff.md` is calls that block for a second or for ever. **Go does not join
+	// threads at exit at all**, which is the same answer arrived at from the other end.
+	//
+	// ⭐ **THE TEST IS THE SYSCALL BRACKET'S OWN STATE BITS, NOT A TIMEOUT, AND THAT IS WHAT KEEPS IT FROM
+	// MASKING A LIVE-BUT-SLOW WORKER.** A bounded wait would treat *"still finishing its last green thread"* and
+	// *"parked in the kernel"* as one state and would silently stop waiting for the first, which is exactly the
+	// class of bug `MOffOsThreadHandle` exists to have fixed: the teardown would return while a worker was still
+	// stepping the counters `__mm_leak_check` reads. **State bits of zero is a machine running ordinary Maxon
+	// code, and every such machine is still joined with no timeout.**
+	//
+	// ⭐⭐⭐ **IT COVERS TWO STATES AND THE SECOND ONE IS WHY THE STOLEN BIT OUTLIVES THE CALL.**
+	// `MSyscallInCall` is a machine inside the kernel, which cannot be woken and must not be joined.
+	// `MSyscallStolen` is a machine that has LEFT the kernel and is inside `__sched_syscall_regain`, waiting for
+	// a processor it may never be given — and that one is a join that hangs just as hard. `exitsyscall`
+	// deliberately clears only the in-call bit for exactly this reason; `MOffSyscallState` carries the pair.
+	//
+	// ⚠ **THE READ IS UNLOCKED AND MAY BE STALE, AND BOTH DIRECTIONS ARE SAFE.** A machine that has cleared its
+	// bits since the read is joined, and it is on its way to `wexit` because the shutdown flag is already set; a
+	// machine that has set them since is skipped, which is the arm this block exists to take.
 	let threadHandle = emitLoadField(module, block: joinBody, record: joinCursor, offset: MOffOsThreadHandle, ids: ids)
 	let nextJoin = emitLoadField(module, block: joinBody, record: joinCursor, offset: MOffAllNext, ids: ids)
+	let syscallWord = emitLoadField(module, block: joinBody, record: joinCursor, offset: MOffSyscallState, ids: ids)
+	let joinStateMask = emitConst(module, block: joinBody, value: MSyscallStateMask, ids: ids)
 	let joinZero = emitConst(module, block: joinBody, value: 0, ids: ids)
 	let noThread = emitCmp(module, block: joinBody, a: threadHandle, b: joinZero, pred: StdCmpPred.eq, ids: ids)
+	let inKernel = emitCmp(module, block: joinBody, a: emitBin(module, block: joinBody, a: syscallWord, b: joinStateMask, opcode: StdBinOpcode.bitAnd, ids: ids), b: joinZero, pred: StdCmpPred.ne, ids: ids)
+	let unjoinable = emitBin(module, block: joinBody, a: noThread, b: inKernel, opcode: StdBinOpcode.bitOr, ids: ids)
 	let carriedNext = ids.mint()
 	joinNext.blockArgs.push(IrBlockArg.create(carriedNext, argType: StdType.i64))
-	module.setTerminator(joinBody, op: StdOp.condBranch(noThread, thenBlockId: joinNext.id, elseBlockId: joinWait.id))
+	module.setTerminator(joinBody, op: StdOp.condBranch(unjoinable, thenBlockId: joinNext.id, elseBlockId: joinWait.id))
 	joinBody.branchEdges.push(BranchEdge.create(joinNext.id, argIds: argsOf(nextJoin)))
 
 	// ⚠ **THE LINK IS READ BEFORE THE JOIN, AND IT IS CARRIED ACROSS IT.** The machine is not freed, so the

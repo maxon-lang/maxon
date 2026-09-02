@@ -314,3 +314,242 @@ aggregate=8 last=1
 ```exitcode
 0
 ```
+
+<!-- test: a-blocking-kernel-call-does-not-starve-an-unrelated-green-thread -->
+<!-- targets: x64-windows -->
+<!-- procs: 1 -->
+<!-- stdin: delayed -->
+⭐⭐ **THIS IS THE CASE THE FILE'S OPENING CLAIM WAS ALWAYS ABOUT, AND IT ASSERTS AN ORDER RATHER THAN A
+CLOCK.** The reader blocks in `Console.stdin().readLine()` — `__con_read_stdin` (`ConsoleRuntime.maxon`),
+a plain synchronous `osReadFile` with **no park and no overlapped read**, which is the one call in reach
+of a spec case that genuinely holds its OS thread in the kernel. The harness's `stdin: delayed` marker
+delivers one line after **≈1 s**, so the read *completes* and the program exits 0 either way. The
+sentinel touches nothing the reader touches and answers in microseconds.
+
+⇒ **`S` must print before `R`.** A green thread with no relationship to a kernel call must not wait a
+full second behind it.
+
+⚠ **MEASURED ON THE PARENT OF THE CHANGE THAT GREENS THIS, 5 RUNS OF 5, `MAXON_MAX_PROCS=1`:**
+`R: read returned` then `S: sentinel ran`, `done sibling=1 read=5`, exit 0 — the sentinel waited out the
+entire read. **The 1 s delay against a microsecond reply is a ~1000× margin**, which is why this is a
+stable wrong ANSWER and not a timing flake; it was deliberately built that way after a `stdin: hold`
+variant was rejected for being able to fail only by timing out.
+
+⛔⛔ **A SECOND THING IS ALSO LOST, AND THE PREDICTION THAT THIS CASE NEEDED IT FIXED WAS WRONG.**
+`emitGtRunOne` (`GtRuntime.maxon:5758-5768`) suspends the DRIVER inside `__gt_context_switch` and records
+it only as `g.waiter`, published to no queue — so a `g` that neither parks nor completes strands its whole
+driver chain, up to and including `main`. **That is real and measured**: with a read that never returns,
+the sentinel runs to completion on another machine at FOUR processors and `main` still never resumes.
+
+⇒ It was predicted here that the cure needed both halves — release the driver *and* retake the processor —
+and that *"each alone leaves one of the two cases below red"*. **MEASURED, and it is false: the retake
+alone greens both.** At one processor the sentinel's green thread is already sitting in P0's own ring when
+the reader blocks, so retaking P0 and starting a machine on it runs the sentinel directly and no driver has
+to move. The driver-release half was never built.
+
+⚠ **So the captive driver above is a LIVE DEFECT that this file does not gate**, and the reason it is
+tolerable is worth stating rather than leaving to be rediscovered: it can only bite a call that never
+returns, and a program holding a green thread that never returns **cannot exit anyway** — shv2's exit path
+waits for live green threads (measured: a green thread parked 60 s and never awaited keeps the process
+alive after `main` returns). Curing it means `main` on a real green thread rather than the machine's own
+`g0`, which is a different change from this one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read() returns Integer
+		let line = try Console.stdin().readLine() otherwise ""
+		print("R: read returned\n")
+
+		return line.count()
+	end 'read'
+end 'Reader'
+
+type Sentinel
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		print("S: sentinel ran\n")
+
+		return 1
+	end 'ping'
+end 'Sentinel'
+
+function main() returns ExitCode
+	let reader = spawn Reader.create()
+	let sentinel = spawn Sentinel.create()
+
+	let blocked = reader.read()
+	let tailReply = sentinel.ping()
+
+	let tail = try await tailReply otherwise 0
+	let n = try await blocked otherwise 0
+	print("done sibling={tail} read={n}\n")
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+S: sentinel ran
+R: read returned
+done sibling=1 read=5
+```
+```exitcode
+0
+```
+
+<!-- test: a-spare-processor-already-carries-the-sibling -->
+<!-- targets: x64-windows -->
+<!-- procs: 4 -->
+<!-- stdin: delayed -->
+⚠ **THIS CASE WAS ALREADY GREEN BEFORE THE CHANGE THAT GREENS THE ONE ABOVE, AND IT IS HERE TO SAY WHY
+THAT ONE IS RED.** Same program, same expected output, one marker different. **MEASURED on the same
+parent, `MAXON_MAX_PROCS=4`: `S` then `R`** — the required order already, because a second machine picks
+the sentinel up while the first is in the kernel.
+
+⇒ The pair states the defect exactly: **one processor cannot do what four can, and the reason is that a
+processor is being spent on a thread that is asleep in the kernel.** As a gate this half is a regression
+guard — it is the path that must not break while the other is being fixed — and it is deliberately not
+counted as evidence for the cure.
+
+⚠ **It pins an ORDER, not a count.** `MAXON_MAX_PROCS` is clamped to the host's processor count, so on a
+one-core machine this case degenerates into the case above and would read `R` first. That is a real
+limitation of the pair and not a flake to re-run; a host that cannot give the runtime two processors
+cannot exhibit the difference the pair exists to show.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read() returns Integer
+		let line = try Console.stdin().readLine() otherwise ""
+		print("R: read returned\n")
+
+		return line.count()
+	end 'read'
+end 'Reader'
+
+type Sentinel
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		print("S: sentinel ran\n")
+
+		return 1
+	end 'ping'
+end 'Sentinel'
+
+function main() returns ExitCode
+	let reader = spawn Reader.create()
+	let sentinel = spawn Sentinel.create()
+
+	let blocked = reader.read()
+	let tailReply = sentinel.ping()
+
+	let tail = try await tailReply otherwise 0
+	let n = try await blocked otherwise 0
+	print("done sibling={tail} read={n}\n")
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+S: sentinel ran
+R: read returned
+done sibling=1 read=5
+```
+```exitcode
+0
+```
+
+<!-- test: sysmon-retakes-a-processor-from-a-blocking-call -->
+<!-- targets: x64-windows -->
+<!-- procs: 1 -->
+<!-- stdin: delayed -->
+⭐ **THIS CASE PINS THE MECHANISM, BECAUSE THE CASE ABOVE CAN BE GREENED BY THE WRONG CURE.** Routing
+`__con_read_stdin` through the existing `__gt_io_park`/IOCP road would reorder those two lines without a
+processor ever being retaken — a real improvement, and a **different** rung's. `__Builtins.schedRetakeCount()`
+sums a per-P counter (the `schedStealCount` shape, so no `.data` word and no golden churn) and answers how
+many times a `sysmon` actually took a processor away from a machine stuck in the kernel.
+
+⇒ **`retaken=yes` is the claim that a processor was handed off, not merely that the output came out in a
+better order.** It is a `> 0` test rather than a fixed count deliberately: how many retakes a run needs is
+a scheduling detail, and pinning the number would make the case a hostage to the sysmon polling interval.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Reader
+	var id as Integer
+
+	static function create() returns Self
+		return Self{id: 0}
+	end 'create'
+
+	export function read() returns Integer
+		let line = try Console.stdin().readLine() otherwise ""
+		print("R: read returned\n")
+
+		return line.count()
+	end 'read'
+end 'Reader'
+
+type Sentinel
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		print("S: sentinel ran\n")
+
+		return 1
+	end 'ping'
+end 'Sentinel'
+
+function main() returns ExitCode
+	let reader = spawn Reader.create()
+	let sentinel = spawn Sentinel.create()
+
+	let blocked = reader.read()
+	let tailReply = sentinel.ping()
+
+	let tail = try await tailReply otherwise 0
+	let n = try await blocked otherwise 0
+
+	var mark = "no"
+	if __Builtins.schedRetakeCount() > 0 'retaken'
+		mark = "yes"
+	end 'retaken'
+	print("done sibling={tail} read={n} retaken={mark}\n")
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+S: sentinel ran
+R: read returned
+done sibling=1 read=5 retaken=yes
+```
+```exitcode
+0
+```

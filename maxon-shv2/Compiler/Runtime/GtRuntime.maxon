@@ -7004,6 +7004,22 @@ export let SubpSlotErrLimit = 160 as ByteOffset
 // how long the child ran. It is a SPAWN-to-WAIT span rather than a spawn-to-exit one because the corpus asks
 // for `durationMs` off the WAIT and a handle may be spawned long before anyone waits on it.
 export let SubpSlotWaitStartMs = 168 as ByteOffset
+
+// ⭐⭐ **THE TICK COUNT BEFORE WHICH `delayed`'s PAYLOAD MAY NOT BE PUSHED, OR 0 FOR "PUSH IT NOW".** Set at
+// spawn to `osTickCountMs() + SubpStdinDelayedFeedMs` for `StdinKind.delayed` and left at the slab's zero for
+// every other kind, so `emitSubpPushStdin`'s guard is a *"is there a deadline, and has it passed?"* pair
+// rather than a kind test repeated a pass later — which is the shape `SubpSlotStdinPend` and
+// `SubpSlotStdinWrite` already have and for the same reason.
+//
+// ⭐ **shv2 FEEDS FROM ITS DRAIN LOOP WHERE THE BOOTSTRAP STARTS A FEED THREAD, AND THAT IS WHY THE DELAY IS A
+// DEADLINE RATHER THAN A SLEEP.** `X86CodeEmitter.Runtime.cs` gives `delayed` a `__subp_feed_thread` whose
+// first act is `Sleep(StdinDelayedFeedMs)`; shv2 has no feed thread at all — `__gt_subp_wait_collect` pushes
+// one chunk per pass between drains — so the equivalent is a time the loop declines to push before, and the
+// loop's own `SubpPollMs` green sleep is what makes the waiting free.
+//
+// ⚠ It fits inside the existing `SubpSlotBytes` (184): 176 is the last free word, so the handle table's stride
+// is unchanged and no other slot field moves.
+export let SubpSlotStdinFeedAt = 176 as ByteOffset
 export let SubpStreamReadEnd = 0
 let SubpStreamBufPtr = 8
 let SubpStreamBufCap = 16
@@ -7406,11 +7422,67 @@ let SubpStdioFile = 3 as ParsedInt
 let SubpStdinBytes = 2 as ParsedInt
 export let SubpOutCollect = 2 as ParsedInt
 
-// ⚠ **`pipe` IS shv2's OWN FIFTH STDIN KIND AND HAS NO SURFACE SPELLING.** `StreamingSubprocess` wants a stdin
-// pipe with NO payload preloaded, which `StdinKind` cannot say — its `bytes` arm always carries one. Appended
-// past the corpus's four rather than overloading `bytes` with an empty payload, so the drain loop's "is there
-// anything to push?" question stays a pointer test rather than a length test on a payload that might be "".
-export let SubpStdinPipe = 4 as ParsedInt
+// ⭐⭐ **`hold` — A STDIN PIPE THE PARENT OPENS AND NEVER WRITES TO, SO THE CHILD'S READ BLOCKS IN THE KERNEL
+// INSTEAD OF SEEING EOF.** `StreamingSubprocess` wants exactly that (a pipe with no payload preloaded), and so
+// does `stdlib/Subprocess.maxon`'s `InputSource.hold`.
+//
+// ⚠⚠ **IT WAS `SubpStdinPipe`, *"shv2's own fifth stdin kind with no surface spelling"*, AND THAT SENTENCE
+// EXPIRED WHEN THE SURFACE ARRIVED.** `StdinKind.hold` was deliberately given the value **4** — its own
+// declaration says *"the number is 4 because that is the value shv2's runtime already decodes"* — so the two
+// were one fact under two names, and the name that survives is the one the language spells. Renaming it is
+// what stops the next reader from concluding that `hold` is unimplemented here because no constant says so.
+export let SubpStdinHold = 4 as ParsedInt
+
+// ⭐⭐ **`delayed` — `hold`'s PIPE, THEN `bytes`'s PAYLOAD, AND THE ONE KIND shv2 GENUINELY DID NOT DECODE.**
+// Everything but `bytes` and `hold` fell through to the non-pipe arm below, which opens the NULL DEVICE — so a
+// program COMPILED BY shv2 and asking for `delayed` got an instant EOF where the bootstrap gave it a
+// one-second block and then the data. **MEASURED, same driver, two compilers:** shv2 read
+// `delayed: exit=9 elapsedMs=15 stdout=EOF` against the bootstrap's `elapsedMs=1016 stdout=len=5`.
+//
+// ⛔ **IT DOES NOT AFFECT THE GATES TODAY AND IT WOULD DISARM THEM TOMORROW**, which is why it is fixed here
+// rather than filed: the spec harness is bootstrap-built, so `<!-- stdin: delayed -->` works today — and a
+// STAGE-2 harness would read every such case as instant EOF, silently turning
+// `specs-shv2/sched-syscall-handoff.md`'s two ordering cases into programs with nothing to block on.
+let SubpStdinDelayed = 5 as ParsedInt
+
+// ⭐ **HOW LONG `delayed` HOLDS THE PIPE BEFORE FEEDING IT.** Fixed rather than a spawn argument because the
+// spawn contract carries a `limit` slot for stdout and stderr and NONE for stdin — `InputSource.delayed`'s own
+// note states that, and states that a caller-chosen delay is a change to the builtin's arity. It matches the
+// bootstrap's `StdinDelayedFeedMs` on both of its emitters; one harness drives all three compilers through
+// this one marker, so the three numbers have to be the same number.
+let SubpStdinDelayedFeedMs = 1000 as ParsedInt
+
+// ⭐⭐ **WHICH STDIN KINDS WANT A PARENT↔CHILD PIPE — STATED ONCE, WHICH IS WHAT THE OLD SHAPE COULD NOT DO.**
+// The routing used to be a chain of equality tests, one per kind, ending in *"everything else gets the null
+// device"* — so a kind added to the stdlib and not to the chain SILENTLY got instant EOF, which is exactly how
+// `delayed` came to be broken here. The bootstrap's two emitters were refactored to a single
+// `StdinKindsWantingPipe` set for the same reason and with the same comment; this is that set.
+//
+// ⚠ **IT IS AN IR EMITTER AND NOT A COMPILE-TIME PREDICATE, BECAUSE THE KIND IS A RUNTIME VALUE.** It arrives
+// in the request struct from `stdlib/Subprocess.maxon`'s `StdioRuntimeTriple`, so the set is a `bitOr` of
+// comparisons rather than an `or` of constants — which is the same set stated once either way.
+function emitSubpStdinKindWantsPipe(module StdModule, block IrBlock, kind ValueId, ids ValueMinter) returns ValueId
+	let isBytes = emitSubpKindIs(module, block: block, kind: kind, value: SubpStdinBytes, ids: ids)
+	let isHold = emitSubpKindIs(module, block: block, kind: kind, value: SubpStdinHold, ids: ids)
+	let isDelayed = emitSubpKindIs(module, block: block, kind: kind, value: SubpStdinDelayed, ids: ids)
+	return emitBin(module, block: block, a: emitBin(module, block: block, a: isBytes, b: isHold, opcode: StdBinOpcode.bitOr, ids: ids), b: isDelayed, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitSubpStdinKindWantsPipe'
+
+// ⭐ **AND WHICH OF THOSE CARRY A PAYLOAD FOR THE DRAIN LOOP TO PUSH.** `hold` is the one that does not, and
+// the distinction is not cosmetic: `SubpReqStdinData` is a valid pointer to an EMPTY cstring for every kind
+// with no payload, so queueing it would make `emitSubpPushStdin`'s spent-test fire on its first pass and close
+// the very pipe `hold` exists to keep open.
+function emitSubpStdinKindQueuesPayload(module StdModule, block IrBlock, kind ValueId, ids ValueMinter) returns ValueId
+	let isBytes = emitSubpKindIs(module, block: block, kind: kind, value: SubpStdinBytes, ids: ids)
+	let isDelayed = emitSubpKindIs(module, block: block, kind: kind, value: SubpStdinDelayed, ids: ids)
+	return emitBin(module, block: block, a: isBytes, b: isDelayed, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitSubpStdinKindQueuesPayload'
+
+// `kind == value` as a 0/1 word — the comparison the two sets above are each an OR of, spelled once so the
+// two of them state their MEMBERSHIP and nothing else.
+function emitSubpKindIs(module StdModule, block IrBlock, kind ValueId, value ParsedInt, ids ValueMinter) returns ValueId
+	return emitCmp(module, block: block, a: kind, b: emitConst(module, block: block, value: value, ids: ids), pred: StdCmpPred.eq, ids: ids)
+end 'emitSubpKindIs'
 
 // The NUL device, as the bytes an `A` entry point reads. `none` (stdin) and `discard` (stdout/stderr) both open
 // it — a child whose stream is wired to NUL reads instant EOF and writes into nothing, which is exactly what
@@ -7711,12 +7783,22 @@ end 'emitSubpNonPipeChildHandle'
 
 // Wire the child's STANDARD INPUT as the request asks, and return the block execution continues in.
 //
-// The `bytes` and `pipe` kinds both need the parent's WRITE end of a synchronous outbound pipe; they differ
-// only in whether a payload is queued for the drain loop to push (`bytes`) or the caller writes by hand
-// (`pipe`). Everything else is `emitSubpNonPipeChildHandle`'s.
+// The three PIPE kinds — `bytes`, `hold` and `delayed` — all need the parent's WRITE end of a synchronous
+// outbound pipe, and differ only in what the drain loop is then told to do with it: push a payload now
+// (`bytes`), push nothing ever (`hold`, which is also what `StreamingSubprocess` asks for, writing by hand),
+// or push a payload after a fixed delay (`delayed`). Everything else is `emitSubpNonPipeChildHandle`'s.
+//
+// ⛔⛔ **THE MEMBERSHIP TEST WAS A CHAIN OF EQUALITIES AND THAT IS WHAT LET `delayed` READ AS THE NULL DEVICE.**
+// Two `==` tests routed `bytes` and `hold` to the pipe and sent **everything else** — including the two kinds
+// the stdlib had since declared — down the non-pipe arm, where `none`'s NUL open gave the child instant EOF.
+// A kind the language can spell and this file cannot see is a WRONG ANSWER with no diagnostic anywhere;
+// `emitSubpStdinKindWantsPipe` is that set stated once, which is the shape the bootstrap's two emitters were
+// moved to for the same reason.
 function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, whenFailed IrBlock) returns IrBlock
-	var bytesArm = module.addBlock(func, label: b"sinbytes")
-	var pipeTest = module.addBlock(func, label: b"sinptest")
+	var queueTest = module.addBlock(func, label: b"sinqtest")
+	var queueArm = module.addBlock(func, label: b"sinqueue")
+	var delayTest = module.addBlock(func, label: b"sindtest")
+	var delayArm = module.addBlock(func, label: b"sindelay")
 	var pipeArm = module.addBlock(func, label: b"sinpipe")
 	var pipeMake = module.addBlock(func, label: b"sinpmake")
 	var nonPipe = module.addBlock(func, label: b"sinother")
@@ -7727,21 +7809,39 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let data = emitLoadField(module, block: cur, record: req, offset: SubpReqStdinData, ids: ids)
 	let slot = emitSubpSlotAddr(module, block: cur, ids: ids, table: table, handle: slotIdx)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	// A non-pipe stdin leaves BOTH of these 0, which is what makes the drain loop's "is there a write end?" and
-	// "is there a payload?" plain pointer tests rather than kind tests repeated one pass later.
+	// A non-pipe stdin leaves ALL THREE of these 0, which is what makes the drain loop's "is there a write
+	// end?", "is there a payload?" and "may I push it yet?" plain word tests rather than kind tests repeated
+	// one pass later.
 	emitStoreField(module, block: cur, record: slot, offset: SubpSlotStdinWrite, value: zero)
 	emitStoreField(module, block: cur, record: slot, offset: SubpSlotStdinPend, value: zero)
-	let bytesConst = emitConst(module, block: cur, value: SubpStdinBytes, ids: ids)
-	let isBytes = emitCmp(module, block: cur, a: kind, b: bytesConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isBytes, thenBlockId: bytesArm.id, elseBlockId: pipeTest.id))
+	emitStoreField(module, block: cur, record: slot, offset: SubpSlotStdinFeedAt, value: zero)
+	let wantsPipe = emitSubpStdinKindWantsPipe(module, block: cur, kind: kind, ids: ids)
+	let noPipeWanted = emitCmp(module, block: cur, a: wantsPipe, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(noPipeWanted, thenBlockId: nonPipe.id, elseBlockId: queueTest.id))
 
-	let slotB = emitSubpSlotAddr(module, block: bytesArm, ids: ids, table: table, handle: slotIdx)
-	emitStoreField(module, block: bytesArm, record: slotB, offset: SubpSlotStdinPend, value: data)
-	module.setTerminator(bytesArm, op: StdOp.branch(pipeArm.id))
+	let queuesPayload = emitSubpStdinKindQueuesPayload(module, block: queueTest, kind: kind, ids: ids)
+	let queueZero = emitConst(module, block: queueTest, value: 0, ids: ids)
+	let noPayload = emitCmp(module, block: queueTest, a: queuesPayload, b: queueZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(queueTest, op: StdOp.condBranch(noPayload, thenBlockId: pipeArm.id, elseBlockId: queueArm.id))
 
-	let pipeConst = emitConst(module, block: pipeTest, value: SubpStdinPipe, ids: ids)
-	let isPipe = emitCmp(module, block: pipeTest, a: kind, b: pipeConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(pipeTest, op: StdOp.condBranch(isPipe, thenBlockId: pipeArm.id, elseBlockId: nonPipe.id))
+	let slotB = emitSubpSlotAddr(module, block: queueArm, ids: ids, table: table, handle: slotIdx)
+	emitStoreField(module, block: queueArm, record: slotB, offset: SubpSlotStdinPend, value: data)
+	module.setTerminator(queueArm, op: StdOp.branch(delayTest.id))
+
+	// `delayed` is `bytes` plus a not-before time. The deadline is taken HERE rather than at the first drain
+	// pass because the wait the caller asked for starts when the child does, not when somebody gets round to
+	// waiting on it — a handle spawned long before anyone calls `waitCollect` would otherwise feed instantly.
+	let isDelayed = emitSubpKindIs(module, block: delayTest, kind: kind, value: SubpStdinDelayed, ids: ids)
+	let delayZero = emitConst(module, block: delayTest, value: 0, ids: ids)
+	let feedNow = emitCmp(module, block: delayTest, a: isDelayed, b: delayZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(delayTest, op: StdOp.condBranch(feedNow, thenBlockId: pipeArm.id, elseBlockId: delayArm.id))
+
+	let spawnedAtMs = ids.mint()
+	module.appendOp(delayArm, op: StdOp.osTickCountMs(spawnedAtMs))
+	let feedDelay = emitConst(module, block: delayArm, value: SubpStdinDelayedFeedMs, ids: ids)
+	let slotD = emitSubpSlotAddr(module, block: delayArm, ids: ids, table: table, handle: slotIdx)
+	emitStoreField(module, block: delayArm, record: slotD, offset: SubpSlotStdinFeedAt, value: emitBin(module, block: delayArm, a: spawnedAtMs, b: feedDelay, opcode: StdBinOpcode.add, ids: ids))
+	module.setTerminator(delayArm, op: StdOp.branch(pipeArm.id))
 
 	let name = emitSubpAllocPipeName(module, block: pipeArm, ids: ids)
 	buildPipeName(module, func: func, ids: ids, startBlock: pipeArm, bufPtr: name, cont: pipeMake)
@@ -7887,7 +7987,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	// stays exactly itself under the command-line shape — the same one call `__gt_process_run` makes.
 	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
 	let req = emitSubpNewRequest(module, block: afterCopy, ids: ids, cmdline: command)
-	let stdinPipe = emitConst(module, block: afterCopy, value: SubpStdinPipe, ids: ids)
+	let stdinPipe = emitConst(module, block: afterCopy, value: SubpStdinHold, ids: ids)
 	emitStoreField(module, block: afterCopy, record: req, offset: SubpReqStdinKind, value: stdinPipe)
 	let collect = emitConst(module, block: afterCopy, value: SubpOutCollect, ids: ids)
 	emitStoreField(module, block: afterCopy, record: req, offset: SubpReqOutKind, value: collect)

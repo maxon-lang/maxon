@@ -329,6 +329,46 @@ export let NetworkLiveValue = "live"
 // swallow another.
 let ProcsMarker = "<!-- procs:"
 
+// ⭐⭐ **WHETHER THIS CASE'S PROGRAM IS GIVEN A STDIN THAT BLOCKS — `<!-- stdin: hold -->` and
+// `<!-- stdin: delayed -->`, the markers that make a real KERNEL WAIT reachable from an ordinary spec
+// case.**
+//
+// Without one, every case's program is spawned with `InputSource.none`: stdin is the null device, so
+// `Console.stdin().readLine()` returns at once (measured — it THROWS immediately at EOF). That is fine
+// for the cases that never read stdin, which is nearly all of them, and it makes one property
+// unassertable: *a green thread blocked in a kernel call must not stall its siblings.* A blocking call
+// is the subject, and a spec case had no way to hold one open — the runtime's own blocking reads
+// (`__con_read_stdin` is a plain synchronous `osReadFile`) are the only ones user code can reach, and
+// every stdin the harness could give them answered instantly.
+//
+// `hold`'s spawn is `InputSource.hold`: a pipe whose read end the child gets and whose write end the
+// parent keeps, WITHOUT EVER WRITING A BYTE, for the child's whole life. A read in the child then
+// blocks in the kernel exactly as a read on an idle terminal does, until the case's own logic exits or
+// `SpecSpawnTimeoutMs` reaps it.
+//
+// ⭐⭐ **`delayed` EXISTS BECAUSE `hold` ALONE CANNOT CARRY AN EXPECTATION.** MEASURED: shv2's exit path
+// waits for live green threads, so a program whose reader is parked forever prints its siblings' lines
+// and then simply never exits. ⇒ A `hold` case can only ever end at `SpecSpawnTimeoutMs`, which is a
+// two-minute FAIL that asserts nothing — "it did not finish" is equally what a hang, a crash loop and a
+// deadlock look like. `delayed` ends the wait after about a second (`runStdinFor`), so the blocking read
+// COMPLETES, the program exits on its own, and the observable becomes what it printed and in what ORDER
+// against whatever ran while it was parked.
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A DEFAULT** — `parseNetworkValue` and `parseProcsValue`,
+// which this follows exactly. Reading `<!-- stdin: pipe -->` as "leave the default alone" would hand
+// the case an instant EOF and let it report PASS on a program that never blocked at all, which is the
+// silently-declined claim `AsyncTraceMarker` records having shipped.
+//
+// It is not a superstring or substring of any other marker ("<!-- stdin:" first differs from
+// "<!-- test:", "<!-- disabled-test:", "<!-- targets:", "<!-- Args:", "<!-- AsyncTrace",
+// "<!-- MmTrace", "<!-- LogTrace", "<!-- network:" and "<!-- procs:" at the character after "<!-- "),
+// so the marker checks stay independent and none can swallow another.
+let StdinMarker = "<!-- stdin:"
+
+// The two values `StdinMarker` recognizes, for `NetworkLiveValue`'s reason.
+let StdinHoldValue = "hold"
+let StdinDelayedValue = "delayed"
+
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
@@ -797,6 +837,24 @@ export union SpecProcs
 	pinned(count ProcessorCount)
 end 'SpecProcs'
 
+// ⭐ **WHAT A CASE'S PROGRAM FINDS ON STDIN — see `StdinMarker` for why this is a per-case fact.**
+//
+// A UNION rather than a bool, for `SpecNetwork`'s reasons: the marker carries a VALUE, the third answer
+// below is a third state rather than the negation of one, and every consumer's `match` is total — so a
+// new arm becomes a compile error instead of a silently-selected spawn. Every arm names what the child
+// actually gets, because that is what a case's expectation is written against.
+export union SpecStdin
+	// No marker: the null device, which answers every read at once with EOF. This is `Subprocess`'s own
+	// default (`InputSource.none`) and the stdin every case in the corpus had before the marker existed.
+	closed
+	// `<!-- stdin: hold -->`: a pipe nobody ever writes to, held open for the child's whole life, so a
+	// read BLOCKS in the kernel rather than being answered.
+	held
+	// `<!-- stdin: delayed -->`: the same pipe, written to about a second later with one line and then
+	// closed, so a read BLOCKS and then COMPLETES and the program can still exit on its own.
+	delayed
+end 'SpecStdin'
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
@@ -861,11 +919,16 @@ export type SpecTest
 	// environment variable the child is given — not what the run must produce.
 	export let procs as SpecProcs
 
+	// What this case's program finds on stdin (a `<!-- stdin: … -->` marker). It rides HERE for `procs`'
+	// reason exactly and is the same kind of fact: it changes one property of the spawn — which
+	// descriptor the child's fd 0 is — not what the run must produce.
+	export let stdin as SpecStdin
+
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, stdin SpecStdin) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1239,6 +1302,9 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// `unset` unless a `<!-- procs: … -->` marker says otherwise — the literal answer for a case that names
 	// no count and takes the process default, not a default standing in for an unread marker.
 	var procs = SpecProcs.unset
+	// `closed` unless a `<!-- stdin: … -->` marker says otherwise — the literal answer for a case whose
+	// program is handed the null device, not a default standing in for an unread marker.
+	var stdin = SpecStdin.closed
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -1324,6 +1390,15 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'procsMarker'
+
+		// The stdin the author asked for, consumed identically to the seven above — including on a DISABLED
+		// case, so shelving a blocking-stdin case does not leave its marker to fall through as unread prose.
+		// The VALUE is refused rather than defaulted; see `parseStdinValue`.
+		if openingsCarry(openings, marker: StdinMarker) 'stdinMarker'
+			stdin = parseStdinValue(line, specPath: specPath, testName: name)
+			i = i + 1
+			continue
+		end 'stdinMarker'
 
 		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
 		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
@@ -1500,7 +1575,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			unpinned to pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
 		end 'traceCaptureOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
 		return i
 	end 'rejected'
 
@@ -1514,7 +1589,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
 
 	return i
 end 'scanTestFromMarker'
@@ -1933,6 +2008,26 @@ function parseProcsValue(line String, specPath FilePath, testName String) return
 
 	return SpecProcs.pinned(count as ProcessorCount)
 end 'parseProcsValue'
+
+// What a `<!-- stdin: … -->` marker asks the child's fd 0 to be, read through the same `markerValue`
+// every other valued marker goes through.
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `closed`**, for `parseNetworkValue`'s reason and with the
+// same fail-open shape: a typo or a blank value read as "the default stdin" hands the case an INSTANT
+// EOF, and a case written to assert that something blocks would then pass without anything ever having
+// blocked — a green result from a program that never entered the state under test.
+function parseStdinValue(line String, specPath FilePath, testName String) returns SpecStdin
+	let value = markerValue(line)
+	if value == StdinHoldValue 'held'
+		return SpecStdin.held
+	end 'held'
+
+	if value == StdinDelayedValue 'delayed'
+		return SpecStdin.delayed
+	end 'delayed'
+
+	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{StdinMarker} {value} -->`, and '{StdinHoldValue}' and '{StdinDelayedValue}' are the only values this marker takes. '{StdinHoldValue}' spawns the program with a stdin pipe nobody ever writes to, so a read BLOCKS in the kernel forever; '{StdinDelayedValue}' writes one line about a second later and closes, so the read blocks and then COMPLETES. An unrecognized value would quietly read as the default stdin, which answers every read at once with EOF — and a case asserting that something blocks would pass without anything having blocked")
+end 'parseStdinValue'
 
 // The arguments an `<!-- Args: … -->` marker names, in order — its value split into the argv the
 // program is spawned with. `<!-- Args: -5.5 -->` is ONE argument, `-5.5`: a value beginning with `-`

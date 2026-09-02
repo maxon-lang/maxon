@@ -930,7 +930,7 @@ function buildSubpStreamSpawn(module StdModule)
 	let cmdline = ids.mint()
 	module.appendOp(entry, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
 	let req = emitSubpNewRequest(module, block: entry, ids: ids, cmdline: cmdline)
-	let stdinPipe = emitConst(module, block: entry, value: SubpStdinPipe, ids: ids)
+	let stdinPipe = emitConst(module, block: entry, value: SubpStdinHold, ids: ids)
 	emitStoreField(module, block: entry, record: req, offset: SubpReqStdinKind, value: stdinPipe)
 	let collect = emitConst(module, block: entry, value: SubpOutCollect, ids: ids)
 	emitStoreField(module, block: entry, record: req, offset: SubpReqOutKind, value: collect)
@@ -1315,9 +1315,16 @@ function buildSubpWaitCollect(module StdModule)
 end 'buildSubpWaitCollect'
 
 // Push one chunk of a queued `StdinKind.bytes` payload into the child's stdin, and close the pipe once the
-// payload is spent. `stdinPend` is 0 for every other stdin kind, which is what makes this a pointer test
-// rather than a kind test repeated a pass later.
+// payload is spent. `stdinPend` is 0 for every stdin kind that carries no payload, which is what makes this a
+// pointer test rather than a kind test repeated a pass later.
+//
+// ⭐⭐ **`StdinKind.delayed` IS THE SAME PUSH BEHIND A NOT-BEFORE TIME**, which is the whole of what this
+// function had to learn: `GtRuntime.SubpSlotStdinFeedAt` carries why the deadline is taken at spawn and why
+// shv2 needs no feed thread to honour it. A pass that declines on the deadline reports NO PROGRESS, so the
+// loop takes its `SubpPollMs` green sleep and comes back — the wait costs this program nothing and the whole
+// scheduler runs through it.
 function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	var feedDue = module.addBlock(func, label: b"wcfdue")
 	var haveWrite = module.addBlock(func, label: b"wcfeed")
 	var doWrite = module.addBlock(func, label: b"wcfwrite")
 	var spentTest = module.addBlock(func, label: b"wcfspent")
@@ -1329,7 +1336,21 @@ function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, c
 	let pend = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinPend, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let nothingQueued = emitCmp(module, block: cur, a: pend, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(nothingQueued, thenBlockId: cont.id, elseBlockId: haveWrite.id))
+	module.setTerminator(cur, op: StdOp.condBranch(nothingQueued, thenBlockId: cont.id, elseBlockId: feedDue.id))
+
+	// The not-before time. A zero deadline is *"push it now"* — the slab's zero, which is what every kind but
+	// `delayed` leaves — so the pair is one compare against zero and one against the clock, and neither is a
+	// kind test. ⚠ The tick count is read fresh here rather than carried from the loop's own `WcStartMs`,
+	// because that reading is taken when the WAIT began and this deadline is measured from the SPAWN.
+	let feedAt = emitLoadField(module, block: feedDue, record: slot, offset: SubpSlotStdinFeedAt, ids: ids)
+	let feedZero = emitConst(module, block: feedDue, value: 0, ids: ids)
+	let noDeadline = emitCmp(module, block: feedDue, a: feedAt, b: feedZero, pred: StdCmpPred.eq, ids: ids)
+	let nowMsF = ids.mint()
+	module.appendOp(feedDue, op: StdOp.osTickCountMs(nowMsF))
+	let arrived = emitCmp(module, block: feedDue, a: nowMsF, b: feedAt, pred: StdCmpPred.ge, ids: ids)
+	let mayPush = emitBin(module, block: feedDue, a: noDeadline, b: arrived, opcode: StdBinOpcode.bitOr, ids: ids)
+	let stillHolding = emitCmp(module, block: feedDue, a: mayPush, b: feedZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(feedDue, op: StdOp.condBranch(stillHolding, thenBlockId: cont.id, elseBlockId: haveWrite.id))
 
 	// A payload with no pipe to push it into is a spawn that asked for `bytes` and got no write end; drop the
 	// queue rather than looping on it for ever.
