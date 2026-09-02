@@ -43,6 +43,14 @@ public class IrType {
   // review).
   public static IrType CString { get; } = new("cstring", 8);
 
+  /// The primitive an IrType's own <see cref="Name"/> spells — the inverse of the statics above,
+  /// for a reader handed a resolved type's name rather than the type. Wider than
+  /// <see cref="FromSizedName"/>, which answers only for the widths source may write in a cast:
+  /// `bool` resolves to `i1` and is not a sized name, so a caller asking what a return type IS
+  /// needs this one.
+  public static IrType? FromPrimitiveName(string name) =>
+    FromSizedName(name) ?? (name == I1.Name ? I1 : name == CString.Name ? CString : null);
+
   public static IrType? FromSizedName(string name) => name switch {
     "u8" => U8,
     "u16" => U16,

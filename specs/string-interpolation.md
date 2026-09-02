@@ -1818,6 +1818,35 @@ end 'main'
 error E2010: specs/fragments/string-interpolation/error.interp-exponent-without-point.test:3:11: Expected 'interpolation end' but got 'e100'
 ```
 
+### Error: A backslash-escaped quote inside a hole is refused AT THE BACKSLASH
+
+Inside `{...}` the hole is expression context, so a string argument is written with bare quotes —
+`"{shout("hi")}"` compiles and runs. A backslash there is not an escape, it is an unexpected token,
+and the refusal must say so at the backslash. It is reported that way when one candidate is in scope;
+with an overload set the same input reported `E3007 Ambiguous overload` at the CALL instead, blaming
+overload resolution for a lexical fault and naming candidates that were never the problem.
+
+<!-- test: error.interp-escaped-quote-with-overloads -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function process(count Integer) returns String
+	return "int: {count}"
+end 'process'
+
+function process(text String) returns String
+	return "str: {text}"
+end 'process'
+
+function main() returns ExitCode
+	print("{process(\"hello\")}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/string-interpolation/error.interp-escaped-quote-with-overloads.test:13:18: Expected expression but got '\'
+```
+
 ### The expression boundary is exact in both directions
 
 The refusal above must not cost any ordinary interpolation. A bare name, a format specifier, a method

@@ -1,0 +1,320 @@
+// Test: lazy-static.enum-from-a-call
+enum Color
+	Red
+	Green
+	Blue
+end 'Color'
+
+function pick() returns Color
+	return Color.Green
+end 'pick'
+
+type Box
+	static var c = pick()
+end 'Box'
+
+function main() returns ExitCode
+	print("{Box.c.rawValue}")
+	if Box.c == Color.Green 'g'
+		print(" G")
+	end 'g'
+	Box.c = Color.Blue
+	print(" {Box.c.rawValue}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1 G 2
+```
+---
+// CompiledIR
+module {
+  func @pick() -> i64 {
+  entry:
+    x64.mov rax, 1
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=128
+    x64.movzx rax, byte [rip+Box.c.__initialized]
+    x64.test rax, rax
+    x64.je main.__lazy_init_0
+  __lazy_merge_0:
+    x64.mov rax, qword [rip+Box.c]
+    x64.lea_func rcx, [__destruct_String]
+    x64.mov rdx, rcx
+    x64.mov [rbp-96], rax
+    x64.mov rcx, 70
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rbx, 48
+    x64.mov rsi, [rbp-8]
+    x64.add rsi, rbx
+    x64.mov rcx, [rbp-96]
+    x64.mov rdx, rsi
+    x64.call maxon_i64_to_string
+    x64.mov rdi, 48
+    x64.mov r8, [rbp-8]
+    x64.add r8, rdi
+    x64.lea r9, [r8 + rax]
+    x64.xor ecx, ecx
+    x64.mov byte ptr [r9+0], rcxb
+    x64.mov rcx, 1
+    x64.mov rdx, -3
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbx+0], r8
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbx+8], rax
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbx+16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+32], rdx
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+40], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.print
+    x64.movzx rax, byte [rip+Box.c.__initialized]
+    x64.test rax, rax
+    x64.je main.__lazy_init_1
+  __lazy_merge_1:
+    x64.mov rax, qword [rip+Box.c]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.g_0.merge
+  g_0:
+    x64.lea rax, [rip+__static_lit_0]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-16], rcx
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call stdlib.print
+    x64.mov rdi, [rbp-16]
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp main.g_0.merge
+  g_0.merge:
+    x64.mov rax, 2
+    x64.mov qword [rip+Box.c], rax
+    x64.mov rcx, 1
+    x64.mov byte [rip+Box.c.__initialized], rcx
+    x64.movzx rdx, byte [rip+Box.c.__initialized]
+    x64.test rdx, rdx
+    x64.je main.__lazy_init_2
+  __lazy_merge_2:
+    x64.mov rax, qword [rip+Box.c]
+    x64.lea_rdata rcx, [__interp_lit_0]
+    x64.mov rdx, rcx
+    x64.mov rbx, 1
+    x64.mov [rbp-96], rax
+    x64.mov [rbp-104], rdx
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-96]
+    x64.mov rdx, [rbp-24]
+    x64.call maxon_i64_to_string
+    x64.mov rsi, [rbp-24]
+    x64.mov rdi, 1
+    x64.lea r8, [rdi + rax]
+    x64.mov r9, 49
+    x64.lea rcx, [r8 + r9]
+    x64.lea_func rdx, [__destruct_String]
+    x64.mov rbx, rdx
+    x64.mov [rbp-112], rax
+    x64.mov [rbp-120], r8
+    x64.mov rdx, rbx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-32], rax
+    x64.mov rax, 48
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-40], rax
+    x64.mov [rbp-48], rcx
+    x64.mov rax, [rbp-120]
+    x64.mov [rbp-56], rax
+    x64.mov rax, [rbp-104]
+    x64.mov [rbp-64], rax
+    x64.mov rax, 1
+    x64.mov [rbp-72], rax
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-80], rax
+    x64.mov rax, [rbp-112]
+    x64.mov [rbp-88], rax
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-64]
+    x64.mov rdx, [rbp-72]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-72]
+    x64.add rax, rcx
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-80]
+    x64.mov rdx, [rbp-88]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-56]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-56]
+    x64.mov rdx, 1
+    x64.mov rbx, -3
+    x64.mov rsi, [rbp-32]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+32], rbx
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-32]
+    x64.mov [rcx+40], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call stdlib.print
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  __lazy_init_0:
+    x64.call Box.c.__lazy_init
+    x64.jmp main.__lazy_merge_0
+  __lazy_init_1:
+    x64.call Box.c.__lazy_init
+    x64.jmp main.__lazy_merge_1
+  __lazy_init_2:
+    x64.call Box.c.__lazy_init
+    x64.jmp main.__lazy_merge_2
+  }
+  func @Box.c.__lazy_init() {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov byte [rip+Box.c.__initialized], rax
+    x64.call pick
+    x64.mov qword [rip+Box.c], rax
+    x64.epilogue
+    x64.ret
+  }
+  func @__module_init() {
+  entry:
+    x64.lea rax, [rip+__static_lit_0]
+    x64.mov rcx, rax
+    x64.mov rdx, 80
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, 1
+    x64.mov [rcx+8], rbx
+    x64.xor esi, esi
+    x64.mov [rcx+16], rsi
+    x64.mov rdi, 4611686018427387904
+    x64.mov [rcx+24], rdi
+    x64.lea_rdata r8, [__str_0]
+    x64.mov r9, r8
+    x64.mov [rcx+32], r9
+    x64.mov rax, 2
+    x64.mov [rcx+40], rax
+    x64.mov rax, -2
+    x64.mov [rcx+48], rax
+    x64.mov rax, 1
+    x64.mov [rcx+56], rax
+    x64.xor eax, eax
+    x64.mov [rcx+64], rax
+    x64.mov rax, 1
+    x64.mov [rcx+72], rax
+    x64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_String.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_String.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_String.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct_String.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_String.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct_String.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

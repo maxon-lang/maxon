@@ -464,8 +464,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private readonly List<DeferredDecl> _deferredExprVars = [];
 
   // Lazy static fields (initialized on first access)
-  private record LazyStaticField(string QualifiedName, string GuardName, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column);
+  private record LazyStaticField(string QualifiedName, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column);
   private readonly List<LazyStaticField> _lazyStaticFields = [];
+
+  /// The two companion globals a lazy static owns. DERIVED from the qualified name rather than
+  /// recorded beside it, because a reader in another file has only the name: `_lazyStaticFields`
+  /// holds this file's declarations, while the slot, the guard and the init function all live in the
+  /// whole program's module.
+  private static string LazyGuardName(string qualifiedName) => $"{qualifiedName}.__initialized";
+  private static string LazyInitFuncName(string qualifiedName) => $"{qualifiedName}.__lazy_init";
 
   // Global mutable variables (name -> type info)
   private readonly Dictionary<string, GlobalVarMetadata> _globalVars = [];
@@ -2616,18 +2623,34 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// The metadata for a global whose initializer runs at startup rather than folding to a `.data`
-  /// attribute — a top-level binding in `__module_init`, or a lazy static field. Both slots hold a
-  /// managed record, and the only question is which SHAPE: a boxed union is `Enum`-kinded so that
-  /// reads of it produce a MaxonEnum and `match` can see its cases, while everything else runtime-
-  /// initialized is struct-shaped (struct, String, Array, Map). Decided once for both callers,
-  /// because a static field that answered `Struct` for a union rejected its own assignments with
-  /// "cannot assign a value of type 'enum' ... which holds 'struct'".
+  /// ⚠ THE METADATA FOR A GLOBAL WHOSE INITIALIZER RUNS AT STARTUP — a top-level binding in
+  /// `__module_init`, or a lazy static field — AND ITS KIND IS THE INITIALIZER'S RESOLVED TYPE, NOT
+  /// A GUESS THAT EVERY SUCH SLOT HOLDS A MANAGED RECORD. That guess covers struct, String, Array
+  /// and Map and is wrong for everything else: an enum read back as `Struct` cannot be compared or
+  /// matched, and a scalar read back as `Struct` hands every reader a pointer where the value is
+  /// ("Cannot return 'struct'" for `return Box.t`).
+  ///
+  /// Decided once for both callers, because two of them disagreeing is how the slot came to reject
+  /// its own assignments with "cannot assign a value of type 'enum' ... which holds 'struct'".
   /// </summary>
-  private GlobalVarMetadata RuntimeInitGlobalMetadata(string typeName, bool isMutable, bool isLazy) =>
-    _typeRegistry.TryGetValue(typeName, out var declType) && declType is IrEnumType { IsHeapAllocated: true }
-      ? new GlobalVarMetadata(MaxonValueKind.Enum, isMutable, EnumTypeName: typeName, IsLazy: isLazy)
-      : new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: typeName, IsLazy: isLazy);
+  private GlobalVarMetadata RuntimeInitGlobalMetadata(string typeName, bool isMutable, bool isLazy) {
+    var declType = _typeRegistry.GetValueOrDefault(typeName) ?? IrType.FromPrimitiveName(typeName);
+
+    if (declType is IrEnumType)
+      return new GlobalVarMetadata(MaxonValueKind.Enum, isMutable, EnumTypeName: typeName, IsLazy: isLazy);
+
+    if (declType != null && IsInlineScalarType(declType))
+      return new GlobalVarMetadata(declType.ToValueKind(), isMutable, IsLazy: isLazy);
+
+    return new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: typeName, IsLazy: isLazy);
+  }
+
+  /// True where a global's slot holds the value ITSELF rather than a pointer to a managed record.
+  /// A whitelist for the reason <see cref="IrType.IsGprScalar"/> is one, which it delegates the bulk
+  /// of to; the additions are the ranged primitives, which reach here under their alias, and the
+  /// floats, which that predicate excludes because they arrive in an FP register.
+  private static bool IsInlineScalarType(IrType type) =>
+    type is IrRangedPrimitiveType || type.IsFloat || type.IsGprScalar;
 
   // Records the visibility tier (file-scoped, module-visible, or exported) for a
   // pre-scanned top-level var/let into the module-level dictionaries that drive
@@ -3037,17 +3060,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // from prior functions or prior lazy inits leaking into this scope_end.
         _variables.Clear();
 
-        var initFuncName = $"{field.QualifiedName}.__lazy_init";
+        var initFuncName = LazyInitFuncName(field.QualifiedName);
 
         var initFunc = new IrFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
         module.AddFunction(initFunc);
         _currentFunction = initFunc;
         _currentBlock = initFunc.Body.AddBlock("entry");
 
-        // Set guard to true before evaluating (prevents infinite recursion)
-        var trueConst = new MaxonLiteralOp(true);
-        _currentBlock.AddOp(trueConst);
-        _currentBlock.AddOp(new MaxonGlobalStoreOp(field.GuardName, trueConst.Result, MaxonValueKind.Bool));
+        // Set before evaluating, so an initializer that reads its own field does not recurse.
+        EmitLazyGuardSet(field.QualifiedName);
 
         // Set _currentTypeName for the duration of the init so that struct literal
         // construction inside static let initializers is allowed (e.g., CharacterSet static lets).
@@ -3074,6 +3095,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _currentFunction = savedFunction;
       _currentBlock = savedBlock;
     }
+  }
+
+  /// Record that a lazy static's slot holds a real value, so no later read re-runs its initializer.
+  /// Both writers need it: the initializer, before evaluating, so a self-read does not recurse; and
+  /// an ASSIGNMENT, whose value the next read would otherwise overwrite with the one the
+  /// initializer was told to supply only in its absence.
+  private void EmitLazyGuardSet(string qualifiedName) {
+    var trueConst = new MaxonLiteralOp(true);
+    _currentBlock!.AddOp(trueConst);
+    _currentBlock.AddOp(new MaxonGlobalStoreOp(LazyGuardName(qualifiedName), trueConst.Result, MaxonValueKind.Bool));
   }
 
   /// <summary>
@@ -3103,22 +3134,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       RequireInjectedStreamConsumed("'end of global initializer'");
 
-      // Every runtime-initialized global holds a managed record, and all but one shape of them is
-      // struct-like (struct, String, Array, Map) — a boxed union is the exception, and it must be
-      // Enum-kinded so `match` reads it as cases rather than as an opaque struct pointer.
-      // `RegisterDeferredExprGlobals` already inferred that from the initializer's leading tokens;
-      // the parsed value is the same fact known exactly, so it REFINES the registration rather than
-      // replacing it — the visibility tier and declaring file were recorded there and are not
-      // re-derivable here, and dropping them desynchronized `_globalVars` from
-      // `module.GlobalVarInfos`, which then disagreed about whether the slot held an enum or a struct.
-      if (value is MaxonEnum valueEnum) {
-        _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Enum, valueEnum.TypeName));
-        RefineGlobalVarType(name, isMutable, MaxonValueKind.Enum, typeName: null, enumTypeName: valueEnum.TypeName);
-      } else {
-        _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Struct));
-        if (value is MaxonStruct valueStruct)
-          RefineGlobalVarType(name, isMutable, MaxonValueKind.Struct, typeName: valueStruct.TypeName, enumTypeName: null);
-      }
+      // The slot's kind is the parsed value's own — a struct, a boxed union, or a scalar — because
+      // this is the one place it is known exactly. `RuntimeInitGlobalMetadata` inferred it from the
+      // initializer's leading tokens, so this REFINES that registration rather than replacing it:
+      // the visibility tier and declaring file were recorded there and are not re-derivable here,
+      // and dropping them desynchronized `_globalVars` from `module.GlobalVarInfos`, which then
+      // disagreed about whether the slot held an enum or a struct.
+      var valueKind = DetermineValueKind(value);
+      var enumTypeName = value is MaxonEnum valueEnum ? valueEnum.TypeName : null;
+      var structTypeName = value is MaxonStruct valueStruct ? valueStruct.TypeName : null;
+
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, valueKind, enumTypeName));
+      RefineGlobalVarType(name, isMutable, valueKind, structTypeName, enumTypeName);
     } finally {
       _tokens = savedTokens;
       _pos = savedPos;
@@ -8102,7 +8129,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Check if this is a complex initializer (function call, struct literal, array literal)
     if (IsComplexStaticInitializer(exprStart)) {
       // Lazy static field: defer initialization to first access
-      var guardName = $"{qualifiedName}.__initialized";
+      var guardName = LazyGuardName(qualifiedName);
       module.Globals.Add(new IrGlobal(qualifiedName, IrType.I64, new IntegerAttr(0, IrType.I64)));
       module.Globals.Add(new IrGlobal(guardName, IrType.I1, new IntegerAttr(0, IrType.I1)));
 
@@ -8112,7 +8139,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       module.GlobalVarInfos[qualifiedName] = gvarInfo;
       _globalVars[guardName] = new GlobalVarMetadata(MaxonValueKind.Bool, true);
 
-      _lazyStaticFields.Add(new LazyStaticField(qualifiedName, guardName, _tokens, exprStart, exprEnd, isMutable, fieldToken.Line, fieldToken.Column));
+      _lazyStaticFields.Add(new LazyStaticField(qualifiedName, _tokens, exprStart, exprEnd, isMutable, fieldToken.Line, fieldToken.Column));
     } else {
       // Simple constant initializer — evaluate at compile time
       _pos = exprStart;
@@ -10040,11 +10067,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var loadOp = new MaxonGlobalLoadOp(name, info.Kind, info.EnumTypeName,
       structTypeName: info.Kind == MaxonValueKind.Struct ? info.TypeName : null);
 
-    // Check if this is a lazy static field — add guard info for lowering
-    var lazyField = _lazyStaticFields.Find(f => f.QualifiedName == name);
-    if (lazyField != null) {
-      loadOp.LazyGuardName = lazyField.GuardName;
-      loadOp.LazyInitFuncName = $"{lazyField.QualifiedName}.__lazy_init";
+    // A lazy static's load carries the guard so lowering can branch to the initializer. Read off
+    // the REGISTRATION, which every file that can see the slot is seeded with — a scan of this
+    // file's declarations would answer "not lazy" for a static declared in another file and hand
+    // back the never-initialized slot.
+    if (info.IsLazy) {
+      loadOp.LazyGuardName = LazyGuardName(name);
+      loadOp.LazyInitFuncName = LazyInitFuncName(name);
     }
 
     _currentBlock!.AddOp(loadOp);
@@ -12112,6 +12141,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         $"store a closure that captures in static '{qualifiedName}'",
         typeToken.Line, typeToken.Column);
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(qualifiedName, newValue, globalInfo.Kind, globalInfo.EnumTypeName));
+
+      if (globalInfo.IsLazy) EmitLazyGuardSet(qualifiedName);
+
       return;
     }
 
@@ -20010,8 +20042,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (primaryTok.Type == TokenType.Eof) {
       throw new CompileError(ErrorCode.ParserUnexpectedEof, "Unexpected end of input, expected expression", primaryTok.Line, primaryTok.Column);
     }
-    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression but got '{FormatTokenValueForError(primaryTok.Value)}'", primaryTok.Line, primaryTok.Column);
+    throw ExpectedExpressionError(primaryTok);
   }
+
+  /// The refusal for a token that cannot begin an expression. ONE spelling, because overload
+  /// resolution's argument peek reaches the same verdict ahead of the parse that would produce it,
+  /// and the two must not give the same input two different answers.
+  private static CompileError ExpectedExpressionError(Token token) =>
+    new(ErrorCode.ParserExpectedExpression,
+      $"Expected expression but got '{FormatTokenValueForError(token.Value)}'", token.Line, token.Column);
 
   private static string FormatTokenValueForError(string value) {
     if (string.IsNullOrEmpty(value) || value == "\n" || value == "\r\n") return "(empty)";
@@ -23366,11 +23405,36 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (ownedByCurrentType.Count == 1) return ownedByCurrentType[0];
     }
 
+    // ⚠ "MULTIPLE OVERLOADS MATCH" IS A CLAIM ABOUT ARGUMENTS THAT ARE EXPRESSIONS. Where the call
+    // holds a character the LEXER could not classify there is no argument to match: every filter
+    // above abstains for want of a type, and reporting that abstention as ambiguity blames
+    // candidates that were never in question and buries the real refusal, which the same call with
+    // a single candidate in scope gives at the offending character.
+    if (FindUnlexableArgToken() is { } unlexable) throw ExpectedExpressionError(unlexable);
+
     var matchInfo = string.Join(", ", matching.Select(c =>
       FormatOverloadSignature(c)));
     throw new CompileError(ErrorCode.SemanticAmbiguousFunctionCall,
       $"Ambiguous overload for '{UnmangleName(callToken.Value)}': multiple overloads match. Candidates: {matchInfo}",
       callToken.Line, callToken.Column);
+  }
+
+  /// The first token inside the call whose arguments begin at `_pos` that the lexer could not turn
+  /// into syntax, or null where there is none. `Unknown` is the lexer's verdict on a character that
+  /// begins no token, so it can appear in no expression. Lexer `Error` tokens are deliberately not
+  /// looked for: those carry their own diagnostic and are reported by their own path.
+  private Token? FindUnlexableArgToken() {
+    int parenDepth = 1;
+
+    for (int i = _pos; i < _tokens.Count && parenDepth > 0; i++) {
+      var token = _tokens[i];
+      if (token.Type == TokenType.Eof) break;
+      if (token.Type == TokenType.Unknown) return token;
+      if (token.Type == TokenType.LeftParen) parenDepth++;
+      if (token.Type == TokenType.RightParen) parenDepth--;
+    }
+
+    return null;
   }
 
   /// Is `func` a method of `typeName`? Its name is fully qualified (`stdlib.FilePath.create`) and

@@ -445,9 +445,9 @@ typealias IntArray = Array with int          // ERROR
 type IntBox implements Container with int    // ERROR
 
 // VALID — use a ranged typealias
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer      // OK
-type IntBox implements Container with Integer // OK
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Tally        // OK
+type IntBox implements Container with Tally  // OK
 ```
 
 **Declaration:**
@@ -624,11 +624,11 @@ This is in contrast to struct assignment, where field mutations through an alias
 Types are user-defined composite types containing named fields. Use `var` for mutable fields and `let` for immutable fields:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
 type Point
-		var x as Integer
-		var y as Integer
+		var x as Coord
+		var y as Coord
 end 'Point'
 ```
 
@@ -636,13 +636,13 @@ end 'Point'
 Create type instances using field initializers. A type literal is legal only inside the type's own methods, so code elsewhere constructs through a `static` factory that holds the literal:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
 type Point
-		var x as Integer
-		var y as Integer
+		var x as Coord
+		var y as Coord
 
-		export static function create(x Integer, y Integer) returns Point
+		export static function create(x Coord, y Coord) returns Point
 				return Point{x: x, y: y}
 		end 'create'
 end 'Point'
@@ -664,13 +664,13 @@ Every field of a type must be initialized when the type is constructed. A field 
 A `Self{}` literal is only legal when every field has a default or is supplied via rule 3. Otherwise the compiler emits **E3086 `SemanticFieldNotInitialized`** listing the uninitialized fields.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 type Counter
-	export var value as Integer
+	export var value as Tally
 	export var version = 0           // default
 
-	export static function create(initial Integer) returns Self
+	export static function create(initial Tally) returns Self
 		self.value = initial          // proof of initialization (rule 3)
 		return Self{}                 // OK: value proven by self-assign; version defaulted
 	end 'create'
@@ -693,11 +693,11 @@ p.x = 15                 // Write field (if var, not let)
 Methods are defined **inside the type body** and can access fields directly (implicit `self`):
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
 type Point
-		var x as Integer
-		var y as Integer
+		var x as Coord
+		var y as Coord
 
 		function add(other Point) returns Point
 				return Point{x: x + other.x, y: y + other.y}
@@ -733,16 +733,16 @@ var mag = p1.magnitude()
 Inside a type body, instance methods can call other instance methods on `self` using a bare name (no explicit receiver):
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Operand = int(i64.min to i64.max)
 
 type Calculator
-	var base as Integer
+	var base as Operand
 
-	function double() returns Integer
+	function double() returns Operand
 		return base * 2
 	end 'double'
 
-	function quadruple() returns Integer
+	function quadruple() returns Operand
 		return double() * 2    // bare call — implicitly calls self.double()
 	end 'quadruple'
 end 'Calculator'
@@ -755,17 +755,17 @@ The compiler detects that `double` is an instance method of the current type and
 Static methods belong to a type but don't have access to instance data. They are declared with the `static` keyword and called using `TypeName.method()` syntax:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
 type Point
-		var x as Integer
-		var y as Integer
+		var x as Coord
+		var y as Coord
 
 		static function origin() returns Point
 				return Point{x: 0, y: 0}
 		end 'origin'
 
-		static function create(x Integer, y Integer) returns Point
+		static function create(x Coord, y Coord) returns Point
 				return Point{x: x, y: y}
 		end 'create'
 
@@ -803,13 +803,13 @@ var mag = p2.magnitude()          // Instance method call
 Static fields are shared across all instances of a type. They are declared using `static var` (mutable) or `static let` (immutable):
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias CounterId = int(0 to u64.max)
 
 type Counter
 		static var count = 0
 		static let MAX_COUNT = 1000
 
-		var id as Integer
+		var id as CounterId
 
 		static function create() returns Counter
 				Counter.count = Counter.count + 1
@@ -911,12 +911,13 @@ end 'Defaults'
 
 Array literal initialization:
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
+typealias Slot = int(0 to u64.max)
 
 type Lookup
 		static var values = [10, 20, 30]
 
-		export static function get(index Integer) returns Integer
+		export static function get(index Slot) returns Amount
 				return try Lookup.values.get(index) otherwise -1
 		end 'get'
 end 'Lookup'
@@ -946,23 +947,24 @@ end 'Cache'
 Interfaces define a set of method signatures that types can implement:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias HashValue = int(i64.min to i64.max)
 
 interface Hashable
-		function hash() returns Integer
+		function hash() returns HashValue
 end 'Hashable'
 ```
 
 Structs declare conformance using the `implements` keyword:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
+typealias HashValue = int(i64.min to i64.max)
 
 type Point implements Hashable
-		var x as Integer
-		var y as Integer
+		var x as Coord
+		var y as Coord
 
-		function hash() returns Integer
+		function hash() returns HashValue
 				return x + y * 31
 		end 'hash'
 end 'Point'
@@ -984,13 +986,13 @@ Interfaces can declare static methods using the `static` keyword. Static interfa
 Functions can use interface types directly as parameter types. Any concrete type that implements the interface can be passed as an argument:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 interface Drawable
-	function draw() returns Integer
+	function draw() returns Tally
 end 'Drawable'
 
-function render(item Drawable) returns Integer
+function render(item Drawable) returns Tally
 	return item.draw()
 end 'render'
 ```
@@ -1002,20 +1004,20 @@ The compiler monomorphizes the function at compile time, creating specialized co
 Functions can declare an interface as their return type. When every `return` in the body yields the same concrete implementing type, the compiler statically infers that type at the call site so chained method dispatch on the result resolves without runtime overhead:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 interface Producer
-	function produce() returns Integer
+	function produce() returns Amount
 end 'Producer'
 
 type Widget implements Producer
-	let value as Integer
+	let value as Amount
 
-	export static function create(value Integer) returns Widget
+	export static function create(value Amount) returns Widget
 		return Widget{value: value}
 	end 'create'
 
-	function produce() returns Integer
+	function produce() returns Amount
 		return value
 	end 'produce'
 end 'Widget'
@@ -1030,10 +1032,10 @@ end 'makeProducer'
 Struct fields can declare an interface as their type. The field stores any value of a type that conforms to the interface, and methods invoked on the field dispatch to the implementing type. When the compiler can trace the concrete type stored into the field at construction, dispatch is resolved statically with no runtime overhead:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias TagId = int(0 to u64.max)
 
 interface Tagged
-	function tag() returns Integer
+	function tag() returns TagId
 end 'Tagged'
 
 type Holder
@@ -1070,8 +1072,8 @@ type Pair uses A, B where A is Hashable, B is Cloneable
 When creating a type alias, the compiler checks that concrete types satisfy the constraints:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias StringMap = Map with (String, Integer)  // OK: String implements Hashable
+typealias Tally = int(0 to u64.max)
+typealias StringMap = Map with (String, Tally)    // OK: String implements Hashable
 ```
 
 ### Per-Instance Typealiases
@@ -1091,9 +1093,9 @@ type Pool uses T
 	end 'get'
 end 'Pool'
 
-typealias Integer = int(i64.min to i64.max)
-typealias PoolA = Pool with Integer
-typealias PoolB = Pool with Integer
+typealias NodeId = int(0 to u64.max)
+typealias PoolA = Pool with NodeId
+typealias PoolB = Pool with NodeId
 ```
 
 `PoolA.Idx` and `PoolB.Idx` are distinct types — passing one where the other is expected produces a compile error. Literal integers that fit the range are still accepted. To explicitly convert between compatible per-instance aliases, use `as`:
@@ -1115,10 +1117,10 @@ Extensions add methods to interfaces that are automatically available on all typ
 **Declaration:**
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 extension Iterable
-	function count() returns Integer
+	function count() returns Tally
 		var n = 0
 		for _ in self 'loop'
 			n = n + 1
@@ -1139,10 +1141,10 @@ end 'Iterable'
 Extensions can use the interface's associated types. These are automatically substituted with the concrete type's associated type bindings:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Slot = int(0 to u64.max)
 
 interface Container uses Element
-	function get(index Integer) returns Element
+	function get(index Slot) returns Element
 end 'Container'
 
 extension Container
@@ -1208,10 +1210,10 @@ end 'Container'
 An interface can have both unconditional extensions and conditional extensions. Types that don't satisfy the `where` clause still receive the unconditional extension methods:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 extension Seq
-	function countItems() returns Integer
+	function countItems() returns Tally
 		var n = 0
 		for _ in self 'loop'
 			n = n + 1
@@ -1302,13 +1304,13 @@ t.1 = 22
 In function parameters and return types, tuple types use parenthesized type lists:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
-function sum(t (Integer, Integer)) returns Integer
+function sum(t (Amount, Amount)) returns Amount
 	return t.0 + t.1
 end 'sum'
 
-function makePair(a Integer, b Integer) returns (Integer, Integer)
+function makePair(a Amount, b Amount) returns (Amount, Amount)
 	return (a, b)
 end 'makePair'
 ```
@@ -1566,10 +1568,10 @@ Unions can additionally have a per-variant struct backing — see [Struct-Backed
 The simplest form of union defines named cases with no additional data:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 union Option
-		some(value Integer)
+		some(value Amount)
 		none
 end 'Option'
 ```
@@ -1579,11 +1581,12 @@ end 'Option'
 Cases can carry additional data called associated values:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
+typealias ErrorCode = int(0 to u64.max)
 
 union Result
-		success(value Integer)
-		failure(code Integer, message String)
+		success(value Amount)
+		failure(code ErrorCode, message String)
 		pending
 end 'Result'
 ```
@@ -1678,11 +1681,11 @@ The `fromName` static method creates a union value from a string name. It throws
 For unions with associated values, pass the values as additional arguments when the name is a compile-time literal:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 union Container
 		empty
-		value(n Integer)
+		value(n Amount)
 end 'Container'
 
 // With associated values (name must be compile-time literal)
@@ -1772,11 +1775,11 @@ This is the union analogue of [Struct-Backed Enums](#struct-backed-enums). Use i
 Every `union` has a compiler-synthesized companion type `U.unionCases` — a simple integer-backed enum with one bare case per variant of `U`, in declaration order. It is the union's discriminant exposed as a first-class enum value.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Length = int(0 to u64.max)
 
 union Shape
-	circle(radius Integer)
-	square(side Integer)
+	circle(radius Length)
+	square(side Length)
 	point
 end 'Shape'
 
@@ -1793,14 +1796,14 @@ Because `U.unionCases` is a regular enum it inherits all of the standard enum ma
 The intended use is symmetric (de)serialization: write the variant's `rawValue` to a buffer alongside its payload; on read, lift the raw integer back to a `U.unionCases` via `fromRawValue` and match on it to dispatch the payload reader. Match arms are single-statement, so multi-step writers and readers extract per-variant helpers:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Length = int(0 to u64.max)
 
-function writeShapeCircle(buf ByteArray, radius Integer)
+function writeShapeCircle(buf ByteArray, radius Length)
 	writeDword(buf, value: Shape.unionCases.circle.rawValue)
 	writeQword(buf, value: radius)
 end 'writeShapeCircle'
 
-function writeShapeSquare(buf ByteArray, side Integer)
+function writeShapeSquare(buf ByteArray, side Length)
 	writeDword(buf, value: Shape.unionCases.square.rawValue)
 	writeQword(buf, value: side)
 end 'writeShapeSquare'
@@ -1861,8 +1864,8 @@ let name = "Maxon"
 Calling a mutating method on a `let` variable is a compile error. Mutating methods include `push`, `pop`, `set`, `remove`, `clear`, `append`, `insert`, `resize`, `reserve`, `setLength`, `grow`, `upsert`, and similar methods that modify the receiver's state. Use `var` for variables that need mutation:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Tally
 
 let items = IntArray.create()
 // items.push(1)        // ERROR: cannot call mutating method 'push' on immutable variable
@@ -1994,13 +1997,13 @@ At runtime, struct-backed enums are stored as ordinals. The struct is reconstruc
 Function backing attaches a top-level function reference to each case. All cases must share the same function signature, which becomes the enum's backing type. The function may be declared later in the same file or in a different file; the binding is resolved after every file's top-level declarations have been pre-scanned.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Operand = int(i64.min to i64.max)
 
-function doubleFn(x Integer) returns Integer
+function doubleFn(x Operand) returns Operand
 		return x * 2
 end 'doubleFn'
 
-function tripleFn(x Integer) returns Integer
+function tripleFn(x Operand) returns Operand
 		return x * 3
 end 'tripleFn'
 
@@ -2287,9 +2290,9 @@ Maxon uses a **first-positional, rest-named** rule for function and method calls
 **Examples:**
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
-function add(a Integer, b Integer) returns Integer
+function add(a Amount, b Amount) returns Amount
 		return a + b
 end 'add'
 
@@ -2314,7 +2317,7 @@ greet("Alice")    // Single param is positional
 Parameters can have default values. Parameters with defaults can be omitted at the call site. Any literal expression is supported as a default value, including integers, floats, booleans, strings, arrays, enum cases, struct construction, character literals, and byte string literals.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 function greet(name String, title String = "Mr.")
 		print("Hello, {title} {name}")
@@ -2329,7 +2332,7 @@ function connect(host String = "localhost") returns ExitCode
 end 'connect'
 
 // Array default
-function process(items IntArray = [10, 20, 12]) returns Integer
+function process(items IntArray = [10, 20, 12]) returns Tally
 		// ...
 end 'process'
 
@@ -2429,13 +2432,13 @@ Maxon supports function overloading — multiple functions with the same name bu
 When overloads differ in their parameter types, the compiler automatically selects the correct overload based on the argument types at the call site:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
-function process(value Integer) returns Integer
+function process(value Tally) returns Tally
 		return value * 2
 end 'process'
 
-function process(value String) returns Integer
+function process(value String) returns Tally
 		return value.count()
 end 'process'
 
@@ -2469,20 +2472,20 @@ If the compiler cannot determine which overload to call based on argument types 
 A type may define both a `static` method and an instance method with the same name. They are disambiguated by call syntax, not by parameter signature, so the two may even share identical parameters:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 type Box
-		export var value as Integer
+		export var value as Amount
 
-		export static function create(value Integer) returns Box
+		export static function create(value Amount) returns Box
 				return Box{value: value}
 		end 'create'
 
-		static function getValue() returns Integer
+		static function getValue() returns Amount
 				return 9
 		end 'getValue'
 
-		function getValue() returns Integer
+		function getValue() returns Amount
 				return value
 		end 'getValue'
 end 'Box'
@@ -2498,9 +2501,9 @@ Box.getValue()    // static   — returns 9
 
 **No Parameters**
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Answer = int(i64.min to i64.max)
 
-function getAnswer() returns Integer
+function getAnswer() returns Answer
 		return 42
 end 'getAnswer'
 ```
@@ -2514,9 +2517,9 @@ end 'greet'
 
 **Multiple Parameters**
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
-function add(a Integer, b Integer) returns Integer
+function add(a Amount, b Amount) returns Amount
 		return a + b
 end 'add'
 
@@ -2525,10 +2528,10 @@ var result = add(3, b: 4)
 
 **Named Arguments for Clarity**
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 typealias NonZeroInt = int(1 to i64.max)
 
-function divide(dividend Integer, divisor NonZeroInt) returns Integer
+function divide(dividend Amount, divisor NonZeroInt) returns Amount
 		return dividend / divisor    // divisor's type excludes 0 — a bare divide, no `try` (see Division by Zero)
 end 'divide'
 
@@ -2537,10 +2540,10 @@ var result = divide(10, divisor: 2)  // first arg positional, rest named
 
 **Array Parameters**
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Tally
 
-function sum(numbers IntArray) returns Integer
+function sum(numbers IntArray) returns Tally
 		var total = 0
 		for num in numbers 'loop'
 				total = total + num
@@ -2568,9 +2571,9 @@ Maxon uses **automatic pass-by-reference** for parameters that are assigned to i
 **By-reference (mutated parameters):** If a function assigns to a parameter (directly or through a field or element), the compiler passes a pointer to the caller's storage. This allows the called function to mutate the caller's variable.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
-function increment(n Integer)
+function increment(n Tally)
 		n = n + 1       // assigns to n — passed by reference
 end 'increment'
 
@@ -2588,9 +2591,9 @@ end 'main'
 - If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
-function double(n Integer)
+function double(n Tally)
 		n = n * 2
 end 'double'
 
@@ -2621,11 +2624,11 @@ typealias Callback = function()                       // takes nothing, returns 
 The `returns` clause is omitted for a void-returning function type. Once defined, the alias can be used at every use site — function parameter, return type, struct field, or generic argument:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
+typealias Score = int(i64.min to i64.max)
+typealias UnaryOp = function(Score) returns Score
 typealias HandlerMap = Map with (String, UnaryOp)
 
-function apply(f UnaryOp, x Integer) returns Integer
+function apply(f UnaryOp, x Score) returns Score
 		return f(x)
 end 'apply'
 
@@ -2654,11 +2657,11 @@ function() gives expression
 **Capture by reference:** Closures capture variables from the enclosing scope by reference, not by value. This means changes to a captured variable after the closure is created are visible inside the closure when it executes.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
 		var x = 10
-		let addX = function(n Integer) gives n + x   // captures x by reference
+		let addX = function(n Score) gives n + x     // captures x by reference
 		x = 20
 		let result = addX(5)             // evaluates with x == 20, result is 25
 		return result
@@ -2679,11 +2682,11 @@ to a callee that only **calls** it is fine — the defining frame is alive for t
 call.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
+typealias Score = int(i64.min to i64.max)
+typealias UnaryOp = function(Score) returns Score
 
-function makeAdder(bump Integer) returns UnaryOp
-		let f = function(n Integer) gives n + bump
+function makeAdder(bump Score) returns UnaryOp
+		let f = function(n Score) gives n + bump
 		return f          // E3099: cannot return a closure that captures
 end 'makeAdder'
 ```
@@ -2717,9 +2720,9 @@ Functions with no return type are always considered impure (their result cannot 
 Pure function results **must** be used -- they cannot be discarded, even with `_ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
-function double(x Integer) returns Integer
+function double(x Amount) returns Amount
 		return x * 2
 end 'double'
 
@@ -2733,10 +2736,10 @@ let result = double(5)  // OK: result is used
 Impure function results **must** be explicitly acknowledged. A bare statement-level call that ignores the result is an error. To intentionally discard the result, use `_ =`:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 var counter = 0
-function incrementAndGet() returns Integer
+function incrementAndGet() returns Tally
 		counter = counter + 1
 		return counter
 end 'incrementAndGet'
@@ -2751,12 +2754,12 @@ let count = incrementAndGet()   // OK: result is used
 Methods that take `self` as their first parameter and return the same type are **chainable**. Their results can be freely discarded without `_ =`, since the common pattern is to call them for their side effect on the receiver:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 type Counter
-		var value as Integer
+		var value as Tally
 
-		export static function create(value Integer) returns Counter
+		export static function create(value Tally) returns Counter
 				return Counter{value: value}
 		end 'create'
 
@@ -2790,10 +2793,11 @@ var (result, _) = pureFunc()   // OK: one element used
 
 Declare external functions (Windows API, C libraries):
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Handle = int(i64.min to i64.max)
+typealias ProcessExitCode = int(0 to u32.max)
 
-extern function GetStdHandle(nStdHandle Integer) returns Integer
-extern function ExitProcess(uExitCode Integer) returns Integer
+extern function GetStdHandle(nStdHandle Handle) returns Handle
+extern function ExitProcess(uExitCode ProcessExitCode) returns ProcessExitCode
 ```
 
 **Notes:**
@@ -2907,9 +2911,9 @@ Integer and float `/`, and integer `mod`, are **fallible operations**: dividing 
 - A divisor the compiler **cannot** prove non-zero (a full-range `int`, which includes 0) makes the divide **throw `DivisionByZero`**. Like any throwing operation it must be handled with `try`, or propagated by a `throws` function (see [Error Handling](#error-handling)):
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
-function tryDivide(a Integer, b Integer) returns Integer
+function tryDivide(a Amount, b Amount) returns Amount
 	return try (a / b) otherwise 0        // b may be zero — supply a fallback
 end 'tryDivide'
 ```
@@ -2917,10 +2921,10 @@ end 'tryDivide'
 Or give the divisor a type that excludes 0, so the divide is provably safe:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 typealias NonZeroInt = int(1 to i64.max)
 
-function ratio(a Integer, b NonZeroInt) returns Integer
+function ratio(a Amount, b NonZeroInt) returns Amount
 	return a / b                          // bare divide — no `try` needed
 end 'ratio'
 ```
@@ -3092,8 +3096,8 @@ try arr.set(0, value: 100) otherwise panic("index out of range")  // First posit
 
 Create an empty typed array using a type alias:
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Tally
 
 var numbers = IntArray.create()         // Empty array
 numbers.push(42)                 // Add elements with push
@@ -3101,8 +3105,8 @@ numbers.push(42)                 // Add elements with push
 
 To preallocate with a specific length (elements zero-initialized):
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Tally
 
 var buffer = IntArray.create()
 buffer.resize(100)               // Length is now 100
@@ -3135,8 +3139,8 @@ names.truncate(2)                // drop the tail, releasing what leaves
 
 To preallocate capacity without changing length (for performance):
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Tally
 
 var buffer = IntArray.create()
 buffer.reserve(100)              // Capacity is 100, length is 0
@@ -3382,11 +3386,12 @@ end 'loop'
 For unions with associated values, use `CaseName(bindings)` syntax to extract values:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
+typealias ErrorCode = int(0 to u64.max)
 
 union Result
-		success(value Integer)
-		failure(code Integer)
+		success(value Amount)
+		failure(code ErrorCode)
 end 'Result'
 
 var r = Result.success(42)
@@ -3454,9 +3459,10 @@ Both endpoints are required and each must be a literal: there is no open-ended f
 wildcard range. A `default` arm covers everything the ranges leave out.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Score = int(i64.min to i64.max)
+typealias Category = int(0 to u64.max)
 
-function classify(n Integer) returns Integer
+function classify(n Score) returns Category
 		match n 'check'
 				1 to 5 then return 1     // 1 to 5 inclusive
 				6 upto 10 then return 2  // 6 to 9 (exclusive of 10)
@@ -3468,9 +3474,9 @@ end 'classify'
 Range patterns work with integers, floats, and any type implementing the `Comparable` interface (like `Character`):
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias CharClass = int(0 to u64.max)
 
-function charType(c Character) returns Integer
+function charType(c Character) returns CharClass
 		match c 'classify'
 				'a' to 'z' then return 1  // lowercase letters
 				'A' to 'Z' then return 2  // uppercase letters
@@ -3518,11 +3524,11 @@ end 'convert'
 
 **Union Case Extraction:**
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 union Container
 		empty
-		value(n Integer)
+		value(n Amount)
 end 'Container'
 
 var c = Container.value(10)
@@ -3773,9 +3779,9 @@ panic("something went wrong")
 The argument can be a plain string literal or an interpolated string. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
-function processValue(x Integer) returns Integer
+function processValue(x Amount) returns Amount
 		if x < 0 'negative'
 				panic("processValue: negative input, got {x}")
 		end 'negative'
@@ -3868,10 +3874,10 @@ let value = try mayFail() otherwise return -1
 Each of these statements terminates the error path, so the success value still flows out of the `try` expression normally. Use single-statement form when the error handler is a single early exit — for anything more complex, use the block form.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 // Early return on error
-function runIt() returns Integer
+function runIt() returns Amount
 		let value = try mayFail() otherwise return -1
 		return value
 end 'runIt'
@@ -3889,7 +3895,7 @@ for item in items 'items'
 end 'items'
 
 // Re-throw as a different error type
-function outer() returns Integer throws OuterError
+function outer() returns Amount throws OuterError
 		let v = try inner() otherwise throw OuterError.failed
 		return v
 end 'outer'
@@ -3911,9 +3917,9 @@ end 'handler'
 The block executes only if an error is thrown.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
-function loadData() returns Integer
+function loadData() returns Amount
 		var result = 0
 		try parseFile("data.txt") otherwise 'err'
 				result = -1  // Mark as failed
@@ -4010,7 +4016,7 @@ end 'handler'
 #### Terminal Form Examples
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 // Panic when the body throws — useful for unreachable error paths.
 try 'reading'
@@ -4019,7 +4025,7 @@ end 'reading'
 otherwise panic("unreachable: data.json is bundled with the binary")
 
 // Re-throw a fixed error to the caller.
-function compute() returns Integer throws AppError
+function compute() returns Tally throws AppError
 		try 'work'
 				doStuff()
 		end 'work'
@@ -4028,7 +4034,7 @@ function compute() returns Integer throws AppError
 end 'compute'
 
 // Bind the original error and wrap it as the payload of the new error.
-function compute2() returns Integer throws AppError
+function compute2() returns Tally throws AppError
 		try 'work'
 				doStuff()
 		end 'work'
@@ -4163,14 +4169,14 @@ function readFile(path String) returns String throws FileError
 ### Complete Example
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 enum ParseError implements Error
 		invalidSyntax
 		unexpectedEnd
 end 'ParseError'
 
-function parseNumber(s String) returns Integer throws ParseError
+function parseNumber(s String) returns Amount throws ParseError
 		if s.isEmpty() 'empty'
 				throw ParseError.unexpectedEnd
 		end 'empty'
@@ -4292,20 +4298,20 @@ end 'Calculator'
 `module` is a third visibility tier between file-scoped (the default) and `export`. A `module`-marked declaration is visible to every file in the **same directory** as the declaring file AND every file in **any subdirectory** of that directory — but not to files outside that subtree.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 // project/feature/internal.maxon
-module function helper() returns Integer
+module function helper() returns Amount
 	return 42
 end 'helper'
 
 // project/feature/main.maxon — same directory, can call helper()
-function caller() returns Integer
+function caller() returns Amount
 	return helper()
 end 'caller'
 
 // project/feature/sub/deep.maxon — subdirectory, can also call helper()
-function deepCaller() returns Integer
+function deepCaller() returns Amount
 	return helper()
 end 'deepCaller'
 
@@ -4507,8 +4513,8 @@ Preemptive cancellation is not yet implemented: in the current cooperative sched
 Promises can be stored in collections and struct fields by declaring an explicit `Promise with T` type. The compiler boxes the green-thread handle into a `Promise<T>` struct at the storage site and unboxes it at the matching `await`. This pattern lets you fan out N tasks and join them in a second loop:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntPromise = Promise with Tally
 typealias IntPromiseArray = Array with IntPromise
 
 var arr = IntPromiseArray.create()
@@ -4882,8 +4888,8 @@ are efficient without requiring explicit `append` calls.
 
 Create a concrete List type with `typealias`, then instantiate it with `create()`:
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntList = List with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntList = List with Tally
 
 var list = IntList.create()             // Empty list
 ```
@@ -5204,13 +5210,13 @@ The LSP automatically detects project boundaries and provides:
 Assigning a struct-typed variable to another variable copies the **heap pointer**, creating a reference (alias) to the same object:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
 type Point
-	export var x as Integer
-	export var y as Integer
+	export var x as Coord
+	export var y as Coord
 
-	export static function create(x Integer, y Integer) returns Point
+	export static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -5287,13 +5293,13 @@ end 'Cloneable'
 The compiler also auto-generates `Equatable` conformance for structs whose fields all implement `Equatable`. The synthesized `equals()` method compares each field using `==` (for primitives) or `.equals()` (for nested structs).
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
 type Point
-	export var x as Integer
-	export var y as Integer
+	export var x as Coord
+	export var y as Coord
 
-	export static function create(x Integer, y Integer) returns Point
+	export static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
 	end 'create'
 end 'Point'
@@ -5332,9 +5338,9 @@ a is c                      // true -- same object
 When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via assignment), the refcount is incremented. When a variable goes out of scope, the runtime decrements the refcount and frees the memory if it reaches zero.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
-function compute() returns Integer
+function compute() returns Coord
 	var a = Point.create(10, y: 20)  // allocated on heap, refcount = 1
 	var b = Point.create(30, y: 40)  // allocated on heap, refcount = 1
 	return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
@@ -5353,10 +5359,10 @@ end 'makePoint'
 **Container cleanup:** Containers with heap-allocated elements (e.g., `List with MyStruct`) perform deep cleanup when freed. Each element's refcount is decremented, and elements whose refcount reaches zero are freed recursively. For `List`, the compiler walks all managed list nodes and decrefs their stored values before freeing the managed list itself.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 typealias TokenList = List with Token
 
-function example() returns Integer
+function example() returns Tally
 	var list = TokenList.create()
 	list.append(Token.create(1))   // Token incref'd by the managed list node
 	list.append(Token.create(2))   // Token incref'd by the managed list node
@@ -5471,9 +5477,9 @@ end 'iter'
 
 ### Factorial Example
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Operand = int(i64.min to i64.max)
 
-function factorial(n Integer) returns Integer
+function factorial(n Operand) returns Operand
 		if n <= 1 'base'
 				return 1
 		end 'base'
@@ -5536,9 +5542,9 @@ var x = 5 + "string"    // ERROR: Type mismatch
 
 **Missing Return**
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
-function test() returns Integer
+function test() returns Tally
 		var x = 5
 		// ERROR: Missing return statement
 end 'test'

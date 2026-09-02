@@ -191,6 +191,311 @@ end 'main'
 0 99
 ```
 
+<!-- test: lazy-static.assigned-before-first-read -->
+### An assignment before the first read SATISFIES the guard
+
+The initializer supplies the value only in the field's absence, so an explicit assignment means it
+never runs. Every case above reads the field first, which set the guard on the way past; assigning
+first left the guard false, and the next read ran the initializer over the value just stored.
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type State
+	static var current = State.makeDefault()
+	export var value as Count
+
+	static function makeDefault() returns State
+		print("init ran ")
+		return State{value: 1}
+	end 'makeDefault'
+
+	export static function get() returns State
+		return State.current
+	end 'get'
+
+	export static function set(s State)
+		State.current = s
+	end 'set'
+
+	static function create(value Count) returns Self
+		return Self{value: value}
+	end 'create'
+end 'State'
+
+function main() returns ExitCode
+	State.set(State.create(99))
+	let b = State.get()
+	print("{b.value}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99
+```
+
+<!-- test: lazy-static.scalar-from-a-call -->
+### A lazy static holding a SCALAR keeps its declared type
+
+The initializer being a call must not cost the field its type. Every case above holds a struct, and a
+scalar took a different path: the read came back as raw `i64` rather than the ranged typealias.
+
+```maxon
+typealias Tally = int(0 to 100)
+
+function compute() returns Tally
+	return 7
+end 'compute'
+
+type Box
+	static var t = compute()
+end 'Box'
+
+function main() returns ExitCode
+	return Box.t
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: lazy-static.scalar-from-a-call-reassigned -->
+### A scalar lazy static can be reassigned
+
+```maxon
+typealias Tally = int(0 to 100)
+
+function compute() returns Tally
+	return 7
+end 'compute'
+
+type Box
+	static var t = compute()
+end 'Box'
+
+function main() returns ExitCode
+	Box.t = 9
+	return Box.t
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: lazy-static.enum-from-a-call -->
+### A lazy static holding a SIMPLE ENUM keeps its declared type
+
+Only a BOXED union used to be enum-kinded; a simple enum is a scalar the slot holds directly, and it
+took the managed-record path with it — `Box.c == Color.Green` was refused as "cannot compare struct
+with int" while the identical comparison on a local compiled.
+
+```maxon
+enum Color
+	Red
+	Green
+	Blue
+end 'Color'
+
+function pick() returns Color
+	return Color.Green
+end 'pick'
+
+type Box
+	static var c = pick()
+end 'Box'
+
+function main() returns ExitCode
+	print("{Box.c.rawValue}")
+	if Box.c == Color.Green 'g'
+		print(" G")
+	end 'g'
+	Box.c = Color.Blue
+	print(" {Box.c.rawValue}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 G 2
+```
+
+<!-- test: lazy-static.assignment-satisfies-the-guard-only-when-it-runs -->
+### The guard is a RUNTIME fact, so an assignment in one branch satisfies it only on that path
+
+An assignment sets the guard where it executes, not where it is written. The call that takes the
+branch never runs the initializer; the call that skips it reads what the first one stored.
+
+```maxon
+typealias Tally = int(0 to 100)
+
+function compute() returns Tally
+	print("I")
+	return 7
+end 'compute'
+
+type Box
+	static var t = compute()
+end 'Box'
+
+function pick(flag bool) returns Tally
+	if flag 'set'
+		Box.t = 3
+	end 'set'
+	return Box.t
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(true)}|{pick(false)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3|3
+```
+
+<!-- test: lazy-static.assignment-reading-its-own-field -->
+### An assignment whose value READS the field runs the initializer first
+
+The read is part of evaluating the right-hand side, so it precedes both the store and the guard set —
+`Box.t = Box.t + 1` on an untouched field is 8, not garbage plus one, and the second one is 9 rather
+than a second initializer run.
+
+```maxon
+typealias Tally = int(0 to 100)
+
+function compute() returns Tally
+	print("I")
+	return 7
+end 'compute'
+
+type Box
+	static var t = compute()
+end 'Box'
+
+function main() returns ExitCode
+	Box.t = Box.t + 1
+	Box.t = Box.t + 1
+	print("{Box.t}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+I9
+```
+
+<!-- test: lazy-static.assigned-inside-the-initializers-own-call -->
+### A field assigned from inside its own initializer keeps the INITIALIZER's value
+
+The initializer sets the guard before evaluating, so the nested assignment does not re-enter it — and
+the initializer's own store is the last one, so it wins. One run, no recursion.
+
+```maxon
+typealias Tally = int(0 to 100)
+
+type Box
+	static var t = compute()
+end 'Box'
+
+function compute() returns Tally
+	print("I")
+	Box.t = 5
+	return 7
+end 'compute'
+
+function main() returns ExitCode
+	print("{Box.t}|{Box.t}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+I7|7
+```
+
+<!-- test: lazy-static.cross-file-first-read -->
+### A read from ANOTHER FILE runs the initializer
+
+The slot, its guard and its init function live in the whole program's module, but the declarations
+that name them are one file's. A reader that consulted only its own file's declarations found no
+guard, emitted a plain load, and handed back the never-initialized slot — zero, silently.
+
+```maxon
+// --- file: lib/box.maxon
+typealias Tally = int(0 to 100)
+
+export function compute() returns Tally
+	print("I")
+	return 7
+end 'compute'
+
+export type Box
+	static var t = compute()
+end 'Box'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	print("{Box.t}|{Box.t}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+I7|7
+```
+
+<!-- test: lazy-static.cross-file-assignment-satisfies-the-guard -->
+### An assignment from ANOTHER FILE satisfies the guard too
+
+The assignment and the read that must respect it are in different files, so the second read below is
+the one that catches a guard set on only one side of the boundary: it runs the initializer over the
+assigned value and answers 7.
+
+```maxon
+// --- file: lib/box.maxon
+typealias Tally = int(0 to 100)
+
+export function compute() returns Tally
+	print("I")
+	return 7
+end 'compute'
+
+export type Box
+	static var t = compute()
+
+	export static function get() returns Tally
+		return Box.t
+	end 'get'
+end 'Box'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	Box.t = 3
+	print("{Box.t}|{Box.get()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3|3
+```
+
 <!-- test: lazy-static.multiple-fields -->
 ### Multiple lazy statics in same type
 

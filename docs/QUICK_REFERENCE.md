@@ -157,7 +157,7 @@ Function return values must be used. Pure functions (no side effects) cannot hav
 ## Tuples
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Score = int(i64.min to i64.max)
 
 // Tuple literal
 var t = (10, 20)
@@ -165,7 +165,7 @@ t.0   // 10
 t.1   // 20
 
 // Tuple as function return type
-function minMax(a Integer, b Integer) returns (Integer, Integer)
+function minMax(a Score, b Score) returns (Score, Score)
 		return (a, b)
 end 'minMax'
 
@@ -190,10 +190,11 @@ var y = 0
 ## Functions
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Amount = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Amount
 
-function add(a Integer, b Integer) returns Integer
+function add(a Amount, b Amount) returns Amount
 		return a + b
 end 'add'
 
@@ -201,7 +202,7 @@ function greet(name String, title String = "Mr.")  // string default
 		print("Hello, {title} {name}")
 end 'greet'
 
-function process(items IntArray = [10, 20, 12]) returns Integer  // array default
+function process(items IntArray = [10, 20, 12]) returns Tally  // array default
 		return items.count()
 end 'process'
 
@@ -238,10 +239,10 @@ greet("Smith", title: "Dr.")
 ## Closures
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Score = int(i64.min to i64.max)
 
-let addX = function(n Integer) gives n + x   // single expression body
-let double = function(n Integer) gives n * 2
+let addX = function(n Score) gives n + x     // single expression body
+let double = function(n Score) gives n * 2
 ```
 
 Closures capture variables from the enclosing scope **by reference**. Changes to a captured variable after the closure is created are visible inside the closure when it runs.
@@ -259,10 +260,10 @@ void. The literal `function(...) returns T` form is legal only as the right-hand
 side of a `typealias` — anywhere else, reference the alias by name.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
+typealias Score = int(i64.min to i64.max)
+typealias UnaryOp = function(Score) returns Score
 
-function apply(f UnaryOp, x Integer) returns Integer
+function apply(f UnaryOp, x Score) returns Score
 		return f(x)
 end 'apply'
 
@@ -434,17 +435,17 @@ In a match *expression*, individual arms may also use `pattern panic("message")`
 ## Types 
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Coord = int(i64.min to i64.max)
 
 interface Describable
 		function describe() returns String
 end 'Describable'
 
 type Point implements Hashable, Describable   // interface conformance
-		export var x as Integer               // public mutable field
-		export var y as Integer
+		export var x as Coord                 // public mutable field
+		export var y as Coord
 		export let name as String = "point"   // public immutable with default
-		var internal as Integer = 0           // private field
+		var internal as Coord = 0             // private field
 
 		static var count = 0               // static mutable field
 		static let MAX = 100               // static immutable constant
@@ -461,7 +462,7 @@ type Point implements Hashable, Describable   // interface conformance
 				return "{name}({x}, {y})"
 		end 'describe'
 
-		export static function create(x Integer, y Integer) returns Point  // factory
+		export static function create(x Coord, y Coord) returns Point      // factory
 				return Point{x: x, y: y}
 		end 'create'
 
@@ -484,13 +485,13 @@ default, the literal, or `self.field = expr` on every path of a static factory.
 `Self{}` with any non-default field is **E3086**.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
 
 type Counter
-	export var value as Integer      // no default
+	export var value as Tally        // no default
 	export var version = 0         // default
 
-	export static function create(initial Integer) returns Self
+	export static function create(initial Tally) returns Self
 		self.value = initial         // proof of initialization
 		return Self{}                // OK: value proven; version defaulted
 	end 'create'
@@ -516,18 +517,19 @@ interface Hashable
 end 'Hashable'
 
 interface Container uses Element       // associated type
-		function get(index Integer) returns Element
+		function get(index Slot) returns Element
 end 'Container'
 
-typealias Integer = int(i64.min to i64.max)
-type IntBox implements Container with Integer  // specify associated type
-		function get(index Integer) returns Integer
+typealias Slot = int(0 to u64.max)
+typealias Amount = int(i64.min to i64.max)
+type IntBox implements Container with Amount  // specify associated type
+		function get(index Slot) returns Amount
 				// ...
 		end 'get'
 end 'IntBox'
 
 // Interface-typed parameters: accept any type implementing the interface (monomorphized)
-function render(item Drawable) returns Integer
+function render(item Drawable) returns Amount
 	return item.draw()
 end 'render'
 
@@ -685,13 +687,13 @@ All cases must use the same struct type. Field values must be compile-time const
 ### Function-Backed Enums
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Operand = int(i64.min to i64.max)
 
-function doubleFn(x Integer) returns Integer
+function doubleFn(x Operand) returns Operand
 	return x * 2
 end 'doubleFn'
 
-function tripleFn(x Integer) returns Integer
+function tripleFn(x Operand) returns Operand
 	return x * 3
 end 'tripleFn'
 
@@ -712,12 +714,13 @@ Unions define a fixed set of named cases with optional associated values. Unions
 Unions can also have a per-variant struct backing — see [Struct-Backed Unions](#struct-backed-unions) below.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
+typealias ErrorCode = int(0 to u64.max)
 
 // Associated values
 union Result
-		success(value Integer)
-		failure(code Integer, message String)
+		success(value Amount)
+		failure(code ErrorCode, message String)
 		pending
 end 'Result'
 var r = Result.success(42)
@@ -886,8 +889,8 @@ var p = async longRunning()
 p.cancel()
 
 // Typed promises in collections
-typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntPromise = Promise with Tally
 typealias IntPromiseArray = Array with IntPromise
 var arr = IntPromiseArray.create()
 arr.push(async compute(1))
@@ -909,8 +912,8 @@ end 'each'
 ## Arrays
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
+typealias Tally = int(0 to u64.max)
+typealias IntArray = Array with Tally
 
 var arr = [1, 2, 3]                    // array literal
 var empty = IntArray.create()                 // typed empty array
