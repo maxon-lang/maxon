@@ -85,10 +85,11 @@ export function verifyRecheck(inputPath FilePath, target Target) returns bool th
 
 	let stabilityOk = try verifyRecheckStability(inputPath, target: target)
 	let clearingOk = try verifyDiagnosticsClear(inputPath, target: target)
+	let isolationOk = try verifyProjectIsolation(inputPath, target: target)
 
-	let allOk = stabilityOk and clearingOk
+	let allOk = stabilityOk and clearingOk and isolationOk
 	if allOk 'passed'
-		print("verify-recheck: PASS (stability + clearing)\n")
+		print("verify-recheck: PASS (stability + clearing + isolation)\n")
 		return true
 	end 'passed'
 
@@ -143,10 +144,9 @@ function verifyDiagnosticsClear(inputPath FilePath, target Target) returns bool 
 	// is an element of the array `fileChanged` pushes to, and `original` is the content of the map
 	// entry every `fileChanged` upserts. Reading either through the storage an edit writes is a
 	// use-after-free — the borrow checker catches it for the array and does not watch the map.
-	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyDiagnosticsClear: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
-	let editedPath = try FilePath.from(firstPath.path.clone()) otherwise panic("verifyDiagnosticsClear: that path came out of the project's own source list, so it cannot fail to re-parse as a path")
-	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyDiagnosticsClear: sourcePaths lists a file that sourceFiles has no entry for")
-	let original = entry.content.clone()
+	let fixture = firstSourceOf(project)
+	let editedPath = fixture.path
+	let original = fixture.content
 
 	let beforeBreak = checkOnce(project)
 
@@ -186,3 +186,97 @@ function verifyDiagnosticsClear(inputPath FilePath, target Target) returns bool 
 	printStandingDiagnostics(project, heading: "  standing after the fix:")
 	return false
 end 'verifyDiagnosticsClear'
+
+// --- Property 3: isolation (a second live project does not contaminate the first) ---
+//
+// THE SHAPE A LANGUAGE SERVER ACTUALLY RUNS, AND NOTHING IN THIS TREE HAS EVER RUN IT. A
+// `ProjectManager` holds one `Project` per open editor project - several at a time, for hours,
+// checked in interleaved order as the user moves between files. Every other caller here holds exactly
+// ONE: `maxon build` compiles one project and exits, `spec-test` compiles cases one after another,
+// and `verify-warm-rebuild` builds each probe on its own fresh project.
+//
+// => "Two projects can be open at once" is an untested premise, and three module-level latches rest on
+// it being false: `Diagnostics`' capture latch, `PhaseProbe.openPhaseSpans` and
+// `QueryEngine.sharedFileMemos` each document their soundness as resting on compiles in a process
+// being STRICTLY SERIAL. Interleaved IS still serial - no two compiles overlap - so this asks the
+// weaker and answerable question: does checking B change what A answers?
+//
+// It is deliberately NOT a concurrency test. shv2's green threads are single-M and a compile blocks
+// the loop, so genuinely parallel compiles are unreachable; a gate pretending otherwise would be
+// testing a configuration that cannot occur.
+//
+// ⚠⚠ **READ THIS AS A REGRESSION PIN, NOT AS EVIDENCE OF A FIX — IT WAS GREEN THE FIRST TIME IT RAN,
+// AND NO SABOTAGE WAS FOUND THAT IT CATCHES.** Two were tried. Removing
+// `compileToCodeResult`'s `project.diagnostics.clear()` reddens the CLEARING property and leaves this
+// one green, because that sink is per-`Project` and never crossed between them. Keying
+// `sharedFileMemos` by path instead of content hash would be the right shape, but that store admits
+// only `stdlib/` files, so a user-file edit never reaches it.
+//
+// ⇒ The contamination this guards against does not exist today, and this cannot prove it would be
+// caught. What it IS: the only thing in the tree that opens two `Project`s at once, standing where a
+// future change to the three module-level latches would have to walk past it. Cheap (one extra load),
+// honest about what it is worth, and not to be cited as though a sabotage had confirmed it.
+function verifyProjectIsolation(inputPath FilePath, target Target) returns bool throws CompileError
+	var first = try loadProject([inputPath], target: target)
+	var second = try loadProject([inputPath], target: target)
+
+	let firstAlone = checkOnce(first)
+	let secondAlone = checkOnce(second)
+
+	// ⚠⚠ **B IS BROKEN ON PURPOSE, AND WITHOUT THAT THIS PROPERTY IS VACUOUS.** MEASURED: an earlier
+	// version interleaved two CLEAN projects and passed while diagnostics were accumulating unbounded —
+	// every count was 0, so "A did not drift" was true and meant nothing. A needs something to be
+	// contaminated BY, so B is given real diagnostics and left holding them.
+	let source = firstSourceOf(second)
+	fileChanged(second, path: source.path, content: "{source.content}\n{SemanticBreakEditText}\n")
+	let secondBroken = checkOnce(second)
+
+	if secondBroken <= secondAlone 'probeDidNotBreakB'
+		printError("FAIL isolation: the synthetic break took project B from {secondAlone} to {secondBroken} diagnostic(s), so B reports nothing and A has nothing to be contaminated by. The measurement below would pass for the one reason it must never pass.\n")
+		return false
+	end 'probeDidNotBreakB'
+
+	// THE MEASUREMENT. A was not edited, so it must answer exactly what it answered alone — while a
+	// second project, holding diagnostics of its own, is live in the same process.
+	let firstBeside = checkOnce(first)
+	if firstBeside != firstAlone 'contaminated'
+		printError("FAIL isolation: project A reported {firstAlone} diagnostic(s) alone and {firstBeside} while a second, BROKEN project was live. B's state is reaching A — the module-level latches (the Diagnostics capture, PhaseProbe.openPhaseSpans, QueryEngine.sharedFileMemos) are where to look, and each documents its soundness as resting on there being one compile at a time.\n")
+		return false
+	end 'contaminated'
+
+	// And B keeps its own answer too: a shared sink would show up as B LOSING diagnostics to A's check.
+	let secondBeside = checkOnce(second)
+	if secondBeside != secondBroken 'secondLostItsOwn'
+		printError("FAIL isolation: project B reported {secondBroken} diagnostic(s) and then {secondBeside} after A was checked in between.\n")
+		return false
+	end 'secondLostItsOwn'
+
+	print("PASS isolation: A holds {firstAlone} diagnostic(s) and B {secondBroken} across an interleaved A B A B, neither seeing the other\n")
+	return true
+end 'verifyProjectIsolation'
+
+// The first source file of `project`, and its content, as OWNED copies.
+//
+// ⚠ **BOTH COPIES ARE LOAD-BEARING, and `verifyInvalidation` states the argument at length**:
+// `editedPath` is an element of the array `fileChanged` PUSHES to, and `original` is the content of
+// the map entry every `fileChanged` UPSERTS. Reading either through the storage an edit writes is a
+// use-after-free — the borrow checker catches it for the array and does not watch the map. Factored
+// out because two properties below need it, and a second copy of this rule is a second chance to get
+// the clone wrong.
+function firstSourceOf(project Project) returns EditableSource
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("firstSourceOf: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
+	let path = try FilePath.from(firstPath.path.clone()) otherwise panic("firstSourceOf: that path came out of the project's own source list, so it cannot fail to re-parse as a path")
+	let entry = try project.db.sourceFiles.get(path) otherwise panic("firstSourceOf: sourcePaths lists a file that sourceFiles has no entry for")
+
+	return EditableSource.create(path, content: entry.content.clone())
+end 'firstSourceOf'
+
+// One file's path and content, owned. See `firstSourceOf`.
+type EditableSource
+	export let path as FilePath
+	export let content as String
+
+	static function create(path FilePath, content String) returns EditableSource
+		return Self{path: path, content: content}
+	end 'create'
+end 'EditableSource'

@@ -1,0 +1,113 @@
+// LspDeclarationSelfTest — PINS the lookup goto-definition on a TYPE NAME will use.
+//
+// ⭐⭐ **THIS GROUP EXISTS BECAUSE THE PLAN IT CAME FROM WAS WRONG, AND THE PIN IS WHAT STOPS THE
+// MISTAKE BEING MADE AGAIN.** The LSP port's plan recorded that `StructLayout` has no source position
+// and that one should be added to it (and to the enum/union layouts). The first half is true and the
+// conclusion is not: the position already exists, on `TypeNameDecl`, reachable as
+// `project.typeNameDecls.declarationOf(name)`.
+//
+// ⛔ Adding `nameLine`/`nameColumn` to `StructLayout` would have been a SECOND copy of a fact the
+// codebase already holds — and `TypeNameDeclArray`'s own header argues against exactly that, for a
+// reason a duplicate would have destroyed:
+//
+//     "The order is the point and it is why this is one array rather than a position added to each of
+//      the four layout types: `structTypes`, `enumTypes`, `interfaces` and `typeAliases` are separate
+//      arrays, so which of a file's `type Box` and `typealias Box` came SECOND is a fact none of them
+//      holds."
+//
+// ⇒ The work goto-definition needed here was ZERO. What was missing was a test saying so, so the next
+// reader of that plan does not add the field. **This is that test.**
+//
+// ⚠ **`declarationOf` THROWS for an unknown name rather than answering `0:0`**, and the pin asserts
+// that too: a sentinel position would be indistinguishable from a compiler-synthesized declaration's
+// real one, which is the distinction an editor would silently get wrong.
+
+typealias DeclFailureCount = int(0 to i64.max)
+
+// The fixture, and the positions its own header promises. ⚠ These four numbers and that header are one
+// fact in two places — the fixture says "line 7, column 6" in prose and this says it in code — so a
+// failure here means one of the two moved, and the message says to read both.
+let DeclFixtureRelativePath = "maxon-shv2/Testing/lsp-fixtures/type-declaration/decl.maxon"
+let BoxTypeName = "LspFixtureBox"
+let BoxDeclLine = 7 as LineNumber
+let ShadeTypeName = "LspFixtureShade"
+let ShadeDeclLine = 11 as LineNumber
+let DeclNameColumn = 6 as ColumnNumber
+
+// A name the fixture does not declare and no stdlib module declares either.
+//
+// ⛔ **IT WAS CALLED `UnknownTypeName`, WHICH COLLIDES WITH AN EXPORTED ENUM.**
+// `TypeResolution.maxon` exports `enum UnknownTypeName`, and Maxon's top-level namespace is FLAT, so
+// a file-private `let` of that name SHADOWS it — and the two compilers do not agree about the
+// result: the bootstrap read the receiver as this `String`, while shv2 compiling ITSELF read it as
+// the enum and refused the call with `E3034: unknown enum case: 'toByteArray'`.
+//
+// ⚠ `maxon flat-namespace check` does not cover this pair, correctly by its own rule: it refuses two
+// declarations with CROSS-FILE visibility, and a file-private `let` has none. The collision is
+// therefore legal, silent, and resolved differently by the two compilers. That divergence is real and
+// is reported with this change; the fix HERE is simply not to shadow an exported name.
+let LspFixtureUndeclaredName = "LspFixtureNobodyDeclaredThis"
+
+export function runLspDeclarationSelfTest() returns bool
+	let path = try FilePath.from(DeclFixtureRelativePath) otherwise 'badPath'
+		printError("lsp-declaration-selftest: FAILED - '{DeclFixtureRelativePath}' is not a valid path\n")
+		return false
+	end 'badPath'
+
+	if not File.exists(path) 'missingFixture'
+		printError("lsp-declaration-selftest: FAILED - fixture not found at {DeclFixtureRelativePath}. Run from the repo root; the path is relative to it, as the other fixture paths are.\n")
+		return false
+	end 'missingFixture'
+
+	// A real load and a real merge: the positions are recorded by the PARSER, so a pin that stopped
+	// short of parsing would assert about a registry nothing had filled.
+	var project = try loadProject([path], target: detectHostTarget()) otherwise 'loadFailed'
+		printError("lsp-declaration-selftest: FAILED - could not load the fixture project\n")
+		return false
+	end 'loadFailed'
+
+	_ = try queryAllModule(project) otherwise 'mergeFailed'
+		printError("lsp-declaration-selftest: FAILED - the fixture did not merge; it must COMPILE for its declarations to be recorded\n")
+		return false
+	end 'mergeFailed'
+
+	var failures = 0
+	failures = failures + expectDeclaredAt(project, name: BoxTypeName, line: BoxDeclLine, column: DeclNameColumn)
+	failures = failures + expectDeclaredAt(project, name: ShadeTypeName, line: ShadeDeclLine, column: DeclNameColumn)
+	failures = failures + expectUnknownNameThrows(project)
+
+	if failures == 0 'allPassed'
+		print("lsp-declaration-selftest: OK - a type name's declaration position is answered by TypeNameRegistry.declarationOf, and an unknown name throws rather than answering 0:0\n")
+		return true
+	end 'allPassed'
+
+	printError("lsp-declaration-selftest: FAILED - {failures} assertion(s)\n")
+	return false
+end 'runLspDeclarationSelfTest'
+
+function expectDeclaredAt(project Project, name String, line LineNumber, column ColumnNumber) returns DeclFailureCount
+	let decl = try project.typeNameDecls.declarationOf(name.toByteArray()) otherwise 'noSuchName'
+		printError("lsp-declaration-selftest FAIL {name}: the registry holds no declaration for it, so goto-definition on the name would have nothing to answer\n")
+		return 1
+	end 'noSuchName'
+
+	if decl.nameLine == line and decl.nameColumn == column 'match'
+		return 0
+	end 'match'
+
+	printError("lsp-declaration-selftest FAIL {name}: declared at {decl.nameLine}:{decl.nameColumn}, expected {line}:{column}. Either the fixture moved (its own header states these numbers) or the parser stopped recording the NAME token's position.\n")
+	return 1
+end 'expectDeclaredAt'
+
+// ⚠ The negative case, and it is not decoration: an implementation that answered `0:0` for an unknown
+// name would pass both positive assertions above and be wrong in the one way an editor cannot see —
+// `0:0` is a real position that a compiler-synthesized declaration legitimately has.
+function expectUnknownNameThrows(project Project) returns DeclFailureCount
+	let found = try project.typeNameDecls.declarationOf(LspFixtureUndeclaredName.toByteArray()) otherwise 'threwAsItMust'
+		return 0
+	end 'threwAsItMust'
+
+	printError("lsp-declaration-selftest FAIL unknown name: '{LspFixtureUndeclaredName}' was answered at {found.nameLine}:{found.nameColumn} instead of throwing. A position for a name nobody declared is indistinguishable from a synthesized declaration's real one.\n")
+	return 1
+end 'expectUnknownNameThrows'
+

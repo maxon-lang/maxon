@@ -42,6 +42,7 @@ export function runLspPositionSelfTest() returns bool
 	failures = failures + checkCrlfLineEndings()
 	failures = failures + checkEmptyAndEndOfBuffer()
 	failures = failures + checkRoundTrip()
+	failures = failures + checkTokenSpans()
 
 	if failures == 0 'allPassed'
 		print("lsp-position-selftest: OK - line index and UTF-16 position conversion over ASCII, 2-, 3- and 4-byte characters, CRLF and buffer edges\n")
@@ -232,3 +233,90 @@ function expectOffset(label String, index LspLineIndex, source String, line LspL
 	printError("lsp-position-selftest FAIL {label}: {line}:{character} -> byte {got}, expected byte {offset}\n")
 	return 1
 end 'expectOffset'
+
+// ⭐ THE SPAN A DIAGNOSTIC UNDERLINES. Asserted as a PROPERTY over every token plus one hand-computed
+// pin, because a property alone can pass vacuously over an empty token array and a pin alone tests one
+// token. `tokenSpanAt` takes the compiler's 1-BASED line/column, which is what a `Diagnostic` carries.
+function checkTokenSpans() returns FailureCount
+	let source = "let alpha = 1\n"
+	let tokens = try tokenize(source) otherwise 'lexFailed'
+		printError("lsp-position-selftest FAIL spans: the fixture source did not tokenize\n")
+		return 1
+	end 'lexFailed'
+
+	var failures = 0
+
+	// The pin: `let` is 3 bytes at offset 0, so its span is [0, 3). Without this the property below
+	// would hold over zero tokens and report nothing.
+	failures = failures + expectSpan("spans: the first token", tokens: tokens, line: 1, column: 1, startByte: 0, endByte: 3)
+
+	// The property: EVERY token's own anchor resolves to exactly that token's byte span. This is what
+	// makes the group independent of how many tokens the lexer emits or what it calls them.
+	var checked = 0
+	for token in tokens 'eachToken'
+		let span = tokenSpanAt(tokens, line: token.line, column: token.column)
+		if span.startByte != token.startByte or span.endByte != token.endByte 'mismatch'
+			printError("lsp-position-selftest FAIL spans: token at {token.line}:{token.column} resolved to [{span.startByte}, {span.endByte}), expected [{token.startByte}, {token.endByte})\n")
+			failures = failures + 1
+		end 'mismatch'
+
+		checked = checked + 1
+	end 'eachToken'
+
+	if checked == 0 'nothingChecked'
+		printError("lsp-position-selftest FAIL spans: the token array was EMPTY, so the property above asserted nothing\n")
+		failures = failures + 1
+	end 'nothingChecked'
+
+	// ⚠ A position no token is anchored at must answer `none`, not a guess. A whole-program diagnostic
+	// anchors at 0:0, and inventing a span for it would underline an arbitrary token.
+	let nowhere = tokenSpanAt(tokens, line: 999, column: 999)
+	if not nowhere.isEmpty() 'inventedASpan'
+		printError("lsp-position-selftest FAIL spans: a position matching no token answered [{nowhere.startByte}, {nowhere.endByte}) instead of none\n")
+		failures = failures + 1
+	end 'inventedASpan'
+
+	return failures + checkTokenSpansAreByteAccurate()
+end 'checkTokenSpans'
+
+// ⭐ The span is in BYTES, so a token containing a multi-byte character must end past where a
+// character count would put it. This is the row that separates a byte span from a character one.
+function checkTokenSpansAreByteAccurate() returns FailureCount
+	let source = "let s = \"a{FourByteChar}b\"\n"
+	let tokens = try tokenize(source) otherwise 'lexFailed'
+		printError("lsp-position-selftest FAIL byte-accurate spans: the fixture source did not tokenize\n")
+		return 1
+	end 'lexFailed'
+
+	var failures = 0
+	var sawTheLiteral = false
+	for token in tokens 'eachToken'
+		let width = token.endByte - token.startByte
+		if width > 4 'theStringLiteral'
+			// MEASURED, not assumed: the token spans its CONTENT, quotes excluded — `a` + the 4-byte
+			// emoji + `b` = 6 BYTES. A character-counted span would say 3, which is the wrong answer
+			// this row exists to refuse. (This expectation was written as 8 first, on the guess that
+			// the quotes were included; the measurement corrected it, and 6-vs-3 discriminates just
+			// as sharply as 8-vs-5 would have.)
+			sawTheLiteral = true
+			failures = failures + expectCount("byte-accurate spans: the string literal spans 6 BYTES, not 3 characters", got: width, want: 6)
+		end 'theStringLiteral'
+	end 'eachToken'
+
+	if not sawTheLiteral 'literalNotFound'
+		printError("lsp-position-selftest FAIL byte-accurate spans: no token wider than 4 bytes was found, so the assertion never ran\n")
+		failures = failures + 1
+	end 'literalNotFound'
+
+	return failures
+end 'checkTokenSpansAreByteAccurate'
+
+function expectSpan(label String, tokens TokenArray, line LineNumber, column ColumnNumber, startByte LspByteOffset, endByte LspByteOffset) returns FailureCount
+	let got = tokenSpanAt(tokens, line: line, column: column)
+	if got.startByte == startByte and got.endByte == endByte 'match'
+		return 0
+	end 'match'
+
+	printError("lsp-position-selftest FAIL {label}: {line}:{column} -> [{got.startByte}, {got.endByte}), expected [{startByte}, {endByte})\n")
+	return 1
+end 'expectSpan'

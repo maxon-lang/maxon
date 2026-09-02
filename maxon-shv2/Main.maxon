@@ -423,7 +423,12 @@ end 'runVerifyRecheck'
 // `specs-shv2` case can reach — a spec case is a program shv2 compiles, and it can call `stdlib/` and
 // nothing else — so it is gated the way the bootstrap gates its own such code, with a selftest.
 function runLspSelfTest() returns ExitCode
-	if runLspPositionSelfTest() 'passed'
+	// BOTH run, and their results are combined AFTER: an `and` here would short-circuit, so a failure in
+	// the first group would hide every result of the second and each fix would need its own run.
+	let positionsOk = runLspPositionSelfTest()
+	let declarationsOk = runLspDeclarationSelfTest()
+
+	if positionsOk and declarationsOk 'passed'
 		return 0
 	end 'passed'
 

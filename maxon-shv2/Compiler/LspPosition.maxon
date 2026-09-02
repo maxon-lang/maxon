@@ -206,6 +206,66 @@ export type LspLineIndex
 	end 'offsetOf'
 end 'LspLineIndex'
 
+// A half-open byte range `[startByte, endByte)` in a source buffer — the same convention
+// `SourceRange` uses, so the two cannot be read as different kinds of interval.
+export type LspSpan
+	export let startByte as LspByteOffset
+	export let endByte as LspByteOffset
+
+	export static function create(startByte LspByteOffset, endByte LspByteOffset) returns LspSpan
+		return Self{startByte: startByte, endByte: endByte}
+	end 'create'
+
+	// No span. Distinct from a zero-width one at offset 0, which is a real position in a real buffer.
+	export static function none() returns LspSpan
+		return Self{startByte: 0, endByte: 0}
+	end 'none'
+
+	export function isEmpty() returns bool
+		return startByte == endByte
+	end 'isEmpty'
+end 'LspSpan'
+
+// ⭐⭐ **THE SPAN A DIAGNOSTIC SHOULD UNDERLINE, RECOVERED FROM THE TOKEN STREAM RATHER THAN CARRIED
+// ON THE DIAGNOSTIC — and the choice is deliberate, not a shortcut.**
+//
+// A `Diagnostic` carries a 1-based `line`/`column` and nothing else, so an editor given one can only
+// paint a single character. The bootstrap LSP does exactly that (`Project.cs:284` builds a range one
+// column wide) and its squiggles never span a token.
+//
+// ⛔ **THE OBVIOUS FIX — thread the anchoring token's `endByte` through `Diagnostic` — WAS MEASURED AND
+// REJECTED.** `ParseError`'s arms each carry `(… line, column)` and no token, so widening them is
+// surgery across every arm; and it would buy nothing for the E3xxx family, because every semantic
+// check reports through `reportPositioned(project, code, message, line, column, filePath)`, which has
+// no token to widen. ⇒ Threading bytes would fix PARSE errors only and leave every type, conformance
+// and ownership error still one character wide — the majority of what an editor shows.
+//
+// ⇒ **Re-lexing answers it for ALL diagnostics uniformly.** A server already holds the document text,
+// `tokenize` is exported, and the token it returns carries `startByte`/`endByte` exactly. One rule,
+// one code path, every diagnostic.
+//
+// Takes the compiler's 1-BASED line and column, because that is what a `Diagnostic` holds; the caller
+// converts the result to LSP's 0-based positions through `positionOf`, which is the one place that
+// conversion lives.
+//
+// ⚠ **IT TAKES THE TOKENS, NOT THE SOURCE, AND THAT IS WHAT KEEPS IT OUT OF A QUADRATIC.** Publishing
+// diagnostics is a walk over N of them; re-lexing inside that walk would make it N x file. The caller
+// tokenizes its document ONCE and hands the array to each lookup — the same array a server already
+// wants for semantic tokens and completion.
+//
+// A position that matches no token's anchor returns `none`, and the caller falls back to the
+// one-character range. That is the honest answer for a diagnostic anchored somewhere no token begins
+// (a whole-program E3001 anchors at 0:0), not a failure.
+export function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
+	for token in tokens 'eachToken'
+		if token.line == line and token.column == column 'anchoredHere'
+			return LspSpan.create(token.startByte, endByte: token.endByte)
+		end 'anchoredHere'
+	end 'eachToken'
+
+	return LspSpan.none()
+end 'tokenSpanAt'
+
 // The line terminator bytes. Named because `10` and `13` in a scan loop say nothing about why.
 let LspNewlineByte = 10 as Byte
 let LspCarriageReturnByte = 13 as Byte
