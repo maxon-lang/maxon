@@ -308,7 +308,27 @@ Apply these standards when writing or reviewing any code:
 - **No silent unhandled cases** — `match`/`if` chains that don't cover all cases must throw on the unhandled path, not return a default value. Never use a bare `default` case in `match` — use `default throws` or `default panic("msg")`.
 - **No silent `else` fallthrough** — if an `else` branch should never be reached, throw an error instead.
 - **`try/otherwise` that should never fail** must use `otherwise panic("reason")`.
-- **Comments explain "why", not "what"** — don't restate the code.
+- **⭐ COMMENTS — CONCISE, MINIMAL, "WHY" ONLY, PRESENT TENSE.** The codebase has accumulated a lot of
+  excessive commentary; these four rules are binding on every comment you write **and on every comment
+  you touch**:
+  - **Minimal and concise.** The default is **no comment**. Write one only where the code cannot carry
+    the point by itself, and then in as few words as it takes — one line where one line does. A comment
+    per line, a banner over every section, and a restated signature above a function are all noise, and
+    noise is not free: it is unverified prose that rots while the code keeps working.
+  - **"Why", never "how".** The code is the "how" — do not narrate it, do not restate a name, do not
+    summarize the block below. Comment the thing the reader cannot recover from the code: the
+    constraint, the invariant, the reason this order/bound/branch is the correct one, the cost that
+    motivated an unobvious shape.
+  - ⛔ **NO HISTORY. Describe the CURRENT state only.** No "used to", "previously", "changed from",
+    "renamed", "now that we…", "this was a workaround for…", no dated narration of an edit and no
+    reference to what a function was called before. **Git holds the history; a comment holds the
+    present.** The reason a guard exists is a *why* and belongs — but state the constraint that still
+    binds ("callers may hand this an unsorted list"), never the edit that introduced it ("we added this
+    after the sort was removed"). *(This bans history in SOURCE COMMENTS. Docs and commit messages are
+    where a measurement, an incident and a correction get recorded — that is unchanged.)*
+  - **Editing a comment means REWRITING it to conform.** If you touch a line whose comment breaks any
+    rule above, fix the whole comment — or delete it — rather than patching around it. Do not leave a
+    conforming edit inside a non-conforming comment.
 - **No skipped work** — look for comments implying something was skipped, deferred, or not fully implemented, and address them.
 - **typealias names describe purpose**, not type — e.g. `BytePos` not `Offset`.
 - **Typed ranges should be as specific as possible** — e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Use the narrowest range correct for the domain. Wide ranges are fine when there is no clear limit.

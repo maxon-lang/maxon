@@ -17,7 +17,10 @@ Prefer the `maxon-dev` MCP tools for all build/test commands (see CLAUDE.md for 
 4. Rebuild with `mcp__maxon-dev__build` (`target: "csharp"` or `target: "shv2"` — one compiler per call; shv2 is built BY the bootstrap, so build `csharp` first if it is stale) and re-run the suite via the MCP tools to verify the fixes.
 5. Repeat until all tests pass.
 6. Apply the standard code quality checklist from CLAUDE.md to all changed files. Format modified Maxon files with `mcp__maxon-dev__fmt` (csharp `maxon fmt` — shv2 has no formatter).
-7. Write a git commit message.
+7. **Stage every golden the runs touched** — `git status --short specs-shv2/fragments/ specs/`, then
+   `git add -A` those paths: `??` (minted), ` M` (**modified**) and ` D` (deleted) are the same
+   obligation. See the guideline below before you write the message.
+8. Write a git commit message.
 
 ## Guidelines
 - **Red before green.** If the bug is already covered by a failing spec, that failing spec IS your red
@@ -28,5 +31,6 @@ Prefer the `maxon-dev` MCP tools for all build/test commands (see CLAUDE.md for 
   extra full builds to re-derive a red you can get for free up front.
 - Read the relevant spec file (`specs/` for the C# suite, `specs-shv2/` for shv2) to understand what the expected behavior is.
 - Fix root causes, not symptoms. No workarounds.
+- ⛔ **A MODIFIED GOLDEN IS COMMITTED WITH THE CHANGE THAT MOVED IT — never reverted.** `git checkout -- specs-shv2/fragments/ specs/` to "clean up churn" throws away the only record of what your fix did to the emitted code, and buries a real regression in the noise it creates. **A moved golden IS a codegen change: review the diff as one, and if you cannot say why it moved, that is a finding to explain BEFORE committing, not noise to drop.**
 - If a RequiredIR block fails, regenerate it with `updateRequired: true` **paired with a `filter`** — unfiltered, it rewrites every golden in the suite. shv2's `--update-required` regenerates RequiredIR but NOT `maxoncstderr` blocks; an error-code renumber moves those by hand.
 - A bug surfaced by the shv2 suite may actually live in the C# bootstrap, since the bootstrap builds shv2 — fix it in `maxon-sharp/` when that is the real cause.

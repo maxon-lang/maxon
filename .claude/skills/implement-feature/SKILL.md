@@ -62,7 +62,13 @@ Use an agent to implement the feature incrementally, test by test:
 15. If any tests from other specs broke, investigate and fix.
 16. Apply the standard code quality checklist from CLAUDE.md to all changed files. Format modified Maxon files with `mcp__maxon-dev__fmt`.
 17. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
-18. Write a git commit message
+18. **Stage every golden the runs touched** — `git status --short specs/ specs-shv2/fragments/`, then
+    `git add -A` those paths. `??` (minted), ` M` (**modified**) and ` D` (deleted) are the same
+    obligation: **a moved golden IS a codegen change, so it ships with the change that moved it and is
+    NEVER reverted.** `git checkout --` over fragment churn to tidy `git status` destroys the only record
+    of what the feature did to the emitted code — and buries a real regression in the noise. A fragment
+    that moved for a reason you cannot state is a **finding**: explain it before committing.
+19. Write a git commit message
 
 ## Guidelines
 

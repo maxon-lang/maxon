@@ -21,7 +21,10 @@ loop should never need to re-derive it.
 prefer to be certain.
 
 **Do not commit, do not push, do not `git add`.** The loop lands the tick, and it wants to see your
-whole diff unstaged when it does.
+whole diff unstaged when it does. ⚠ **That is not licence to CLEAN.** Leave every golden your runs
+moved exactly where it lies — `git checkout -- specs-shv2/fragments/` to tidy `git status` deletes work
+the loop is about to commit, and a moved golden IS a codegen change. If a fragment moved for a reason
+you cannot state, report it as a finding.
 
 ## The references, in this order — and you are free to walk away from both
 

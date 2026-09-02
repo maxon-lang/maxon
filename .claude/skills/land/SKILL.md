@@ -355,7 +355,10 @@ that is gone — read it as ordinary deferred work, decide it here, and carry on
 - **Brief it for the "Code Quality" checklist in `.claude/CLAUDE.md`** — **duplication first**, including
   pre-existing duplication in the files touched, and especially logic copied across a boundary where
   nothing MAKES the copies agree — then latent bugs: resources released on every path, flags published
-  before the data they guard, dropped or double-dispatched work.
+  before the data they guard, dropped or double-dispatched work — and **comments**: concise and minimal
+  (the default is none), WHY not HOW, present state only (no "used to"/"changed from"/old names), and a
+  comment it edits gets rewritten to conform. Excess commentary in the files you touched is a finding it
+  should DELETE.
 - ⛔ **Do NOT ask it to run the full suite, prove coverage, or establish correctness.** Your battery runs
   minutes later on the identical tree, and the suite is a far better false-reject detector than anything
   it can probe by hand. Its `--filter`ed runs are its own. ⚠ A specific instruction in your brief
@@ -394,7 +397,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **Full `run_spec_test compiler=shv2`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test compiler=shv2 target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
 | **SELF-COMPILE** — `maxon-shv2/.maxon/maxon-shv2.exe build maxon-shv2 -o temp/land-selfcompile` | exit 0, ~3 min. Output discarded; only the exit code matters |
-| **Minted goldens tracked** | `git status --short specs-shv2/fragments/` → `git add` every one. Untracked is invisible to `git status` noise and to every later count alike |
+| **Every touched golden staged — MINTED *and* MODIFIED** | `git status --short specs-shv2/fragments/ specs/` → `git add` **every line**, `??` and ` M` alike. See the box below |
 | **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |
 | **Bootstrap suite** | **ONLY if a bootstrap problem is suspected** — you touched `maxon-sharp/` or `stdlib/`, or the thing being verified is a cross-compiler answer. Otherwise skip it (user ruling, 2026-08-29). ⚠ *Building* the bootstrap is a different question: required whenever it is stale |
 
@@ -406,6 +409,19 @@ during changes; a battery run before the rebase measured a tree that no longer e
 > TYPES; run it anyway, it is three minutes. An E3092 here is a declaration more visible than its uses:
 > narrow it, or land it *with* its first consumer.
 
+> ### ⛔ A GOLDEN THE RUN MODIFIED SHIPS WITH THE CHANGE. NEVER REVERTED, NEVER LEFT BEHIND.
+> **`??` and ` M` are the SAME obligation.** A new fragment is easy to remember because it is new; a
+> **modified** one is the dangerous half — it looks like churn, and `git checkout -- specs-shv2/fragments/`
+> to "clean up" is throwing away the only record of what your change did to the emitted code.
+> **A moved golden IS a codegen change — commit it, and review the diff as one.** If a fragment moved
+> and you cannot say why, that is a **finding**, not noise: explain it before you commit, and put the
+> reason in the message.
+> ⚠ **`git add -A specs-shv2/fragments/` picks up deletions too** — a golden the runner *deleted* is
+> the same fact in the other direction, and leaving it staged-out is how a stale golden survives a rebase.
+> ⚠ Do not attribute someone else's staleness to yourself: a batch of `specs/fragments-x64-windows/`
+> churn on a tree you never made dirty is the parallel repo's arm64 lane catching up. **Still commit it**
+> (`chore(specs): regenerate stale x64-windows fragments`) — just do not claim it as your codegen impact.
+
 **A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
 before yours (CLAUDE.md). To attribute it: do the failures touch what you changed? If that is not
 obvious in a minute, **measure the control** — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
@@ -415,7 +431,8 @@ folded into the green.
 ## 8. Commit and push
 
 **ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
-the compiler source, the spec cases, the minted goldens, any `optimization-log.md` row, and a `PLAN.md`
+the compiler source, the spec cases, **every golden the runs touched — minted, modified or deleted** —
+any `optimization-log.md` row, and a `PLAN.md`
 row if one happened to close. ⛔ **Not a commit per piece, and never a partial landing with the rest
 "to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
 licensed you to push.

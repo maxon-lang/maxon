@@ -46,6 +46,14 @@ Create a task list to perform these steps.
    comments that explain **why**. **Cross-target consistency:** an x64 change needs its arm64
    equivalent.
 
+   ⭐ **COMMENTS ARE A FIRST-CLASS REVIEW TARGET — excess commentary is a finding, and you DELETE it.**
+   Against the checklist's four rules: concise and minimal (the default is no comment), **why** and
+   never **how**, **present state only** (⛔ no "used to", "previously", "changed from", no old names —
+   git holds the history), and **a comment you touch is rewritten to conform rather than patched.**
+   This applies to PRE-EXISTING comments in the files under review, exactly as duplication does: a
+   restated signature, a banner over every section, a line-by-line narration, or a comment describing
+   a shape the code no longer has all come out.
+
 5. Look for **latent bugs**, not just style: resources released on **every** path (including
    throw/panic), flags published before the data they guard, dropped or double-dispatched work.
 
@@ -69,5 +77,11 @@ Create a task list to perform these steps.
    Ignore fragment churn until all test runs complete; then review it — **a moved fragment IS a codegen
    change**, and the diff is the review.
 
-8. Commit to the current branch. Give a commit message that summarizes **the change**, not what happened
-   during the review.
+8. Commit to the current branch, **including every golden the runs touched**. Give a commit message that
+   summarizes **the change**, not what happened during the review.
+
+   ⛔ **MODIFIED goldens are committed, never reverted.** `git status --short specs-shv2/fragments/ specs/`
+   → `git add -A` those paths; `??` (minted), ` M` (**modified**) and ` D` (deleted) are one obligation.
+   A `git checkout --` over them to leave a tidy `git status` destroys the record of what the change did
+   to the emitted code — which is the very diff step 7 just told you to review. A fragment that moved for
+   a reason you cannot state is a **finding**: explain it in the message, or fix it; do not drop it.

@@ -107,7 +107,11 @@ making it.
   deferral yourself — there is no backlog file** (`PLAN.md` and the slice board were retired), so a debt
   you cannot fix goes in your REPORT and in the trend log, and the caller decides.
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
-- Commit as a **SEPARATE commit** on the same branch.
+- Commit as a **SEPARATE commit** on the same branch, **and every golden your runs touched goes in it**
+  — `git status --short specs-shv2/fragments/ specs/` then `git add -A` those paths. `??` (minted),
+  ` M` (**modified**) and ` D` (deleted) are one obligation: a moved golden IS a codegen change, so it
+  ships with the change that moved it and is **never reverted** to tidy `git status`. If an optimization
+  you made moved a fragment you cannot explain, that is a **finding** for your report, not churn to drop.
 
 ## Report
 Each hot spot found, with `file:line` and its **complexity before and after**, and the **real

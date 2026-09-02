@@ -61,7 +61,10 @@ No bare `default` in a `match` (`default throws` / `default panic("msg")`). No s
 fallthrough — throw. `try/otherwise` that cannot fail ⇒ `otherwise panic("reason")`. **No magic values**
 (named constants). **No sentinel returns** (`""`, `-1`, `null`) — throw. **No thin wrapper functions.**
 `typealias` names describe **purpose**, not type. Typed ranges as narrow as **provably** correct (a
-wrong narrow bound is a runtime panic; wide is fine where there is no real bound). Comments explain
+wrong narrow bound is a runtime panic; wide is fine where there is no real bound). **Comments: concise
+and minimal (the default is none), WHY not HOW, present state only — no "used to"/"changed from"/old
+names, git holds that — and one you touch is rewritten to conform. Excess or stale commentary in the
+files this rung touched is a finding: delete it.** Comments explain
 **WHY**, not what. Blank lines between logical sections. TABS, camelCase, no underscores.
 **Cross-target consistency:** an x64 change needs its arm64 equivalent — **the CODE, which you review by
 READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not part of the rung gate, so
@@ -70,7 +73,12 @@ READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not pa
 ## Rules of engagement
 
 - **Fix what you find**, in the worktree, then re-verify and commit as a **SEPARATE commit** on the same
-  branch (so the review is legible as its own diff).
+  branch (so the review is legible as its own diff). **Every golden your re-verification runs touched
+  goes into that commit** — `git status --short specs-shv2/fragments/ specs/` then `git add -A` those
+  paths; `??` (minted), ` M` (**modified**) and ` D` (deleted) are one obligation. A moved golden IS a
+  codegen change: commit it and review the diff as one, **never `git checkout --` it away** to leave a
+  clean `git status` — that is how a regression hides. A fragment that moved for a reason you cannot
+  state is a finding.
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
 - **A DEFECT you find by PROBING is still a blocker — a WRONG ANSWER as much as a leak — fix-or-cleanly-
   reject, NEVER "defer to a later rung".** *Leaks are not ok, and neither is a wrong answer in code this

@@ -7,22 +7,41 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 
 ## Building and testing
 
-After writing or modifying Maxon code, verify it compiles and passes tests. Prefer the `maxon-dev` MCP tools — they are faster than shelling out and return structured output. See CLAUDE.md for the full tool mapping.
+After writing or modifying Maxon code, verify it compiles and passes tests. Prefer the `maxon-dev` MCP
+tools — they are faster than shelling out and return structured output. See CLAUDE.md for the full tool
+mapping. **In a worktree, pass `repoRoot` (your worktree's absolute path) to EVERY tool call**, or you
+will drive the main checkout and be told `success: true` about a tree containing none of your work.
 
-**C# compiler** (after modifying `maxon-sharp/`):
+**TWO compilers are driveable, and every tool naming one takes `compiler` (or `target`):**
+
+**C# bootstrap** (after modifying `maxon-sharp/` or `stdlib/`):
 - Build: `mcp__maxon-dev__build` with `target: "csharp"`.
-- Spec tests: `mcp__maxon-dev__run_spec_test` (default compiler is `csharp`).
+- Spec tests: `mcp__maxon-dev__run_spec_test` (default compiler is `csharp`, suite `specs/`).
 
-**Self-hosted compiler** (after modifying `maxon-selfhosted/`):
-- Build: `mcp__maxon-dev__build` with `target: "selfhosted"` (or `"both"` to chain after csharp).
-- Spec tests: `mcp__maxon-dev__run_self_hosted_test`.
+**shv2** — the active development line (after modifying `maxon-shv2/`):
+- Build: `mcp__maxon-dev__build` with `target: "shv2"`. It is built BY the bootstrap, so build `csharp`
+  first if `maxon-sharp/` is newer than `bin/`. One compiler per call — there is no `"both"`.
+- Spec tests: `mcp__maxon-dev__run_spec_test` with `compiler: "shv2"` (suite `specs-shv2/`).
+
+> ⚠ **The v1 self-hosted compiler (`maxon-selfhosted`) is DEPRECATED and unreachable from the MCP** — no
+> `selfhosted` token, no `run_self_hosted_test` tool, no `"both"` build. It also no longer BUILDS, and
+> that is accepted. **Read its 191,487 lines as a reference** — every hard mechanism already exists there,
+> debugged — but drive it by hand (CLAUDE.md) if you truly must run it.
 
 **Quick experiments / verification:**
-- Run a snippet or file end-to-end: `mcp__maxon-dev__run_program` (pass `compiler: "csharp"` or `"selfhosted"` — it is required).
-- Inspect lowered IR: `mcp__maxon-dev__dump_ir` (set `dumpStages: true` for per-stage artifacts).
-- Format Maxon source: `mcp__maxon-dev__fmt`.
-- Look up a 4-digit error code: `mcp__maxon-dev__lookup_error_code`.
-- Debug memory leaks: `mcp__maxon-dev__mm_trace_analyze`.
+- Run a snippet or file end-to-end: `mcp__maxon-dev__run_program` (`compiler` is required: `"csharp"` or
+  `"shv2"`).
+- Inspect lowered IR: `mcp__maxon-dev__dump_ir` (`compiler` required; `dumpStages: true` for per-stage
+  artifacts is **csharp only** — shv2 REJECTS it with an error naming the gap, rather than dropping it).
+- Format Maxon source: `mcp__maxon-dev__fmt` — the bootstrap's `maxon fmt`; **shv2 has no formatter**.
+  ⚠ Give it the **file** you mean: with no path it formats the whole current directory.
+- Look up a 4-digit error code: `mcp__maxon-dev__lookup_error_code`. Never reference a code by its bare
+  number in source — use the generated `ErrorCode` member.
+- Debug memory leaks: `mcp__maxon-dev__mm_trace_analyze` (`mmTrace` is csharp-only on `run_spec_test`;
+  shv2 rejects it). **Exit code 101 = a leak was detected.**
+
+⚠ **`bin/maxon.exe` and the shv2 binary are BOTH gitignored and nothing rebuilds them**, so a stale one
+lies in both directions — build before you trust a run.
 
 ## Syntax that DOES NOT EXIST (most common mistakes)
 
@@ -59,7 +78,7 @@ cond ? a : b                   a if cond else b
 - **`else` MUST be on the same line as its `end`**: `end 'check' else 'other'` or `end 'check' else if x == 0 'zero'`.
 - **NEVER use bare `int`, `float`, or `byte`** in type positions (params, returns, fields). ALWAYS use a typealias with a range. `bool` is the exception.
 - **Variable declarations NEVER have type annotations** — `let x = 5`, not `let x: int = 5` (E2010).
-- **First argument is positional, all others MUST be named**: `connect("localhost", port: 8080, timeout: 5000)`.
+- **First argument is positional, all others MUST be named**: `connect("localhost", port: 8080, timeout: 5000)`. Naming the first one is **E2052** — `arr.remove(0)`, never `arr.remove(at: 0)`, even though the parameter is called `at`.
 - **`main` MUST return `ExitCode` and MUST NOT throw**.
 - **Collection `.get()` ALWAYS requires `try...otherwise`** — it throws.
 - **Throwing functions MUST be called with `try`** (E3057).
@@ -68,9 +87,23 @@ cond ? a : b                   a if cond else b
 - **Union values CANNOT be compared with `==`** (E3066) — use `match`.
 - **Indentation uses tabs** (not spaces).
 - **Strings use `{expr}` interpolation** — there is NO string concatenation operator.
-- **Comments use `//`** (or `/* ... */` for block comments).
+- **Comments use `//`** (or `/* ... */` for block comments). **Concise and minimal — the default is NO
+  comment.** Explain the **why** (a constraint, an invariant, a non-obvious reason), never the **how**;
+  the code is the how. **Present state only — no history**: no "used to", "changed from", or old names;
+  git holds that. **A comment you edit is rewritten to conform, not patched.** (Code Quality checklist,
+  `.claude/CLAUDE.md`.)
 - **Blocks MUST NOT be empty** (E3082) — no comment-only blocks.
+- **Struct FIELDS use `as`**: `export var x as Coord`, not `export var x Coord` (E2010). Parameters and
+  returns do NOT — `function f(x Coord) returns Coord`.
+- **`Type{...}` ONLY inside that type's own methods** (E3076). External callers go through a
+  `static function create(...)`. This includes ranged typealiases: `Port{8080}` at a call site is
+  E3076 — write the bare literal at a `Port`-typed destination, or `8080 as Port`.
+- **Every field must be initialized** in a struct literal (E3086) unless it has a declaration default
+  (`export var value = 0`) or is proven definitely assigned before a `Self{}` in a static factory.
 - **All variables must be used** (E3012). Use `_` to discard.
+- **A typealias declared and never used is an error** (E3062) — "used" means the NAME appears in a type
+  position in its OWN file; `export` and `module` both exempt it (the check only asks about aliases
+  nothing outside the file can see), and inference from a bare `[...]` literal is not a use.
 - **`var` that is never reassigned is an error** (E3077) — use `let`.
 - **Cannot assign immutable `let` ref-type to `var`** (E3078) — use `let` or `.clone()`.
 - **Self-assignment is an error** (E3067): `x = x`, `p.x = p.x`.
@@ -78,6 +111,11 @@ cond ? a : b                   a if cond else b
 ## Stdlib type aliases to use
 
 Cross-cutting: `ExitCode`, `HashValue`, `Codepoint`, `Byte`, `ByteArray`, `FileSize`, `Timestamp`, `NetworkPort`, `Character`.
+
+⚠ **`Integer` is NOT one of them** — nothing in the stdlib exports it, and a bare `Integer` in a type
+position is E2003 ("Unknown type"). Examples that use it declare
+`typealias Integer = int(i64.min to i64.max)` in the same file — in real code, prefer a purpose-named
+alias.
 
 For per-domain quantities (counts, indices, byte offsets, math values), declare a typealias local to your file with a name that describes the *purpose* — e.g. `Tally`, `BytePos`, `Coord`. Don't reach for a generic `Count` or `Index`; the stdlib doesn't export them anymore.
 
@@ -114,23 +152,32 @@ _ = sideEffect()    // discard (RHS MUST be a function call)
 // Domain-specific typealiases declared next to the type that uses them
 typealias Coord = float(f64.min to f64.max)
 typealias VisitCount = int(0 to u64.max)
+typealias StatusCode = int(0 to 599)
 
-// Struct type
+// Struct type — fields take 'as'; a literal is legal only inside the type's own methods
 export type Point
-	export var x Coord           // public mutable
-	export let name String       // public immutable
-	var internal VisitCount      // private
+	export var x as Coord            // public mutable
+	export var y as Coord
+	var visits as VisitCount = 0     // private, declaration default
+
+	export static function create(x Coord, y Coord) returns Point
+		return Point{x: x, y: y}
+	end 'create'
 
 	function magnitude() returns Coord
-		return sqrt((self.x * self.x + self.y * self.y) as float)
+		return sqrt(self.x * self.x + self.y * self.y)
 	end 'magnitude'
+
+	function magnitudeSquared() returns Coord
+		return magnitude() * magnitude()   // sibling call — no explicit receiver
+	end 'magnitudeSquared'
 
 	static function origin() returns Point
 		return Point{x: 0.0, y: 0.0}
 	end 'origin'
 end 'Point'
 
-var p = Point{x: 1.5, y: 2.5}
+var p = Point.create(1.5, y: 2.5)   // E3076 if written Point{x: 1.5, y: 2.5} out here
 var o = Point.origin()
 
 // Enum (auto Equatable/Hashable; supports ==/!=)
@@ -151,8 +198,8 @@ end 'HttpStatus'
 
 // Union (for associated values; NO ==/!=, use match)
 union Result
-	success(value Integer)
-	failure(code Integer, message String)
+	success(value VisitCount)
+	failure(code StatusCode, message String)
 	pending
 end 'Result'
 
@@ -186,8 +233,10 @@ export typealias Score = int(0 to 100)
 export typealias ScoreArray = Array with Score
 export typealias ScoreMap = Map with (String, Score)
 
-// Ranged type construction
-var p = Port{8080}          // TypeName{value}
+// Ranged type values: a bare literal at a Port-typed destination, or an 'as' cast.
+// Port{8080} is E3076 outside the type's own methods.
+let port = 8080 as Port
+connect(host, port: 443)    // literal takes the parameter's declared type
 
 // If / else if / else
 if x > 0 'positive'
@@ -274,10 +323,10 @@ end 'err'
 
 panic("invariant violated: {details}")                // unrecoverable
 
-// Closures (capture by reference)
-let double = (n Integer) gives n * 2
-items.sort((a, b) gives a.priority - b.priority)
-let always42 = (_ Integer) gives 42
+// Closures (capture by reference) — a closure literal STARTS with `function`
+let double = function(n VisitCount) gives n * 2
+items.sort(function(a, b) gives a.priority - b.priority)
+let always42 = function(_ VisitCount) gives 42
 
 // Tuples
 var t = (10, 20)                  // 2+ elements required
@@ -350,38 +399,44 @@ let raw = b"\xFF\x00"
 
 ## Collections
 
+Every method that can fail THROWS — `get`, `set`, `pop`, `remove`, `Map.insert`, `List.insert`,
+`List.first` — so it needs `try` (E3057). `push`, `Array.insert`, `upsert`, `clear`, `reserve`,
+`resize`, `prepend` and `append` do not. A returned value must be used (E3064/E3065).
+
 ```maxon
-// Arrays
-typealias IntArray = Array with Integer
-var arr = [1, 2, 3]
-var empty = IntArray.create()
+// Arrays — a container needs a typealias before use (E3003)
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+var arr = TallyArray.create()
+var literal = [1, 2, 3]                        // literal infers its type; NOT a use of the alias (E3062)
 arr.push(42)
-arr.count()
-let val = try arr.get(0) otherwise 0    // ALWAYS try
-arr.set(0, value: 100)
+let n = arr.count()
+let val = try arr.get(0) otherwise 0           // throws — ALWAYS try
+try arr.set(0, value: 100) otherwise ignore    // throws
+arr.insert(0, value: 99)                       // first arg positional, rest named
+let last = try arr.pop() otherwise 0           // throws
+let gone = try arr.remove(0) otherwise 0       // throws, returns the removed element
 arr.reserve(100)
 arr.resize(50)
-arr.pop()
-arr.insert(0, value: 99)
-arr.remove(at: 0)
 arr.clear()
 
 // Maps
-typealias StringIntMap = Map with (String, Integer)
-var m = ["hello": 42]
-let val = try m.get("hello") otherwise 0
-m.set("world", value: 99)
-m.containsKey("hello")
-m.remove("hello")
-m.count()
+typealias StringTallyMap = Map with (String, Tally)
+var m = StringTallyMap.create()
+try m.insert("hello", value: 42) otherwise ignore   // throws MapError.keyAlreadyExists
+m.upsert("hello", value: 43)                        // insert-or-update, never throws
+let hit = try m.get("hello") otherwise 0            // throws
+let has = m.contains("hello")                       // NOT containsKey
+let dropped = m.remove("hello")                     // returns bool
+let size = m.count()
 
 // List (doubly linked, O(1) at ends)
-typealias IntList = List with Integer
-var list = IntList.create()
+typealias TallyList = List with Tally
+var list = TallyList.create()
 list.prepend(1)
 list.append(2)
-try list.first() otherwise 0
-try list.removeFirst() otherwise 0
+let head = try list.first() otherwise 0         // throws
+let popped = try list.removeFirst() otherwise 0 // throws
 ```
 
 ## Builtins
@@ -421,7 +476,7 @@ Float→int requires `trunc()`, `round()`, `floor()`, or `ceil()`.
 - Structs: assigned by reference (alias). Use `.clone()` for an independent copy (auto-generated when all fields are Cloneable).
 - Reference counting with automatic scope cleanup.
 - Stack promotion: small all-primitive structs that don't escape are stack-allocated.
-- `@heap var p = Point{x: 0, y: 0}` forces heap allocation.
+- `@heap var p = Point.create(0.0, y: 0.0)` forces heap allocation.
 - Borrow checker (NLL): CANNOT mutate a collection while a `.get()` borrow is live (E3070).
 - Pass-by-reference is automatic for parameters that are assigned to in the callee.
 - Passing a `let` var to a mutating parameter is E3019.
