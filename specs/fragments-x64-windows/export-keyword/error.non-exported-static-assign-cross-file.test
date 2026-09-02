@@ -1,0 +1,23 @@
+// Test: error.non-exported-static-assign-cross-file
+// --- file: counter.maxon
+typealias Tally = int(0 to 100)
+
+function seed() returns Tally
+	return 7
+end 'seed'
+
+export type Counter
+	static var hits = seed()
+end 'Counter'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	Counter.hits = 9
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3008: specs/fragments/export-keyword/error.non-exported-static-assign-cross-file.test:15:10: static 'Counter.hits' is not exported
+```
+---
+---

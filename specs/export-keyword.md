@@ -335,6 +335,88 @@ end 'main'
 error E3008: specs/fragments/export-keyword/error.non-exported-function-cross-file.test:11:9: function 'privateHelper' is not exported
 ```
 
+### A STATIC FIELD obeys the export rule its type does
+
+`export` on the type publishes the type, not every slot inside it. A `static var` without its own
+`export` is file-private exactly as a top-level function is, and reading it from another file is the
+same refusal — `function 'x' is not exported` and `static 'T.x' is not exported` are one rule with two
+nouns. Statics were the hole in that rule: a cross-file read of a private one compiled and ran.
+
+<!-- test: error.non-exported-static-read-cross-file -->
+```maxon
+// --- file: holder.maxon
+typealias Count = int(0 to u64.max)
+
+export type Holder
+	static var cached = Holder.build()
+	export var value as Count
+
+	static function build() returns Holder
+		return Holder{value: 7}
+	end 'build'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = Holder.cached
+	return a.value
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.non-exported-static-read-cross-file.test:16:17: static 'Holder.cached' is not exported
+```
+
+<!-- test: error.non-exported-static-assign-cross-file -->
+```maxon
+// --- file: counter.maxon
+typealias Tally = int(0 to 100)
+
+function seed() returns Tally
+	return 7
+end 'seed'
+
+export type Counter
+	static var hits = seed()
+end 'Counter'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	Counter.hits = 9
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.non-exported-static-assign-cross-file.test:15:10: static 'Counter.hits' is not exported
+```
+
+### An EXPORTED static is readable across files
+
+The refusal above must not cost the exported case anything.
+
+<!-- test: exported-static-cross-file -->
+```maxon
+// --- file: holder.maxon
+typealias Count = int(0 to u64.max)
+
+export type Holder
+	export static var cached = Holder.build()
+	export var value as Count
+
+	static function build() returns Holder
+		return Holder{value: 7}
+	end 'build'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = Holder.cached
+	return a.value
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: error.typealias-with-unknown-element-type -->
 ```maxon
 typealias BadArray = Array with UnknownType

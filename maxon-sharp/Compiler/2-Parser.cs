@@ -7367,7 +7367,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         continue;
       }
 
-      // Handle 'static' keyword for static fields and static methods
+      // Visibility modifier (export / module). A method's was recorded at pre-scan, so for those
+      // this is a parser-state sync only; a STATIC FIELD is not pre-scanned at all, so its
+      // visibility is recorded here, from these flags.
+      var (isMemberExported, isMemberModuleVisible) = ParseVisibilityModifier();
+
       if (Check(TokenType.Static)) {
         Advance(); // consume 'static'
 
@@ -7378,37 +7382,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           continue;
         }
 
-        ParseStaticField(module, typeName);
+        ParseStaticField(module, typeName, isMemberExported, isMemberModuleVisible);
         SkipNewlines();
         continue;
-      }
-
-      // Handle visibility modifier (export / module). Visibility itself was
-      // recorded at pre-scan — here we just consume the token and dispatch.
-      if (CheckVisibilityModifier()) {
-        Advance();
-
-        // visibility-modified function (instance method)
-        if (Check(TokenType.Function)) {
-          ParseInstanceMethod(module, typeName);
-          SkipNewlines();
-          continue;
-        }
-
-        // visibility-modified static function/var/let
-        if (Check(TokenType.Static)) {
-          Advance(); // consume 'static'
-
-          if (Check(TokenType.Function)) {
-            ParseStaticMethod(module, typeName);
-            SkipNewlines();
-            continue;
-          }
-
-          ParseStaticField(module, typeName);
-          SkipNewlines();
-          continue;
-        }
       }
 
       if (Check(TokenType.Var) || Check(TokenType.Let)) {
@@ -8105,7 +8081,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return new ExprResult.Direct(callOp.Result!);
   }
 
-  private void ParseStaticField(IrModule<MaxonOp> module, string typeName) {
+  private void ParseStaticField(IrModule<MaxonOp> module, string typeName, bool isExported, bool isModuleVisible) {
     bool isMutable;
     if (Check(TokenType.Var)) { Advance(); isMutable = true; } else if (Check(TokenType.Let)) { Advance(); isMutable = false; } else {
       throw new CompileError(ErrorCode.ParserUnexpectedToken,
@@ -8134,7 +8110,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       module.Globals.Add(new IrGlobal(guardName, IrType.I1, new IntegerAttr(0, IrType.I1)));
 
       var typeName2 = InferDeferredTypeName(new DeferredDecl(qualifiedName, exprStart, exprEnd, fieldToken.Line, fieldToken.Column));
-      var gvarInfo = RuntimeInitGlobalMetadata(typeName2, isMutable, isLazy: true);
+      var gvarInfo = RuntimeInitGlobalMetadata(typeName2, isMutable, isLazy: true) with {
+        IsExported = isExported,
+        IsModuleVisible = isModuleVisible,
+        SourceFilePath = _sourceFilePath
+      };
       _globalVars[qualifiedName] = gvarInfo;
       module.GlobalVarInfos[qualifiedName] = gvarInfo;
       _globalVars[guardName] = new GlobalVarMetadata(MaxonValueKind.Bool, true);
@@ -8150,7 +8130,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       if (isMutable) {
         module.Globals.Add(new IrGlobal(qualifiedName, fieldType, defaultValue));
-        _globalVars[qualifiedName] = new GlobalVarMetadata(fieldType.ToValueKind(), true);
+        _globalVars[qualifiedName] = new GlobalVarMetadata(fieldType.ToValueKind(), true,
+          IsExported: isExported, IsModuleVisible: isModuleVisible, SourceFilePath: _sourceFilePath);
       } else {
         RegisterStaticLetConstant(qualifiedName, fieldType, defaultValue);
       }
@@ -12134,6 +12115,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var qualifiedName = $"{typeToken.Value}.{fieldToken.Value}";
 
     if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
+      RequireStaticFieldVisible(qualifiedName, globalInfo, fieldToken);
       var newValue = ResolveExprValue(ParseExpression());
       newValue = CoerceAssignedValue(newValue, globalInfo.Kind, globalInfo.TypeName,
         $"static '{qualifiedName}'", typeToken.Line, typeToken.Column);
@@ -19776,7 +19758,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // Check for global/static variable
         if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
           Advance(); // consume '.'
-          Advance(); // consume member name
+          var memberToken = Advance(); // consume member name
+          RequireStaticFieldVisible(qualifiedName, globalInfo, memberToken);
           return ParseFieldAccessChain(EmitGlobalLoad(qualifiedName, globalInfo), token);
         }
 
@@ -23057,6 +23040,49 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// ⭐ WHETHER THE FILE BEING PARSED MAY NAME A DECLARATION ANOTHER FILE WROTE — asked once, for
+  /// every kind of declaration that carries a visibility.
+  ///
+  /// `export` reaches the whole program, `module` reaches its declaring directory and everything
+  /// below it, and anything else is private to the file that wrote it. A declaration with no
+  /// recorded file — synthesized by the compiler, or seeded before any file claimed it — has no file
+  /// to be private to, so it is reachable.
+  ///
+  /// A function and a static field are two nouns over one decision, so they ask here rather than
+  /// each carrying a reading of `export`: `export` on a TYPE publishes the type, and every slot
+  /// inside it states its own reach or has none.
+  /// </summary>
+  private bool IsDeclarationVisible(bool isExported, bool isModuleVisible, string? declaringFile) {
+    if (isExported) return true;
+    if (declaringFile == null || _sourceFilePath == null) return true;
+    if (declaringFile == _sourceFilePath) return true;
+    return isModuleVisible && AliasScope.IsInDirectoryScopeOf(declaringFile, _sourceFilePath);
+  }
+
+  private bool IsFunctionVisible(IrFunction<MaxonOp> func) =>
+    IsDeclarationVisible(func.IsExported, func.IsModuleVisible, func.SourceFilePath);
+
+  /// <summary>
+  /// Refuses `Type.field` where the slot is not reachable from the file being parsed. Blamed at the
+  /// MEMBER name, because the type is visible and the slot inside it is what is not — and told apart
+  /// the same way <see cref="ResolveFunctionName"/> tells a hidden function apart: `module` and
+  /// unexported are different facts and carry different codes.
+  /// </summary>
+  private void RequireStaticFieldVisible(string qualifiedName, GlobalVarMetadata info, Token fieldToken) {
+    if (IsDeclarationVisible(info.IsExported, info.IsModuleVisible, info.SourceFilePath)) return;
+
+    if (info.IsModuleVisible) {
+      throw new CompileError(ErrorCode.SemanticSymbolNotInModuleScope,
+        $"static '{qualifiedName}' is module-scoped and not visible from this directory",
+        fieldToken.Line, fieldToken.Column);
+    }
+
+    throw new CompileError(ErrorCode.SemanticSymbolNotExported,
+      $"static '{qualifiedName}' is not exported",
+      fieldToken.Line, fieldToken.Column);
+  }
+
+  /// <summary>
   /// Resolves a function name by finding all matches (exact or suffix).
   /// Errors if no matches or multiple matches (ambiguous).
   /// Examples:
@@ -23064,14 +23090,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   ///   - "greet" finds suffix matches like "helpers.greet", "utils.greet"
   ///   - If multiple matches exist, it's ambiguous and errors
   /// </summary>
-  private bool IsFunctionVisible(IrFunction<MaxonOp> func) {
-    if (func.IsExported) return true;
-    if (func.SourceFilePath == null || _sourceFilePath == null) return true;
-    if (func.SourceFilePath == _sourceFilePath) return true;
-    if (func.IsModuleVisible && AliasScope.IsInDirectoryScopeOf(func.SourceFilePath, _sourceFilePath)) return true;
-    return false;
-  }
-
   private IrFunction<MaxonOp> ResolveFunctionName(string functionName, Token functionNameToken) {
     // First, try to find a function in the current file's namespace
     var currentNamespace = NamespaceOf();
