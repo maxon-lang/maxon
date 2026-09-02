@@ -1506,6 +1506,14 @@ end 'loadSourceDirectory'
 // would read as correct at BOTH sites while a file was silently compiled on one side and silently
 // skipped on the other.
 //
+// ⚠ **`maxon fmt` HAS ITS OWN WALK AND IS NOT A THIRD CALLER OF THIS ONE**
+// (`Formatter.collectFormattableFiles`), because it is asking a DIFFERENT question: it formats
+// `*.test.maxon`, which no `selection` here admits alongside a plain build root, and it prunes any
+// subdirectory holding a `.git`, which this walk must NOT do — pruning there would change which files
+// get COMPILED and would diverge from the bootstrap's `SourceCollector`, which prunes nothing. What the
+// two DO share — `BuildManifestName`, `MaxonSourceExtension`, `holdsIgnoreMarker`, `isIgnoredDirectory`
+// — it reaches through those same names rather than respelling any of them.
+//
 // ⭐⭐ **THE `.maxonignore` RULE IS THE BOOTSTRAP'S, ESTABLISHED BY RUNNING IT AND NOT BY READING IT.**
 // The bootstrap (`maxon-sharp`'s `MaxonIgnore.IsIgnored` + `SourceCollector.ExclusionFor`) is what
 // compiles this compiler, so a file set that disagreed with it would build a different program than
@@ -1658,12 +1666,17 @@ end 'loadOneSourceFile'
 // --- Output path resolution ---
 
 // The build manifest filename, the Maxon source extension, and the flag file that excludes a
-// directory. Named, not bare literals — all three are file-discovery contracts, and the walk rooted at
-// `collectMaxonSources` is the only reader of any of them: `stdlib/` is enumerated by that same
-// function, so what a source file is called, and what says a directory holds none, are stated once for
-// the whole compiler.
-let BuildManifestName = "build.maxon"
-let MaxonSourceExtension = ".maxon"
+// directory. Named, not bare literals — all three are file-discovery contracts, so what a source file
+// is called, and what says a directory holds none, are stated once for the whole compiler. Every walk
+// this compiler makes over a source tree reads them from here: `collectMaxonSources` below (which
+// enumerates `stdlib/` as well as the user's own paths), and `Formatter.collectFormattableFiles`, which
+// is `maxon fmt`'s SEPARATE walk — it takes `*.test.maxon`, which a build does not, and prunes `.git`,
+// which a build must not, but it must leave the manifest alone and pick `.maxon` files by these same
+// two names. `module` visibility is what lets it, and a second spelling of either name would be a
+// file-discovery contract written down twice.
+module let BuildManifestName = "build.maxon"
+
+module let MaxonSourceExtension = ".maxon"
 
 // ⭐⭐ **A `test` DECLARATION'S FILE IS A SOURCE CATEGORY, NOT A FLAG INSIDE THE FILE** (see
 // `docs/LANGUAGE_REFERENCE.md`, "Test Declarations"). A `*.test.maxon` file carries the project's tests and

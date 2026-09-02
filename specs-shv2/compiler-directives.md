@@ -112,3 +112,17 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: directives.doc-comment-after-condition -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows) /// a doc comment riding the directive line
+		return 7
+	#else /// and on the else
+		return 7
+	#endif /// and the endif
+end 'main'
+```
+```exitcode
+7
+```

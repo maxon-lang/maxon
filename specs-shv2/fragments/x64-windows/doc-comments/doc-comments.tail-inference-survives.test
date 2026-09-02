@@ -1,0 +1,78 @@
+// Test: doc-comments.tail-inference-survives
+typealias Count = int(0 to u64.max)
+
+function tail(n Count) returns ExitCode
+	if n > 0 'positive'
+		return 1
+	end 'positive'
+
+	panic("gone")
+	/// after a panic, the tail is still elided
+end 'tail'
+
+function main() returns ExitCode
+	// Runtime-valued, so neither the call nor the branch folds away and the panic path
+	// survives into the emitted code where the golden can record it. A spec case runs with
+	// no arguments, so this is 1.
+	return tail(CommandLine.args().count())
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @tail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, ifcont
+  positive:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at doc-comments.tail-inference-survives.test:9: gone\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect CommandLine.args
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+  __il_body:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, __il_slow
+  positive:
+    x64.movRegImm32 r12, 1
+    x64.jmp __il_cont
+  __il_slow:
+    x64.callDirect tail
+    x64.movRegReg r12, r8
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

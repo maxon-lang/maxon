@@ -1,0 +1,1309 @@
+// fixtures.test.maxon — the shared half of `maxon fmt`'s gate: where the corpus is, how one case is
+// staged and run, and the two things asked of the corpus itself. The per-case `test` declarations are
+// the files beside this one, named for the PROPERTY each case gates.
+//
+// ⭐⭐ **WHAT THIS PROJECT PROVES: `fmt`'s product is a REPORT *and* A TREE, and neither one alone is
+// the answer.** stdout says which files were written; it never says what. A run that reports
+// `formatted: A.maxon` and writes garbage into it is byte-identical, on stdout, to the correct run.
+// So every case here asserts four things — the exit status, stderr, stdout, and the whole resulting
+// tree compared BOTH ways — and `tests/README.md` states the hazard each of those answers.
+//
+// ⭐⭐ **THE EXPECTATIONS ARE THE BOOTSTRAP'S REAL ANSWERS, WHICH IS WHAT MAKES THIS A PARITY GATE.**
+// `tests/fmt/generate-expectations.py` mints every `expected-*` file and every `expected-tree/` by
+// RUNNING `bin/maxon fmt`. A hand-written fixture proves only "shv2 does what I wrote down"; a
+// generated one proves "shv2 does what the bootstrap does", which is the whole contract for a port.
+// Never hand-edit an expectation; re-run the generator.
+//
+// ⛔⛔ **THE WORKING DIRECTORY OF THE SPAWNED `fmt` IS THE STAGED TREE, NEVER THE CHECKOUT ROOT.**
+// This inverts `maxon-shv2/Testing/test-command/`'s contract deliberately, and it is the one rule here
+// whose violation would do damage rather than report a wrong answer: `flag-refused` and
+// `flag-refused-no-path` exist because a regression makes `fmt` fall back to the CURRENT DIRECTORY and
+// rewrite it in place — the incident that once rewrote 92 files across two agent worktrees. Run from
+// the checkout root, those two fixtures would REPRODUCE it.
+//
+// ⛔⛔ **THIS FILE'S OWN PATHS, on the other hand, are relative to the CHECKOUT ROOT**, because that is
+// what a test binary inherits from `maxon test` (`TestExecutor.launchTests` passes
+// `inheritedWorkingDir()` and the command never chdirs). The two contracts live side by side: the
+// HARNESS reads the corpus relative to the root, and the CHILD is given the staged tree. Everything
+// handed to the child — the compiler path and the staged directory — is made absolute first, because a
+// relative program path resolves against the child's new working directory on POSIX and against the
+// parent's on Windows, and a gate must not depend on which.
+//
+// ⛔⛔ **ONE SPAWNING `test` PER FILE, AND THAT IS STRUCTURAL RATHER THAN TIDINESS.** A test FILE is
+// the unit one process runs (`TestExecutor.shardsOf` puts a whole file in one launch) and that process
+// has a 5000 ms default deadline. Every test here spawns the compiler TWICE — once for the answer and
+// once for idempotence — so a file holding several of them reports a spurious TIMED OUT. Splitting by
+// case makes each process hold one case, which no deadline can catch.
+//
+// ⚠ **NOTHING IS STAGED UNDER `tests/`.** The corpus is inert on disk on purpose (rule 1: no stored
+// file is a live `.maxon`), and staging a runnable copy beside it would hand `maxon fmt` over the
+// checkout exactly the live tree that rule exists to deny it. Staging goes to gitignored `temp/`.
+
+// Where the corpus lives, and this project's own directory, both relative to the checkout root.
+let FixturesDirName = "tests/fmt/fixtures"
+let ProjectDirName = "tests/fmt"
+
+// The one file in this directory that declares the shared half rather than a case. Together with the
+// directory above it is how the coverage guard counts case files without a hand-maintained number.
+let SharedHelperFileName = "fixtures.test.maxon"
+
+// Where a case's runnable copy is built. Gitignored, outside `tests/`, and one directory per case so
+// two cases can never see each other's tree.
+let StagingRootDirName = "temp/fmt-fixtures"
+
+// The binary under test, relative to the checkout root, without its host suffix.
+let TestedCompilerStem = "maxon-shv2/.maxon/maxon-shv2"
+
+// The command being exercised. `fmt` takes no options at all — that refusal is itself under test — so
+// there is no reproducibility flag to add here the way `test`'s corpus needs two.
+let TestedCommandName = "fmt"
+
+// What a case directory holds. `input/` and `expected-tree/` are trees; the three `expected-*` files
+// are the streams and the status. `argv.txt` is OPTIONAL, and an absent OR EMPTY one means the case
+// passes no arguments — which is not a half-written fixture here but a case in its own right, since
+// `fmt` with no path defaults to the working directory.
+let InputDirName = "input"
+let ExpectedTreeDirName = "expected-tree"
+let ExpectedStdoutFileName = "expected-stdout.txt"
+let ExpectedStderrFileName = "expected-stderr.txt"
+let ExpectedExitFileName = "expected-exit.txt"
+let ExtraArgvFileName = "argv.txt"
+
+// ⛔ **THE STORED-NAME MAPPING, AND IT IS WRITTEN DOWN IN EXACTLY TWO PLACES THAT MUST AGREE** — here
+// and in `generate-expectations.py`'s `stored_to_real` / `real_to_stored`. They stage the same trees,
+// so a disagreement is silent: the generator would mint an expectation for a tree this harness never
+// builds, and every case would fail for a reason having nothing to do with `fmt`.
+//
+//     <name>.fixture -> <name>        dot-<name> -> .<name>
+//
+// A DIRECTORY takes only the `dot-` half — appending `.fixture` to one would not round-trip.
+let StoredFixtureSuffix = ".fixture"
+let StoredDotPrefix = "dot-"
+
+// The suffix that marks a source file as test code, and the plain one. The corpus guard below needs
+// both: a `*.test.maxon` here is a driver and SHOULD be formatted like any other source; any other
+// `.maxon` under this project would be a live source `maxon fmt` over the checkout would rewrite.
+let TestSourceSuffix = ".test.maxon"
+let MaxonSourceSuffix = ".maxon"
+
+// The per-project build-products directory. The corpus walk refuses to descend into one: `maxon test`
+// stages a COPY of this project under `tests/fmt/.maxon/test/staged/` and writes a generated entry
+// source beside it, so a walk that went in would report the compiler's own output as a corpus offence.
+let ProjectProductsDirName = ".maxon"
+
+// ⚠ **THE THREE SUBSTITUTIONS, WHICH MUST MATCH `generate-expectations.py`'s `normalize` EXACTLY** —
+// CR, the host path separator, and the absolute staging path. That file carries the reasoning for each
+// one; what matters here is that the harness performs the identical three against ITS OWN staging
+// directory, in the same order (the tree is matched in its forward-slash form, so the separator has to
+// go first). A divergence between the two is silent: every pin would be minted in a shape this file
+// never produces.
+let CarriageReturn = "\r"
+let LineFeed = "\n"
+let PortablePathSeparator = "/"
+let StagingTreeToken = "<TREE>"
+
+// ⭐ **THE SUMMARY LINE'S GRAMMAR, WRITTEN ONCE AND USED THREE WAYS** — to parse the first run's two
+// counts, to validate that what was parsed reconstructs the line byte for byte, and to PREDICT the
+// second run's line. A separate parser and a separate builder would be the same fact twice, and the
+// prediction is the whole idempotence assertion.
+let SummaryPrefixWord = "fmt:"
+let SummaryFilesWord = "file(s)"
+let SummaryChangedWord = "changed,"
+let SummaryUnchangedWord = "unchanged."
+let SummaryWordSeparator = " "
+let SummaryWordCount = 6
+let ChangedCountWordIndex = 1
+let UnchangedCountWordIndex = 4
+
+// What a second run must report changed: nothing. Named because it is the assertion, not a literal.
+let IdempotentChangedCount = 0
+
+// The status a run that did its job exits with. Every other value is a refusal, and a refusal is
+// idempotent in a different way — see `expectIdempotent`.
+let SuccessExitCode = 0
+
+// Which of a case's two runs a message is about. A tree comparison happens twice and the two failures
+// mean different things: the first says `fmt` wrote the wrong bytes, the second says a re-run touched
+// a tree it had already finished with.
+let FirstRunLabel = "the first run"
+let SecondRunLabel = "the second run"
+
+// What each of a case's three required pins holds, said in the words a reader would need in order to
+// mint a missing one.
+let StdoutPinHolds = "everything this case's run must write to stdout"
+let StderrPinHolds = "everything this case's run must write to stderr"
+let ExitPinHolds = "the status this case's run must exit with, as one integer"
+
+
+// An exit code as a fixture states it and as a run produces it. `Subprocess`'s own `ExitInt` is
+// file-private there, so this is the same range spelled where it is used.
+typealias RunExitCode = int(i64.min to i64.max)
+
+// A file count as the summary line states it. FULL WIDTH deliberately: it is parsed out of text, so
+// the value is whatever the report said, and narrowing it here would turn a wrong report into a range
+// trap instead of the assertion failure a reader can act on.
+typealias FileTally = int(i64.min to i64.max)
+
+// A list of paths one directory walk produced. Declared HERE rather than reached for: stdlib's own
+// `FilePathArray` is a member of `Directory` and has no file-scope spelling.
+typealias FixturePathArray = Array with FilePath
+
+// The relative paths one tree holds, asked as a membership question rather than read as a list.
+typealias RelativePathSet = Set with String
+
+// ============================================================================================
+// THE CORPUS ITSELF
+// ============================================================================================
+
+// ⭐⭐ **A CASE NOBODY INVOKED READS EXACTLY LIKE A CASE THAT PASSED.** A fixture directory declares
+// nothing by existing, so a case this file never names simply does not run, and a run that skipped it
+// reports precisely what a run that checked it and agreed reports. Asked once, of the corpus as a
+// whole, because no individual case can see its own absence.
+//
+// ⚠ **IT READS THIS FILE'S OWN SOURCE, and that is what makes it survive the layout.** The guard it
+// replaced counted `<case>.test.maxon` FILES against case directories, which said something only while
+// there was one file per case; the moment they were batched into this file it would have compared 21
+// directories against 0 files and had to be deleted or weakened. Matching on the `checkFixture("…")`
+// call itself asks the question that actually matters — is this case INVOKED — and it keeps asking it
+// however the tests are arranged.
+test 'every fixture case is invoked by name'
+	let source = try File.readText(readableFile("{ProjectDirName}/{SharedHelperFileName}")) otherwise panic("fmt-fixtures.test: the gate could not run — this file could not read its own source at {ProjectDirName}/{SharedHelperFileName}. Paths here are relative to the CHECKOUT ROOT; run from there.")
+
+	var uninvoked = StringArray.create()
+	for caseName in fixtureCaseNames() 'eachCase'
+		if not source.contains("checkFixture(\"{caseName}\")") 'neverInvoked'
+			uninvoked.push(caseName)
+		end 'neverInvoked'
+	end 'eachCase'
+
+	let listed = listedLines(uninvoked)
+	try Expect.isEmpty(listed, message: "these case directories under {FixturesDirName} are never invoked from {SharedHelperFileName}. Each one needs a `test` that calls `checkFixture(\"<case>\")`; a fixture nothing runs proves nothing and reads exactly like one that passed.")
+end 'every fixture case is invoked by name'
+
+// ⛔⛔ **NOTHING STORED IN THIS CORPUS MAY BE A LIVE `.maxon`, AND THE HAZARD IS THE TOOL UNDER TEST
+// REWRITING ITS OWN ORACLE.** `maxon fmt` over the checkout walks `tests/`. A real `Ugly.maxon` under
+// `fixtures/` would therefore be FORMATTED by the very command this corpus exists to gate — silently
+// re-blessing every expectation here, `already-formatted` included, which would then be green forever
+// by construction. That is why every stored source carries the inert suffix and this harness maps the
+// name back at staging time.
+//
+// ⚠ **THE USUAL CURE — a `.maxonignore` at the corpus root — IS FORBIDDEN HERE**, and for a reason
+// this directory owns rather than one borrowed from `test-command`: two of these fixtures
+// (`maxonignore-pruned`, `maxonignore-above-root`) are ABOUT how `fmt` reads that marker, and a real
+// one above them would hide the corpus from the walk under test as well as from the fixtures
+// themselves. `tests/README.md` states it as a rule of the directory.
+//
+// The `*.test.maxon` drivers are exempt: they are ordinary sources that SHOULD be formatted, and both
+// compilers' build walks drop them, so they are the one live thing that may sit here.
+test 'no fixture is stored as a source maxon fmt would rewrite'
+	let live = listedLines(liveSourcesUnder(readableDir(ProjectDirName)))
+	try Expect.isEmpty(live, message: "these files under {ProjectDirName} are LIVE Maxon sources, so `maxon fmt` over this checkout would rewrite them — and under {FixturesDirName} that means the tool under test editing its own oracle. Store a fixture source as `<name>{StoredFixtureSuffix}`; do NOT add a `.maxonignore`, which would hide the corpus from the command it exists to gate and break the two `maxonignore` cases outright.")
+end 'no fixture is stored as a source maxon fmt would rewrite'
+
+// ⛔⛔ **AN OPTION TYPED AHEAD OF THE WORD `fmt` MUST STILL BE REFUSED — AND THIS IS THE ONLY CASE
+// THAT CAN SAY SO.** Every fixture above goes through `FixtureCase.spawn`, which builds its argv as
+// `fmt <extras>`; a flag can therefore only ever appear AFTER the command word there. But this
+// driver's parser is ORDER-INDEPENDENT — one loop over every argument, arms in no particular
+// relation to position — so `--emit-ir fmt` is a spelling the corpus above structurally cannot
+// reach.
+//
+// MEASURED, and it is the incident the whole refusal exists for: before `MaxonArgs.anyOption`
+// existed, `maxon-shv2 --emit-ir fmt` printed `formatted: <cwd>/U.maxon`, exited 0, and REWROTE THE
+// WORKING DIRECTORY. The first fix was a `command == fmt` arm, which cannot see a flag that arrived
+// before the command set it — so the record moved above the arm chain, where no ordering reaches
+// around it.
+//
+// ⚠ **IT ASSERTS THE SAFETY PROPERTY, NOT THE MESSAGE, AND THAT IS DELIBERATE.** Every other pin in
+// this corpus is the BOOTSTRAP's own answer (`generate-expectations.py`), which is what makes the
+// corpus a parity oracle rather than a record of what its author expected. There is no reference
+// answer for THIS spelling: the bootstrap dispatches positionally, so it reads `--emit-ir` as the
+// command name and prints its top-level usage — a different grammar, pre-existing, and nothing this
+// port introduced. Rather than hand-write an expectation and quietly weaken that rule, this asks the
+// two things that actually matter and that hold for any wording: it must NOT succeed, and it must
+// NOT have written anything.
+test 'an option ahead of the command word is still refused'
+	let staged = writableDir("{StagingRootDirName}/option-ahead-of-command")
+	purgeFilesIn(staged)
+	copyStagedTree(readableDir("{FixturesDirName}/flag-refused-implemented-option/{InputDirName}"), into: staged)
+
+	let before = fileBody(staged.join("Ugly.maxon"))
+
+	var arguments = StringArray.create()
+	arguments.push("--emit-ir")
+	arguments.push(TestedCommandName)
+	let run = spawnCompiler(arguments, workingDirectory: staged, what: "the option-ahead-of-command probe")
+
+	try Expect.notEqual(run.exitCode(), expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
+
+	let after = fileBody(staged.join("Ugly.maxon"))
+	try Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
+end 'an option ahead of the command word is still refused'
+
+// ============================================================================================
+// ONE CASE
+// ============================================================================================
+
+// One case and everything an assertion about it needs. It exists so that the four things that travel
+// together — the name a message quotes, the directory the pins live in, the tree that was staged, and
+// that tree's portable spelling, which is what `<TREE>` stands for in a pin — cannot be passed
+// separately and get out of step.
+type FixtureCase
+	let name as String
+	let dir as FilePath
+	let staged as FilePath
+	let tree as String
+
+	// Build a runnable copy of this case's `input/` under `temp/`, applying the stored-name mapping.
+	//
+	// ⚠ **THE STAGING DIRECTORY IS PURGED OF FILES RATHER THAN DELETED, because stdlib has no
+	// directory removal.** That is enough for a re-run: a case's input tree has the same SHAPE every
+	// time, so the directories left behind are exactly the ones staging is about to recreate, and
+	// every file in them is written fresh. What it does not survive is a fixture whose input LOSES a
+	// directory — an emptied `.git` left from a previous run would still prune a walk. Delete the
+	// staging root by hand after removing one.
+	static function stage(caseName String) returns FixtureCase
+		let caseDir = readableDir("{FixturesDirName}/{caseName}")
+		let staged = writableDir("{StagingRootDirName}/{caseName}")
+		purgeFilesIn(staged)
+		copyStagedTree(readableDir("{FixturesDirName}/{caseName}/{InputDirName}"), into: staged)
+
+		return FixtureCase{name: caseName, dir: caseDir, staged: staged, tree: portableSpelling(staged)}
+	end 'stage'
+
+	// ⚠ **OBSERVED STREAMS AND COMMITTED PINS GO THROUGH THE IDENTICAL FUNCTION, AND THAT IS THE
+	// POINT.** A correctly minted pin is already in this form, so folding it again changes nothing —
+	// but two spellings of one normalization is exactly the shape that drifts, and the CR fold also
+	// defends against a checkout that handed the pin back with Windows endings.
+	function normalized(text String) returns String
+		let folded = text.replace(CarriageReturn, with: "").replace(FilePath.separator(), with: PortablePathSeparator)
+		let anonymized = folded.replace(self.tree, with: StagingTreeToken)
+		if anonymized.isEmpty() or anonymized.endsWith(LineFeed) 'alreadyNormalized'
+			return anonymized
+		end 'alreadyNormalized'
+
+		return "{anonymized}{LineFeed}"
+	end 'normalized'
+
+	// One of this case's three REQUIRED pins. Its absence is the instrument being broken, never a
+	// pass: a case directory with no pin is a fixture somebody started and did not finish, and a sweep
+	// that skipped it reports exactly what a sweep that checked it and agreed reports. `holds` is what
+	// the missing file would have said, which is what a reader needs in order to mint it.
+	function pinned(fileName String, holds String) returns String
+		let path = self.dir.join("{fileName}")
+		if not File.exists(path) 'noPin'
+			panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case has no {fileName}, so nothing says {holds}. Mint it with `python tests/fmt/generate-expectations.py {self.name}`; a case directory with no expectation proves nothing, and reads exactly like one that passed.")
+		end 'noPin'
+
+		let text = try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case's {fileName} exists but could not be read.")
+		return normalized(text)
+	end 'pinned'
+
+	// The status this case's run must produce.
+	function expectedExit() returns RunExitCode
+		let text = pinned(ExpectedExitFileName, holds: ExitPinHolds)
+		return try int.fromString(text.trim()) otherwise panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case's {ExpectedExitFileName} is not an integer. It must hold exactly the number the run exits with: {SuccessExitCode} when `fmt` did its job, 1 when it refused.")
+	end 'expectedExit'
+
+	// This case's own arguments, one per line of its `argv.txt`. Blank lines are dropped and each
+	// argument is trimmed, so a checkout that handed back CRLF cannot turn `--check` into `--check\r`
+	// — an argument `fmt` would refuse for a reason having nothing to do with the case.
+	//
+	// ⚠ An ABSENT file and an EMPTY one both mean "no arguments", and unlike `test-command`'s corpus
+	// that is not a half-written fixture: `no-argument-defaults-to-cwd` is precisely the case where
+	// `fmt` is given nothing and must fall back to the working directory.
+	function argv() returns StringArray
+		var extras = StringArray.create()
+
+		let path = self.dir.join("{ExtraArgvFileName}")
+		if not File.exists(path) 'takesNoArguments'
+			return extras
+		end 'takesNoArguments'
+
+		let text = try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case has an {ExtraArgvFileName} that could not be read. A case whose arguments cannot be recovered would be run as some OTHER case, silently.")
+
+		for line in text.split(LineFeed) 'eachLine'
+			let argument = line.trim()
+			if argument.isEmpty() 'blankLine'
+				continue
+			end 'blankLine'
+
+			extras.push(argument)
+		end 'eachLine'
+
+		return extras
+	end 'argv'
+
+	// Spawn the compiler under test at this case's staged tree.
+	//
+	// ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN
+	// ASSERTION.** A missing binary, an unspellable path, a spawn that never happened — none of those
+	// is `fmt` answering wrongly, and a report that made them read alike would send a reader looking
+	// for a defect in the thing that never ran.
+	function spawn() returns CollectedOutput
+		var arguments = StringArray.create()
+		arguments.push(TestedCommandName)
+		for extra in argv() 'eachExtra'
+			arguments.push(extra)
+		end 'eachExtra'
+
+		return spawnCompiler(arguments, workingDirectory: self.staged, what: "the '{self.name}' case")
+	end 'spawn'
+
+	// The three streams a case pins, asserted against one run.
+	function checkStreamsAgainstPins(run CollectedOutput, runLabel String) throws TestFailure
+		let expectedStdout = pinned(ExpectedStdoutFileName, holds: StdoutPinHolds)
+		let expectedStderr = pinned(ExpectedStderrFileName, holds: StderrPinHolds)
+
+		try checkStreams(run, expectedStdout: expectedStdout, expectedStderr: expectedStderr, runLabel: runLabel)
+	end 'checkStreamsAgainstPins'
+
+	// ⭐⭐ **RUNNING `fmt` AGAIN MUST CHANGE NOTHING, AND "NOTHING" IS SPELLED TWO DIFFERENT WAYS.**
+	//
+	// A case that SUCCEEDED reports a summary whose two counts have MOVED: everything the first run
+	// changed is unchanged the second time, so the total the walk sees is the same and the changed
+	// count is zero. That prediction is derived from the first run's own pin rather than written into
+	// each fixture, so it cannot drift case by case and a new fixture gets it for free.
+	//
+	// A case that was REFUSED changed nothing to begin with, so its second run must say exactly what
+	// its first run said — the same pins, byte for byte. Predicting a summary line there would be
+	// wrong: a refusal prints no summary at all.
+	function checkIdempotence(run CollectedOutput) throws TestFailure
+		if expectedExit() != SuccessExitCode 'aRefusal'
+			try checkStreamsAgainstPins(run, runLabel: SecondRunLabel)
+			return
+		end 'aRefusal'
+
+		let firstStdout = pinned(ExpectedStdoutFileName, holds: StdoutPinHolds)
+		let seen = totalFilesSeen(firstStdout, caseName: self.name)
+		let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: seen)}{LineFeed}"
+		let expectedStderr = pinned(ExpectedStderrFileName, holds: StderrPinHolds)
+
+		try checkStreams(run, expectedStdout: expectedStdout, expectedStderr: expectedStderr, runLabel: SecondRunLabel)
+	end 'checkIdempotence'
+
+	// ⭐⭐ **EVERY HALF OF ONE RUN, IN THE ORDER A READER NEEDS THEM.** The status comes first
+	// because it is the half a script reads; stderr comes before stdout because every `fmt` refusal
+	// prints to stderr and NOTHING to stdout, so on a refusal case stderr is the payload and stdout is
+	// empty on both sides. ONE place, so that order and the sentence explaining each question exist
+	// once rather than once per caller.
+	function checkStreams(run CollectedOutput, expectedStdout String, expectedStderr String, runLabel String) throws TestFailure
+		let observedExit = run.exitCode()
+		let expectedStatus = expectedExit()
+		let observedStderr = normalized(run.stderr)
+		try Expect.equal(observedExit, expected: expectedStatus, message: "'{self.name}' exited differently from its {ExpectedExitFileName} on {runLabel}. The status is the half of this report a SCRIPT reads, and the half that decides whether a refusal stops anything. It wrote to stderr: {observedStderr}")
+
+		try Expect.equal(observedStderr, expected: expectedStderr, message: "'{self.name}' wrote different stderr on {runLabel}. Every `fmt` refusal goes here and prints NOTHING to stdout, so on a refusal case this is the whole message.")
+
+		let observedStdout = normalized(run.stdout)
+		try Expect.equal(observedStdout, expected: expectedStdout, message: "'{self.name}' wrote different stdout on {runLabel}. The `formatted:` lines name every file written, and the summary counts what the walk FOUND — a `0 unchanged` proves an excluded file was never reached, where `1 unchanged` would mean it was reached and merely left alone.")
+	end 'checkStreams'
+
+	// ⭐⭐ **THE TREE IS COMPARED BOTH WAYS, AND THE SECOND DIRECTION IS THE ONE THAT FINDS THINGS.**
+	// Every file `expected-tree/` names must exist with identical bytes — that is the obvious half — and
+	// every file the staged tree holds must be named by `expected-tree/`, which is what makes an
+	// UNEXPECTED write red even when stdout is perfect. A walk that formatted a file it should have pruned
+	// reports nothing about it and changes it anyway.
+	//
+	// ⚠ **THE CONTENTS ARE COMPARED RAW, WITH NONE OF `normalized`'s FOLDING.** These are source bytes,
+	// not a report: a formatter that started writing CRLF, or that dropped a file's final newline, must be
+	// caught rather than normalized away.
+	function checkTree(runLabel String) throws TestFailure
+		let expectedTree = readableDir("{self.dir.toString()}/{ExpectedTreeDirName}")
+
+		var missing = StringArray.create()
+		var different = StringArray.create()
+		var expectedPaths = RelativePathSet.create()
+
+		for storedRelative in relativeFilePathsUnder(expectedTree, prefix: "") 'eachExpected'
+			let relative = storedPathToReal(storedRelative)
+			expectedPaths.insert(relative)
+
+			let stagedFile = joinRelative(self.staged, relative: relative)
+			if not File.exists(stagedFile) 'notWritten'
+				missing.push(relative)
+				continue
+			end 'notWritten'
+
+			let want = fileBody(joinRelative(expectedTree, relative: storedRelative))
+			let got = fileBody(stagedFile)
+			if want != got 'differentBytes'
+				different.push(relative)
+			end 'differentBytes'
+		end 'eachExpected'
+
+		var unexpected = StringArray.create()
+		for relative in relativeFilePathsUnder(self.staged, prefix: "") 'eachStaged'
+			if not expectedPaths.contains(relative) 'notInTheOracle'
+				unexpected.push(relative)
+			end 'notInTheOracle'
+		end 'eachStaged'
+
+		let report = treeReport(missing, different: different, unexpected: unexpected)
+		try Expect.isEmpty(report, message: "'{self.name}' left a tree that does not match its {ExpectedTreeDirName} after {runLabel}. MISSING is a file `fmt` should have left in place or written; DIFFERENT is one it wrote the wrong bytes into; UNEXPECTED is one it wrote that the oracle does not name at all — the direction stdout can never report, because a run that formats a file it should have pruned says nothing about it.")
+	end 'checkTree'
+end 'FixtureCase'
+
+// ⭐⭐ **ONE CASE, RUN TWICE.** The first run is compared against everything the fixture pins; then
+// the whole thing is run AGAIN on the tree the first run left, and required to change nothing.
+// Idempotence is a property no single-run fixture can see: a formatter rule that flips a file between
+// two spellings formats correctly, reports correctly, and is still broken.
+//
+// The tree is compared after EACH run, and the two failures mean different things: the first says
+// `fmt` wrote the wrong bytes, the second says a re-run touched a tree it had already finished with.
+function checkFixture(caseName String) throws TestFailure
+	let fixture = FixtureCase.stage(caseName)
+
+	let firstRun = fixture.spawn()
+	try fixture.checkStreamsAgainstPins(firstRun, runLabel: FirstRunLabel)
+	try fixture.checkTree(FirstRunLabel)
+
+	let secondRun = fixture.spawn()
+	try fixture.checkIdempotence(secondRun)
+	try fixture.checkTree(SecondRunLabel)
+end 'checkFixture'
+
+// The binary under test, absolute and with the suffix this host can actually spawn. ABSOLUTE because
+// the child is given a different working directory: a relative program path resolves against the
+// child's new directory on POSIX and against the parent's on Windows.
+function testedCompilerPath() returns FilePath
+	#if os(Windows)
+		let spelled = "{TestedCompilerStem}.exe"
+	#else
+		let spelled = "{TestedCompilerStem}"
+	#endif
+
+	let relative = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{TestedCompilerStem}' is not a spellable path")
+	return relative.resolve(Directory.currentPath())
+end 'testedCompilerPath'
+
+// ============================================================================================
+// THE SUMMARY LINE
+// ============================================================================================
+
+// The line every successful `fmt` run ends with, built from the one grammar this file holds.
+function summaryLine(changed FileTally, unchanged FileTally) returns String
+	return "{SummaryPrefixWord} {changed} {SummaryFilesWord} {SummaryChangedWord} {unchanged} {SummaryUnchangedWord}"
+end 'summaryLine'
+
+// How many files a run's walk FOUND, read off its summary: everything it changed plus everything it
+// left alone. That total is what the next run must report as unchanged.
+//
+// ⚠ **THE PARSE VALIDATES ITSELF BY REBUILDING THE LINE.** Two numbers lifted out by position could
+// have come from a line of some other shape entirely; reconstructing the whole line from them and
+// requiring it back byte for byte means the grammar is checked with the same spelling that produced
+// it.
+function totalFilesSeen(stdout String, caseName String) returns FileTally
+	let summary = lastNonBlankLine(stdout)
+	let words = summary.split(SummaryWordSeparator)
+	if words.count() != SummaryWordCount 'wrongWordCount'
+		panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's {ExpectedStdoutFileName} ends with '{summary}', which is not a `fmt` summary line. Every successful run ends with one, and the second run's expectation is derived from its two counts.")
+	end 'wrongWordCount'
+
+	let changed = countWordAt(words, index: ChangedCountWordIndex, summary: summary, caseName: caseName)
+	let unchanged = countWordAt(words, index: UnchangedCountWordIndex, summary: summary, caseName: caseName)
+	let rebuilt = summaryLine(changed, unchanged: unchanged)
+	if rebuilt != summary 'wrongShape'
+		panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line reads '{summary}' where this file's grammar builds '{rebuilt}'. The two must agree: one grammar parses the first run and predicts the second.")
+	end 'wrongShape'
+
+	return changed + unchanged
+end 'totalFilesSeen'
+
+// One of the summary line's two counts.
+function countWordAt(words StringArray, index FileTally, summary String, caseName String) returns FileTally
+	let word = try words.get(index) otherwise panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line '{summary}' has no word {index}.")
+	return try int.fromString(word) otherwise panic("fmt-fixtures.test: the gate could not run — the '{caseName}' case's summary line '{summary}' holds '{word}' where a file count belongs.")
+end 'countWordAt'
+
+// The last line of a stream that says anything. `fmt` ends every successful run with its summary and
+// then a newline, so the trailing empty piece of the split is not the line anybody means.
+function lastNonBlankLine(text String) returns String
+	var last = ""
+	for line in text.split(LineFeed) 'eachLine'
+		let candidate = line.trim()
+		if not candidate.isEmpty() 'saysSomething'
+			last = candidate
+		end 'saysSomething'
+	end 'eachLine'
+
+	return last
+end 'lastNonBlankLine'
+
+// ============================================================================================
+// STAGING
+// ============================================================================================
+
+// Copy one stored tree into a runnable one, mapping every name on the way.
+function copyStagedTree(stored FilePath, into FilePath)
+	for entry in listing(stored) 'eachEntry'
+		let target = into.join("{storedToReal(entry.filename())}")
+		if Directory.isDirectory(entry) 'aDirectory'
+			if not Directory.create(target) 'couldNotCreate'
+				panic("fmt-fixtures.test: the gate could not run — could not create the staging directory {target.toString()}.")
+			end 'couldNotCreate'
+
+			copyStagedTree(entry, into: target)
+			continue
+		end 'aDirectory'
+
+		let body = try File.readText(entry) otherwise panic("fmt-fixtures.test: the gate could not run — could not read the stored fixture file {entry.toString()}.")
+		try File.writeText(target, content: body) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {target.toString()}.")
+	end 'eachEntry'
+end 'copyStagedTree'
+
+// ⛔ **THE STORED-NAME MAPPING — the harness half of the pair `generate-expectations.py` holds.** One
+// function serves files and directories both: a directory carries only the `dot-` half, and a name
+// carrying neither marker is already what it will be called.
+function storedToReal(stored String) returns String
+	var real = stored
+	if real.endsWith(StoredFixtureSuffix) 'inertSource'
+		let suffixStart = try real.findLast(StoredFixtureSuffix) otherwise panic("fmt-fixtures.test: the gate could not run — '{real}' ends with {StoredFixtureSuffix} and yet does not contain it.")
+		real = real.slice(real.startIndex(), endIndex: suffixStart)
+	end 'inertSource'
+
+	if real.startsWith(StoredDotPrefix) 'hiddenName'
+		real = ".{real.replaceFirst(StoredDotPrefix, with: "")}"
+	end 'hiddenName'
+
+	return real
+end 'storedToReal'
+
+// The same mapping applied to a whole relative path, so a stored tree's walk can be compared against a
+// staged tree's walk without staging anything twice.
+function storedPathToReal(stored String) returns String
+	var real = ""
+	var atFirstComponent = true
+	for component in stored.split(PortablePathSeparator) 'eachComponent'
+		let mapped = storedToReal(component)
+		if atFirstComponent 'firstComponent'
+			real = mapped
+			atFirstComponent = false
+			continue
+		end 'firstComponent'
+
+		real = "{real}{PortablePathSeparator}{mapped}"
+	end 'eachComponent'
+
+	return real
+end 'storedPathToReal'
+
+// Delete every file under a directory, leaving the directories themselves. The same shape, for the
+// same reason, as `SpecTestRunner.purgeFilesIn`.
+function purgeFilesIn(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			purgeFilesIn(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("fmt-fixtures.test: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree. Left there, it would be compared as though `fmt` had written it.")
+	end 'eachEntry'
+end 'purgeFilesIn'
+
+// A path as the pins spell one: forward slashes whatever the host uses.
+function portableSpelling(path FilePath) returns String
+	return path.toString().replace(FilePath.separator(), with: PortablePathSeparator)
+end 'portableSpelling'
+
+// ============================================================================================
+// COMPARING THE TREE
+// ============================================================================================
+
+// The three kinds of tree difference, rendered as the one text a reader has to act on. Empty when the
+// trees agree, which is what makes `checkTree`'s assertion an `isEmpty` on the evidence itself.
+function treeReport(missing StringArray, different StringArray, unexpected StringArray) returns String
+	var report = ""
+	report.append(listedUnder(missing, heading: "MISSING"))
+	report.append(listedUnder(different, heading: "DIFFERENT"))
+	report.append(listedUnder(unexpected, heading: "UNEXPECTED"))
+
+	return report
+end 'treeReport'
+
+// One heading and its paths, or nothing at all when there are none.
+function listedUnder(paths StringArray, heading String) returns String
+	if paths.isEmpty() 'nothingToSay'
+		return ""
+	end 'nothingToSay'
+
+	return "{LineFeed}{heading}:{listedLines(paths)}"
+end 'listedUnder'
+
+// Every file under `root`, as a path relative to it with `/` between the components whatever the host
+// spells. The order is the directory listing's and nothing depends on it: these paths are compared as
+// SETS, and their only ordered use is the offender list a failure message prints.
+//
+// Directories are descended into unconditionally — `.git` and `.maxonignore` included, since
+// whether `fmt` respected those is exactly what the tree is being compared to find out.
+function relativeFilePathsUnder(root FilePath, prefix String) returns StringArray
+	var found = StringArray.create()
+
+	for entry in listing(root) 'eachEntry'
+		let name = entry.filename()
+		let relative = name if prefix.isEmpty() else "{prefix}{PortablePathSeparator}{name}"
+		if Directory.isDirectory(entry) 'aDirectory'
+			for nested in relativeFilePathsUnder(entry, prefix: relative) 'eachNested'
+				found.push(nested)
+			end 'eachNested'
+			continue
+		end 'aDirectory'
+
+		found.push(relative)
+	end 'eachEntry'
+
+	return found
+end 'relativeFilePathsUnder'
+
+// A relative path built by `relativeFilePathsUnder`, resolved against the root it came from.
+//
+// ⚠ **THE INTERPOLATION AROUND EVERY `join` ARGUMENT IN THIS FILE IS LOAD-BEARING, NOT NOISE.** The
+// BOOTSTRAP reports `FilePath.join` as an ambiguous overload set (E3007, the `String` and `FilePath`
+// candidates) for a plain `String` argument, where shv2 resolves it; these tests must compile under
+// both, so they take the spelling both accept. Same divergence, same cure, as the locals `Expect.equal`
+// is handed above.
+function joinRelative(root FilePath, relative String) returns FilePath
+	var path = root
+	for component in relative.split(PortablePathSeparator) 'eachComponent'
+		path = path.join("{component}")
+	end 'eachComponent'
+
+	return path
+end 'joinRelative'
+
+// One file's bytes as text. A file that cannot be read is the instrument being broken: both trees are
+// on this machine and one of them was written moments ago.
+function fileBody(path FilePath) returns String
+	return try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — could not read {path.toString()} while comparing a case's tree.")
+end 'fileBody'
+
+// ============================================================================================
+// WALKING THE CORPUS
+// ============================================================================================
+
+// A directory this file's paths name, refused loudly when it is not there. ONE speller, because every
+// such refusal is really the same one — the working-directory contract in the header was not met — and
+// each site repeating it is how the sentence explaining it comes to exist in only some of them.
+function readableDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+	if not Directory.isDirectory(path) 'notThere'
+		panic("fmt-fixtures.test: the gate could not run — there is no directory at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
+	end 'notThere'
+
+	return path
+end 'readableDir'
+
+// A directory this run WRITES into, created if it is not there yet, and ABSOLUTE because the staging
+// tree is handed to a child process as its working directory.
+function writableDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+	if not Directory.create(path) 'couldNotCreate'
+		panic("fmt-fixtures.test: the gate could not run — could not create '{spelled}'. It is where a case's runnable copy is built; nothing can be staged without it.")
+	end 'couldNotCreate'
+
+	return path.resolve(Directory.currentPath())
+end 'writableDir'
+
+// ⭐⭐ **THE ROSTER IS READ FROM THE FILESYSTEM, NEVER FROM A CONSTANT.** A hand-written list is a
+// guard only while somebody maintains it: adding a fixture without adding its name would leave the
+// case unrun, and an unrun case reads exactly like one that passed — the very thing the guard exists
+// to close.
+//
+// Files sitting at the corpus root are not cases and are not listed: a note beside the directories
+// (`census-sources.txt`) is not a fixture.
+function fixtureCaseNames() returns StringArray
+	var names = StringArray.create()
+
+	for entry in listing(readableDir(FixturesDirName)) 'eachEntry'
+		if Directory.isDirectory(entry) 'aCase'
+			names.push(entry.filename())
+		end 'aCase'
+	end 'eachEntry'
+
+	return names
+end 'fixtureCaseNames'
+
+// A file this harness must be able to read, resolved with the same loud failure `readableDir` gives a
+// directory — and for its reason: every path here is relative to the CHECKOUT ROOT, so a run started
+// anywhere else finds nothing and must say so rather than reporting an empty corpus as agreement.
+function readableFile(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+	if not File.exists(path) 'notThere'
+		panic("fmt-fixtures.test: the gate could not run — there is no file at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
+	end 'notThere'
+
+	return path
+end 'readableFile'
+
+// Every `.maxon` file under `root` that is not a test driver, skipping `.maxon/` product directories —
+// `maxon test` stages a copy of this project there and writes a generated entry source beside it, so a
+// walk that went in would report the compiler's own output as a corpus offence.
+function liveSourcesUnder(root FilePath) returns StringArray
+	var live = StringArray.create()
+
+	for entry in listing(root) 'eachEntry'
+		let name = entry.filename()
+		if Directory.isDirectory(entry) 'aDirectory'
+			if name == ProjectProductsDirName 'buildProducts'
+				continue
+			end 'buildProducts'
+
+			for nested in liveSourcesUnder(entry) 'eachNested'
+				live.push(nested)
+			end 'eachNested'
+			continue
+		end 'aDirectory'
+
+		if name.endsWith(MaxonSourceSuffix) and not name.endsWith(TestSourceSuffix) 'aLiveSource'
+			live.push(entry.toString())
+		end 'aLiveSource'
+	end 'eachEntry'
+
+	return live
+end 'liveSourcesUnder'
+
+// The paths a refusal lists, one per line — empty when there are none, which is what makes the
+// assertions above an `isEmpty` on the very text a reader has to act on.
+function listedLines(paths StringArray) returns String
+	var listed = ""
+	for path in paths 'eachPath'
+		listed.append("{LineFeed}  {path}")
+	end 'eachPath'
+
+	return listed
+end 'listedLines'
+
+// What one directory holds. A listing that fails is the instrument being broken — the corpus is
+// checked into this repository, and the staging tree was written by this process moments ago.
+function listing(dir FilePath) returns FixturePathArray
+	return try Directory.list(dir) otherwise panic("fmt-fixtures.test: the gate could not run — could not list {dir.toString()}")
+end 'listing'
+
+
+// ============================================================================================
+// THE CASES
+// ============================================================================================
+
+// ⚠ **ONE FILE, NOT ONE PER CASE — AND THE RULE IT DEPARTS FROM IS A DEADLINE, NOT A STYLE.**
+// `maxon-shv2/Testing/test-command/` gives each spawning `test` its own file because a file is what
+// ONE process runs and that process has a 5,000 ms deadline, and ITS fixtures each COMPILE A PROJECT
+// at roughly half a second apiece. These format a tiny staged tree instead.
+//
+// MEASURED on this corpus, merged: **26 tests, 2,718 ms** against that deadline — 1.8x headroom, and
+// the 22 case tests average 61 ms. Splitting them back out would ADD time, not save it: the only
+// thing a split buys back is process startups, and they are not where the time goes.
+//
+// ⛔ **THE ONE CASE THAT COULD BRING THE DEADLINE BACK IS THE CENSUS**, which formats real compiler
+// sources and costs ~1,270 ms on its own — roughly HALF the run. Its roster is short for that reason
+// and its own header says so; `Parser.maxon` is deliberately off it at ~2.6 s per pass. If this file
+// ever does time out, the answer is that roster or `--timeout=`, never a return to one file per case.
+//
+// ⭐ And one file is what keeps the constants and helpers below from being redeclared per case. They
+// were, in the first draft — a separate census file carried its own `TestedCompilerStem`,
+// `TestedCommandName`, `LineFeed`, `PortablePathSeparator` and `SuccessExitCode`. In one file those
+// names COLLIDE, so the duplication is not discouraged here, it is impossible.
+
+// already-formatted.test.maxon — a source already in the formatter's own output shape is
+// REWRITTEN BY NOBODY. `0 changed, 1 unchanged` is the pair of numbers that says so: the walk
+// found the file and decided against it, which is a different fact from never having found it.
+//
+test 'an already-formatted source is found and left alone'
+	try checkFixture("already-formatted")
+end 'an already-formatted source is found and left alone'
+
+// build-manifest-case-folded.test.maxon — the build manifest is recognised WITHOUT REGARD TO
+// CASE, so a `BUILD.maxon` is skipped exactly as `build.maxon` is.
+//
+// ⭐ `0 changed, 0 unchanged` is the load-bearing half: it says the walk never counted the file
+// at all. `0 changed, 1 unchanged` would mean the manifest was found and merely left as it was,
+// which is a different implementation passing the same stdout check.
+//
+test 'a manifest named BUILD.maxon is skipped like build.maxon'
+	try checkFixture("build-manifest-case-folded")
+end 'a manifest named BUILD.maxon is skipped like build.maxon'
+
+// build-manifest-skipped.test.maxon — a directory walk formats the sources and never reaches the
+// build manifest beside them. The manifest is a project declaration the compiler reads, not a
+// source the formatter owns.
+//
+// ⭐ `1 changed, 0 unchanged` proves the skip happened in the WALK: had the manifest been visited
+// and declined, it would be counted as unchanged.
+//
+test 'a directory walk formats the sources and never visits build.maxon'
+	try checkFixture("build-manifest-skipped")
+end 'a directory walk formats the sources and never visits build.maxon'
+
+// command-word-as-path — ⛔⛔ **A DIRECTORY WHOSE NAME SPELLS A COMMAND IS STILL A PATH, AND THE
+// SPELLING THAT FAILS IS `fmt fmt`.** This driver's argument parser is ORDER-INDEPENDENT — one loop,
+// arms in no relation to position — so before `laterCommandWordIsAPath` existed the second `fmt` set
+// the command a second time and was never filed as a positional. `runFmt` then saw NO path, took its
+// working-directory default, and REWROTE THE WHOLE TREE in place: exit 0, `2 file(s) changed`, with a
+// file the caller never named among them. That is the 92-file worktree incident reached through the
+// POSITIONAL door, which every `flag-refused` case above guards only the FLAG door of.
+//
+// ⭐ `Outside.maxon` is stored deliberately UNFORMATTED and pinned that way: a regression formats it,
+// and the tree comparison is the only thing that can say so — stdout on the broken run named it, but
+// a run that named nothing and wrote nothing would read the same as this one.
+//
+// The expectation is the BOOTSTRAP's own answer, as every case here is: it dispatches on `args[0]` and
+// hands the rest to `RunFmt`, so it cannot have this defect and is the right oracle for it.
+//
+test 'a directory whose name spells a command is still a path'
+	try checkFixture("command-word-as-path")
+end 'a directory whose name spells a command is still a path'
+
+// directory-walk.test.maxon — a directory argument reaches every `.maxon` beneath it at every
+// depth, and reports them in one stable order. The order is part of the pin: a walk whose output
+// depends on the filesystem's listing order cannot be diffed between two compilers at all.
+//
+test 'a directory argument formats every source beneath it, at any depth'
+	try checkFixture("directory-walk")
+end 'a directory argument formats every source beneath it, at any depth'
+
+// empty-directory.test.maxon — a tree holding no Maxon source at all is not an error and not a
+// refusal: `fmt` reports that it found nothing and exits 0. The `notes.txt` in it is the point — a
+// non-source file must be neither formatted nor counted.
+//
+test 'a tree with no Maxon source reports nothing found and succeeds'
+	try checkFixture("empty-directory")
+end 'a tree with no Maxon source reports nothing found and succeeds'
+
+// flag-refused-implemented-option.test.maxon — ⛔⛔ **THE DANGEROUS HALF OF THE FLAG REFUSAL, AND THE
+// ONE `flag-refused` CANNOT SEE.** That case passes `--check`, which NO command in this driver
+// implements, so it is refused by the catch-all unknown-flag arm and would stay refused even if `fmt`
+// had no rule of its own. This one passes `--emit-ir`, which `maxon-shv2` DOES implement — so an arm
+// that understands it sets `emitIr`, leaves `badOption` empty, and lets `fmt` run on a command line
+// whose flag was silently swallowed. For this command that means rewriting a directory in place.
+//
+// MEASURED before the fix: `maxon-shv2 --emit-ir fmt` printed `formatted: <cwd>/U.maxon` and exited 0.
+// See `MaxonArgs.anyOption`, which records every `-`-leading argument ABOVE the arm chain so no arm can
+// swallow one first, and `fixtures.test.maxon`'s `an option ahead of the command word is still refused`
+// for the ORDERING half — the two together are what close it.
+//
+// The expectation here is the BOOTSTRAP's own answer: it refuses any `-`-leading argument in `RunFmt`,
+// so both compilers print the identical two lines for this spelling.
+//
+test 'an option this driver implements is still refused rather than swallowed'
+	try checkFixture("flag-refused-implemented-option")
+end 'an option this driver implements is still refused rather than swallowed'
+
+// flag-refused-no-path.test.maxon — the same refusal with NO path beside the option, which is the
+// shape that actually falls back to the current directory when the guard is missing.
+// `flag-refused` passes `.` as well, so a regression there could be masked by the path it was
+// given; here there is no path at all, and the only two outcomes are a refusal or a whole-tree
+// rewrite.
+//
+test 'an option with no path is refused rather than falling back to the working directory'
+	try checkFixture("flag-refused-no-path")
+end 'an option with no path is refused rather than falling back to the working directory'
+
+// flag-refused.test.maxon — ⛔ **THE FIXTURE THAT GATES A DESTRUCTIVE REGRESSION.** `fmt` takes no
+// options, and an unrecognized one must be REFUSED — with the usage line, on stderr, exit 1,
+// nothing written. The failure this prevents is specific and it has happened: an unrecognized
+// flag that matched no path once fell through to "format the current directory", and one
+// accidental whole-tree run rewrote 92 files across two agent worktrees.
+//
+// ⚠ That is also why this harness runs every case with the STAGED TREE as the working directory.
+// Run from the checkout root, this fixture would reproduce the incident instead of gating it.
+//
+test 'an unrecognized option is refused on stderr and nothing is written'
+	try checkFixture("flag-refused")
+end 'an unrecognized option is refused on stderr and nothing is written'
+
+// git-at-root-not-pruned.test.maxon — ⭐⭐ **ONE HALF OF A PAIR THAT FAILS IN OPPOSITE DIRECTIONS,
+// AND NEITHER HALF CONSTRAINS THE RULE ALONE.** Its partner is `nested-git-pruned`.
+//
+// A `.git` BELOW the traversal root marks a separate checkout and must prune that subtree
+// (`nested-git-pruned`). A `.git` AT the traversal root is this checkout's own, and pruning on it
+// would make `maxon fmt` inside any repository format NOTHING — so it must not prune.
+//
+// A rule that never prunes passes this case and fails its partner; a rule that always prunes
+// passes its partner and fails this one. Only the two together say where the boundary is.
+//
+test 'a .git at the traversal root does not prune the walk'
+	try checkFixture("git-at-root-not-pruned")
+end 'a .git at the traversal root does not prune the walk'
+
+// maxonignore-above-root.test.maxon — a `.maxonignore` does not stop applying because the walk was
+// started BELOW it. The named root here is `vendor/deep` and the marker sits in `vendor/`: the
+// subtree is still excluded, and `0 changed, 0 unchanged` says the walk found nothing rather than
+// finding the file and declining it.
+//
+// ⚠ Read against `named-path-escapes-ignore`, which names a FILE under the same marker and DOES
+// format it. Naming a file is an instruction; naming a directory is still a walk.
+//
+test 'a .maxonignore above the named directory still excludes it'
+	try checkFixture("maxonignore-above-root")
+end 'a .maxonignore above the named directory still excludes it'
+
+// maxonignore-pruned.test.maxon — a `.maxonignore` prunes its whole subtree from a directory walk,
+// however deep. `1 changed, 0 unchanged` is the assertion: the one source outside the marked
+// directory is formatted and the two inside it are never counted at all.
+//
+test 'a .maxonignore prunes its entire subtree from a walk'
+	try checkFixture("maxonignore-pruned")
+end 'a .maxonignore prunes its entire subtree from a walk'
+
+// named-path-escapes-ignore.test.maxon — a file named ON THE COMMAND LINE is formatted even though
+// a `.maxonignore` beside it excludes the directory from a walk. The marker says what a SWEEP
+// should skip; it is not a refusal to touch the file when somebody asks for it by name.
+//
+// ⚠ The partner case is `maxonignore-above-root`, which names the DIRECTORY instead and gets
+// nothing.
+//
+test 'a file named on the command line is formatted despite a .maxonignore'
+	try checkFixture("named-path-escapes-ignore")
+end 'a file named on the command line is formatted despite a .maxonignore'
+
+// named-path-escapes-manifest.test.maxon — the build manifest is skipped by the WALK, not exempted
+// from formatting: named on the command line, `build.maxon` is formatted like any other source.
+// The two facts are easy to conflate into one "manifests are never touched" rule, and this case
+// is the half that would go red if they were.
+//
+test 'a build manifest named on the command line is formatted'
+	try checkFixture("named-path-escapes-manifest")
+end 'a build manifest named on the command line is formatted'
+
+// nested-git-pruned.test.maxon — ⭐⭐ **ONE HALF OF A PAIR THAT FAILS IN OPPOSITE DIRECTIONS, AND
+// NEITHER HALF CONSTRAINS THE RULE ALONE.** Its partner is `git-at-root-not-pruned`.
+//
+// A `.git` BELOW the traversal root marks a checkout that is not ours, and its subtree must be
+// pruned — in BOTH of git's spellings, the `.git/` directory of a clone and the `.git` FILE of a
+// worktree. This tree holds one of each, and only `Top.maxon` may be formatted.
+//
+// A rule that always prunes passes this case and fails its partner, where a `.git` at the root
+// would make `maxon fmt` inside any repository format nothing. Only the two together say where
+// the boundary is.
+//
+test 'a .git below the traversal root prunes its subtree, as a directory and as a file'
+	try checkFixture("nested-git-pruned")
+end 'a .git below the traversal root prunes its subtree, as a directory and as a file'
+
+// no-argument-defaults-to-cwd.test.maxon — `fmt` with no path formats the WORKING DIRECTORY. That
+// is the documented default, and it is the behaviour every flag-refusal case exists to keep from
+// being reached by accident — so it has to be pinned somewhere, deliberately, as itself.
+//
+// ⚠ **THIS IS THE ONE CASE WHOSE OUTPUT IS ABSOLUTE**, because the default has no argument
+// spelling to echo. The staging directory differs on every run, so the harness and
+// `generate-expectations.py` both fold it to the literal `<TREE>` — the third of the three
+// substitutions their `normalized` / `normalize` must agree on.
+//
+test 'no argument formats the working directory'
+	try checkFixture("no-argument-defaults-to-cwd")
+end 'no argument formats the working directory'
+
+// path-not-found.test.maxon — a path that is not there is a refusal on stderr with exit 1, NOT a
+// silent no-op and not a fallback to the working directory. A mistyped filename that formatted
+// the whole tree instead is the same incident the flag-refusal cases gate, reached through a
+// different door.
+//
+test 'a path that does not exist is refused, and the real source beside it is untouched'
+	try checkFixture("path-not-found")
+end 'a path that does not exist is refused, and the real source beside it is untouched'
+
+// section-separator-file.test.maxon — a spec fragment named on the command line is formatted even
+// though its extension is not `.maxon` and its body is three `---`-separated sections rather than
+// one program. Naming a path is an instruction about THAT FILE; the extension is how a WALK
+// decides.
+//
+test 'a named file is formatted whatever its extension'
+	try checkFixture("section-separator-file")
+end 'a named file is formatted whatever its extension'
+
+// section-separator-not-walked.test.maxon — the other half of `section-separator-file`: the same
+// fragment, in the same directory, is NEVER FOUND by a walk. `1 changed, 0 unchanged` says so —
+// the fragment is not counted as unchanged, because the walk selects on the extension and never
+// opens it.
+//
+test 'a walk selects on the extension and never finds a fragment beside a source'
+	try checkFixture("section-separator-not-walked")
+end 'a walk selects on the extension and never finds a fragment beside a source'
+
+// single-file.test.maxon — a file argument formats THAT FILE and nothing else. The sibling source
+// in the same directory is the assertion: it is not named, so it must come out byte-identical,
+// and the tree comparison is what catches it if it does not — stdout would say nothing either
+// way.
+//
+test 'a file argument formats only that file, leaving its sibling untouched'
+	try checkFixture("single-file")
+end 'a file argument formats only that file, leaving its sibling untouched'
+
+// two-paths-refused.test.maxon — `fmt` takes AT MOST ONE path, and two is refused with both of
+// them named. The alternative a refusal prevents is worse than an error: silently formatting the
+// first and ignoring the second reads, on stdout, exactly like a successful run.
+//
+test 'a second path is refused rather than silently ignored'
+	try checkFixture("two-paths-refused")
+end 'a second path is refused rather than silently ignored'
+
+// unlexable-file-left-alone.test.maxon — a source the lexer rejects is left BYTE-IDENTICAL and
+// counted as unchanged, and the run still succeeds: one unformattable file in a tree must not
+// stop the others from being formatted, and must not be half-rewritten from a token stream that
+// stopped early.
+//
+// ⚠ `tests/README.md` records the limit this case cannot cover: `unchanged` means both "already
+// perfect" and "could not be read", and nothing in the report tells the two apart. One fixture
+// pins it for one file; nothing says it is happening to two hundred.
+//
+test 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
+	try checkFixture("unlexable-file-left-alone")
+end 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
+// ============================================================================================
+// REAL SOURCES, AT SCALE
+// ============================================================================================
+
+// ⭐⭐ **THE CORPUS ABOVE HAS ONE STRUCTURAL BLIND SPOT AND IT IS SCALE.** The formatter's indent
+// level, block stack and group counters are MONOTONIC across a file: they are carried from the first
+// token to the last, so an imbalance does not produce a wrong answer on one line, it produces drift
+// that grows. Every fixture above is a few dozen lines at nesting depth 2-3, where such an imbalance
+// moves three lines and reads as a layout opinion. The measured incident moved 2,189 lines in a real
+// file. This is the one case that reaches real sources.
+//
+// ⛔⛔ **IT STAGES FROM THE LIVE TREE AT TEST TIME AND COMMITS NO COPY.** A committed duplicate of an
+// 8,000-line compiler source would drift from the original the first time either was edited, and the
+// test would then be measuring a file the compiler no longer has. That is a deliberate exception to
+// this directory's "nothing stored here is a live `.maxon`" rule, and it is safe for that rule's own
+// reason INVERTED: the rule exists because `maxon fmt` over the checkout would rewrite a stored source
+// and silently re-bless the expectation minted from it — and **nothing is stored here, so there is no
+// expectation for `fmt` to re-bless.** The roster names paths; it is not Maxon and the walk that
+// guards this directory does not read it as a source.
+//
+// ⭐ **SO EVERY ASSERTION IS DERIVED RATHER THAN PINNED, WHICH IS THE OPPOSITE OF EVERY CASE ABOVE.**
+// There is no `expected-tree/` and no `expected-stdout.txt`, and there could not be: the oracle would
+// have to be re-minted on every edit to any of the sources, which is a re-bless per commit and a gate
+// that means nothing by the second one. What is asserted instead is what must hold for ANY correctly
+// formatted version of ANY of these files — every comment line still a comment line, every doc comment
+// still a doc comment, every line of code still there, and a second run with nothing left to do.
+//
+// ⛔ **THE COPY IS FORMATTED, NEVER THE ORIGINAL.** `fmt` is spawned with its working directory in
+// gitignored `temp/`, and nothing here passes it a path inside the checkout's source tree.
+
+// Where the roster lives, relative to the checkout root. It is NOT under `fixtures/`: it has no
+// `input/`, no `expected-tree/` and no pins, so filed among the case directories it would be counted
+// as a case and read as a half-written fixture.
+let CensusSourceListFileName = "tests/fmt/census-sources.txt"
+
+// A roster line that is a note rather than a path. The roster explains itself in place, because which
+// files are on it and why is the first thing a reader of a failure here needs.
+let CensusNotePrefix = "#"
+
+// Where the copies are built. A second staging root beside `StagingRootDirName` rather than a case
+// directory under it: `purgeFilesIn` clears a whole root, and sharing one with the fixtures would have
+// this test delete a case's staged tree out from under it.
+let CensusStagingDirName = "temp/fmt-census"
+
+// The path `fmt` is given: the staging directory it is already running in. Explicit rather than
+// relying on the no-argument default, which is a case of its own (`no-argument-defaults-to-cwd`) and
+// not what is being asked here.
+let CensusStagingDirArgument = "."
+
+// The two comment markers the census counts. They are NOT disjoint — a `///` line contains `//` and is
+// counted by both — and that is the point: a doc comment demoted to a plain comment moves one count
+// and not the other, where a census of "comment lines" alone would read the swap as no change at all.
+let CommentMarker = "//"
+let DocCommentMarker = "///"
+
+// What a staged file is called: the source's path with its separators folded into one name, so a flat
+// staging directory holds sources from anywhere in the tree without two of them colliding. It also
+// guarantees no staged file is named `build.maxon`, which the walk skips by name
+// (`build-manifest-skipped`).
+let StagedNameSeparator = "_"
+
+// Which of the census test's two runs a message is about. The two failures mean different things: the
+// first says `fmt` mangled a real source, the second says a re-run touched a tree it had finished with.
+let CensusFirstRunLabel = "the first run"
+let CensusSecondRunLabel = "the second run"
+
+// How many lines of one kind a file holds. Named for what it measures rather than for the loop.
+typealias LineTally = int(0 to u64.max)
+
+// ⭐⭐ **WHAT MUST HOLD FOR ANY CORRECTLY FORMATTED VERSION OF ANY FILE.** The three counts are taken
+// together and reported together, because a failure in which two of them moved says something quite
+// different from one in which a single count did.
+//
+// ⚠ **THEY COUNT LINES, NOT COMMENTS, AND THAT IS THE HONEST BOUND FOR A CENSUS OVER ARBITRARY
+// SOURCE**: a `//` inside a string literal is counted too. It does not matter, because the question
+// asked is INVARIANCE — the identical rule is applied to both texts, and a formatter that neither
+// loses nor duplicates content leaves every one of these numbers exactly where it was.
+type Census
+	let commentLines as LineTally
+	let docCommentLines as LineTally
+	let nonBlankLines as LineTally
+
+	// ONE walk, so a file of several thousand lines is split into lines once rather than once per count.
+	static function of(text String) returns Census
+		var comments = 0 as LineTally
+		var docComments = 0 as LineTally
+		var nonBlank = 0 as LineTally
+
+		for line in text.split(LineFeed) 'eachLine'
+			if line.contains(CommentMarker) 'bearsAComment'
+				comments = comments + 1
+			end 'bearsAComment'
+
+			if line.contains(DocCommentMarker) 'bearsADocComment'
+				docComments = docComments + 1
+			end 'bearsADocComment'
+
+			if not line.trim().isEmpty() 'saysSomething'
+				nonBlank = nonBlank + 1
+			end 'saysSomething'
+		end 'eachLine'
+
+		return Self{commentLines: comments, docCommentLines: docComments, nonBlankLines: nonBlank}
+	end 'of'
+
+	// The whole census as one line, which is what the two sides are compared as: an equality on text
+	// puts all three numbers in front of the reader at once, where three separate assertions would stop
+	// at the first and hide the SHAPE of the loss.
+	function rendered() returns String
+		return "{self.commentLines} comment line(s), {self.docCommentLines} doc-comment line(s), {self.nonBlankLines} non-blank line(s)"
+	end 'rendered'
+end 'Census'
+
+// One roster entry: where it came from, where its copy is, and what it said before `fmt` saw it. The
+// three travel together because every assertion compares the last against the second and names the
+// first.
+type CensusSource
+	let origin as String
+	let staged as FilePath
+	let before as String
+
+	static function create(origin String, staged FilePath, before String) returns CensusSource
+		return Self{origin: origin, staged: staged, before: before}
+	end 'create'
+
+	// The one question asked of this source once `fmt` has run over its copy. It is a method rather
+	// than a loop body reading three fields, because what a failure has to name — the ORIGIN path — is
+	// the field a caller outside the type would have to be handed in order to say it.
+	function requireNothingWasLost() throws TestFailure
+		let observed = Census.of(fileBody(self.staged)).rendered()
+		let expected = Census.of(self.before).rendered()
+		try Expect.equal(observed, expected: expected, message: "formatting changed what {self.origin} CONTAINS, not merely how it is laid out. A comment line that stopped being one was destroyed; a doc-comment line that stopped being one was demoted; a missing non-blank line is code or prose that is gone. Layout is the formatter's to change, and not one of these three is layout.")
+	end 'requireNothingWasLost'
+end 'CensusSource'
+
+typealias CensusSourceArray = Array with CensusSource
+
+test 'formatting real sources keeps every comment, every doc comment and every line of code'
+	let sources = stageEveryCensusSource()
+
+	let firstRun = spawnFmtOverCensusTree()
+	try requireCensusRunSucceeded(firstRun, runLabel: CensusFirstRunLabel)
+
+	for source in sources 'eachSource'
+		try source.requireNothingWasLost()
+	end 'eachSource'
+
+	// ⭐ Idempotence over real sources is a different claim from idempotence over a fixture: a rule that
+	// flips a construct between two spellings needs that construct to appear, and the cases above reach
+	// a few dozen constructs where these files reach thousands.
+	//
+	// The prediction goes through `summaryLine` — the ONE grammar this file parses the fixtures' first
+	// run with and predicts their second run with — rather than a substring: what the second run must
+	// say is exactly `0 changed` over every file the walk found, and the walk found what was staged.
+	let secondRun = spawnFmtOverCensusTree()
+	try requireCensusRunSucceeded(secondRun, runLabel: CensusSecondRunLabel)
+
+	let observedStdout = secondRun.stdout.replace(CarriageReturn, with: "")
+	// ⚠ No `as FileTally` on the count: shv2 accepts the cast, the BOOTSTRAP rejects it as
+	// `E3010 unneeded cast` — and this corpus has to compile under BOTH, because running it under the
+	// reference is what closes the circularity for a driver that tests itself.
+	let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: sources.count())}{LineFeed}"
+	try Expect.equal(observedStdout, expected: expectedStdout, message: "a second `{TestedCommandName}` over the tree the first one left did not report that it had nothing to do. Formatting a formatted file must be a fixed point; anything else means the tool moves a real source a little further every time it is run over it.")
+end 'formatting real sources keeps every comment, every doc comment and every line of code'
+
+// ⛔ **AN EMPTY ROSTER IS A PANIC, NOT A PASS.** A test that formatted nothing reports exactly what a
+// test that formatted everything and agreed reports — and unlike every case above, this one has no
+// stored expectation whose absence would give it away.
+function stageEveryCensusSource() returns CensusSourceArray
+	let stagingRoot = writableDir(CensusStagingDirName)
+	purgeFilesIn(stagingRoot)
+
+	var staged = CensusSourceArray.create()
+	for origin in censusRosterPaths() 'eachOrigin'
+		let body = fileBody(censusSourcePath(origin))
+		let target = stagingRoot.join("{stagedCensusNameFor(origin)}")
+		try File.writeText(target, content: body) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage a copy of {origin} at {target.toString()}. The ORIGINAL is never formatted, so without the copy there is nothing to format.")
+
+		staged.push(CensusSource.create(origin, staged: target, before: body))
+	end 'eachOrigin'
+
+	if staged.isEmpty() 'nothingStaged'
+		panic("fmt-fixtures.test: the gate could not run — {CensusSourceListFileName} names no source, so `{TestedCommandName}` would run over an empty directory and this test would pass having formatted nothing.")
+	end 'nothingStaged'
+
+	return staged
+end 'stageEveryCensusSource'
+
+// The roster with its notes and blank lines dropped. It is read from a file rather than written here
+// so that the reason each source is on the list sits beside the path, where whoever adds one reads it.
+function censusRosterPaths() returns StringArray
+	let path = try FilePath.from(CensusSourceListFileName) otherwise panic("fmt-fixtures.test: the gate could not run — '{CensusSourceListFileName}' is not a spellable path")
+	let text = try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — could not read {CensusSourceListFileName}. Every path in this file is relative to the CHECKOUT ROOT (see the header); a run started anywhere else finds nothing.")
+
+	var paths = StringArray.create()
+	for line in text.split(LineFeed) 'eachLine'
+		let entry = line.trim()
+		if entry.isEmpty() or entry.startsWith(CensusNotePrefix) 'aNote'
+			continue
+		end 'aNote'
+
+		paths.push(entry)
+	end 'eachLine'
+
+	return paths
+end 'censusRosterPaths'
+
+// A source the roster names, refused loudly when it is not there. A file that has been moved or
+// renamed must BREAK this test rather than quietly shrink it: a roster that silently lost an entry
+// formats less every time the tree moves, and says nothing.
+function censusSourcePath(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
+	if not File.exists(path) 'notThere'
+		panic("fmt-fixtures.test: the gate could not run — {CensusSourceListFileName} names '{spelled}', and there is no file there. Point the roster at the file's new home, with the note saying why it is on the list.")
+	end 'notThere'
+
+	return path
+end 'censusSourcePath'
+
+// A source's path folded into one staging filename. See `StagedNameSeparator`.
+function stagedCensusNameFor(origin String) returns String
+	return origin.replace(PortablePathSeparator, with: StagedNameSeparator)
+end 'stagedCensusNameFor'
+
+// Spawn the compiler under test over the census staging tree.
+function spawnFmtOverCensusTree() returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(TestedCommandName)
+	arguments.push(CensusStagingDirArgument)
+
+	return spawnCompiler(arguments, workingDirectory: writableDir(CensusStagingDirName), what: "the real-sources census")
+end 'spawnFmtOverCensusTree'
+
+// ⛔⛔ **THE ONE SPAWN, AND EVERY CALLER GOES THROUGH IT.** Three of them — a fixture case, the
+// option-ahead-of-command probe, and the real-sources census — and what they share is not the six
+// lines: it is the CONTRACT that a missing binary or a spawn that never happened is the GATE being
+// broken, never `fmt` answering wrongly. Three copies of that judgement would drift into three
+// different verdicts about the same non-event, and a reader sent looking for a formatter defect would
+// find nothing there. What actually differs between the callers is the argv, the directory and the
+// noun a message names, so those are the parameters and nothing else is.
+//
+// ⛔ It PANICS rather than failing an assertion, for that reason.
+function spawnCompiler(arguments StringArray, workingDirectory FilePath, what String) returns CollectedOutput
+	let binary = testedCompilerPath()
+	if not File.exists(binary) 'noBinary'
+		panic("fmt-fixtures.test: the gate could not run — there is no compiler at {binary.toString()}, which {what} needs. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	return try Subprocess.run(Executable.path(binary), arguments: arguments, workingDirectory: workingDirectory) otherwise (e) 'spawnFailed'
+		panic("fmt-fixtures.test: the gate could not run — could not spawn {what} ({e.displayReason()}). It pins what `{TestedCommandName}` reports AND what it writes, and a tree nothing compares is a claim.")
+	end 'spawnFailed'
+end 'spawnCompiler'
+
+// A run that REFUSED wrote nothing, so every census would agree and a `fmt` that failed outright would
+// pass as a green. The status is therefore asked before anything is compared.
+function requireCensusRunSucceeded(run CollectedOutput, runLabel String) throws TestFailure
+	let observed = run.exitCode()
+	let expected = SuccessExitCode
+	try Expect.equal(observed, expected: expected, message: "`{TestedCommandName}` did not succeed on {runLabel} over the real sources staged from the tree. A run that refused wrote nothing, so every census this test takes would agree and the failure would read as a pass. It wrote to stderr: {run.stderr}")
+end 'requireCensusRunSucceeded'

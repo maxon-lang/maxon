@@ -143,8 +143,19 @@ Formats `.maxon` source files in-place.
 maxon fmt [file|directory]
 ```
 
+**Available in BOTH compilers** — `maxon fmt` and `maxon-shv2 fmt`. shv2's is a token-for-token port
+of the bootstrap's engine and is gated byte-for-byte against it by `tests/fmt/`, whose every
+expectation is minted by running the reference.
+
 **Arguments:**
-- `[file|directory]` - Path to a source file or directory to format (default: current directory). When given a directory, formats all `.maxon` files recursively, skipping directories with `.maxonignore`.
+- `[file|directory]` - Path to a source file or directory to format (default: current directory). When given a directory, formats all `.maxon` files recursively, skipping directories with `.maxonignore`, skipping `build.maxon`, and **pruning any subdirectory holding a `.git`** (a nested clone or a git worktree) so a run cannot rewrite files outside the tree you named. The traversal root is exempt, or `fmt` inside a checkout would format nothing.
+
+**It takes NO options.** Any `-`-leading argument is refused on stderr with exit 1 and nothing written
+— including one the driver otherwise implements, and wherever it sits on the line. A swallowed flag
+would leave `fmt` with no path and send it at the current directory.
+
+**A file it cannot lex is left byte-identical** and counted as `unchanged`, which is the same word it
+uses for a file that was already canonical.
 
 **Examples:**
 ```bash

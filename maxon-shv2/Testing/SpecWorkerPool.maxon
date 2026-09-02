@@ -1842,6 +1842,22 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	// document of a few hundred bytes.)
 	requireScaleHistoryRefusalsFire()
 
+	// ⭐ **AND THAT `fmt` STILL REPRODUCES THE ANSWERS THE BOOTSTRAP GAVE FOR ITS ENGINE CORPUS.** The
+	// other gate in this slot that spawns nothing, and the only one about a COMMAND rather than about
+	// the harness: `maxon fmt` rewrites source in place, and it once destroyed 338 comments in one file
+	// with exit 0 while nothing in the tree could have noticed. A spec case cannot reach it — the
+	// formatter lives in `Compiler/`, where the corpus's vocabulary does not go — so it is asked here,
+	// of every run. It is `format` over twenty-odd sources of a few lines each plus three string
+	// comparisons per case; see `FormatterSelfTest` for what each of the three catches.
+	//
+	// ⚠ **IT GOES ABOVE THE SPAWNING GATES FOR THE REASON STATED DIRECTLY ABOVE, AND THAT ORDER IS
+	// LOAD-BEARING.** MEASURED, with one `.expected` deliberately swapped for its `.in`: placed after
+	// `requireHarnessRefusalsFire`, the panic fires inside every fixture sub-run instead, and the parent
+	// reads each one as a fixture that failed for the WRONG REASON — headline `11 of 11 harness refusals
+	// did not fire`, which is false, with the real cause buried eleven times in the body. Asked here, the
+	// parent panics on its own terms and names the cases.
+	requireFormatterPreservesItsCorpus()
+
 	// ⭐ **AND THE HARNESS'S OWN REFUSALS, BEFORE THE HARNESS IS TRUSTED TO JUDGE ANYTHING ELSE.** It
 	// runs here rather than in `Main` because this is the one function only the PARENT of a pool reaches
 	// (a worker goes to `runPersistentWorker`), and it runs ahead of `buildPlans`, which is itself one of

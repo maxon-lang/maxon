@@ -6235,7 +6235,9 @@ let ByteViewMethod = b"bytes"
 // still compile as written; they simply reach the declaration instead of an arm.
 // The `module` visibility modifier's spelling. It is matched as an IDENTIFIER, never as a keyword — see
 // `Parser.atModuleModifier` for the measurement that forbids a `keywordMap` entry.
-let ModuleModifierName = b"module"
+// `module` and not file-private: `maxon fmt` has to recognize the same contextual keyword to know that
+// `module function f()` opens a block, and it holds no `Parser` to ask. See `Formatter.emitRealToken`.
+module let ModuleModifierName = b"module"
 
 // ⭐⭐ **`spawn`'s SPELLING — AN IDENTIFIER, NEVER A KEYWORD, FOR `module`'s REASON AND WITH ITS OWN
 // MEASUREMENT (SV1).** Two live declarations own the word and neither may be retokenized:
@@ -10469,11 +10471,61 @@ module function tokenCanBeAName(tok Token) returns bool
 	if tok.kind == TokenKind.identifier 'plainIdentifier'
 		return true
 	end 'plainIdentifier'
+	// ⛔⛔ **LAYOUT IS NEVER A NAME, AND `docComment` IS WHY THIS ARM HAS TO EXIST.** The empty-value test
+	// below carried every layout kind out until `///` became a token: a doc comment is not an identifier,
+	// is not a literal, and CARRIES ITS PROSE — so it passes all three tests below, and `consumeNameToken`
+	// would take the body of a comment as a declared name, a parameter, a callee, a method or an argument
+	// label, with `tokenDisplayText` then quoting that prose inside the E2010 for whatever followed. Asked
+	// through `tokenKindIsSkippedLayout` rather than named here, so the door the cursor SKIPS a token at
+	// and the door that refuses it as a NAME cannot come apart.
+	if tokenKindIsSkippedLayout(tok.kind) 'layout'
+		return false
+	end 'layout'
+
 	if tok.value.isEmpty() 'punctuationOrEof'
 		return false
 	end 'punctuationOrEof'
 	return not tokenIsLiteralKind(tok.kind)
 end 'tokenCanBeAName'
+
+// ⭐⭐ **DOES A `test` DECLARATION OPEN AT `index`?** — `atModuleModifier`'s shape one construct over, and
+// its exactness argument transferred: the word `test` is the declaration opener iff the very next token
+// is the quoted prose NAME. See `TestKeywordName` for the measurement that forbids a `keywordMap` row.
+//
+// ⚠ **IT DOES NOT ASK WHETHER `index` IS A DECLARATION POSITION — ITS CALLERS ESTABLISH THAT, AND BOTH
+// MUST.** `dispatchTopLevel` is a declaration position by construction; the tolerant SWEEP asks only at
+// block depth 0, exactly as it does for `let`/`var`/`type`/`enum`. Asked anywhere else it would claim
+// `match test 'check'` — the identical two tokens — which is the shape
+// `test-declaration/test-stays-an-ordinary-identifier` pins.
+//
+// ONE predicate for both walks, for `atTopLevelBindingKeyword`'s reason: a shape taught to the real parse
+// and not to the sweep would leave the sweep counting a block the real parse opened, and every depth-0
+// gate below it would stop firing.
+//
+// ⚠ **`module test 'x'` IS REFUSED WHILE `export test` AND `public test` COMPILE — AND THAT ASYMMETRY IS
+// THE REFERENCE'S, MEASURED, NOT AN ARTEFACT OF THIS PORT.** `export`/`public` are real lexer keywords, so
+// `consumeOptionalVisibility` takes them before the head fork is reached; `module` is a CONTEXTUAL keyword
+// gated on `declarationOpensAt(TokenKind)`, which structurally cannot see another contextual one, so it is
+// never consumed and the `test` arm never runs. MEASURED against `./bin/maxon.exe test` on a probe project,
+// all four spellings: bare / `export` / `public` all pass, and `module test 'a name'` gives
+// `error E2001: probe.test.maxon:1:1: Expected function declaration, got 'module'` — the same code, the
+// same sentence and the same position shv2 gives.
+// ⇒ **Do not "fix" this into a divergence.** It is a refusal either way, a test's visibility means nothing
+// (nothing calls a test), and making `module test` compile here would put shv2 alone in accepting it.
+//
+// ⚠ A free function over a bare `TokenArray` rather than a method, because `maxon fmt` asks the same
+// question with no `Parser` in scope, and a second spelling of "this line declares a test" would have
+// the formatter re-lay-out a construct the parser reads as something else. `module` and not `export`:
+// every reader lives under `Compiler/` (see `Lexer.Ascii` for the E3093 rule).
+module function testDeclarationAt(tokens TokenArray, index TokenIndex) returns bool
+	let word = try tokens.get(index) otherwise return false
+	if word.kind != TokenKind.identifier or not word.value.equals(TestKeywordName) 'notTheWord'
+		return false
+	end 'notTheWord'
+
+	let proseName = try tokens.get(index + 1) otherwise return false
+	return proseName.kind == TokenKind.charLiteral
+end 'testDeclarationAt'
 
 // What a `consumeNameToken` mismatch names when the position wanted an enum/union CASE name — the
 // bootstrap's phrasing, and the one spelling of it, so the declaration reader and the `Color.red`
@@ -14132,7 +14184,7 @@ export type Parser
 			//
 			// It opens a block closed by its own `end`, counted BEFORE the head is read exactly as the
 			// `function` arm counts one; the body is then walked by this same loop.
-			if depth == 0 and self.testDeclarationAt(self.pos) 'isTestDecl'
+			if depth == 0 and testDeclarationAt(self.tokens, index: self.pos) 'isTestDecl'
 				depth = depth + 1
 				self.recordScannedTest(entries, throwsEntries: throwsEntries, testDecls: testDecls)
 				continue
@@ -15253,13 +15305,18 @@ export type Parser
 
 			let kind = self.kindAt(q)
 
-			// The body's statements are newline-separated, so the first token after a newline at BODY depth
+			// The body's statements are newline-separated, so the first token past the LAYOUT at BODY depth
 			// opens a top-level statement. `atStatementStart` seeds FALSE rather than true: `bodyStart` is the
 			// newline that ends a well-formed header, and a malformed declaration the tolerant sweep landed
 			// mid-line on must not have that line read as a statement.
-			if kind == TokenKind.newline 'aLineEnds'
+			//
+			// ⚠ **A `///` DOC COMMENT IS LAYOUT HERE TOO, AND READING IT AS A STATEMENT WOULD BE SILENT.** It
+			// is a token in this lexer but opens nothing, so a doc comment written as a body's LAST line would
+			// otherwise become `lastTopLevelStatement` and quietly cost the `panic`/`throw` tail inferences
+			// below — no diagnostic, just an exit edge the emitter stops eliding.
+			if tokenKindIsSkippedLayout(kind) 'layout'
 				atStatementStart = true
-			end 'aLineEnds' else 'aRealToken'
+			end 'layout' else 'aRealToken'
 				if blockDepth == 0 and atStatementStart 'aTopLevelStatementOpensHere'
 					lastTopLevelStatement = q
 					sawATopLevelStatement = true
@@ -18905,34 +18962,6 @@ export type Parser
 		return self.kindAt(index) == TokenKind.identifier and self.tokenAt(index).value.equals(ModuleModifierName)
 	end 'moduleModifierAt'
 
-	// ⭐⭐ **DOES A `test` DECLARATION OPEN AT `index`?** — `atModuleModifier`'s shape one construct over, and
-	// its exactness argument transferred: the word `test` is the declaration opener iff the very next token
-	// is the quoted prose NAME. See `TestKeywordName` for the measurement that forbids a `keywordMap` row.
-	//
-	// ⚠ **IT DOES NOT ASK WHETHER `index` IS A DECLARATION POSITION — ITS CALLERS ESTABLISH THAT, AND BOTH
-	// MUST.** `dispatchTopLevel` is a declaration position by construction; the tolerant SWEEP asks only at
-	// block depth 0, exactly as it does for `let`/`var`/`type`/`enum`. Asked anywhere else it would claim
-	// `match test 'check'` — the identical two tokens — which is the shape
-	// `test-declaration/test-stays-an-ordinary-identifier` pins.
-	//
-	// ONE predicate for both walks, for `atTopLevelBindingKeyword`'s reason: a shape taught to the real parse
-	// and not to the sweep would leave the sweep counting a block the real parse opened, and every depth-0
-	// gate below it would stop firing.
-	//
-	// ⚠ **`module test 'x'` IS REFUSED WHILE `export test` AND `public test` COMPILE — AND THAT ASYMMETRY IS
-	// THE REFERENCE'S, MEASURED, NOT AN ARTEFACT OF THIS PORT.** `export`/`public` are real lexer keywords, so
-	// `consumeOptionalVisibility` takes them before the head fork is reached; `module` is a CONTEXTUAL keyword
-	// gated on `declarationOpensAt(TokenKind)`, which structurally cannot see another contextual one, so it is
-	// never consumed and the `test` arm never runs. MEASURED against `./bin/maxon.exe test` on a probe project,
-	// all four spellings: bare / `export` / `public` all pass, and `module test 'a name'` gives
-	// `error E2001: probe.test.maxon:1:1: Expected function declaration, got 'module'` — the same code, the
-	// same sentence and the same position shv2 gives.
-	// ⇒ **Do not "fix" this into a divergence.** It is a refusal either way, a test's visibility means nothing
-	// (nothing calls a test), and making `module test` compile here would put shv2 alone in accepting it.
-	function testDeclarationAt(index TokenIndex) returns bool
-		return self.kindAt(index) == TokenKind.identifier and self.tokenAt(index).value.equals(TestKeywordName) and self.kindAt(index + 1) == TokenKind.charLiteral
-	end 'testDeclarationAt'
-
 	// ⭐⭐ **IS THE CURSOR ON THE `spawn` PREFIX OPERATOR? (SV1)** — `atModuleModifier`'s shape one construct
 	// over, and its exactness argument transfers unchanged: an identifier spelled `spawn` is the operator iff
 	// the very next token opens a NAME, because two adjacent name tokens begin no expression the grammar has.
@@ -20852,7 +20881,7 @@ export type Parser
 		if self.at(TokenKind.function) 'isFunction'
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
 			try self.parseFunction(visibility, takesReceiver: false, form: DeclaredHeadForm.declaredFunction)
-		end 'isFunction' else if self.testDeclarationAt(self.pos) 'isTest'
+		end 'isFunction' else if testDeclarationAt(self.tokens, index: self.pos) 'isTest'
 			// ⭐ **THE DECLARATION POSITION HALF OF `test`'s CONTEXTUAL RULE, and this arm IS that half.**
 			// `testDeclarationAt` asks only about the two tokens; standing here is what says the cursor is
 			// somewhere a declaration may begin, which is the other half and the one that tells `test 'x'`
@@ -22598,11 +22627,17 @@ export type Parser
 	// written declaration — the property `FunctionTypeAlias.paramSpelling` needs and that no RESOLVED fact
 	// about a parameter has.
 	//
-	// ⚠ **IT IS BLIND TO LAYOUT, AND THE REASON IS NOT "THOSE ARE NOT TOKENS".** Comments genuinely are not
-	// (`scanComment`/`scanBlockComment` skip without emitting one), but `TokenKind.newline` very much IS a
-	// token. It cannot fall inside a range this is asked about for a different reason: a function typealias's
-	// parameter list may not span lines — a newline there is `E2010 Expected 'a type' but got 'newline'` — so
-	// reformatting cannot reach the range at all. Whitespace and indentation are not tokens either way.
+	// ⚠ **IT IS BLIND TO LAYOUT, AND THE REASON IS THE SAME ONE FOR EVERY KIND OF IT: THE RANGE CANNOT HOLD
+	// ANY.** A function typealias's parameter list may not span lines — a newline there is `E2010 Expected 'a
+	// type' but got 'newline'` — and `scanComment` stops BEFORE the line break, so a `///` doc comment inside
+	// the parens would put a `docComment` token there and earn the identical refusal. Neither can reach a
+	// range this is asked about, so reformatting cannot move the digest. Whitespace and indentation are not
+	// tokens at all.
+	//
+	// ⛔ **DO NOT REST THAT ON "COMMENTS ARE NOT TOKENS", WHICH IS NO LONGER TRUE.** `//` and `/* … */` are
+	// still dropped by the lexer, but `///` is emitted (the formatter and the LSP read it back), and it
+	// CARRIES TEXT — so a doc comment inside a folded range would change the digest, and the declaration
+	// sweep and the real parse mint identical values only because no legal range contains one.
 	//
 	// ⛔⛔ **IT FOLDS TOKEN TEXT AND PUNCTUATORS CARRY NONE, SO A CALLER MUST SUPPLY EVERY SEPARATOR ITSELF.**
 	// `Token.value` is `EmptySourceText` for every punctuator (`Lexer.maxon`: a token whose text is implied by
@@ -30166,8 +30201,13 @@ export type Parser
 	// The exemption is therefore structural rather than a carve-out anyone has to remember. The check
 	// runs before the scope frame opens, so the throw leaves no half-opened block behind, and it is
 	// anchored on the closing `end` — where the missing statements would have gone. A body holding
-	// only a COMMENT reads as empty, because the lexer emits no token for one; the spec's own
-	// documentation example is exactly that program.
+	// only a COMMENT reads as empty, and the spec's own documentation example is exactly that program.
+	//
+	// ⚠ **THAT HOLDS BECAUSE THE PARSER SKIPS COMMENTS, NOT BECAUSE THE LEXER DROPS THEM — and the two
+	// stopped being one statement when `///` became a token.** `//` and `/* … */` are still dropped; a
+	// `///` doc comment reaches the parser, and this body reads it as empty only because the
+	// `skipNewlines` above steps over it (`tokenKindIsSkippedLayout`). Sever that and a block holding one
+	// doc-comment line silently stops being empty, so E3082 stops firing on it.
 	function parseBlockBody(func IrFunction, block IrBlock, label ByteArray) returns IrBlock throws ParseError
 		self.skipNewlines()
 		if self.at(TokenKind.end) 'emptyBlock'
@@ -63158,10 +63198,15 @@ export type Parser
 			if kind == TokenKind.comma and depth == 1 'topLevelSeparator'
 				commas = commas + 1
 			end 'topLevelSeparator'
-			// Anything between the literal's own `[` and its `]` is an element token — except a NEWLINE, which
+			// Anything between the literal's own `[` and its `]` is an element token — except LAYOUT, which
 			// `finishArrayLiteral` skips at every element boundary, so `[\n]` is as empty as `[]`. Keyed on the
 			// OPENER'S INDEX rather than on the bracket kind, so a nested `[` still counts as content.
-			if i != openIndex and kind != TokenKind.newline 'elementToken'
+			//
+			// ⭐ **THE SKIP IS `tokenKindIsSkippedLayout`'s TO DEFINE, NOT THIS COUNTER'S**: a `///` doc comment
+			// is a token in this lexer and `skipNewlines` steps over it at every element boundary too, so a
+			// counter naming only `newline` would report a non-empty literal for a program the real parse
+			// reads as empty.
+			if i != openIndex and not tokenKindIsSkippedLayout(kind) 'elementToken'
 				sawElement = true
 			end 'elementToken'
 			i = i + 1
@@ -79303,7 +79348,13 @@ export type Parser
 
 	// **WHERE A STATEMENT STOPS, ASKED AT AN ABSOLUTE INDEX** — the `newline` that separates it from the
 	// next one, the `end` that closes the enclosing block when it is that block's last statement, or EOF.
-	// Comments are not tokens (the lexer drops them), so a trailing `// …` does not have to be listed here.
+	//
+	// ⛔ **A `///` DOC COMMENT IS NOT A FOURTH TERMINATOR AND MUST NOT BE ADDED AS ONE.** `//` and `/* … */`
+	// are dropped by the lexer and cannot appear here at all; a doc comment IS a token, and a statement
+	// with one trailing it has not ended — its `newline` still follows, because `scanComment` stops before
+	// the line break. This asks what TERMINATES a statement, a question about a token's MEANING;
+	// `tokenKindIsSkippedLayout` asks what a cursor may step over, and routing one through the other would
+	// let `return /// x` read as a bare `return`.
 	//
 	// ONE predicate because three readers ask it and a divergence between them is a WRONG DIAGNOSTIC
 	// rather than a crash: `atEnumFunctionRawValue` decides that a name IS the whole raw value,
@@ -81224,14 +81275,20 @@ export type Parser
 		self.pos = self.indexPastNewlines(self.pos)
 	end 'skipNewlines'
 
-	// The first index at or after `index` that is not a newline — the LOOKAHEAD form, moving no cursor, and
-	// the one definition `skipNewlines` above is derived from. A lookahead that counted newlines as tokens
-	// would answer a question about the source's LAYOUT where the asker meant one about its shape: `[10]` and
-	// `[10\n]` are the same literal, and the two must not take different paths through the parser. `tokenAt`
-	// answers `eof` past the end, so this terminates.
+	// The first index at or after `index` that the GRAMMAR reads — the LOOKAHEAD form, moving no cursor,
+	// and the one definition `skipNewlines` above is derived from. A lookahead that counted layout as
+	// tokens would answer a question about the source's TYPOGRAPHY where the asker meant one about its
+	// shape: `[10]` and `[10\n]` are the same literal, and the two must not take different paths
+	// through the parser. `tokenAt` answers `eof` past the end, so this terminates.
+	//
+	// ⭐ **WHICH KINDS ARE LAYOUT IS `Lexer.tokenKindIsSkippedLayout`'s TO SAY, NOT THIS LOOP'S** — a `///`
+	// doc comment is a token in this lexer (the formatter round-trips it and the LSP maps a cursor into it)
+	// and the grammar reads it no more than it reads a newline. Spelled out here, the set would have to be
+	// spelled again in every raw-stream walk that re-derives the same skip, and a walk admitting one kind
+	// and not the other would count a construct the real parse steps over.
 	function indexPastNewlines(index TokenIndex) returns TokenIndex
 		var scan = index
-		while self.kindAt(scan) == TokenKind.newline 'skip'
+		while tokenKindIsSkippedLayout(self.kindAt(scan)) 'skip'
 			scan = scan + 1
 		end 'skip'
 		return scan

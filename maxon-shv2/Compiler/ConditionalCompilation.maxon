@@ -331,9 +331,16 @@ end 'evaluateCondition'
 // `newline` is a real token in this lexer, so "the rest of the line" is one lookahead and no
 // position arithmetic. EOF counts as an ending: a `#if` on an unterminated final line is a region
 // fault (E2063), reported below with the position of the `#if` itself, not a condition fault.
+//
+// ⛔ **A `///` DOC COMMENT ENDS THE LINE TOO, AND LEAVING IT OUT WOULD REFUSE SOURCE THAT BUILDS TODAY.**
+// `#if os(Windows) /// note` lexes as a `docComment` followed by the line's `newline`; before `///` became
+// a token the `//` path swallowed it and the condition ended cleanly. Read as a trailing token it would
+// be a NEW E2063 on an unchanged file — and the corpus contains no such line, so nothing would catch it.
+// The set is `tokenKindIsSkippedLayout`'s plus EOF, which is the same "nothing the grammar reads follows"
+// the parser's own line-end rules mean.
 function expectConditionEnd(tokens TokenArray, cursor ConditionCursor) throws DirectiveError
 	let tok = tokenAtOrEof(tokens, index: cursor.value)
-	if tok.kind != TokenKind.newline and tok.kind != TokenKind.eof 'trailing'
+	if not tokenKindIsSkippedLayout(tok.kind) and tok.kind != TokenKind.eof 'trailing'
 		throw DirectiveError.trailingConditionTokens(tok.line, column: tok.column)
 	end 'trailing'
 end 'expectConditionEnd'

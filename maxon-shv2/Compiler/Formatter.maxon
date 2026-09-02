@@ -1,0 +1,1480 @@
+// ⭐⭐ **`maxon fmt` — A TOKEN-STREAM RE-PRINTER. IT NEVER PARSES, AND THAT IS THE DESIGN.**
+//
+// The whole formatter is `tokenize` plus a walk that decides, for each token, how much whitespace goes
+// in front of it. There is no AST, so a file that does not PARSE still formats — and a file that does
+// not LEX comes back byte for byte unchanged (`format`'s one `otherwise`), because the alternative is
+// writing a lexer's error text into the author's file.
+//
+// ⚠ **COMMENTS ARE NOT IN THE TOKEN STREAM, WITH ONE EXCEPTION**, so they are recovered from the RAW
+// SOURCE by `CommentScan` and re-attached by line number. The exception is `///`, which IS a token
+// (`TokenKind.docComment`) — and the raw scan must therefore SKIP it, or every doc comment in the tree
+// is written out twice. See `scanLineComment`.
+//
+// Ported from the C# bootstrap's `Lsp/MaxonFormatter.cs`, which is the authority for every layout
+// decision here: `tests/fmt/`'s expectations were MINTED by running it, so a divergence is this
+// port's failure and not an improvement. Where shv2 genuinely differs — an interpolated string is
+// several tokens here and one there, `sizeof`/`countof` are keywords here and identifiers there, `---`
+// is not end-of-source here — the difference is written down beside the code that handles it.
+
+// How deep the emitter is indented. ONE TAB per level: the bootstrap carries `indentSize`/`useTabs`
+// parameters for an LSP formatting request that can ask for spaces, and shv2 has no such caller — the
+// `fmt` command is the only entry point and it always wants tabs, which is the language's own rule.
+typealias IndentDepth = int(0 to u64.max)
+
+// How many `newline` tokens have arrived since the last real one. 1 terminates a line; every further
+// one is a blank line the author wrote, whose fate the forced-blank rule decides.
+typealias NewlineRun = int(0 to u64.max)
+
+// The forced-blank rule emits one blank line or none. It never emits two, which is what makes a
+// reformat of a formatted file a fixed point rather than an accretion.
+typealias BlankLineCount = int(0 to 1)
+
+// The counter behind a `unique:<n>` group key. Monotonic for one `format` call; two lines that must
+// never be treated as one group get two different keys from it.
+typealias GroupKeyOrdinal = int(0 to u64.max)
+
+// A 0-based line index into `SourceLines`, and how many such lines a source has. DISTINCT from
+// `LineNumber`, which is the 1-based number a token carries and a reader sees in a diagnostic — the
+// comment index is keyed by the second, and the raw scan walks the first.
+typealias LineIndex = int(0 to u64.max)
+
+// The group key of a line whose first token is a `///`. `forcedBlanksBefore` returns 0 after it, which
+// is what FUSES a doc block to the declaration below it even across a blank line the author left.
+let DocGroupKey = "doc"
+
+// The group key of a whole-line `//` comment. It attaches to the line below it the same way, but only
+// when the author left NO blank between them: Maxon has no `///` convention in practice, so a `//`
+// serves as both a section heading and an attached doc, and the blank is what tells them apart.
+let CommentGroupKey = "comment"
+
+// The group keys of the two declaration families that PACK — adjacent `let`/`var` lines, and adjacent
+// `typealias` lines, keep whatever blank separation the author gave them instead of being forced apart.
+let BindingGroupKey = "let"
+let AliasGroupKey = "typealias"
+
+// The prefix of a key no other line can share. A line that OPENS A BLOCK takes one at line-end, so the
+// next line is always forced onto its own group.
+let UniqueGroupKeyPrefix = "unique:"
+
+// A directory holding this entry is a SEPARATE CHECKOUT — a nested clone (a directory) or a git
+// worktree (a file holding a gitdir pointer). Both spellings are probed; see `prunedSubdirectory`.
+let GitCheckoutMarkerName = ".git"
+
+// What kind of block the emitter is inside. Only three kinds change how a token is laid out; everything
+// else is `other` and affects nothing but the indent.
+enum FormatBlockKind
+	// An `enum` or `union` BODY. The two are ONE case because nothing asks which of them it is: every
+	// reader wants "is this a bare case-name context", where `name(a, b)` is a case carrying associated
+	// values rather than a call, and where a keyword may be a case NAME rather than a declaration.
+	data
+	// An `interface` body, where `function f(...)` is a bodyless signature and opens no block.
+	interfaceBody
+	// A `match` body, where `caseName(_, _)` is a pattern whose all-discarded bindings are stripped.
+	matchBody
+	other
+end 'FormatBlockKind'
+
+typealias FormatBlockKindArray = Array with FormatBlockKind
+
+// --- The raw-source comment scan -------------------------------------------------------------
+
+/// One captured comment, and whether it OWNS the line it sits on.
+///
+/// `wholeLine` true: only whitespace precedes its start and follows its end on that line, so it is
+/// re-emitted on a line of its own at the current indent. False: there is code on the line, so it is
+/// appended after that line's last token with two leading spaces.
+///
+/// A block comment with code BOTH before and after it on one line (`var y = /* note */ 5`) cannot be
+/// cleanly relocated by a formatter that does not parse; it comes out as a trailing comment. The
+/// comment is PRESERVED — only its position within the line is lost.
+type SourceComment
+	export let text as String
+	export let wholeLine as bool
+
+	export static function create(text String, wholeLine bool) returns SourceComment
+		return Self{text: text, wholeLine: wholeLine}
+	end 'create'
+end 'SourceComment'
+
+// The comments of one file, keyed by the 1-based line they occupy. A block comment spanning several
+// lines contributes ONE ENTRY PER LINE it covers, so the per-line emit paths reproduce it on the lines
+// it had.
+typealias SourceCommentMap = Map with (LineNumber, SourceComment)
+
+// The lines whose comment has already been written out. A comment is reachable from two emit paths
+// (trailing, and the whole-line gap flush) and must be written by exactly one of them.
+typealias ConsumedLineSet = Set with LineNumber
+
+/// A source buffer addressed BY LINE — spans into the original bytes, never a `String` per line.
+///
+/// Two readers want it and both ask the same three things the bytes alone do not answer: where a line
+/// stops, what a range within one says, and whether a range holds nothing but layout. `CommentScan`
+/// walks it to recover the comments; `findSectionSeparator` walks it to find the `---` line. Splitting
+/// into `String`s would materialize the whole file a second time to answer questions about byte offsets.
+type SourceLines
+	let bytes as ByteArray
+	let starts as ByteOffsetArray
+	let ends as ByteOffsetArray
+
+	// The split is `\n`-delimited and KEEPS a trailing empty line, exactly as the reference's
+	// `source.Split('\n')` does: `"a\n"` is two lines, the second empty. The emit paths index comments
+	// by line number, so a line that exists and holds nothing still has to exist here.
+	static function of(bytes ByteArray) returns SourceLines
+		var starts = ByteOffsetArray.create()
+		var ends = ByteOffsetArray.create()
+		var lineStart = 0 as ByteOffset
+		var i = 0 as ByteOffset
+
+		while i < bytes.count() 'eachByte'
+			let b = try bytes.get(i) otherwise panic("SourceLines.of: index {i} below the {bytes.count()}-byte source")
+			if b == Ascii.lf 'endOfLine'
+				starts.push(lineStart)
+				ends.push(i)
+				lineStart = i + 1
+			end 'endOfLine'
+			i = i + 1
+		end 'eachByte'
+
+		starts.push(lineStart)
+		ends.push(bytes.count())
+		return Self{bytes: bytes, starts: starts, ends: ends}
+	end 'of'
+
+	export function count() returns LineIndex
+		return starts.count()
+	end 'count'
+
+	export function length(index LineIndex) returns ByteOffset
+		return self.endOf(index) - self.startOf(index)
+	end 'length'
+
+	// The byte at `offset` within line `index`. The callers bound `offset` by `length` first.
+	export function byteAt(index LineIndex, offset ByteOffset) returns Byte
+		let at = self.startOf(index) + offset
+		return try bytes.get(at) otherwise panic("SourceLines.byteAt: byte {at} outside the {bytes.count()}-byte source")
+	end 'byteAt'
+
+	// The text of `[from, to)` within line `index`.
+	export function textIn(index LineIndex, from ByteOffset, to ByteOffset) returns String
+		let lo = self.startOf(index) + from
+		let hi = self.startOf(index) + to
+		let span = try bytes.slice(lo, endIndex: hi) otherwise panic("SourceLines.textIn: [{lo}, {hi}) outside the {bytes.count()}-byte source")
+		return String.from(span)
+	end 'textIn'
+
+	// Is `[from, to)` within line `index` nothing but layout? This is the reference's
+	// `line[..j].Trim().Length == 0` — the test that decides whether a comment owns its line.
+	export function blankBetween(index LineIndex, from ByteOffset, to ByteOffset) returns bool
+		var i = from
+		while i < to 'eachByte'
+			if not isLayoutByte(self.byteAt(index, offset: i)) 'sawContent'
+				return false
+			end 'sawContent'
+			i = i + 1
+		end 'eachByte'
+		return true
+	end 'blankBetween'
+
+	export function startOf(index LineIndex) returns ByteOffset
+		return try starts.get(index) otherwise panic("SourceLines.startOf: line {index} of {starts.count()}")
+	end 'startOf'
+
+	function endOf(index LineIndex) returns ByteOffset
+		return try ends.get(index) otherwise panic("SourceLines.endOf: line {index} of {ends.count()}")
+	end 'endOf'
+end 'SourceLines'
+
+// Space, tab and CR — the whitespace a LINE can carry. LF cannot appear inside one by construction, so
+// this is the whole of "layout" for every question `SourceLines` answers.
+function isLayoutByte(b Byte) returns bool
+	return b == Ascii.space or b == '\t' or b == '\r'
+end 'isLayoutByte'
+
+/// The raw-source scan that recovers `//` and `/* … */` comments, keyed by line.
+///
+/// ⛔⛔ **A NESTING STACK, NOT AN `inString` FLAG — A STRING CAN CONTAIN A STRING.** `"{f("//x")}"` is
+/// ONE literal: the interpolation's expression holds a second string. A single bool closes at the INNER
+/// quote, and the scanner then reads `//x")}"` as a trailing comment, which the emit path appends to the
+/// line as a phantom copy. MEASURED on the reference before its fix, exit 0, reported as `formatted:`:
+///     let m = "{f("//x")}"     became     let m = "{f("//x")}"  //x")}"
+/// That is source corruption by DUPLICATION — which no comment-count check can catch, because nothing
+/// was lost, and which is perfectly idempotent on a rerun.
+///
+/// Each stack entry says what we are INSIDE: `"` a string, `'` a char literal, `{` an interpolation's
+/// expression. It persists ACROSS LINES, because a `b"…"` may span them. A comment is recognized ONLY
+/// when the stack is EMPTY: inside an interpolation the bytes are expression source, and reading a `//`
+/// there as prose is the same mistake one level down.
+type CommentScan
+	let lines as SourceLines
+	var comments as SourceCommentMap
+	var nesting as ByteArray
+	// The line the scan is on, 0-based, and the offset within it. Both move inside the block-comment
+	// walk, which is why they are fields rather than loop variables.
+	var line as LineIndex
+	var at as ByteOffset
+
+	static function create(lines SourceLines) returns CommentScan
+		return Self{lines: lines, comments: SourceCommentMap.create(), nesting: ByteArray.create(), line: 0, at: 0}
+	end 'create'
+
+	function run() returns SourceCommentMap
+		while self.line < lines.count() 'eachLine'
+			self.at = 0
+			self.scanLine()
+			self.line = self.line + 1
+		end 'eachLine'
+		return self.comments
+	end 'run'
+
+	function scanLine()
+		while self.line < lines.count() and self.at < lines.length(self.line) 'eachByte'
+			let c = lines.byteAt(self.line, offset: self.at)
+
+			if self.nesting.count() > 0 'insideALiteral'
+				self.stepInsideLiteral(c)
+				continue
+			end 'insideALiteral'
+
+			if c == Ascii.dquote or c == Ascii.quote 'opensALiteral'
+				self.nesting.push(c)
+				self.at = self.at + 1
+				continue
+			end 'opensALiteral'
+
+			if c == Ascii.slash and self.nextByteIs(Ascii.slash) 'lineComment'
+				// Either way the rest of the line belongs to the comment.
+				self.scanLineComment()
+				return
+			end 'lineComment'
+
+			if c == Ascii.slash and self.nextByteIs(Ascii.star) 'blockComment'
+				self.scanBlockComment()
+				continue
+			end 'blockComment'
+
+			self.at = self.at + 1
+		end 'eachByte'
+	end 'scanLine'
+
+	// One byte of a string, char literal or interpolation body. The three contexts differ only in what
+	// opens and closes them, which is why they share a step.
+	function stepInsideLiteral(c Byte)
+		let context = try self.nesting.get(self.nesting.count() - 1) otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
+
+		if context == Ascii.dquote or context == Ascii.quote 'quotedText'
+			if c == Ascii.backslash and self.at + 1 < lines.length(self.line) 'escape'
+				// The escaped byte is skipped whole, so `\"` does not close the literal and `\\` does
+				// not leave a lone backslash to be read as an escape lead.
+				self.at = self.at + 2
+				return
+			end 'escape'
+
+			if c == context 'closes'
+				_ = try self.nesting.pop() otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
+			end 'closes' else if c == '{' and context == Ascii.dquote 'opensInterpolation'
+				// `c` rather than a fresh `'{'`: the byte in hand IS the opener, and `Ascii` names no
+				// brace to spell it with.
+				self.nesting.push(c)
+			end 'opensInterpolation'
+
+			self.at = self.at + 1
+			return
+		end 'quotedText'
+
+		// An interpolation's expression: ordinary code, which may open a string of its own, and whose
+		// `}` closes back into the literal.
+		if c == Ascii.dquote or c == Ascii.quote 'opensNested'
+			self.nesting.push(c)
+		end 'opensNested' else if c == '}' 'closesInterpolation'
+			_ = try self.nesting.pop() otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
+		end 'closesInterpolation'
+
+		self.at = self.at + 1
+	end 'stepInsideLiteral'
+
+	// A `//` comment. Either way the rest of the line belongs to it, so the caller stops there.
+	//
+	// ⛔⛔ **`///` IS NOT CAPTURED HERE.** It is `TokenKind.docComment` and is round-tripped through the
+	// TOKEN STREAM; captured here as well, every doc comment in the tree would be written out TWICE —
+	// once by this index and once by the emit loop. This is the highest-blast-radius mistake available
+	// in this file.
+	function scanLineComment()
+		if self.at + 2 < lines.length(self.line) and lines.byteAt(self.line, offset: self.at + 2) == Ascii.slash 'docComment'
+			return
+		end 'docComment'
+
+		let text = lines.textIn(self.line, from: self.at, to: lines.length(self.line)).trimEnd()
+		let ownsTheLine = lines.blankBetween(self.line, from: 0, to: self.at)
+		self.record(self.line, comment: SourceComment.create(text, wholeLine: ownsTheLine))
+	end 'scanLineComment'
+
+	// A `/* … */` comment, which may span lines. One entry is recorded per line it covers, so the
+	// gap-emit path can reproduce it on the lines it had. An UNTERMINATED one is not this scan's
+	// problem: `format` returns the source unchanged when the lexer rejects it, and it does.
+	function scanBlockComment()
+		let startLine = self.line
+		let startPrefixBlank = lines.blankBetween(startLine, from: 0, to: self.at)
+		// The segment is SLICED out of the source rather than rebuilt byte by byte: `/*` and `*/` are in
+		// the file already, so the span from the opener to the line end IS the text the reference
+		// reassembles.
+		var segmentStart = self.at
+		self.at = self.at + 2
+
+		while true 'walk'
+			if self.at >= lines.length(self.line) 'lineRanOut'
+				// Store what this line carries and continue on the next. The text keeps the source's
+				// leading whitespace; the gap-emit path strips it before applying the formatter's indent,
+				// so an in-code block comment does not double-indent.
+				self.recordSegment(lines.textIn(self.line, from: segmentStart, to: lines.length(self.line)), startLine: startLine, startPrefixBlank: startPrefixBlank, ownsTheLine: true)
+				self.line = self.line + 1
+				if self.line >= lines.count() 'sourceRanOut'
+					return
+				end 'sourceRanOut'
+				self.at = 0
+				segmentStart = 0
+				continue
+			end 'lineRanOut'
+
+			if lines.byteAt(self.line, offset: self.at) == Ascii.star and self.nextByteIs(Ascii.slash) 'closes'
+				self.at = self.at + 2
+				let trailingBlank = lines.blankBetween(self.line, from: self.at, to: lines.length(self.line))
+				self.recordSegment(lines.textIn(self.line, from: segmentStart, to: self.at), startLine: startLine, startPrefixBlank: startPrefixBlank, ownsTheLine: trailingBlank)
+				return
+			end 'closes'
+
+			self.at = self.at + 1
+		end 'walk'
+	end 'scanBlockComment'
+
+	// One line's worth of a block comment. A segment owns its line when nothing follows it there AND
+	// either it is a continuation line or nothing preceded the `/*` on the opening one.
+	function recordSegment(text String, startLine LineIndex, startPrefixBlank bool, ownsTheLine bool)
+		let wholeLine = ownsTheLine and (self.line != startLine or startPrefixBlank)
+		self.record(self.line, comment: SourceComment.create(text, wholeLine: wholeLine))
+	end 'recordSegment'
+
+	function record(index LineIndex, comment SourceComment)
+		self.comments.upsert(index + 1, value: comment)
+	end 'record'
+
+	function nextByteIs(b Byte) returns bool
+		if self.at + 1 >= lines.length(self.line) 'noNextByte'
+			return false
+		end 'noNextByte'
+		return lines.byteAt(self.line, offset: self.at + 1) == b
+	end 'nextByteIs'
+end 'CommentScan'
+
+// --- Token classification ---------------------------------------------------------------------
+
+// Keywords that start a block declaration on the line they appear on, with no trailing label.
+function labellessBlockOpener(kind TokenKind) returns bool
+	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.union or kind == TokenKind.enum or kind == TokenKind.interface or kind == TokenKind.extension
+end 'labellessBlockOpener'
+
+// Keywords that open a block whose body is named by a trailing character literal.
+function labeledBlockOpener(kind TokenKind) returns bool
+	return kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match or kind == TokenKind.then or kind == TokenKind.try
+end 'labeledBlockOpener'
+
+// After these, no space goes before the next token.
+function noSpaceAfter(kind TokenKind) returns bool
+	return kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace or kind == TokenKind.dot or kind == TokenKind.at
+end 'noSpaceAfter'
+
+// Before these, no space goes.
+function noSpaceBefore(kind TokenKind) returns bool
+	return kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace or kind == TokenKind.comma or kind == TokenKind.dot
+end 'noSpaceBefore'
+
+// Tokens that unconditionally PRODUCE A VALUE — an operand precedes anything that follows one.
+function valueTokenKind(kind TokenKind) returns bool
+	return kind == TokenKind.identifier or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace or kind == TokenKind.self or kind == TokenKind.selfType or kind == TokenKind.true or kind == TokenKind.false
+end 'valueTokenKind'
+
+// Keywords that are PREFIX operators or statement heads. Where an operand is expected these are always
+// the operator and never a name, so the operand belongs to THEM: `return -1`, `not -x`.
+function prefixOperandKeyword(kind TokenKind) returns bool
+	return kind == TokenKind.not or kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.panic or kind == TokenKind.await or kind == TokenKind.async or kind == TokenKind.try
+end 'prefixOperandKeyword'
+
+// Does this token produce a value — i.e. is a `-` or `+` after it BINARY rather than unary?
+//
+// The hard part is that EVERY keyword can also be an ordinary name in Maxon, so `to` and `end` are an
+// operand on one line and an operator on the next. Position decides, and one bit of position is enough:
+// an infix keyword operator ALWAYS has its left operand before it, so a keyword with NO operand behind
+// it is being used as a NAME.
+//
+// That is what tells `let pending = to - from` — where `to` is the parameter it is, so the `-` is
+// binary — from `int(0 to -5)`, where `to` is the range operator and the `-` is unary. Getting it wrong
+// is not cosmetic in one direction: rendering a binary `-` as unary is what rewrote `to - from` to
+// `to -from` across four files on a whole-tree `maxon fmt`.
+//
+// The keyword question is asked of `Lexer.isKeywordKind`, which DERIVES it from the one `keywordMap`.
+// The bootstrap has to add `Mod` to its derived set by hand because `mod` lives in its OPERATOR map;
+// shv2's `keywordMap` already carries `mod`, so there is nothing to add and no second list to keep.
+function producesValue(kind TokenKind, operandBefore bool) returns bool
+	if valueTokenKind(kind) 'alwaysAValue'
+		return true
+	end 'alwaysAValue'
+	if not isKeywordKind(kind) 'notAKeyword'
+		return false
+	end 'notAKeyword'
+	if prefixOperandKeyword(kind) 'ownsWhatFollows'
+		return false
+	end 'ownsWhatFollows'
+	return not operandBefore
+end 'producesValue'
+
+// Punctuation, operator and literal tokens — everything that is NOT a keyword or an identifier. Read by
+// exactly one rule: a `{` after a WORD token opens a struct literal (`Foo {…}`) and takes no space.
+//
+// ⚠ `stringInterpStart`, `stringInterpEnd` and `stringFormatSpec` are deliberately absent, and their
+// absence is structural rather than an omission: all three live INSIDE an interpolated literal, whose
+// whole span this formatter emits from the raw source in one piece (see `interpolatedLiteralOpensAt`),
+// so none of them is ever the token before a `{`.
+function nonWordToken(kind TokenKind) returns bool
+	return kind == TokenKind.leftParen or kind == TokenKind.rightParen or kind == TokenKind.leftBracket or kind == TokenKind.rightBracket or kind == TokenKind.leftBrace or kind == TokenKind.rightBrace or kind == TokenKind.comma or kind == TokenKind.dot or kind == TokenKind.at or kind == TokenKind.colon or kind == TokenKind.plus or kind == TokenKind.minus or kind == TokenKind.star or kind == TokenKind.slash or kind == TokenKind.equals or kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals or kind == TokenKind.newline or kind == TokenKind.eof or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.docComment
+end 'nonWordToken'
+
+// ⭐ **TOKENS AFTER WHICH `(` IS AN ARGUMENT, PATTERN OR TYPE LIST — NOT A PARENTHESIZED EXPRESSION.**
+// These are the only contexts where the space before `(` is suppressed. Every other keyword (`for`,
+// `if`, `or`, `and`, `return`, `not`, `in`, `upto`, …) is a non-callable and gets a mandatory space.
+//
+// `with`, `otherwise` and `gives` are NOT here — each introduces a clause whose body may be a
+// parenthesized expression rather than a call target, so `with (`, `otherwise (` and `gives (10, 20)`
+// keep the space.
+//
+// ⭐⭐ **`sizeof` AND `countof` ARE HERE AND THE BOOTSTRAP HAS NO ENTRY FOR EITHER — MEASURED, 143 LIVE
+// SITES.** They are real lexer keywords in shv2 (`sizeof(T)` parses its operand as a TYPE) and ordinary
+// IDENTIFIERS in the bootstrap, where `TokenType.Identifier` already covers them. A token-for-token port
+// of the reference's table would therefore emit `sizeof (Node)` and `countof (Self)` across
+// `maxon-shv2/` + `stdlib/`: 105 `sizeof(` and 38 `countof(`, none of them dot-prefixed.
+// ⭐ **AND THE ENTRY IS PROVEN LOAD-BEARING, not merely counted**: 453 real source files formatted by
+//    both compilers come back BYTE-IDENTICAL, and 105 of those `sizeof(` sites are inside them. Drop
+//    either name from this set and every one of them diverges.
+//
+// ⛔ **`cstring` IS DELIBERATELY NOT HERE.** It is the fourth primitive-type keyword beside `int`,
+// `float` and `bool`, and adding it on that symmetry was considered and rejected: there are ZERO
+// `cstring(` call sites in the tree, so the entry would be an unmeasured widening — a rule about a
+// construct nobody writes, which nothing can ever confirm or refute.
+//
+// ✅ **`byte` NEEDS NO ENTRY, AND THE TWO COMPILERS AGREE ON IT — MEASURED, after the opposite was
+// claimed here.** `byte` IS a live ranged primitive in the bootstrap (`E3005 Cannot cast to bare
+// 'byte'`) and does NOT exist in shv2 (`E3011 Unknown type 'byte'`), which looks like it must produce
+// a spacing divergence in a match arm — and it does not: the bootstrap's `TokenType.Byte` IS in its
+// `CallableBeforeLeftParen` (`MaxonFormatter.cs:785`, beside `Int`/`Float`/`Bool`), and in shv2 `byte`
+// lexes as an ordinary `identifier`, which this set already covers. Both emit `byte(b) then`.
+//
+// ⛔ **DO NOT ADD A `byte` ENTRY, AND DO NOT RESTORE THE DIVERGENCE NOTE THAT STOOD HERE.** There is no
+// `TokenKind.byte` to name, and the note asserted a difference that measurement refutes: 453 real
+// source files formatted by both compilers came back BYTE-IDENTICAL, the same 8 files changed in the
+// same order. A comment claiming a divergence that does not exist is worse than no comment — it is an
+// invitation to make the code match it.
+//
+// `mod` is deliberately absent too — it is context-dependent, and `modIsCasePattern` decides it.
+// `of` needs no entry: it names a type syntax no parser implemented, so it lexes as an identifier.
+function callableBeforeLeftParen(kind TokenKind) returns bool
+	return kind == TokenKind.identifier or kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.int or kind == TokenKind.float or kind == TokenKind.bool or kind == TokenKind.sizeof or kind == TokenKind.countof or kind == TokenKind.panic or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.function or kind == TokenKind.interface or kind == TokenKind.default
+end 'callableBeforeLeftParen'
+
+// `mod` is BOTH an infix operator (`x mod (y + 1)`) and a union case name destructured in a match arm
+// (`mod(result, lhs, rhs) then …` — `StdOp` and `MaxonOp` each carry a `mod` case). The two want
+// opposite spacing before `(`, so the token alone cannot decide it.
+//
+// What separates them is POSITION: a match-arm pattern is the FIRST token on its line, while infix `mod`
+// always has its left operand before it on the same line. So `mod` suppresses the space only when it
+// began its line.
+//
+// Getting this wrong is not cosmetic in one direction: formatting `mod(a, b)` to `mod (a, b)` is what a
+// naive keyword rule does, and it silently rewrites source on every `maxon fmt`.
+function modIsCasePattern(prev TokenKind, prevBeganLine bool) returns bool
+	return prev == TokenKind.mod and prevBeganLine
+end 'modIsCasePattern'
+
+// Does a space go between `prev` and `cur`?
+function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inDataBlock bool, prevWasUnary bool, prevBeganLine bool) returns bool
+	if noSpaceBefore(cur) 'tightBefore'
+		return false
+	end 'tightBefore'
+	if noSpaceAfter(prev) 'tightAfter'
+		return false
+	end 'tightAfter'
+	if cur == TokenKind.colon 'namedArgument'
+		return false
+	end 'namedArgument'
+	if prevWasUnary 'unarySign'
+		return false
+	end 'unarySign'
+	if cur == TokenKind.leftParen and prevWasDot 'memberCall'
+		return false
+	end 'memberCall'
+	if cur == TokenKind.leftParen and inDataBlock 'caseWithValues'
+		return false
+	end 'caseWithValues'
+	if cur == TokenKind.leftParen and modIsCasePattern(prev, prevBeganLine: prevBeganLine) 'modPattern'
+		return false
+	end 'modPattern'
+	if cur == TokenKind.leftParen 'parenthesis'
+		return not callableBeforeLeftParen(prev)
+	end 'parenthesis'
+	if cur == TokenKind.leftBracket and (prev == TokenKind.identifier or prev == TokenKind.rightParen or prev == TokenKind.rightBracket) 'subscript'
+		return false
+	end 'subscript'
+	if cur == TokenKind.leftBrace and not nonWordToken(prev) 'structLiteral'
+		return false
+	end 'structLiteral'
+	return true
+end 'needsSpaceBefore'
+
+// --- The emit loop ----------------------------------------------------------------------------
+
+/// The whole state of one `format` call.
+///
+/// ⚠ **IT IS ONE RECORD BECAUSE TWO DOZEN LOOP-CARRIED `var`s DO NOT FIT IN x64's REGISTERS.** The
+/// reference holds this state in locals of one long method, which C# is free to spill; shv2's driver
+/// carries the identical warning at `MaxonArgs.parse`, where 21 locals live across a loop became 33
+/// values against 14 GPRs and the compile REFUSED with `E5001`. A field store lands in one frame slot,
+/// so the emit loop carries ONE value however much state the layout rules grow.
+type FormatState
+	var out as StringBuilder
+	let tokens as TokenArray
+	// The source bytes, for the one construct re-emitted from raw source rather than from tokens: an
+	// interpolated string literal. See `interpolatedLiteralOpensAt`.
+	let source as ByteArray
+	let comments as SourceCommentMap
+	// How many lines the source has. The comment-only path walks the FILE rather than the map, because
+	// a `Map`'s iteration order is unspecified and that path must emit in LINE order.
+	let lineCount as LineNumber
+	var consumed as ConsumedLineSet
+	var blocks as FormatBlockKindArray
+	var indentLevel as IndentDepth
+	var atLineStart as bool
+	var newlineRun as NewlineRun
+	var pendingIndentIncrease as bool
+	// The token before this one, ignoring newlines — kind and source bytes. The bytes are read by
+	// exactly one rule: `module` is a CONTEXTUAL keyword with no `TokenKind` of its own, so
+	// `module function f()` can only be recognized by the word.
+	var prevKind as TokenKind
+	var prevValue as ByteArray
+	var prevWasDot as bool
+	// True when the previous `-` or `+` was UNARY, so nothing goes between it and its operand.
+	var prevWasUnary as bool
+	var prevProducedValue as bool
+	// True when the previous token was the FIRST on its line. Read by `modIsCasePattern`.
+	var prevBeganLine as bool
+	// Whether any real token has been written yet, and the source line the last one came from. A
+	// separate flag rather than a -1 in the line field: `LineNumber` cannot hold -1, and "nothing has
+	// been emitted" is a different fact from "line zero".
+	var hasEmitted as bool
+	var lastEmittedSourceLine as LineNumber
+	var lineStartedWithEnd as bool
+	var lineHasLabeledOpener as bool
+	var lineHasMatch as bool
+	// The group keys of the last fully-emitted top-level line and of the line being emitted. EMPTY
+	// means "none" — every key this file mints is non-empty, so the two cannot be confused.
+	var prevGroupKey as String
+	var pendingGroupKey as String
+	var currentLineOpenedBlock as bool
+	var uniqueGroupCounter as GroupKeyOrdinal
+	// True from a line terminator until the next real line-start token decides whether a blank goes
+	// before it.
+	var blankDecisionPending as bool
+
+	static function create(tokens TokenArray, source ByteArray, comments SourceCommentMap, lineCount LineNumber) returns FormatState
+		return Self{out: StringBuilder.create(), tokens: tokens, source: source, comments: comments, lineCount: lineCount, consumed: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: "", pendingGroupKey: "", currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false}
+	end 'create'
+
+	// Walk every token, then hand over the built text. A formatted file always ends with exactly one
+	// newline and no trailing layout.
+	export function run() returns String
+		var index = 0 as TokenIndex
+		while index < tokens.count() 'eachToken'
+			index = self.emitToken(index)
+		end 'eachToken'
+		return "{self.out.build().trimEnd()}\n"
+	end 'run'
+
+	// Emit the token at `index`; returns the index the walk resumes at.
+	function emitToken(index TokenIndex) returns TokenIndex
+		// By VALUE, not a borrow — `emitRealToken` below mutates `self`. See `tokenAt`.
+		let tok = self.tokenAt(index)
+
+		if tok.kind == TokenKind.eof 'endOfFile'
+			self.emitEof()
+			return tokens.count()
+		end 'endOfFile'
+
+		if tok.kind == TokenKind.newline 'lineBreak'
+			self.emitNewline(tok)
+			return index + 1
+		end 'lineBreak'
+
+		return self.emitRealToken(index, tok: tok)
+	end 'emitToken'
+
+	// --- The three token families ---
+
+	function emitEof()
+		if not self.hasEmitted 'nothingEmitted'
+			// A file of nothing but comments. Walked by LINE rather than over the map, so the order is
+			// the file's own.
+			var line = 1 as LineNumber
+			while line <= self.lineCount 'eachLine'
+				if self.pendingCommentOn(line, wholeLine: true) 'ownsItsLine'
+					self.out.append(self.commentTextOn(line))
+					self.out.append("\n")
+				end 'ownsItsLine'
+				line = line + 1
+			end 'eachLine'
+			return
+		end 'nothingEmitted'
+
+		if self.pendingCommentOn(self.lastEmittedSourceLine, wholeLine: false) 'trailingComment'
+			self.out.append("  ")
+			self.out.append(self.commentTextOn(self.lastEmittedSourceLine))
+		end 'trailingComment'
+	end 'emitEof'
+
+	function emitNewline(tok Token)
+		if not self.hasEmitted 'nothingEmittedYet'
+			self.atLineStart = true
+			return
+		end 'nothingEmittedYet'
+
+		self.newlineRun = self.newlineRun + 1
+		if self.pendingIndentIncrease 'blockBodyBegins'
+			self.indentLevel = self.indentLevel + 1
+			self.pendingIndentIncrease = false
+		end 'blockBodyBegins'
+
+		if self.newlineRun == 1 and self.lastEmittedSourceLine > 0 and self.pendingCommentOn(self.lastEmittedSourceLine, wholeLine: false) 'trailingComment'
+			self.consumed.insert(self.lastEmittedSourceLine)
+			self.out.append("  ")
+			self.out.append(self.commentTextOn(self.lastEmittedSourceLine))
+		end 'trailingComment'
+
+		// Whole-line comments on this newline's line, OR on any source line a BLOCK COMMENT skipped
+		// between the last emitted line and this one. A `/* … */` emits no newline token for its
+		// interior lines, so the first newline after it is the only place its segments can be flushed.
+		if self.gapHoldsAWholeLineComment(tok.line) 'flushGap'
+			self.emitGapComments(tok.line)
+			return
+		end 'flushGap'
+
+		// The first newline terminates the content line; any further consecutive one is a blank the
+		// author wrote, whose effect the forced-blank rule decides later.
+		if self.newlineRun == 1 'terminatesTheLine'
+			self.closeCurrentLine()
+			self.blankDecisionPending = true
+			self.out.append("\n")
+		end 'terminatesTheLine'
+		self.atLineStart = true
+	end 'emitNewline'
+
+	function emitRealToken(index TokenIndex, tok Token) returns TokenIndex
+		self.newlineRun = 0
+
+		if not self.hasEmitted and tok.line >= 1 'headComments'
+			self.emitHeadComments(tok.line)
+		end 'headComments'
+
+		// Set when this line is the TAIL of a block or literal opened on an earlier line. It suppresses
+		// the forced blank at top level: a closing line belongs to the declaration it closes, not to a
+		// new group.
+		var lineIsBlockCloser = false
+
+		if (tok.kind == TokenKind.rightBracket or tok.kind == TokenKind.rightBrace) and self.atLineStart and self.indentLevel > 0 'closesMultiLineLiteral'
+			self.indentLevel = self.indentLevel - 1
+			lineIsBlockCloser = true
+		end 'closesMultiLineLiteral'
+
+		// `#else` closes the previous branch AND opens the next, so it is not a group of its own either.
+		if (tok.kind == TokenKind.hashElse or tok.kind == TokenKind.hashEndif) and self.indentLevel > 0 'closesDirectiveBranch'
+			self.indentLevel = self.indentLevel - 1
+			lineIsBlockCloser = true
+		end 'closesDirectiveBranch'
+
+		// `end 'label'` closes a block. Only at line start and only when the label follows immediately —
+		// a mid-line `end` (`TokenKind.end`) is a value reference, and a bare `end` in an enum body is a
+		// case name.
+		let endLabelFollows = tok.kind == TokenKind.end and self.kindAt(index + 1) == TokenKind.charLiteral
+		if endLabelFollows and self.atLineStart 'closesBlock'
+			if self.indentLevel > 0 'dedent'
+				self.indentLevel = self.indentLevel - 1
+			end 'dedent'
+			self.popBlock()
+			lineIsBlockCloser = true
+		end 'closesBlock'
+
+		let wasAtLineStart = self.atLineStart
+		if wasAtLineStart 'lineBegins'
+			self.lineStartedWithEnd = endLabelFollows
+			self.lineHasLabeledOpener = false
+			self.lineHasMatch = false
+		end 'lineBegins'
+
+		if wasAtLineStart and labeledBlockOpener(tok.kind) 'labeledOpener'
+			self.lineHasLabeledOpener = true
+		end 'labeledOpener'
+
+		// `test 'name'` is a LABELED opener — its name is the trailing character literal, exactly like
+		// `if cond 'label'` — but it is a CONTEXTUAL keyword with no `TokenKind`, so it cannot join
+		// `labeledBlockOpener` and has to be recognized by SHAPE. That shape is asked of the parser's own
+		// predicate rather than respelled here: a fourth spelling would be the one that kept accepting
+		// `test 'x'` after the grammar moved, silently re-indenting every `*.test.maxon` on save, which no
+		// spec fragment runs the formatter to notice. The line-start guard is the half this caller owns:
+		// mid-line, `test 'x'` is `match test 'check'`, not a declaration.
+		if wasAtLineStart and testDeclarationAt(self.tokens, index: index) 'testDeclaration'
+			self.lineHasLabeledOpener = true
+		end 'testDeclaration'
+
+		// These open a labeled block even mid-line — but not `then`, which opens one only at line start,
+		// so a match arm's label is not read as a block opener.
+		if tok.kind == TokenKind.try or tok.kind == TokenKind.otherwise or tok.kind == TokenKind.match 'midLineOpener'
+			self.lineHasLabeledOpener = true
+		end 'midLineOpener'
+
+		if tok.kind == TokenKind.match 'matchOnThisLine'
+			self.lineHasMatch = true
+		end 'matchOnThisLine'
+
+		if self.atLineStart 'indent'
+			self.openLine(tok, index: index, lineIsBlockCloser: lineIsBlockCloser)
+		end 'indent' else 'separate'
+			if needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine) 'needsSpace'
+				self.out.append(" ")
+			end 'needsSpace'
+		end 'separate'
+
+		// The token's own text. Two kinds are re-assembled rather than printed: a doc comment, whose
+		// delimiter the lexer stripped, and an interpolated literal, which is several tokens here.
+		if tok.kind == TokenKind.docComment 'docComment'
+			// `///` with the prose right-trimmed, and a BARE `///` when there is none (a paragraph break
+			// inside a doc block). The trim is what makes formatting IDEMPOTENT: without it every run
+			// accretes one more trailing space on a blank doc line. The lexer has already stripped the
+			// one separator space, so the separator is put back by rule rather than preserved.
+			let prose = String.from(tok.value).trimEnd()
+			self.out.append("///" if prose.isEmpty() else "/// ")
+			self.out.append(prose)
+		end 'docComment' else if self.interpolatedLiteralOpensAt(index) 'interpolatedString'
+			// ⭐⭐ **AN INTERPOLATED STRING IS RE-EMITTED FROM THE RAW SOURCE, IN ONE PIECE.** The bootstrap
+			// has ONE `StringInterp` token holding the whole body and re-prints its text verbatim; shv2
+			// PRE-LEXES interpolations into the main stream —
+			//   stringLiteral("a ") stringInterpStart <expr tokens> stringInterpEnd stringLiteral(" b")
+			// — and **the `{` and `}` are not tokens at all**. Emitting token by token would lose both braces
+			// AND silently reformat the interior: `"{ x+1 }"` would come back as `"{x + 1}"`.
+			let last = self.lastInterpolationFragment(index)
+			self.out.append("\"{self.sourceSpanBetween(index, last: last)}\"")
+			self.noteEmittedAt(tok.line)
+			// The whole literal is ONE operand, exactly as the bootstrap's single `StringInterp` token
+			// is. Nothing below this point applies to a string literal, so the walk resumes past the
+			// literal's final fragment.
+			self.notePrevToken(TokenKind.stringLiteral, value: tok.value, wasAtLineStart: wasAtLineStart)
+			return last + 1
+		end 'interpolatedString' else 'ordinaryToken'
+			self.out.append(tokenSourceSpelling(tok))
+		end 'ordinaryToken'
+
+		self.noteEmittedAt(tok.line)
+
+		// Match-arm rewrite: `caseName(_, _, …)` becomes `caseName`. When every binding is discarded the
+		// parenthesized underscores say nothing.
+		if tok.kind == TokenKind.identifier and self.inMatchBlock() and self.kindAt(index + 1) == TokenKind.leftParen 'maybeAllDiscarded'
+			let afterPattern = self.allDiscardedBindingsEndAt(index + 2)
+			if afterPattern > index + 2 and self.kindAt(afterPattern) == TokenKind.rightParen 'allDiscarded'
+				// The rewritten pattern is an operand, the same as the `)` it replaced. The rest of the
+				// left context is deliberately untouched: nothing between here and the `)` could have
+				// changed it.
+				self.prevKind = TokenKind.identifier
+				self.prevValue = EmptySourceText
+				self.prevProducedValue = true
+				return afterPattern + 1
+			end 'allDiscarded'
+		end 'maybeAllDiscarded'
+
+		// A `[` or `{` whose matching closer is on a different line opens an indent level.
+		if tok.kind == TokenKind.leftBracket or tok.kind == TokenKind.leftBrace 'maybeMultiLineLiteral'
+			if self.closerIsOnAnotherLine(index, tok: tok) 'spansLines'
+				self.pendingIndentIncrease = true
+				self.currentLineOpenedBlock = true
+			end 'spansLines'
+		end 'maybeMultiLineLiteral'
+
+		if tok.kind == TokenKind.hashIf or tok.kind == TokenKind.hashElse 'directiveOpensBranch'
+			self.pendingIndentIncrease = true
+			self.currentLineOpenedBlock = true
+		end 'directiveOpensBranch'
+
+		// `end 'X' else` / `end 'X' otherwise` stay on one line: the chain's next keyword is pulled up
+		// beside the label rather than starting a line of its own.
+		if tok.kind == TokenKind.charLiteral and self.prevKind == TokenKind.end 'maybeChainLabel'
+			let next = self.indexPastNewlinesFrom(index + 1)
+			if self.kindAt(next) == TokenKind.else or self.kindAt(next) == TokenKind.otherwise 'chains'
+				self.prevKind = tok.kind
+				self.prevValue = tok.value
+				self.prevProducedValue = true
+				self.lineStartedWithEnd = false
+				self.lineHasLabeledOpener = true
+				return next
+			end 'chains'
+		end 'maybeChainLabel'
+
+		let priorKind = self.prevKind
+		let priorValue = self.prevValue
+		self.notePrevToken(tok.kind, value: tok.value, wasAtLineStart: wasAtLineStart)
+
+		// Inside an enum/union body the same keyword can be a bare CASE NAME (`function`, `type`,
+		// `match` as `TokenKind` variants) or a real nested declaration (an instance method
+		// `function toString(…)`). A real declaration is followed by the name it declares.
+		if self.inDataBlock() 'insideACaseList'
+			if not (labellessBlockOpener(tok.kind) or labeledBlockOpener(tok.kind)) 'notAKeywordCase'
+				// Case names, arguments and raw values never affect block-level indent; only
+				// `end 'label'`, handled above, does.
+				return index + 1
+			end 'notAKeywordCase'
+
+			// ⚠ **THE LOOKAHEAD MUST NOT SKIP NEWLINES.** The declared name sits on the SAME line as the
+			// keyword, so skipping them makes a bare case named `function` borrow the NEXT case's name,
+			// read as a declaration, and open a block that never closes — 2,189 lines re-indented across
+			// two files when the reference did it.
+			if self.kindAt(index + 1) != TokenKind.identifier 'bareCaseName'
+				return index + 1
+			end 'bareCaseName'
+		end 'insideACaseList'
+
+		// A labelless opener pushes a block and indents the next line — at line start, or after a
+		// visibility/`static`/`module` modifier. `module` is a contextual keyword lexed as an identifier,
+		// so it is matched by its WORD; `Parser.ModuleModifierName` is where that word is written down.
+		let prevWasModuleKeyword = priorKind == TokenKind.identifier and priorValue.equals(ModuleModifierName)
+		let openerPositionAllows = wasAtLineStart or priorKind == TokenKind.export or priorKind == TokenKind.public or priorKind == TokenKind.static or prevWasModuleKeyword
+		if labellessBlockOpener(tok.kind) and openerPositionAllows and not self.inMatchBlock() 'labellessOpener'
+			// Inside an interface body a `function` is a bodyless signature and opens nothing.
+			let bodylessSignature = self.inInterfaceBlock() and tok.kind == TokenKind.function
+			if not bodylessSignature 'opensABody'
+				self.blocks.push(blockKindOpenedBy(tok.kind))
+				self.pendingIndentIncrease = true
+				self.currentLineOpenedBlock = true
+			end 'opensABody'
+		end 'labellessOpener'
+
+		// A character literal opens a block only when a labeled-block opener appeared earlier on the same
+		// line — never after `break`, `continue`, `return` or an `end` that closed one.
+		if tok.kind == TokenKind.charLiteral and not self.lineStartedWithEnd and self.lineHasLabeledOpener 'maybeBlockLabel'
+			let next = self.indexPastNewlinesFrom(index + 1)
+			let chains = self.kindAt(next) == TokenKind.else or self.kindAt(next) == TokenKind.otherwise
+			if not chains 'opensABlock'
+				self.blocks.push(FormatBlockKind.matchBody if self.lineHasMatch else FormatBlockKind.other)
+				self.pendingIndentIncrease = true
+				self.currentLineOpenedBlock = true
+			end 'opensABlock'
+		end 'maybeBlockLabel'
+
+		return index + 1
+	end 'emitRealToken'
+
+	// --- Line and blank-line bookkeeping ---
+
+	// Everything above the file's first real token. A non-comment line AFTER the first comment becomes a
+	// bare newline, which is how a blank line between two head comments survives.
+	function emitHeadComments(firstTokenLine LineNumber)
+		var emittedAny = false
+		var line = 1 as LineNumber
+		while line < firstTokenLine 'eachLine'
+			if self.pendingCommentOn(line, wholeLine: true) 'ownsItsLine'
+				self.out.append(self.commentTextOn(line))
+				self.out.append("\n")
+				emittedAny = true
+			end 'ownsItsLine' else if emittedAny 'blankBetweenComments'
+				self.out.append("\n")
+			end 'blankBetweenComments'
+			line = line + 1
+		end 'eachLine'
+	end 'emitHeadComments'
+
+	function gapHoldsAWholeLineComment(untilLine LineNumber) returns bool
+		var probe = self.lastEmittedSourceLine + 1
+		while probe <= untilLine 'eachLine'
+			if self.pendingCommentOn(probe, wholeLine: true) 'found'
+				return true
+			end 'found'
+			probe = probe + 1
+		end 'eachLine'
+		return false
+	end 'gapHoldsAWholeLineComment'
+
+	// Write every unconsumed whole-line comment between the last emitted line and `untilLine`.
+	function emitGapComments(untilLine LineNumber)
+		if self.newlineRun == 1 'previousLineEnds'
+			self.closeCurrentLine()
+			self.blankDecisionPending = true
+			self.out.append("\n")
+		end 'previousLineEnds'
+
+		let topLevel = self.atTopLevel()
+		var sawFirst = false
+		var lastCommentLine = self.lastEmittedSourceLine
+		var probe = self.lastEmittedSourceLine + 1
+
+		while probe <= untilLine 'eachLine'
+			if self.pendingCommentOn(probe, wholeLine: true) 'ownsItsLine'
+				self.consumed.insert(probe)
+
+				if not sawFirst 'firstInTheGap'
+					// The forced-blank decision is made against the FIRST comment in the gap only. The
+					// ones after it are part of the same logical comment block and merely preserve the
+					// author's blanks between themselves.
+					let userHadBlank = probe >= self.lastEmittedSourceLine + 2
+					if self.blankDecisionPending 'decide'
+						if topLevel 'atTopLevel'
+							self.appendBlanks(self.forcedBlanksBefore(CommentGroupKey, userHadBlank: userHadBlank))
+						end 'atTopLevel' else if userHadBlank 'nestedKeepsOne'
+							self.out.append("\n")
+						end 'nestedKeepsOne'
+						self.blankDecisionPending = false
+					end 'decide'
+					sawFirst = true
+				end 'firstInTheGap' else if probe >= lastCommentLine + 2 'blankBetweenComments'
+					self.out.append("\n")
+				end 'blankBetweenComments'
+
+				self.appendIndent()
+				// A continuation line of a multi-line block comment keeps its SOURCE indentation in the
+				// captured text. Stripping it here lets the comment line up with the surrounding code
+				// instead of double-indenting.
+				self.out.append(self.commentTextOn(probe).trimStart())
+				self.out.append("\n")
+				lastCommentLine = probe
+			end 'ownsItsLine'
+			probe = probe + 1
+		end 'eachLine'
+
+		if topLevel 'topLevelGroup'
+			self.prevGroupKey = CommentGroupKey
+		end 'topLevelGroup'
+		self.pendingGroupKey = ""
+		self.currentLineOpenedBlock = false
+		self.blankDecisionPending = true
+		// The emission ended with the comment line's own terminator, so the run stands at one.
+		self.newlineRun = 1
+		self.atLineStart = true
+		self.lastEmittedSourceLine = lastCommentLine
+	end 'emitGapComments'
+
+	// Decide the blank line before this line's first token, then write the indent.
+	function openLine(tok Token, index TokenIndex, lineIsBlockCloser bool)
+		let topLevel = self.atTopLevel()
+		let userHadBlankBeforeLine = self.hasEmitted and tok.line >= self.lastEmittedSourceLine + 2
+
+		if topLevel 'atTopLevel'
+			let thisKey = self.deriveGroupKey(tok.kind, index: index)
+			if self.blankDecisionPending and not lineIsBlockCloser 'decide'
+				self.appendBlanks(self.forcedBlanksBefore(thisKey, userHadBlank: userHadBlankBeforeLine))
+			end 'decide'
+			self.pendingGroupKey = thisKey
+		end 'atTopLevel' else if self.blankDecisionPending and userHadBlankBeforeLine 'nestedKeepsOne'
+			// Nested contexts are preserve-with-cap: at most one of the author's blank lines survives.
+			self.out.append("\n")
+		end 'nestedKeepsOne'
+
+		self.blankDecisionPending = false
+		self.appendIndent()
+		self.atLineStart = false
+	end 'openLine'
+
+	// ⭐ **THE OPINIONATED BLANK-LINE RULE, AND IT APPLIES AT TOP LEVEL ONLY.** Exactly one blank line
+	// separates adjacent top-level logical GROUPS, where a group is a run of adjacent lines sharing a
+	// key. Inside a nested context the author's blanks are preserved with a cap of one instead.
+	function forcedBlanksBefore(thisKey String, userHadBlank bool) returns BlankLineCount
+		if self.prevGroupKey.isEmpty() 'noPreviousLine'
+			return 0
+		end 'noPreviousLine'
+		if self.prevGroupKey == DocGroupKey 'docAttachesBelow'
+			return 0
+		end 'docAttachesBelow'
+		if self.prevGroupKey == CommentGroupKey and not userHadBlank 'commentAttachesBelow'
+			return 0
+		end 'commentAttachesBelow'
+		if self.prevGroupKey == thisKey 'sameGroupPacks'
+			return 1 if userHadBlank else 0
+		end 'sameGroupPacks'
+		return 1
+	end 'forcedBlanksBefore'
+
+	// The tentative group key of a line whose first meaningful token is `first`. A line that turns out to
+	// OPEN a block has this overwritten at line end, so the next line is always forced onto its own group.
+	function deriveGroupKey(first TokenKind, index TokenIndex) returns String
+		if first == TokenKind.docComment 'docBlock'
+			return DocGroupKey
+		end 'docBlock'
+
+		// A whole-line `//` is not a token and never reaches here; the gap path assigns its key.
+		var kind = first
+		if first == TokenKind.export or first == TokenKind.public 'visibilityPrefix'
+			kind = self.lookaheadKind(index)
+		end 'visibilityPrefix'
+
+		if kind == TokenKind.let or kind == TokenKind.var 'binding'
+			return BindingGroupKey
+		end 'binding'
+		if kind == TokenKind.typealias 'alias'
+			return AliasGroupKey
+		end 'alias'
+		return self.nextUniqueGroupKey()
+	end 'deriveGroupKey'
+
+	// Promote the line's key at line end.
+	function closeCurrentLine()
+		if not self.pendingGroupKey.isEmpty() 'hasAKey'
+			if self.currentLineOpenedBlock 'opensABlock'
+				self.pendingGroupKey = self.nextUniqueGroupKey()
+			end 'opensABlock'
+			self.prevGroupKey = self.pendingGroupKey
+			self.pendingGroupKey = ""
+		end 'hasAKey'
+		self.currentLineOpenedBlock = false
+	end 'closeCurrentLine'
+
+	function nextUniqueGroupKey() returns String
+		let key = "{UniqueGroupKeyPrefix}{self.uniqueGroupCounter}"
+		self.uniqueGroupCounter = self.uniqueGroupCounter + 1
+		return key
+	end 'nextUniqueGroupKey'
+
+	// --- Left context ---
+
+	// The running left context every spacing decision reads. A LINE begins with nothing behind it, so the
+	// operand state resets there rather than carrying the previous line's final token over — which is
+	// what makes a match arm's `default then -1` come out unary.
+	function notePrevToken(kind TokenKind, value ByteArray, wasAtLineStart bool)
+		self.prevWasDot = self.prevKind == TokenKind.dot
+		let operandBefore = not wasAtLineStart and self.prevProducedValue
+		self.prevWasUnary = (kind == TokenKind.minus or kind == TokenKind.plus) and not operandBefore
+		self.prevProducedValue = producesValue(kind, operandBefore: operandBefore)
+		self.prevKind = kind
+		self.prevValue = value
+		self.prevBeganLine = wasAtLineStart
+	end 'notePrevToken'
+
+	function noteEmittedAt(line LineNumber)
+		self.hasEmitted = true
+		self.lastEmittedSourceLine = line
+	end 'noteEmittedAt'
+
+	// --- Comment lookups ---
+
+	// Is there a comment on `line` that has not been written yet and that has the shape the caller wants
+	// — occupying the whole line, or trailing code on it? ONE predicate, because the two questions differ
+	// only in which of a captured comment's two shapes is being asked for.
+	function pendingCommentOn(line LineNumber, wholeLine bool) returns bool
+		if self.consumed.contains(line) 'alreadyWritten'
+			return false
+		end 'alreadyWritten'
+		let found = try self.comments.get(line) otherwise return false
+		return found.wholeLine == wholeLine
+	end 'pendingCommentOn'
+
+	function commentTextOn(line LineNumber) returns String
+		let found = try self.comments.get(line) otherwise panic("FormatState.commentTextOn: line {line} carries no comment — every caller asks `pendingCommentOn` first")
+		return found.text
+	end 'commentTextOn'
+
+	// --- Block stack ---
+
+	function popBlock()
+		if self.blocks.count() > 0 'hasABlock'
+			_ = try self.blocks.pop() otherwise panic("FormatState.popBlock: the count is non-zero on the line above")
+		end 'hasABlock'
+	end 'popBlock'
+
+	function innermostBlock() returns FormatBlockKind
+		// `other` at file scope is not a sentinel: none of the three layout rules keyed on this kind
+		// applies there, which is exactly what `other` means. The guard is not defensive either — the
+		// index below is a ranged type and `0 - 1` is a range violation, not a miss.
+		if self.blocks.count() == 0 'atFileScope'
+			return FormatBlockKind.other
+		end 'atFileScope'
+		return try self.blocks.get(self.blocks.count() - 1) otherwise panic("FormatState.innermostBlock: the count is non-zero on the line above")
+	end 'innermostBlock'
+
+	function inDataBlock() returns bool
+		return self.innermostBlock() == FormatBlockKind.data
+	end 'inDataBlock'
+
+	function inInterfaceBlock() returns bool
+		return self.innermostBlock() == FormatBlockKind.interfaceBody
+	end 'inInterfaceBlock'
+
+	function inMatchBlock() returns bool
+		return self.innermostBlock() == FormatBlockKind.matchBody
+	end 'inMatchBlock'
+
+	function atTopLevel() returns bool
+		return self.indentLevel == 0 and self.blocks.count() == 0 and not self.pendingIndentIncrease
+	end 'atTopLevel'
+
+	// --- Token-stream lookahead ---
+
+	// ⛔⛔ **A TOKEN IS FETCHED BY VALUE, NEVER HELD AS A BORROW ACROSS A `self.` CALL.** `tokens` is a
+	// FIELD, so `let tok = tokens.get(i)` borrows part of `self` — and every emit helper takes `self`
+	// mutably, so calling one while that borrow is live is **E3070**: `cannot mutate 'tokens' via
+	// 'emitRealToken' while it is borrowed by 'tok'`. Returning the token out of a function ends the
+	// borrow at the return, which is exactly why `Parser.tokenAt` exists in the same shape.
+	//
+	// ⚠ **ONLY THE SELF-COMPILE CATCHES THIS.** shv2 is built BY the bootstrap, which refcounts and has
+	// no move or borrow model at all, so this file compiles clean there and the whole spec suite stays
+	// green over it. `maxon-shv2 build maxon-shv2` is the one thing that runs shv2's borrow checker over
+	// shv2's own source — it is where this was found, after 25/25 and 453 byte-identical files said
+	// nothing.
+	function tokenAt(index TokenIndex) returns Token
+		if index >= tokens.count() 'pastEnd'
+			return Token.eof()
+		end 'pastEnd'
+
+		return try tokens.get(index) otherwise panic("FormatState.tokenAt: index<count just checked but tokens.get({index}) failed")
+	end 'tokenAt'
+
+	function kindAt(index TokenIndex) returns TokenKind
+		// `eof` past the end is the honest answer rather than a sentinel: the stream really has ended,
+		// and every caller is asking "what follows", which is nothing.
+		let tok = try tokens.get(index) otherwise return TokenKind.eof
+		return tok.kind
+	end 'kindAt'
+
+	// ⛔⛔ **`newline` ONLY — NEVER `Lexer.tokenKindIsSkippedLayout`, WHICH IS ONE IDENTIFIER AWAY AND
+	// WOULD DESTROY SOURCE.** That predicate says what the GRAMMAR may step over, and it admits
+	// `docComment`; this one says what the FORMATTER may step over, and a doc comment is text it has to
+	// write out. `maybeChainLabel` RETURNS this index — the walk resumes there and every token in
+	// between is never emitted — so admitting `docComment` would silently delete the comment in
+	// `end 'x' /// note` followed by `else`. The two questions share a shape and not an answer.
+	function indexPastNewlinesFrom(index TokenIndex) returns TokenIndex
+		var at = index
+		while at < tokens.count() and self.kindAt(at) == TokenKind.newline 'skip'
+			at = at + 1
+		end 'skip'
+		return at
+	end 'indexPastNewlinesFrom'
+
+	// The kind of the first non-newline token after `index`, or `eof` when there is none.
+	function lookaheadKind(index TokenIndex) returns TokenKind
+		return self.kindAt(self.indexPastNewlinesFrom(index + 1))
+	end 'lookaheadKind'
+
+	// Where a run of `_` bindings separated by commas stops, starting at `index`.
+	function allDiscardedBindingsEndAt(index TokenIndex) returns TokenIndex
+		var at = index
+		while at < tokens.count() 'eachBinding'
+			let tok = try tokens.get(at) otherwise panic("FormatState.allDiscardedBindingsEndAt: index {at} below the {tokens.count()}-token stream")
+			if tok.kind != TokenKind.identifier or not tok.value.equals(DiscardBindingName) 'notADiscard'
+				return at
+			end 'notADiscard'
+
+			at = at + 1
+			if self.kindAt(at) == TokenKind.comma 'separator'
+				at = at + 1
+			end 'separator'
+		end 'eachBinding'
+		return at
+	end 'allDiscardedBindingsEndAt'
+
+	// Does the bracket or brace at `index` close on a LATER line?
+	//
+	// ⚠ **THIS IS AN O(n) SCAN INSIDE THE O(n) EMIT LOOP, AND IT IS THE REFERENCE'S SHAPE** — the same
+	// forward walk `MaxonFormatter.cs:611-623` makes. Ported deliberately rather than replaced by a
+	// precomputed matching-closer index, because MEASURED it does not bend: a doubling ladder built from
+	// real source (2k/4k/8k/16k lines) reads 150/207/360/546 ms, which net of the ~100 ms fixed startup is
+	// about x2 per doubling. Bracket nesting in real Maxon is shallow, so the total work is n x average
+	// depth, not n².
+	//
+	// ⇒ **The instrument for this is an ad-hoc ladder like that one, NOT `scale-test`**: the formatter is
+	// not on the compile path, so no rung of that corpus ever calls it and every column there would read a
+	// flat zero — the blind spot, not a result. The shape that WOULD bend is many UNMATCHED openers, each
+	// scanning to EOF; `specs-shv2/lexer-parser-robustness.md` carries such cases and they are tiny.
+	function closerIsOnAnotherLine(index TokenIndex, tok Token) returns bool
+		let closing = TokenKind.rightBracket if tok.kind == TokenKind.leftBracket else TokenKind.rightBrace
+		var depth = 1
+		var at = index + 1
+		while at < tokens.count() and depth > 0 'scan'
+			let kind = self.kindAt(at)
+			if kind == tok.kind 'opens'
+				depth = depth + 1
+			end 'opens' else if kind == closing 'closes'
+				depth = depth - 1
+			end 'closes'
+			at = at + 1
+		end 'scan'
+
+		if at == index + 1 'nothingFollows'
+			return false
+		end 'nothingFollows'
+
+		let lastScanned = try tokens.get(at - 1) otherwise panic("FormatState.closerIsOnAnotherLine: index {at - 1} below the {tokens.count()}-token stream")
+		return lastScanned.line != tok.line
+	end 'closerIsOnAnotherLine'
+
+	// --- Interpolated string literals ---
+
+	// Does the literal at `index` carry interpolations? A plain `"…"` is ONE `stringLiteral` and is
+	// re-quoted from its own value; an interpolated one is a run of fragments and is sliced out of the
+	// source.
+	function interpolatedLiteralOpensAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.stringLiteral and self.kindAt(index + 1) == TokenKind.stringInterpStart
+	end 'interpolatedLiteralOpensAt'
+
+	// The index of the literal's FINAL fragment. Nesting is counted, because `"{f("{y}")}"` is legal and
+	// the inner literal's own markers must not be mistaken for the outer one's.
+	function lastInterpolationFragment(index TokenIndex) returns TokenIndex
+		var last = index
+		// The caller has established that `index + 1` opens an interpolation.
+		var at = index + 1
+
+		while at < tokens.count() 'eachSegment'
+			var depth = 0
+			while at < tokens.count() 'oneInterpolation'
+				let kind = self.kindAt(at)
+				if kind == TokenKind.stringInterpStart 'opens'
+					depth = depth + 1
+				end 'opens' else if kind == TokenKind.stringInterpEnd 'closes'
+					depth = depth - 1
+					if depth == 0 'thisOneClosed'
+						break
+					end 'thisOneClosed'
+				end 'closes'
+				at = at + 1
+			end 'oneInterpolation'
+
+			// The fragment after a depth-zero close belongs to this literal. A stream that ends before
+			// one arrives cannot reach here — the lexer would have thrown and `format` returned the
+			// source — so the walk simply stops.
+			at = at + 1
+			if self.kindAt(at) != TokenKind.stringLiteral 'noClosingFragment'
+				break
+			end 'noClosingFragment'
+
+			last = at
+			// Only another interpolation continues the literal. Anything else ends it, which is what
+			// keeps two adjacent string literals from being absorbed into one span.
+			if self.kindAt(at + 1) != TokenKind.stringInterpStart 'literalEnds'
+				break
+			end 'literalEnds'
+			at = at + 1
+		end 'eachSegment'
+
+		return last
+	end 'lastInterpolationFragment'
+
+	// The raw source between the first fragment's start and the last fragment's end — everything between
+	// the literal's own quotes, braces and all. Addressed by BYTE offset: `String.slice` is
+	// GRAPHEME-indexed and is the wrong tool for a span the lexer measured in bytes. Escape sequences are
+	// safe: the lexer keeps escape bytes RAW in a fragment, so they were never decoded.
+	function sourceSpanBetween(first TokenIndex, last TokenIndex) returns String
+		let opening = try tokens.get(first) otherwise panic("FormatState.sourceSpanBetween: index {first} below the {tokens.count()}-token stream")
+		let closing = try tokens.get(last) otherwise panic("FormatState.sourceSpanBetween: index {last} below the {tokens.count()}-token stream")
+		let span = try source.slice(opening.startByte, endIndex: closing.endByte) otherwise panic("FormatState.sourceSpanBetween: [{opening.startByte}, {closing.endByte}) outside the {source.count()}-byte source")
+		return String.from(span)
+	end 'sourceSpanBetween'
+
+	// --- Output ---
+
+	function appendIndent()
+		var level = 0 as IndentDepth
+		while level < self.indentLevel 'eachLevel'
+			self.out.append("\t")
+			level = level + 1
+		end 'eachLevel'
+	end 'appendIndent'
+
+	function appendBlanks(count BlankLineCount)
+		var written = 0 as BlankLineCount
+		while written < count 'eachBlank'
+			self.out.append("\n")
+			written = written + 1
+		end 'eachBlank'
+	end 'appendBlanks'
+end 'FormatState'
+
+// The binding a match arm writes when it wants none of a case's associated values.
+let DiscardBindingName = b"_"
+
+// Which kind of block a labelless opener starts.
+function blockKindOpenedBy(kind TokenKind) returns FormatBlockKind
+	if kind == TokenKind.enum or kind == TokenKind.union 'caseList'
+		return FormatBlockKind.data
+	end 'caseList'
+	if kind == TokenKind.interface 'signatures'
+		return FormatBlockKind.interfaceBody
+	end 'signatures'
+	return FormatBlockKind.other
+end 'blockKindOpenedBy'
+
+// --- The public entry points ------------------------------------------------------------------
+
+// Where a source stops being Maxon and becomes committed golden text.
+union SectionSeparator
+	at(offset ByteOffset)
+	absent
+end 'SectionSeparator'
+
+/// Format `source`. A source the lexer REJECTS comes back unchanged.
+///
+/// ⭐⭐ **THE `---` SPLIT IS THE REFERENCE'S BEHAVIOUR FOR THE OPPOSITE REASON.** A `.test` fragment
+/// carries its golden sections (`ExitCode:`, `CompiledIR`) below a `---` separator line. The BOOTSTRAP
+/// splits here because ITS lexer treats such a line as end-of-source and would silently DISCARD
+/// everything after it. **shv2's lexer has no such rule — it lexes `---` as three `minus` tokens** — so
+/// the failure this split prevents is the mirror image: shv2 would happily walk on and RE-LAY-OUT the
+/// golden sections as though they were Maxon. Same split, opposite reason, and both destroy the tail.
+export function format(source String) returns String
+	let bytes = source.toByteArray()
+
+	return match findSectionSeparator(bytes) 'separator'
+		at(offset) gives "{formatCore(sliceOf(bytes, from: 0, to: offset))}{sliceOf(bytes, from: offset, to: bytes.count())}"
+		absent gives formatCore(source)
+	end 'separator'
+end 'format'
+
+function formatCore(source String) returns String
+	let tokens = try tokenize(source) otherwise return source
+	let bytes = source.toByteArray()
+	let lines = SourceLines.of(bytes)
+	var scan = CommentScan.create(lines)
+	var state = FormatState.create(tokens, source: bytes, comments: scan.run(), lineCount: lines.count())
+	return state.run()
+end 'formatCore'
+
+// The byte offset of the first `---` section-separator line, if the source has one. A separator is a
+// line whose first non-layout characters are `---` and which carries nothing but layout after them.
+function findSectionSeparator(bytes ByteArray) returns SectionSeparator
+	let lines = SourceLines.of(bytes)
+	var index = 0 as LineIndex
+
+	while index < lines.count() 'eachLine'
+		var at = 0 as ByteOffset
+		while at < lines.length(index) and isLayoutByte(lines.byteAt(index, offset: at)) 'skipIndent'
+			at = at + 1
+		end 'skipIndent'
+
+		if at + 3 <= lines.length(index) and lines.byteAt(index, offset: at) == Ascii.minus and lines.byteAt(index, offset: at + 1) == Ascii.minus and lines.byteAt(index, offset: at + 2) == Ascii.minus 'threeDashes'
+			if lines.blankBetween(index, from: at + 3, to: lines.length(index)) 'nothingElseOnTheLine'
+				return SectionSeparator.at(lines.startOf(index))
+			end 'nothingElseOnTheLine'
+		end 'threeDashes'
+
+		index = index + 1
+	end 'eachLine'
+
+	return SectionSeparator.absent
+end 'findSectionSeparator'
+
+function sliceOf(bytes ByteArray, from ByteOffset, to ByteOffset) returns String
+	let span = try bytes.slice(from, endIndex: to) otherwise panic("sliceOf: [{from}, {to}) outside the {bytes.count()}-byte source")
+	return String.from(span)
+end 'sliceOf'
+
+// --- The directory walk -----------------------------------------------------------------------
+
+/// The `.maxon` files `maxon fmt` will rewrite under `root`, in the order it visits them.
+///
+/// ⚠ **IT IS NOT `Compiler.collectMaxonSources`, AND THE TWO DIFFERENCES ARE BOTH REQUIRED.** That walk
+/// defaults to `SourceSelection.productionOnly`, which drops every `*.test.maxon` — files `fmt` MUST
+/// format — and it prunes nothing for `.git`, because pruning there would change which files get
+/// COMPILED and would diverge from the bootstrap's `SourceCollector`, which prunes nothing. Everything
+/// the two walks DO share is reached through the shared names rather than respelled here.
+///
+/// ⭐ **A DIRECTORY HOLDING `.git` IS ITS OWN CHECKOUT AND IS PRUNED — file or directory.** A nested
+/// clone spells it as a directory; a git worktree spells it as a file holding a gitdir pointer. `fmt`
+/// rewrites in place, so descending through that boundary edits files the caller never named and cannot
+/// see in their own `git status`: one accidental whole-tree run rewrote 92 files across two agent
+/// worktrees. **The traversal ROOT is deliberately exempt** — every checkout contains `.git`, so pruning
+/// it there would make `maxon fmt` inside a repo format nothing at all.
+export function collectFormattableFiles(root FilePath) returns FilePathArray
+	var files = FilePathArray.create()
+
+	// The ancestry question is asked ONCE, for the root; every directory below it inherits the answer,
+	// so the markers below are probed with `holdsIgnoreMarker` alone. That is the same two-function
+	// shape `collectMaxonSources` uses, and for the same reason: re-asking per level would make the
+	// probes O(directories x depth).
+	if isIgnoredDirectory(root) 'notPartOfAnyProject'
+		return files
+	end 'notPartOfAnyProject'
+
+	var pending = FilePathArray.create()
+	pending.push(root)
+
+	while pending.count() > 0 'walk'
+		let dir = try pending.pop() otherwise panic("collectFormattableFiles: the stack is non-empty on the line above")
+		let entries = try Directory.list(dir) otherwise panic("collectFormattableFiles: {dir} was listed as a directory and cannot now be unlistable")
+
+		var subdirectories = FilePathArray.create()
+		var here = FilePathArray.create()
+		for entry in entries 'eachEntry'
+			if Directory.isDirectory(entry) 'isSubdirectory'
+				if not prunedSubdirectory(entry) 'kept'
+					subdirectories.push(entry)
+				end 'kept'
+			end 'isSubdirectory' else 'isFile'
+				if formattableFileName(entry.filename()) 'isASource'
+					here.push(entry)
+				end 'isASource'
+			end 'isFile'
+		end 'eachEntry'
+
+		// `Directory.list` answers in FILESYSTEM order, which is not stable across hosts and would make
+		// the `formatted:` lines a different list on every machine. Directories go onto the stack
+		// DESCENDING so they come back off ascending; files are appended ascending as they are found.
+		subdirectories.sort(function(a FilePath, b FilePath) gives comparePathSpelling(b, right: a))
+		here.sort(function(a FilePath, b FilePath) gives comparePathSpelling(a, right: b))
+
+		for subdirectory in subdirectories 'eachSubdirectory'
+			pending.push(subdirectory)
+		end 'eachSubdirectory'
+		for file in here 'eachFile'
+			files.push(file)
+		end 'eachFile'
+	end 'walk'
+
+	return files
+end 'collectFormattableFiles'
+
+// A subtree `fmt` must not descend into: another checkout, or a directory taken out of every project.
+function prunedSubdirectory(dir FilePath) returns bool
+	// Interpolated so the argument is a committed `String` — a bare module-`let` is ambiguous between
+	// `join`'s two overloads, the same reason `Compiler.holdsIgnoreMarker` spells its name this way.
+	let marker = dir.join("{GitCheckoutMarkerName}")
+	return holdsIgnoreMarker(dir) or Directory.exists(marker) or File.exists(marker)
+end 'prunedSubdirectory'
+
+// A file the walk formats. The build manifest is left alone — it is a build SCRIPT the compiler runs,
+// not part of the program — and the match is case-insensitive because the filesystem this walk reads is,
+// on the host that hosts most of these checkouts.
+//
+// ⚠ Naming a path OUTRIGHT escapes this, exactly as it escapes `.maxonignore`: `maxon fmt build.maxon`
+// formats it. See `runFmt`.
+function formattableFileName(name String) returns bool
+	if not name.endsWith(MaxonSourceExtension) 'notAMaxonSource'
+		return false
+	end 'notAMaxonSource'
+
+	// Asked SECOND, because `String.toLower` folds its receiver's buffer IN PLACE — asked first it would
+	// leave the extension test reading a lower-cased name, quietly making that half case-insensitive too.
+	return name.toLower() != BuildManifestName
+end 'formattableFileName'
+
+// Order two discovered paths by their spelling, byte for byte. A `FilePath` is not `Comparable` and the
+// ordering wanted here is the filesystem-neutral one: the bytes, not a locale's idea of them.
+function comparePathSpelling(left FilePath, right FilePath) returns Ordering
+	let a = left.toString().toByteArray()
+	let b = right.toString().toByteArray()
+	let shared = a.count() if a.count() < b.count() else b.count()
+
+	var i = 0
+	while i < shared 'eachByte'
+		let x = try a.get(i) otherwise panic("comparePathSpelling: index {i} below the shared length {shared}")
+		let y = try b.get(i) otherwise panic("comparePathSpelling: index {i} below the shared length {shared}")
+		if x != y 'differ'
+			return Ordering.lessThan if x < y else Ordering.greaterThan
+		end 'differ'
+		i = i + 1
+	end 'eachByte'
+
+	return a.count().compare(b.count())
+end 'comparePathSpelling'

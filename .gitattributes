@@ -22,3 +22,14 @@
 # a visibly duplicated row carrying the same date and rung name, not silent corruption,
 # which is why it is acceptable HERE and must not be extended to source.
 docs/optimization-log.md merge=union
+
+# ⭐ THE fmt ORACLE IS BYTES, SO GIT MUST NOT NORMALIZE IT.
+# `tests/fmt/fixtures/**` and `tests/fmt/selftest-cases/**` hold a formatter's REAL
+# OUTPUT, compared byte for byte by `tests/fmt/fixtures.test.maxon`. Under the
+# `* text=auto eol=lf` rule above, git would rewrite line endings on checkout — so on a
+# host where `fmt` emitted CRLF the harness would be comparing against a file git had
+# silently converted, and the corpus would agree with a formatter it had never seen.
+# Nothing is broken today (both compilers emit LF); this makes the oracle inert on that
+# axis, which is the same reason nothing in it is stored as a live `.maxon`.
+tests/fmt/fixtures/** -text
+tests/fmt/selftest-cases/** -text

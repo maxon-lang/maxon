@@ -1,0 +1,324 @@
+// Testing/FormatterSelfTest.maxon — the gate over `maxon fmt`'S ENGINE, driven from the suite's
+// parent process beside the harness's own self-checks.
+//
+// ⛔⛔ **IT EXISTS BECAUSE `maxon fmt` SILENTLY DELETED COMMENTS FOR AN UNKNOWN LENGTH OF TIME, AND
+// NOTHING IN THE TREE COULD HAVE NOTICED.** Measured 2026-08-20 on a pristine copy of
+// `maxon-shv2/Compiler/Runtime/GtRuntime.maxon`: one run took it from 5554 lines to 5251 and its
+// comment lines from 1920 to 1381 — 338 destroyed, exit 0, `changed: true`, and nothing else said.
+// The root cause was in the LEXER (`Advance` did not count a newline consumed inside a byte-string
+// literal, so token lines drifted below true source lines and the formatter's line-keyed comment map
+// stopped finding them), but the reason it survived for weeks is what this file closes: the formatter
+// had NO TEST AT ALL. A tool that rewrites source in place gets a gate.
+//
+// ⭐ **THE CORPUS IS `tests/fmt/selftest-cases/`, AND ITS EXPECTATIONS ARE THE BOOTSTRAP'S REAL
+// ANSWERS** — minted by running `maxon-sharp`'s `Lsp.MaxonFormatter` over each `.in`. That is what
+// makes PARITY assertable at all: shv2's formatter is a PORT, so a divergence from the reference is
+// this port's failure and never an improvement. A hand-written expectation could only ever prove
+// "shv2 does what its author wrote down".
+//
+// ⭐⭐ **THREE QUESTIONS PER CASE, AND THEY CATCH THREE DIFFERENT DEFECTS. Keep all three:**
+//
+//   1. **PARITY** — `format(<Name>.in)` equals `<Name>.expected` byte for byte. The strongest of the
+//      three, and available only because the expectation is another compiler's real output.
+//   2. **COMMENT MULTIPLICITY** — every distinct `//`-bearing text occurs the same number of times
+//      after formatting as before. ⚠ COUNTS, not presence: the defect this caught in the reference was
+//      a DUPLICATED comment (`NestedStringInsideInterpolation`), which a presence check passes.
+//   3. **IDEMPOTENCE** — `format(format(x))` equals `format(x)`. A formatter can preserve every comment
+//      and still move one a little further on each run; neither question above can see that.
+//
+// Parity looks like it subsumes the other two, and it does not. It holds them only as long as the
+// committed `.expected` is right — and 2 and 3 are the two claims that stay true no matter who re-mints
+// one. They are the questions asked of the FORMATTER; parity is the question asked of the PORT.
+//
+// ⚠ **THE `Unterminated*` CASES ARE SOURCES THE LEXER REJECTS, AND THEIR `.expected` IS A COPY OF
+// THEIR `.in`. THAT IS THE CONTRACT, NOT AN ACCIDENT** — see `requireUnlexableOracleIsTheSourceItself`,
+// which states it as a check rather than as prose so that nobody "fixes" it back into the defect it
+// records.
+//
+// ⚠ **AND THREE CASES ARE NEGATIVE CONTROLS** — see `negativeControlCases`. Each would have passed
+// throughout the lifetime of the defect it sits beside, so its passing is evidence of nothing on its
+// own. They are named in code, and required to be present, for the same reason.
+
+// Where the corpus lives, relative to the repo root — anchored at the working directory for
+// `HarnessSelfTest.FixturesRelativeDir`'s reason: the suite is invoked from the repo root, and a run
+// from anywhere else has already failed to find `specs-shv2`.
+let SelfTestCasesRelativeDir = "tests/fmt/selftest-cases"
+
+// What one case is stored as: the source, and the answer the reference gave for it.
+let CaseSourceExtension = ".in"
+let CaseExpectedExtension = ".expected"
+
+// ⛔ **THE PREFIX OF A CASE WHOSE SOURCE THE LEXER REJECTS.** `format` returns such a source byte for
+// byte — `formatCore`'s `try tokenize(source) otherwise return source` — and the corpus records that by
+// holding an `.expected` identical to the `.in`.
+//
+// ⚠ **THE TWO COMPILERS REACH THAT ANSWER BY DIFFERENT ROUTES, AND ONLY ONE OF THEM HAD THE DEFECT.**
+// shv2's `tokenize` THROWS `LexerError`; there is no error `TokenKind` for the emit loop to print. The
+// BOOTSTRAP mints a `TokenType.Error` whose Value is a prefixed message, and to a token-stream
+// re-printer every token's text is source — so it WROTE THE ERROR MESSAGE INTO THE FILE
+// (`let s = "unterminated` became `let s = __unterminated_string__:...`, exit 0, reported as
+// `formatted:`) until `MaxonFormatter.FormatCore` grew its `tokens.Any(t => t.Type == Error)` guard.
+// The cases are kept here because the CONTRACT is shared and the expectations are that compiler's, not
+// because this port can reproduce its mechanism.
+let UnlexableCasePrefix = "Unterminated"
+
+// The marker a `//` comment begins with. Both halves of the multiplicity census read it: the scan that
+// finds a comment on a line, and the count of how often that comment's text occurs in the whole text.
+let CommentMarker = "//"
+
+let LineFeed = "\n"
+
+// How deep one failing case sits under the sentence that introduces it — one paragraph per line, the
+// depth `HarnessSelfTest` and `ScaleHistorySelfTest` both use for the same list.
+let BrokenCaseIndent = "\n  "
+
+// How many cases one sweep read. Named because it is the count the empty-corpus refusal reads, not a
+// loop counter.
+typealias FormatterCaseTally = int(0 to u64.max)
+
+// How many times one comment text occurs in one source. Named for what it measures: the census is
+// about MULTIPLICITY, and a tally that could only say "present" would miss the duplication defect.
+typealias CommentOccurrenceTally = int(0 to u64.max)
+
+// ⭐ **PROVE THE FORMATTER STILL REPRODUCES ITS OWN CORPUS.** Called ONCE, by the spec suite's parent
+// process, beside `requireScaleHistoryRefusalsFire` and for its reason: this is a property of the TREE
+// rather than of any one test, so there is no test to fail and nothing downstream that could act on
+// it. It PANICS, naming every case that broke and how — all of them together, because one formatter
+// edit routinely moves several and a report naming the first sends the reader back for another sweep
+// per remaining case.
+export function requireFormatterPreservesItsCorpus()
+	let root = try FilePath.from(SelfTestCasesRelativeDir) otherwise panic("FormatterSelfTest: '{SelfTestCasesRelativeDir}' is not a valid path")
+	let entries = try Directory.list(root) otherwise panic("FormatterSelfTest: could not list {SelfTestCasesRelativeDir} — it holds the formatter engine's corpus, each case a source and the answer the bootstrap's formatter really gave for it. Run the suite from the repo root.")
+
+	// ⭐⭐ **THE CASE SET IS DERIVED FROM THE DIRECTORY, NEVER FROM A TABLE HERE.** A hand-written
+	// roster beside a directory of cases is one fact written twice, and the half that drifts is always
+	// the roster — a case somebody adds would then be gated by nothing while reading exactly like one
+	// that passed. `LadderIndex` and `HarnessSelfTest` derive their case sets for the identical reason.
+	// A file that is neither half of a case is not a case — the precedent `countFixtureCases` sets for
+	// a stray note beside a corpus. What is NOT let through silently is a HALF of one: that is
+	// `requireCorpusIsPaired`, immediately below.
+	var sources = StringArray.create()
+	var expectations = StringArray.create()
+	for entry in entries 'eachEntry'
+		let storedExtension = entry.fileExtension()
+		if storedExtension == CaseSourceExtension 'aSource'
+			sources.push(entry.stem())
+		end 'aSource' else if storedExtension == CaseExpectedExtension 'anExpectation'
+			expectations.push(entry.stem())
+		end 'anExpectation'
+	end 'eachEntry'
+
+	var broken = StringArray.create()
+	requireCorpusIsPaired(sources, expectations: expectations, broken: broken)
+	requireNegativeControlsArePresent(sources, broken: broken)
+
+	let checked = checkEveryPairedCase(sources, expectations: expectations, root: root, broken: broken)
+
+	// An EMPTY corpus would let the whole engine go unchecked while this function reported nothing at
+	// all — the exact silence it exists to remove. `HarnessSelfTest` refuses an empty fixture corpus
+	// for the identical reason.
+	if checked == 0 'noCases'
+		panic("FormatterSelfTest: {SelfTestCasesRelativeDir} holds no paired case, so not one formatter answer was compared against the reference. Each case is a `<Name>{CaseSourceExtension}` and the `<Name>{CaseExpectedExtension}` the bootstrap's formatter produced for it.")
+	end 'noCases'
+
+	if broken.isEmpty() 'everyCaseHolds'
+		return
+	end 'everyCaseHolds'
+
+	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is
+	// built as text and INTERPOLATED. The same constraint `HarnessSelfTest` and `ScaleHistorySelfTest`
+	// both document.
+	let report = indentedList(broken, indent: BrokenCaseIndent)
+	panic("FormatterSelfTest: the formatter no longer reproduces its own corpus — {broken.count()} problem(s) over {checked} case(s) in {SelfTestCasesRelativeDir}.{report}")
+end 'requireFormatterPreservesItsCorpus'
+
+// Every case the corpus holds BOTH halves of, asked all three questions, and how many that was. The
+// unpaired ones are skipped here and reported by `requireCorpusIsPaired` instead: reading a case whose
+// oracle is missing would panic on the read and hide the far more useful sentence about the corpus.
+function checkEveryPairedCase(sources StringArray, expectations StringArray, root FilePath, broken StringArray) returns FormatterCaseTally
+	var checked = 0 as FormatterCaseTally
+
+	for caseName in sources 'eachCase'
+		if not expectations.contains(caseName) 'unpaired'
+			continue
+		end 'unpaired'
+
+		checkCase(caseName, root: root, broken: broken)
+		checked = checked + 1
+	end 'eachCase'
+
+	return checked
+end 'checkEveryPairedCase'
+
+// ⛔⛔ **A HALF-STORED CASE IS A PANIC, NEVER A SKIP.** A `.in` with no `.expected` would be silently
+// passed over, and a case that never ran reads exactly like one that passed — which is the whole
+// failure mode this file was written against, one level up. The other direction matters just as much:
+// an `.expected` whose `.in` is gone is an oracle for nothing, and it is how a case comes to look
+// covered while the source it judged has left the tree.
+function requireCorpusIsPaired(sources StringArray, expectations StringArray, broken StringArray)
+	for caseName in sources 'eachSource'
+		if expectations.contains(caseName) 'paired'
+			continue
+		end 'paired'
+
+		broken.push("'{caseName}' has a {CaseSourceExtension} and no {CaseExpectedExtension}, so nothing says what the formatter must produce for it. Mint it with `python tests/fmt/generate-expectations.py`; a case with no oracle proves nothing and reads exactly like one that passed.")
+	end 'eachSource'
+
+	for caseName in expectations 'eachExpectation'
+		if sources.contains(caseName) 'paired'
+			continue
+		end 'paired'
+
+		broken.push("'{caseName}' has an {CaseExpectedExtension} and no {CaseSourceExtension}, so it is an oracle for a source that is no longer in the corpus. Remove it, or restore the source it judges.")
+	end 'eachExpectation'
+end 'requireCorpusIsPaired'
+
+// ⭐ **THE CASES THAT PROVE NOTHING ON THEIR OWN, NAMED IN CODE SO A READER CANNOT MISTAKE A GREEN ONE
+// FOR EVIDENCE.** Each is the control beside a case that reaches a real defect, and each passed
+// throughout the whole lifetime of the defect its neighbour records.
+//
+// They are REQUIRED TO BE PRESENT rather than merely described, because a control that quietly left
+// the corpus would take its warning with it and leave the neighbouring cases reading as sufficient.
+function negativeControlCases() returns StringArray
+	var controls = StringArray.create()
+
+	// Beside the byte-string trio: a literal that consumes no newline never desynchronizes the
+	// line-keyed comment map, so this case was green while 338 comments were being destroyed.
+	controls.push("NoMultilineLiteral")
+
+	// Beside `NestedStringInsideInterpolation`: a `//` inside an ORDINARY string was always scanned
+	// correctly, so neither of these says anything about a string nested inside an interpolation.
+	controls.push("PlainStringNoInterpolation")
+	controls.push("UrlInPlainString")
+
+	return controls
+end 'negativeControlCases'
+
+// The three controls, required to be in the corpus. See `negativeControlCases` for what a control's
+// passing does and does not say.
+function requireNegativeControlsArePresent(sources StringArray, broken StringArray)
+	for control in negativeControlCases() 'eachControl'
+		if sources.contains(control) 'present'
+			continue
+		end 'present'
+
+		broken.push("'{control}' is a NEGATIVE CONTROL and is no longer in the corpus. It is the case beside a real defect that would have passed throughout that defect's whole lifetime; without it a reader has nothing telling them that the neighbouring green is not evidence.")
+	end 'eachControl'
+end 'requireNegativeControlsArePresent'
+
+// One case, asked all three questions. Each answer is pushed and the next question still asked: a case
+// whose parity broke usually still has something to say about idempotence, and a reader fixing one
+// wants both.
+function checkCase(caseName String, root FilePath, broken StringArray)
+	let source = caseText(root, caseName: caseName, storedExtension: CaseSourceExtension)
+	let expected = caseText(root, caseName: caseName, storedExtension: CaseExpectedExtension)
+
+	requireUnlexableOracleIsTheSourceItself(caseName, source: source, expected: expected, broken: broken)
+
+	let formatted = format(source)
+
+	if formatted != expected 'divergedFromTheReference'
+		broken.push("'{caseName}' no longer formats to its {CaseExpectedExtension}. That file is the BOOTSTRAP's own answer, so this is a divergence in the port and never an improvement — re-minting it would record shv2's behaviour as the contract. The reference gives:{LineFeed}{expected}and shv2 gives:{LineFeed}{formatted}")
+	end 'divergedFromTheReference'
+
+	requireCommentMultiplicityHolds(caseName, source: source, formatted: formatted, broken: broken)
+
+	// Idempotence is a separate claim from either of the two above, and it catches a defect neither can
+	// see: a rule that flips a file between two spellings formats correctly and reports correctly every
+	// single run.
+	let twice = format(formatted)
+	if twice != formatted 'notIdempotent'
+		broken.push("'{caseName}' is not idempotent — a second pass changed the output again. The first pass gives:{LineFeed}{formatted}and the second gives:{LineFeed}{twice}")
+	end 'notIdempotent'
+end 'checkCase'
+
+// ⛔⛔ **AN UNLEXABLE SOURCE'S ORACLE MUST BE THE SOURCE ITSELF**, checked rather than described.
+//
+// Parity alone cannot say this. It compares shv2 against whatever the `.expected` holds, so an
+// `.expected` re-minted from a formatter that had regressed — one writing `__unterminated_string__:`
+// error text back into the file, which is the measured shape of this defect — would be reproduced
+// faithfully and reported green. This is the claim that survives a re-mint.
+//
+// ⚠ **AND IT FAILS CLOSED**: a corpus holding no unlexable case at all is reported, because the rule
+// is keyed on a NAME PREFIX and a rename would otherwise switch the whole check off in silence.
+function requireUnlexableOracleIsTheSourceItself(caseName String, source String, expected String, broken StringArray)
+	if not caseName.startsWith(UnlexableCasePrefix) 'lexes'
+		return
+	end 'lexes'
+
+	if expected == source 'oracleIsTheSource'
+		return
+	end 'oracleIsTheSource'
+
+	broken.push("'{caseName}' is a source the lexer REJECTS, so its {CaseExpectedExtension} must be byte-identical to its {CaseSourceExtension}: `format` returns such a source untouched, because the alternative is writing the lexer's error text into somebody's file. This oracle says the formatter should CHANGE it.")
+end 'requireUnlexableOracleIsTheSourceItself'
+
+// ⭐⭐ **EVERY DISTINCT COMMENT OCCURS THE SAME NUMBER OF TIMES AFTER FORMATTING AS BEFORE.** Counts,
+// not presence, and that is the whole strength of it: the reference defect that this census was
+// written for DUPLICATED a comment rather than losing one (the comment harvester is a raw line scanner,
+// and `"{f("//x")}"` is ONE literal whose interpolation holds a second string — a scanner tracking a
+// single in-string flag closes at the inner quote and reads the tail as a trailing comment). Nothing is
+// lost there, so a "did we keep every comment" check phrased as presence passes it.
+function requireCommentMultiplicityHolds(caseName String, source String, formatted String, broken StringArray)
+	for comment in commentTextsIn(source) 'eachComment'
+		let before = occurrencesOf(source, needle: comment)
+		let after = occurrencesOf(formatted, needle: comment)
+		if after == before 'preserved'
+			continue
+		end 'preserved'
+
+		broken.push("'{caseName}': the comment '{comment}' appeared {before} time(s) before formatting and {after} after. Formatting must never lose or duplicate a comment — a lost one cannot be recovered by re-running the tool, and a duplicated one is corruption that every presence check passes.")
+	end 'eachComment'
+end 'requireCommentMultiplicityHolds'
+
+// The DISTINCT `//`-bearing texts in a source, from the marker to the end of the line with trailing
+// space dropped. A text that occurs more than once is listed once and COUNTED by the caller, which is
+// what makes the census a multiplicity comparison rather than a presence one.
+//
+// It is a raw line scan and not a token walk on purpose: comments are not in shv2's token stream (the
+// `///` doc comment excepted), so the thing under test recovers them from raw source exactly this way,
+// and a census built on the formatter's own scanner would follow it wherever it went.
+function commentTextsIn(source String) returns StringArray
+	var found = StringArray.create()
+
+	for rawLine in source.split(LineFeed) 'eachLine'
+		let at = try rawLine.findFirst(CommentMarker) otherwise continue
+		let text = rawLine.slice(at, endIndex: rawLine.endIndex()).trimEnd()
+		if found.contains(text) 'alreadyListed'
+			continue
+		end 'alreadyListed'
+
+		found.push(text)
+	end 'eachLine'
+
+	return found
+end 'commentTextsIn'
+
+// How many times `needle` occurs in `haystack`, non-overlapping and left to right.
+//
+// Splitting on the needle yields exactly one more piece than there are occurrences, so the first piece
+// is skipped and the rest are counted. Counting pieces and subtracting is the same arithmetic with a
+// step that would have to go below zero, which this tally's range does not have.
+function occurrencesOf(haystack String, needle String) returns CommentOccurrenceTally
+	var seen = 0 as CommentOccurrenceTally
+	var atFirstPiece = true
+
+	for _ in haystack.split(needle) 'eachPiece'
+		if atFirstPiece 'firstPiece'
+			atFirstPiece = false
+			continue
+		end 'firstPiece'
+
+		seen = seen + 1
+	end 'eachPiece'
+
+	return seen
+end 'occurrencesOf'
+
+// One half of one case. A file the corpus listing just named and that cannot be read is the instrument
+// being broken, never a case that failed — and a reader sent looking for a formatter defect would find
+// nothing there.
+function caseText(root FilePath, caseName String, storedExtension String) returns String
+	let path = root.join("{caseName}{storedExtension}")
+	return try File.readText(path) otherwise panic("FormatterSelfTest: could not read {path.toString()}, which the corpus listing had just named.")
+end 'caseText'

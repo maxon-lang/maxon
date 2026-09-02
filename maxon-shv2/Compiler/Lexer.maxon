@@ -272,9 +272,37 @@ export enum TokenKind
 	hashIf = "#if"
 	hashElse = "#else"
 	hashEndif = "#endif"
+	// `///` — the ONE comment form that is a token. `//` and `/* … */` are dropped by the lexer; this one
+	// is emitted because two readers OUTSIDE the grammar need the text and the span back: `maxon fmt`
+	// round-trips it, and the LSP maps a cursor position into it. The grammar itself never reads one —
+	// `tokenKindIsSkippedLayout` is what every parser cursor steps over it by, exactly as the bootstrap's
+	// `SkipNewlines` is its only consumer there.
+	docComment = "doc comment"
 	newline = "newline"
 	eof = "end of file"
 end 'TokenKind'
+
+// ⭐⭐ **WHICH KINDS A PARSER CURSOR STEPS OVER — THE ONE DEFINITION, and it is deliberately not a
+// list of "trivia".** `newline` and `docComment` are here because the GRAMMAR reads neither: a newline
+// separates statements and carries nothing once the separation is recorded, and a doc comment is prose
+// for `maxon fmt` and the LSP that no production consumes. Everything else, EOF included, is a token
+// some production wants.
+//
+// ⚠ **IT IS NOT "where a statement ENDS", AND `statementEndsAt` MUST NOT BE ROUTED THROUGH IT.** That
+// question is about a `newline`'s MEANING (it terminates the statement), and a doc comment terminates
+// nothing — `requireNewlineAfterBlockLabel` and `requireSignatureLineEnd` demand a literal newline for
+// the same reason the bootstrap's `ExpectNewline` checks `Newline` BEFORE calling `SkipNewlines`.
+//
+// ⚠ It is ONE definition because the readers must agree or a construct means two things: the cursor
+// mover and its lookahead (`Parser.skipNewlines` / `indexPastNewlines`) decide what a program IS, and
+// `arrayLiteralElementCountAt` and the declaration sweep re-derive the same skip while walking the raw
+// stream. A copy that admitted one kind and not the other would have the sweep count a literal element
+// the real parse skipped.
+//
+// `module` and not `export`: every reader lives under `Compiler/`.
+module function tokenKindIsSkippedLayout(kind TokenKind) returns bool
+	return kind == TokenKind.newline or kind == TokenKind.docComment
+end 'tokenKindIsSkippedLayout'
 
 export type Token
 	export let kind as TokenKind
@@ -323,9 +351,14 @@ export let EmptySourceText = b""
 // text its KIND already implies carries `EmptySourceText`, and for those the kind's own
 // spelling IS the text (`TokenKind.leftParen` is `"("`).
 //
-// ⚠ "the kind's own spelling" holds for every PUNCTUATOR and OPERATOR, and NOT for the two
-// LAYOUT kinds that also carry `EmptySourceText`: `TokenKind.newline`.rawValue is the NAME
-// `"newline"` and `eof`'s is the phrase `"end of file"`, neither of which appears in the source.
+// ⚠ "the kind's own spelling" holds for every PUNCTUATOR and OPERATOR, and NOT for a kind whose
+// `rawValue` is a NAME for a position in the stream rather than bytes the author typed:
+// `TokenKind.newline` is `"newline"`, `eof` is `"end of file"` and `docComment` is `"doc comment"`.
+//
+// ⚠⚠ **THAT FAMILY IS NOT THE SAME AS "carries `EmptySourceText`", AND `docComment` IS WHY.** `newline`
+// and `eof` carry the empty slice BY CONSTRUCTION, so they always reach the arm above; a doc comment
+// carries the PROSE it was written with and reaches it only when that prose is empty (a bare `///`),
+// where "doc comment" is the honest answer for a token holding no text.
 // That is correct for the E2001 sites this fills — they name a token that IS there — and wrong for
 // an operand position, which is the whole reason `expressionOperandDisplayText` below exists. Do
 // not "unify" the two on the strength of the sentence above; it describes the majority, not the set.
@@ -773,9 +806,19 @@ type Lexer
 		end 'eof'
 	end 'handleEmit2'
 
-	function handleEnterComment() throws CursorError
-		try advance()
-		try scanComment()
+	// `startByte` is the first `/`, not the cursor: `scanComment` may find a THIRD one and emit a
+	// `docComment` token, whose span has to start where the author's `///` starts.
+	//
+	// ⛔ **`//` AS THE SOURCE'S LAST TWO BYTES IS A COMPLETE COMMENT, NOT TRUNCATED INPUT.** The second
+	// slash is the byte no advance can step past, so an unguarded move here unwound as
+	// `E1008 Unexpected end of input` on a file the bootstrap compiles (measured: the same file with
+	// `// x`, or with a trailing newline, was already fine — it was the EMPTY comment alone that failed).
+	// A `//` emits no token, so there is nothing to finish here but the scan.
+	function handleEnterComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		try advance() otherwise 'slashesEndTheFile'
+			try finishAtEof()
+		end 'slashesEndTheFile'
+		try scanComment(startLine, startCol: startCol, startByte: startByte)
 	end 'handleEnterComment'
 
 	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
@@ -790,6 +833,10 @@ type Lexer
 	// the top-level run() loop and scanInterp() so the two share one driver.
 	function stepDfa(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
 		let ch = cursor.current()
+		// The offset of the token's FIRST byte, read before any mover runs — `scanComment` is the one
+		// dispatch arm that cannot recover it afterwards, because two slashes are already behind the cursor
+		// by the time it is reached.
+		let startByte = cursor.index()
 		// `#` opens a compiler directive (e.g. `#if`, `#else`, `#endif`). It
 		// sits outside the table-driven DFA because the directive name is a
 		// run of letters following the `#`, and we want to emit a dedicated
@@ -825,11 +872,11 @@ type Lexer
 			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
 		end 'live'
 		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
-		try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, lastChar: atEnd)
+		try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, startByte: startByte, lastChar: atEnd)
 		return atEnd
 	end 'stepDfa'
 
-	function dispatchAction(action Action, dfaState DfaState, startLine LineNumber, startCol ColumnNumber, lastChar bool) throws CursorError
+	function dispatchAction(action Action, dfaState DfaState, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, lastChar bool) throws CursorError
 		match action 'dispatch'
 			skip then return
 			skipCr then column = column - 1
@@ -840,7 +887,7 @@ type Lexer
 			enterStrDq then try scanDoubleQuoteString(startLine, startCol: startCol)
 			enterNumber then try scanNumberFromDfa(lastChar, startLine: startLine, startCol: startCol)
 			enterIdent then try scanIdentifierFromDfa(lastChar, startLine: startLine, startCol: startCol)
-			enterComment then try handleEnterComment()
+			enterComment then try handleEnterComment(startLine, startCol: startCol, startByte: startByte)
 			enterBlockComment then try handleEnterBlockComment(startLine, startCol: startCol)
 			default panic("Lexer: unhandled action {action}")
 		end 'dispatch'
@@ -1534,7 +1581,17 @@ type Lexer
 
 	// Both '/' characters already consumed. Advances to (but not past) the newline, which is left for
 	// the main DFA to consume and emit as a token.
-	function scanComment() throws CursorError
+	//
+	// ⭐ **NOT PAST THE NEWLINE IS LOAD-BEARING NOW, NOT MERELY TIDY**: it is what guarantees a
+	// `docComment` token is always immediately followed by a `newline` one, which is the whole reason the
+	// parser can treat a doc comment as layout and still leave every "a statement/header/label line ends
+	// here" rule demanding a literal newline.
+	function scanComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		if cursor.current() == Ascii.slash 'aThirdSlash'
+			try scanDocComment(startLine, startCol: startCol, startByte: startByte)
+			return
+		end 'aThirdSlash'
+
 		while cursor.index() < len 'skipComment'
 			if cursor.current() == Ascii.lf 'endComment'
 				break
@@ -1546,6 +1603,51 @@ type Lexer
 			end 'commentEof'
 		end 'skipComment'
 	end 'scanComment'
+
+	// ⭐⭐ **`///` IS THE ONE COMMENT FORM THAT BECOMES A TOKEN** — the formatter round-trips it and the
+	// LSP maps a cursor into it, so it cannot be dropped the way `//` and `/* … */` are. The third slash
+	// and then ONE following space are consumed and left OUT of the text, so `/// text` and `///text`
+	// carry the identical prose and a re-emit can put the separator back by rule instead of preserving
+	// whatever the author typed. The SPAN still opens at the first slash, because that is where the
+	// construct starts on screen. Byte for byte the bootstrap's capture (`1-Lexer.cs`).
+	function scanDocComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		if not tryAdvance() 'slashesEndTheFile'
+			try finishEmptyDocComment(startLine, startCol: startCol, startByte: startByte)
+		end 'slashesEndTheFile'
+
+		if cursor.current() == Ascii.space 'oneSeparatorSpace'
+			if not tryAdvance() 'spaceEndsTheFile'
+				try finishEmptyDocComment(startLine, startCol: startCol, startByte: startByte)
+			end 'spaceEndsTheFile'
+		end 'oneSeparatorSpace'
+
+		let textStart = cursor.index()
+		var atEof = false
+		while cursor.current() != Ascii.lf 'docBody'
+			if not tryAdvance() 'docEof'
+				atEof = true
+				break
+			end 'docEof'
+		end 'docBody'
+
+		// At EOF the cursor still sits ON the last byte — `advance` refuses to step past it — so that byte
+		// is part of the text and the span runs to the end of the source.
+		let textEnd = len if atEof else cursor.index()
+		let value = try bytes.slice(textStart, endIndex: textEnd) otherwise panic("Lexer.scanDocComment: slice [{textStart}, {textEnd}) outside the {len}-byte source")
+		emitWithSource(TokenKind.docComment, value: value, startLine: startLine, startCol: startCol, startByte: startByte, endByte: textEnd)
+
+		if atEof 'docCommentEndsTheFile'
+			try finishAtEof()
+		end 'docCommentEndsTheFile'
+	end 'scanDocComment'
+
+	// `///` — or `/// ` — as the source's final bytes: a doc comment with no prose, completed cleanly
+	// rather than a truncated token. Two positions in `scanDocComment` can run out that way, and they owe
+	// the same token.
+	function finishEmptyDocComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		emitWithSource(TokenKind.docComment, value: EmptySourceText, startLine: startLine, startCol: startCol, startByte: startByte, endByte: len)
+		try finishAtEof()
+	end 'finishEmptyDocComment'
 
 	// Both '/' and '*' already consumed. Scans until '*/' is found. A newline inside the comment is an
 	// ordinary consumed byte — `countConsumed` is what keeps `line` right across it, so this body no
@@ -1743,6 +1845,28 @@ function classifyIdentifier(name ByteArray) returns TokenKind
 	return info.kind
 end 'classifyIdentifier'
 
+// ⭐ **IS `kind` A RESERVED WORD — DERIVED FROM `keywordMap`, NEVER RESTATED.** The formatter has to know
+// whether a token it is re-emitting is a keyword or an ordinary identifier, and a second list of the
+// keywords is exactly the copy that goes stale silently: a word added to the map above would keep
+// lexing as a keyword and start formatting as an identifier. The map is the only place the set is
+// written down, so this scans it.
+//
+// The scan is linear in the keyword count and the map is the wrong index for this direction — it is
+// keyed by SPELLING, and the answer wanted here is keyed by KIND. A reverse index would be a second
+// copy of the same fact with its own initialization order to get wrong, for a question asked once per
+// token by ONE caller that is already writing bytes to a file.
+//
+// `module` and not `export`: the formatter lives under `Compiler/` (see `Ascii` for the E3093 rule).
+module function isKeywordKind(kind TokenKind) returns bool
+	for (_, info) in keywordMap 'eachKeyword'
+		if info.kind == kind 'isTheKind'
+			return true
+		end 'isTheKind'
+	end 'eachKeyword'
+
+	return false
+end 'isKeywordKind'
+
 // Map a directive name (the text following `#`) to its TokenKind. Returns
 // TokenKind.identifier for unrecognized names so the lexer caller can
 // distinguish "valid directive" from "junk after `#`" without a separate
@@ -1769,6 +1893,7 @@ end 'classifyDirective'
 // does not run, so only `scripts/self-host-ab.sh` sees it.
 module enum Ascii
 	lf = 10
+	space = 32
 	dquote = 34
 	hash = 35
 	quote = 39

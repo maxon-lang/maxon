@@ -40,6 +40,19 @@ module let NothingRanExitCode = 2
 // nowhere else.
 module let SpecTestCommandName = "spec-test"
 
+// ⭐ **`fmt` TAKES NO OPTIONS AT ALL, AND THAT IS ENFORCED IN THE PARSER**, not left to the command:
+// silently DROPPING an unrecognized flag is the most destructive thing this command could do -
+// `maxon fmt --check` would find no path, fall back to the current directory and rewrite the whole tree
+// in place, the exact opposite of what the flag asked for. `MaxonArgs.parse` therefore records ANY
+// `-`-leading argument typed after this word as a bad option, including flags other commands implement.
+let FmtCommandName = "fmt"
+
+// ⚠ **`fmt`'s REFUSALS ARE ITS OWN SENTENCES AND THEY SAY `maxon`, NOT `maxon-shv2`.** They are a
+// PORT: `tests/fmt/fixtures/flag-refused`, `flag-refused-no-path` and `two-paths-refused` pin these
+// bytes, and every expectation in that corpus was MINTED by running the bootstrap's `maxon fmt`. Byte
+// parity with the reference is the contract, so a "better" wording here is the failure, not a fix.
+let FmtUsageLine = "usage: maxon fmt [<file|directory>]   (formats in place; no options)"
+
 module let WorkerPersistentFlag = "--worker-persistent"
 
 module let FilterFlagPrefix = "--filter="
@@ -142,6 +155,11 @@ let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 // `CompileProduct.totalCpuTicks` (G20), which is the same number from the same whole-compile probe
 // without the file. It was written out as a literal at the parser below AND at the scale runner
 // until a second harness would have made a third copy.
+// What makes an argument an OPTION rather than a positional: one leading dash. Named because three
+// readers ask it — `anyOption`'s unconditional record, the catch-all unknown-flag arm, and `fmt`'s
+// refusal through the first of those — and a fourth spelling would be the rule written down twice.
+let OptionPrefix = "-"
+
 module let MetricsFlagPrefix = "--metrics="
 
 // Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
@@ -165,7 +183,9 @@ function main() returns ExitCode
 	// An option the driver does not implement aborts BEFORE any command runs. Every
 	// command below would otherwise proceed as though the flag had been honoured,
 	// which is the one outcome a caller can neither see nor recover from.
-	if not args.badOption.isEmpty() 'badOption'
+	// ⚠ `fmt` is EXEMPT and refuses its own options inside `runFmt`, in the reference's words rather
+	// than this driver's. See `FmtUsageLine`.
+	if not args.badOption.isEmpty() and args.command != MaxonCommand.fmt 'badOption'
 		printError("error: unknown option: {args.badOption}\n")
 		printUsage()
 		return refusedCommandLineExit(args.command)
@@ -179,6 +199,7 @@ function main() returns ExitCode
 		specTest gives runSpecTest(args)
 		scaleTest gives runScaleTest(args)
 		test gives runTest(args)
+		fmt gives runFmt(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -603,6 +624,123 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	return suiteExit
 end 'runSpecTest'
 
+// ⭐⭐ **`maxon fmt` — RE-PRINT MAXON SOURCES IN CANONICAL LAYOUT, IN PLACE.**
+//
+// A PORT of the bootstrap's `RunFmt` (`maxon-sharp/Program.cs`), whose OBSERVABLE BEHAVIOUR is the
+// contract rather than a starting point: every expectation under `tests/fmt/fixtures/` was minted by
+// running that command, so each stream, each exit code and each resulting tree is the reference's own
+// answer. That is why the two refusals below are spelled out here instead of going through this
+// driver's shared `refusedPositionalBeyond` — that helper says `error: unexpected extra argument: <x>`
+// followed by a `Usage:` line, and `fmt` says something else, in `maxon`'s name rather than
+// `maxon-shv2`'s. See `FmtUsageLine`.
+//
+// ⚠ **A `-`-LEADING ARGUMENT NEVER REACHES THE WALK**: `MaxonArgs.parse` records every one of them as
+// a bad option the moment the command is `fmt`, and `main` routes that here rather than to its own
+// gate. The reason is in `FmtCommandName`, and it is not tidiness — a dropped flag makes this command
+// rewrite the working directory.
+function runFmt(args MaxonArgs) returns ExitCode
+	if not args.anyOption.isEmpty() 'refusedOption'
+		printError("fmt: unrecognized option: {args.anyOption}\n")
+		printError("{FmtUsageLine}\n")
+		return 1
+	end 'refusedOption'
+
+	if args.paths.count() > 1 'refusedSecondPath'
+		printError("fmt: expected at most one path, got {args.paths.count()}: {joinedWith(args.paths, separator: PathListSeparator)}\n")
+		return 1
+	end 'refusedSecondPath'
+
+	let spelling = args.solePositional()
+	return match fmtSelection(spelling) 'selection'
+		files(paths) gives formatEachFile(paths)
+		notFound gives refusedFmtPath(spelling)
+	end 'selection'
+end 'runFmt'
+
+// What a `fmt` invocation's one argument resolves to.
+union FmtSelection
+	// The files to rewrite, in the order they will be visited.
+	files(paths FilePathArray)
+	// The argument names nothing on disk.
+	notFound
+end 'FmtSelection'
+
+// ⚠ **A NAMED FILE IS FORMATTED WHATEVER IT IS CALLED AND WHEREVER IT SITS** — a `build.maxon`, a
+// `.test` fragment, a file under a `.maxonignore`. Naming a path outright overrides every exclusion,
+// exactly as it does for `maxon build`: the filters belong to the WALK, which only ever sees paths it
+// discovered itself (see `Formatter.collectFormattableFiles`).
+function fmtSelection(spelling String) returns FmtSelection
+	if spelling.isEmpty() 'noPathGiven'
+		return FmtSelection.files(collectFormattableFiles(Directory.currentPath()))
+	end 'noPathGiven'
+
+	let target = try FilePath.from(spelling) otherwise return FmtSelection.notFound
+
+	if Directory.isDirectory(target) 'aDirectory'
+		return FmtSelection.files(collectFormattableFiles(target))
+	end 'aDirectory'
+
+	if File.exists(target) 'aFile'
+		var only = FilePathArray.create()
+		only.push(target)
+		return FmtSelection.files(only)
+	end 'aFile'
+
+	return FmtSelection.notFound
+end 'fmtSelection'
+
+// Rewrite each file whose formatted text DIFFERS from what is on disk, and report the two counts. A
+// file that is already canonical is not rewritten: `fmt` over a clean tree must leave every mtime alone.
+function formatEachFile(files FilePathArray) returns ExitCode
+	var changed = 0 as FormattedFileCount
+	for file in files 'eachFile'
+		let original = try File.readText(file) otherwise 'unreadable'
+			printError("fmt: could not read {file}\n")
+			return 1
+		end 'unreadable'
+
+		let formatted = format(original)
+		if formatted != original 'differs'
+			try File.writeText(file, content: formatted) otherwise 'unwritable'
+				printError("fmt: could not write {file}\n")
+				return 1
+			end 'unwritable'
+
+			print("formatted: {file}\n")
+			changed = changed + 1
+		end 'differs'
+	end 'eachFile'
+
+	print("fmt: {changed} file(s) changed, {files.count() - changed} unchanged.\n")
+	return 0
+end 'formatEachFile'
+
+function refusedFmtPath(spelling String) returns ExitCode
+	printError("fmt: path not found: {spelling}\n")
+	return 1
+end 'refusedFmtPath'
+
+// How many files one `fmt` run rewrote.
+typealias FormattedFileCount = int(0 to u64.max)
+
+// What separates the paths `fmt` names back when it refuses more than one.
+let PathListSeparator = ", "
+
+// The spellings joined for a message that has to name them all — a free function because the library
+// carries no `String.join`.
+function joinedWith(values SourcePathSpellingArray, separator String) returns String
+	var out = StringBuilder.create()
+	var first = true
+	for value in values 'eachValue'
+		if not first 'needsSeparator'
+			out.append(separator)
+		end 'needsSeparator'
+		out.append(value)
+		first = false
+	end 'eachValue'
+	return out.build()
+end 'joinedWith'
+
 // The tree lock for a suite run — taken for every run except a fixture sub-run, whose parent holds it.
 function acquireSuiteTreeLock(specDir FilePath) returns ExitCode
 	if isHarnessFixtureSubRun(specDir) 'parentHoldsIt'
@@ -921,6 +1059,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		lspSelfTest gives 1
 		specTest gives 1
 		scaleTest gives 1
+		fmt gives 1
 		unknown gives 1
 	end 'whichCommand'
 end 'refusedCommandLineExit'
@@ -966,6 +1105,11 @@ function printUsage()
 	print("                                quadratic) and nothing is fitted. An INSTRUMENT, not a gate: it\n")
 	print("                                renders no verdict, and it exits non-zero only when the RUN\n")
 	print("                                broke. The trend it feeds is {OptimizationLogRelativePath}.\n")
+	print("  fmt [<file|directory>]        Re-print Maxon sources in canonical layout, IN PLACE (default:\n")
+	print("                                the working directory). A named FILE is formatted whatever it\n")
+	print("                                is called; a DIRECTORY is walked for `.maxon` files, skipping\n")
+	print("                                `build.maxon`, anything under a `.maxonignore`, and any\n")
+	print("                                subdirectory that is its own checkout. Takes no options.\n")
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
@@ -1061,6 +1205,8 @@ enum MaxonCommand
 	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
 	// runs this compiler's specs, this one runs whatever the directory it is pointed at declares.
 	test
+	// `maxon fmt` - re-print `.maxon` sources in canonical layout, IN PLACE. See `runFmt`.
+	fmt
 	unknown
 end 'MaxonCommand'
 
@@ -1180,6 +1326,18 @@ module type MaxonArgs
 	export var logOverridden as bool
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
+	// ⛔⛔ **EVERY `-`-LEADING ARGUMENT, RECORDED REGARDLESS OF WHICH ARM CONSUMES IT OR WHERE IT SAT.**
+	// `badOption` below is only the ones NO arm understood, and it is set from INSIDE the arm chain — so
+	// it can never see a flag this driver DOES implement. That is fatal for `fmt`, whose whole contract
+	// is that it takes no options: MEASURED before this field existed, `maxon-shv2 --emit-ir fmt` set
+	// `emitIr`, left `badOption` empty, and FORMATTED THE CURRENT DIRECTORY IN PLACE, exit 0 — the exact
+	// incident the refusal exists to prevent.
+	//
+	// ⚠ **A COMMAND-GATED ARM CANNOT FIX THAT, AND THE FIRST ATTEMPT WAS ONE.** This parser is
+	// ORDER-INDEPENDENT, so an arm asking `command == fmt` sees nothing when the flag is typed AHEAD of
+	// the word `fmt`. Recorded above the chain instead, unconditionally — the one site no ordering can
+	// reach around.
+	export var anyOption as String
 	export var badOption as String
 	// ⭐ Set when an argument names an option this driver ONCE HAD and deliberately withdrew. A
 	// separate field from `badOption` because the two owe the reader different sentences and `main`
@@ -1196,7 +1354,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, badOption: "", withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", badOption: "", withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -1208,7 +1366,8 @@ module type MaxonArgs
 	end 'solePositional'
 
 	// Parse the process command line. argv[0] is the executable path (skipped).
-	// The first `build` token selects the command; every bare (non-flag)
+	// The FIRST command word selects the command and every later one is an ordinary
+	// positional (see `laterCommandWordIsAPath`); every bare (non-flag)
 	// argument is KEPT, in order, as a positional; `-o <path>` / `--output=<path>` set the output;
 	// `--emit-ir` requests the Target-IR sidecar; `--filter=<pattern>` narrows the
 	// spec-test selection; `--update-required` regenerates the spec-test goldens.
@@ -1236,6 +1395,23 @@ module type MaxonArgs
 		var i = 1
 		while i < args.count() 'each'
 			let arg = try args.get(i) otherwise panic("MaxonArgs.parse: index {i} >= args.count() despite the while guard i<args.count()")
+
+			// Recorded BEFORE the chain decides anything, so it sees a flag whichever arm goes on to consume
+			// it and wherever on the line it sat. See `anyOption`.
+			if arg.startsWith(OptionPrefix) 'anOption'
+				parsed.anyOption = firstBadOption(parsed.anyOption, arg: arg)
+			end 'anOption'
+
+			// The command as it stood BEFORE this argument, so the arms below can stay a plain chain and
+			// the first-word rule be applied once, after them. See `laterCommandWordIsAPath`.
+			//
+			// ⚠ **CLEARED, NOT MERELY REMEMBERED**, so that an arm firing below is detectable even when it
+			// re-selects the command already chosen. `maxon-shv2 fmt fmt` is exactly that shape, and it is
+			// the destructive one: comparing the command before and after would read it as no change at
+			// all. Nothing between here and the restore reads the field.
+			let commandBefore = parsed.command
+			parsed.command = MaxonCommand.unknown
+
 			if arg == "build" 'buildCmd'
 				parsed.command = MaxonCommand.build
 			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
@@ -1250,7 +1426,9 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.scaleTest
 			end 'scaleTestCmd' else if arg == TestCommandName 'testCmd'
 				parsed.command = MaxonCommand.test
-			end 'testCmd' else if arg == "-o" 'dashOutput'
+			end 'testCmd' else if arg == FmtCommandName 'fmtCmd'
+				parsed.command = MaxonCommand.fmt
+			end 'fmtCmd' else if arg == "-o" 'dashOutput'
 				i = i + 1
 				parsed.outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
@@ -1394,7 +1572,7 @@ module type MaxonArgs
 					// `TestCommand.quietTheBuildChatter`.
 					parsed.logOverridden = true
 				end 'goodSpec'
-			end 'logFlag' else if arg.startsWith("-") 'unknownFlag'
+			end 'logFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'unknownFlag' else 'positional'
 				// KEPT, never dropped. WHICH of them a command uses is the COMMAND's question — `build`
@@ -1402,6 +1580,26 @@ module type MaxonArgs
 				// cannot be given here, where the arity of the command being parsed is not yet known.
 				parsed.paths.push(arg)
 			end 'positional'
+
+			// ⛔⛔ **ONLY THE FIRST COMMAND WORD ON A LINE IS THE COMMAND; A LATER ONE IS A PATH.** The
+			// arms above are order-independent by design, which is right for FLAGS and destructive for
+			// command words: MEASURED without this, in a tree holding a `fmt/` directory,
+			// `maxon-shv2 fmt fmt` set the command twice, left `paths` EMPTY, fell back to `fmt`'s
+			// no-path default and REWROTE THE WHOLE WORKING DIRECTORY in place — exit 0, `2 file(s)
+			// changed`, a file the caller never named among them. That is the 92-file incident the option
+			// refusals exist to prevent, reached through the POSITIONAL door instead of the flag one.
+			//
+			// The BOOTSTRAP cannot have it and is the contract here: it dispatches on `args[0]` and hands
+			// `args[1..]` to `RunFmt`, so its `fmt fmt` formats `fmt/` and touches nothing else (measured,
+			// both compilers). Restoring the earlier command and re-filing the word as a positional is
+			// what makes this parser answer the same.
+			if parsed.command == MaxonCommand.unknown 'noCommandWordHere'
+				parsed.command = commandBefore
+			end 'noCommandWordHere' else if commandBefore != MaxonCommand.unknown 'laterCommandWordIsAPath'
+				parsed.command = commandBefore
+				parsed.paths.push(arg)
+			end 'laterCommandWordIsAPath'
+
 			i = i + 1
 		end 'each'
 

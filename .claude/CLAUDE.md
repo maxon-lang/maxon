@@ -119,7 +119,7 @@ It is slow (several minutes) and off by default.
 
 There is **no `maxon clean` command** — it prints usage and exits 1. To force a from-source stdlib rebuild, delete `stdlib/.maxon/cache/*.mxc` yourself; the self-hosted compiler recompiles the stdlib whenever its cache is absent. The C# bootstrap's stdlib cache is in-memory only, so it always builds the stdlib fresh.
 
-**The tools say what a compiler cannot do rather than pretending.** ⚠ **THIS PARAGRAPH USED TO SAY shv2's RUNNER "IMPLEMENTS ONLY `--filter`, `--update-required`, AND `--log`", AND THAT WAS STALE BY FOUR FLAGS — MEASURED 2026-09-01 off `Main.maxon`'s own parse loop.** It also accepts a positional `[dir]`, **`--network`**, **`--workers=<n>`** and **`--target=<cpu>-<os>`**; `--target` is not rejected at all, and `--network` is the BOOTSTRAP's gap (only shv2's runner knows it), which is why `checkSpecTestFlags` now refuses in both directions. What shv2's runner genuinely lacks against the bootstrap's is `--verbose` (it always prints a line per test), `--no-batch` (its batching is `RunStrategy`, chosen by target and host, not a flag) and `--debug-info`; its `--filter` is ONE substring where the bootstrap's unions on commas. `mmTrace` and `dumpStages` are still REJECTED with an `invalidParams` error naming the gap, never silently dropped, and it has no `fmt`. Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
+**The tools say what a compiler cannot do rather than pretending.** ⚠ **THIS PARAGRAPH USED TO SAY shv2's RUNNER "IMPLEMENTS ONLY `--filter`, `--update-required`, AND `--log`", AND THAT WAS STALE BY FOUR FLAGS — MEASURED 2026-09-01 off `Main.maxon`'s own parse loop.** It also accepts a positional `[dir]`, **`--network`**, **`--workers=<n>`** and **`--target=<cpu>-<os>`**; `--target` is not rejected at all, and `--network` is the BOOTSTRAP's gap (only shv2's runner knows it), which is why `checkSpecTestFlags` now refuses in both directions. What shv2's runner genuinely lacks against the bootstrap's is `--verbose` (it always prints a line per test), `--no-batch` (its batching is `RunStrategy`, chosen by target and host, not a flag) and `--debug-info`; its `--filter` is ONE substring where the bootstrap's unions on commas. `mmTrace` and `dumpStages` are still REJECTED with an `invalidParams` error naming the gap, never silently dropped. ⚠ **shv2 NOW HAS `fmt` (2026-09-02)** — `maxon-shv2 fmt [<file|directory>]`, the bootstrap's engine ported token for token, gated byte-for-byte against the reference by `tests/fmt/`. The MCP `fmt` tool still drives the BOOTSTRAP only; it has no `compiler` parameter yet. Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
 
 ## Building and Testing
 
@@ -162,6 +162,26 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 > the self-compile. One test per file is structural, not tidiness: a file is what ONE process runs and
 > that process has a 5 s default deadline, so twelve compiler-spawning tests in one file report a
 > spurious `TIMED OUT`.
+>
+> ### ⭐ AND THE HOME FOR THE NEXT ONE IS `tests/`, NOT `maxon-shv2/Testing/`
+>
+> `maxon fmt`'s corpus is `tests/fmt/` (added 2026-09-02, the directory's first tenant). Run it the
+> way the box above runs `test`'s — **under BOTH compilers, and they must agree**:
+> `maxon-shv2 test tests/fmt` and `./bin/maxon.exe test tests/fmt`.
+> `test-command`/`test-fixtures` above predate it and are the next to move; that split is in progress,
+> not a second convention. **`tests/README.md` states the six rules**, each answering a hazard whose
+> obvious alternative fails SILENTLY. The two worth knowing before you touch any of it:
+>
+> - ⛔ **NOTHING STORED THERE IS A LIVE `.maxon` OR A REAL `.git`.** Names are `<x>.fixture` and
+>   `dot-git/`, mapped back at staging time. Git refuses to commit a path with a `.git` component —
+>   and a real `.maxon` under `tests/` is walked by `maxon fmt` over the checkout, which is **the tool
+>   under test rewriting its own oracle**. It would re-bless every expectation, `already-formatted`
+>   included, which would then be green forever by construction. For the same reason there is **no
+>   `.maxonignore` there** (it would hide the corpus from the command it gates) and `.gitattributes`
+>   marks it `-text` (git must not normalize line endings in a file compared as raw bytes).
+> - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — `python tests/fmt/generate-expectations.py`
+>   runs the BOOTSTRAP and records its real answers. That is what makes the corpus a parity oracle for
+>   a port rather than a record of what its author expected. Re-run it after changing any input.
 
 The shv2 compiler binary is at `./maxon-shv2/.maxon/maxon-shv2.exe` (Windows) or `./maxon-shv2/.maxon/maxon-shv2` (Linux/macOS).
 
@@ -266,6 +286,21 @@ driving these binaries:
   or stops being idempotent. Sabotage-proved: with the original defect restored, its byte-string cases
   go red and the build stops — while its no-multi-line-literal control still PASSES, which is
   precisely why nothing caught this for two weeks.
+  ⛔⛔ **AND IT CORRUPTED SOURCE TWO MORE WAYS UNTIL 2026-09-02 — BOTH SILENT, BOTH EXIT 0, BOTH
+  REPORTED AS `formatted:`.** Found while building `tests/fmt/`, not by any gate:
+  **(a) A LEXER ERROR IS A TOKEN, NOT A THROW**, so `FormatCore`'s catch never fired and the emit loop
+  wrote the error's own sentinel into the file — `let s = "unterminated` became
+  `let s = __unterminated_string__:Unterminated string literal`, and `/* unterminated` became
+  `__unterminated_block_comment__:Unterminated block comment`. The formatter's own comment claimed the
+  opposite was happening. The guard now asks the TOKEN TYPE, not the two sentinel spellings, so a third
+  lexer error cannot reopen it.
+  **(b) A STRING CAN CONTAIN A STRING.** `"{f("//x")}"` is ONE literal — the interpolation's expression
+  holds a second string — so the comment harvester's single `inString` bool closed at the INNER quote,
+  read the tail as a trailing comment, and appended a phantom copy of it to the line. Corruption by
+  DUPLICATION, which a preservation check phrased as presence passes and which is perfectly idempotent;
+  only MULTIPLICITY catches it. Replaced with a nesting stack.
+  ⇒ **`fmt-selftest` now carries 8 comment shapes + 4 unlexable sources**, every one sabotage-proved,
+  with `UrlInPlainString` and `NoMultilineLiteral` as controls that stay GREEN under the sabotage.
 
 ### ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe it through `head`/`tail`/`grep`.
 

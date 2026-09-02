@@ -1,0 +1,46 @@
+# census-sources.txt — the real sources the census test in `fixtures.test.maxon` formats, one
+# checkout-root-relative path per line. Blank lines and lines beginning with '#' are notes; everything
+# else is a source.
+#
+# It sits at the top level of `tests/fmt/` rather than under `fixtures/` because it is NOT a fixture
+# case: it has no `input/`, no `expected-tree/` and no pinned streams, and filed among the cases it
+# would be counted as one by the corpus guard and read as a half-written fixture by anyone opening it.
+#
+# THE TEST STAGES THESE FROM THE LIVE TREE AT TEST TIME AND STORES NO COPY. A committed duplicate of a
+# 8,000-line compiler source would drift from the original the first time either was edited, and the
+# test would then be measuring a file the compiler no longer has. That is a deliberate exception to the
+# corpus's "nothing stored here is a live .maxon" rule, and it is safe for that rule's own reason
+# inverted: the rule exists because `maxon fmt` over the checkout would rewrite a stored source and
+# silently re-bless its expectation — and NOTHING IS STORED HERE, so there is no expectation for `fmt`
+# to re-bless. Every assertion this case makes is derived from the file it just read.
+#
+# ⭐ WHY REAL FILES AT ALL: SCALE, which is the fixture corpus's one structural blind spot. The
+# formatter's indent level, block stack and group counters are MONOTONIC across a file — every fixture
+# reaches nesting depth 2-3 and a few dozen lines, so a state imbalance moves three lines there and
+# moved 2,189 in a real one. Depth sustained over thousands of lines is the only thing that shows it.
+#
+# ⚠ A SOURCE THAT IS ALREADY CANONICAL DOES NOT WEAKEN THE TEST. Most of the tree is formatted, so most
+# runs here change nothing — the assertion is about what `fmt` does to the file, and a regression is
+# precisely the thing that makes it act.
+#
+# Adding one costs time on BOTH of this test's two runs, inside a test FILE whose whole process has
+# 5000 ms — keep the list to sources that reach a shape the others do not.
+
+# ⛔ THE EXACT FILE THE FOUNDING DEFECT DESTROYED — 338 comment lines gone, exit 0, nothing said. It is
+# still the most comment-dense large file in the tree, and it still holds the multi-line byte-string
+# literal whose uncounted newline desynchronized the line-keyed comment map in the first place.
+maxon-shv2/Compiler/Runtime/GtRuntime.maxon
+
+# The tree's densest `///` file (374 of them). A doc comment is the one comment shape that IS a token,
+# so it travels the other route through the formatter — and the raw scan must skip it or every doc
+# comment in the file is written out twice.
+stdlib/String.maxon
+
+# 4,366 lines at nesting depth 6, which is the shape this test exists for: the counters that carry
+# indent and grouping are monotonic across a file, so an imbalance shows up as drift that grows with
+# depth sustained over thousands of lines rather than as a wrong answer on any one line.
+stdlib/Internals.maxon
+
+# Nesting depth 7 in a few hundred lines, generic-heavy, and stdlib rather than compiler — a different
+# author's layout habits against the same rules.
+stdlib/Map.maxon
