@@ -20,6 +20,37 @@
 // under test (`maxon-shv2`) does not. That is deliberate. The subject is shv2's `test` command; the
 // bootstrap is here as a second opinion about whether these tests ran at all.
 //
+// ⭐⭐ **THE OUTCOME CENSUS, AND THE THREE OUTCOMES THIS CORPUS DELIBERATELY DOES NOT PIN.**
+// `UnitTestOutcome` names six ways a test can finish, five of them ways to fail, and a corpus that
+// pinned only some of them would look exactly like one that pinned them all. Four are pinned here:
+// PASS (`all-pass`, `two-files`), FAIL by a failed assertion (`assertion-failure`), FAIL by an error
+// let out of the body (`uncaught-throw`), and CRASHED together with the re-run behind it
+// (`panic-crashes`). The other three are ABSENT ON PURPOSE, each for its own reason, written down so
+// that a reader finding the hole knows it was considered rather than missed:
+//
+// **TIMED OUT — excluded because the verdict is about the MACHINE, not the compiler.** The deadline
+// is wall time, so a case pinning it goes green on an idle box and red on a loaded one. A gate that
+// reports which other processes were running is worse than a missing gate.
+//
+// **DID NOT RUN — excluded because only half of it is constructible.** It needs a process that dies
+// before reaching a test AND a re-run that makes no progress either. `panic-crashes` builds the first
+// half; nothing in ordinary source produces the second half deterministically, and its `✓` there is
+// exactly the evidence that the runner cures the first half rather than reporting it.
+//
+// ⚠ **LEAKED — excluded because a leak is NOT CONSTRUCTIBLE FROM ORDINARY MAXON. MEASURED
+// 2026-09-02, four routes compiled or refused, one read:** a managed global initializer is refused
+// (E2045, not a constant expression); a reference cycle is refused outright (E4014, `recursive type
+// references are not allowed`); a top-level managed container held to process exit exits **0**; and a
+// `Promise` pushed into an array and never awaited exits **0**. The fifth route is shut by
+// declaration rather than by measurement: `__Internals.*` is the only raw allocation the tree has,
+// and `stdlib/Internals.maxon`'s own header states that the lowering pass rejects a call to it from
+// any other source file. That is the
+// language's own design rather than a gap in this corpus — `specs/leak-checker.md` states it
+// outright, *"leaks indicate a compiler bug rather than a user error"* — so the ONLY fixture that
+// could pin LEAKED would be one built on a LIVE COMPILER DEFECT. Such a gate goes green the day the
+// defect is fixed and takes the fixture red with it, which is a gate premised on a bug. A stated gap
+// beats one that expires silently.
+//
 // ⛔⛔ **THE WORKING DIRECTORY IS A CONTRACT, AND IT IS THE CHECKOUT ROOT.** A test binary INHERITS
 // the working directory of the `maxon test` process that launched it — `TestExecutor.launchTests` passes
 // `inheritedWorkingDir()`, and the command never changes directory. So every path in this project is

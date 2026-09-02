@@ -1,0 +1,32 @@
+// The one outcome NOTHING INSIDE THE BINARY CAN REPORT. `panic` is uncatchable, so the first test
+// takes the whole process down: it writes a begin marker and never an end marker, and the second test
+// never writes a begin marker at all. The only honest reading of that stream is "crashed" and "not
+// observed"; what the second must never be read as is a PASS, since nothing watched it. The runner
+// then re-queues the unobserved test into a FRESH process, where it is finally reported by whatever it
+// really does there. Both halves are the subject: absence is classified as absence FIRST, and only an
+// actual run turns it into a verdict.
+//
+// ⭐ **THE SECOND TEST ASSERTS RATHER THAN PRINTS, AND THAT IS WHAT PINS THE RE-RUN.** A test binary's
+// stdout is captured and never read — attribution is the stderr marker stream — so a `print` here
+// would prove nothing to anyone. Its `✓` in `expected.txt` is the evidence that its body really
+// executed in the re-queued process; disable the re-queue and it reports DID NOT RUN instead.
+//
+// ⚠ **EDITING THIS FILE MOVES A LINE NUMBER THE EXPECTATION PINS.** The CRASHED block names the
+// panicking line — `panic at ledger.test.maxon:N` — so inserting a line above the `panic` owes
+// `expected.txt` a regeneration. The gate's report will say which line differs.
+//
+// ⚠ **THE PANIC MESSAGE IS A PLAIN LITERAL ON PURPOSE.** An interpolated one is a different lowering
+// with its own contract, and pinning it here would make this case answer two questions at once.
+typealias Cents = int(i64.min to i64.max)
+
+function balanceAfter(owed Cents, paid Cents) returns Cents
+	return owed - paid
+end 'balanceAfter'
+
+test 'a settled account that still owes takes the process down'
+	panic("ledger: a settled account cannot still owe")
+end 'a settled account that still owes takes the process down'
+
+test 'an ordinary balance still runs after the crash'
+	try Expect.equal(balanceAfter(500, paid: 200), expected: 300)
+end 'an ordinary balance still runs after the crash'

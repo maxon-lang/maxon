@@ -1065,6 +1065,7 @@ maxon build [file|dir]       # Compile file, directory, or project → .exe
 maxon run <function>         # Run exported function from build.maxon (dashes → underscores)
 maxon run                    # List available commands in build.maxon (shown with dashes)
 maxon test [dir]             # Run a PROJECT's unit tests (its *.test.maxon files)
+maxon-shv2 test [dir]        # ...same command on shv2, byte-identical report (x64-windows)
 maxon spec-test              # Run spec fragment tests (the COMPILER's own suite)
 maxon lsp-server             # Start LSP server for IDE integration
 ```
