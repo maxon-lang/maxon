@@ -1139,6 +1139,26 @@ type MaxonToStdLowering
 	var nextValueId as ValueId
 
 	static function create(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns MaxonToStdLowering
+		// ⭐⭐ **THE ONE LOWERING-WRITTEN PROJECT MAP THAT NOTHING RESET, AND IT IS THE ODD ONE OUT AMONG
+		// ITS OWN SIBLINGS.** `stdOpElementStrides` is keyed by STD OP INDEX, and a fresh `StdModule` is
+		// built here on every lowering — so the key space restarts at 0 while the map does not. Every
+		// sibling passed in below is safe for the opposite reason: `allocTagSites`,
+		// `debugStreamNameSites` and `rangeChecks` are written by the MERGE (`ParseStaging`) and are
+		// already cleared by `Queries.resetMergeTargets`, so a re-fold re-derives them. This one has no
+		// merge to be re-derived by, and it had no reset either.
+		//
+		// ⛔ MEASURED by `verify-recheck` on `maxon-dev-mcp/mcp`: a second compile over one `Project`
+		// panicked with *"recordStaticElementStride: Std op index 344 already carries an element stride —
+		// the key space is meant to be one entry per appended call, so `ops.count()` and the append it
+		// names have come apart"*. That guard was right and the map was stale; the two had indeed come
+		// apart, one compile earlier.
+		//
+		// Cleared HERE rather than in `compileToCodeResult` because the pass that WRITES a keyspace is
+		// what knows when it restarts — a reset in the driver is a second place that has to remember.
+		// A fresh map rather than a `clear()`, which `Map` does not offer — and the same spelling
+		// `resetMergeTargets` uses for every one of its sibling registries.
+		project.stdOpElementStrides = StdOpElementStrideMap.create()
+
 		// `queryProgramSignatures` is memoized and was computed by `compileToCodeResult` before the
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).

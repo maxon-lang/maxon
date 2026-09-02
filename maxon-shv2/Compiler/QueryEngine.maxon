@@ -398,3 +398,38 @@ export function allModuleCacheValid(project Project) returns bool
 	end 'never'
 	return project.db.allModuleCache.keyHash == compositeSourceHash(project)
 end 'allModuleCacheValid'
+
+// ⭐⭐ **THE PIPELINE MUTATES THE MODULE THIS MEMO HANDS OUT, SO THE PIPELINE MUST DROP IT.**
+//
+// Every other memo here is valid exactly while its input's content hash is unchanged, and that test is
+// sound because nothing downstream writes to a memoized value. `queryAllModule`'s is the ONE exception:
+// `TypeResolution.resolveTypes` rewrites `maxonParamTypes`/`maxonReturnType` on the module's functions
+// IN PLACE, and `installManagedGlobalInit` appends to it. The bytes did not move, so the hash still
+// matches, so the memo still says VALID — and hands back a module the last compile edited.
+//
+// ⛔ **MEASURED, and it is not a drift — it is a WRONG ANSWER and then a CRASH.** A second
+// `compileToCodeResult` over one `Project`:
+//   • on a 3-line program invented **5 diagnostics** where the first reported none — all E3016
+//     "partial interface implementation" against `stdlib/` (`compare(other Character) returns int`
+//     against `expected compare(other Self) returns Ordering`). `checkConformance` runs BEFORE
+//     `resolveTypes` precisely so it can print the source spellings resolution erases; on a re-check
+//     it reads the ERASED ones and reports a mismatch that does not exist.
+//   • on `maxon-dev-mcp/mcp` **panicked** — `dispatchedRequirementSlots: blockRef 5618 not in
+//     module.blocks`.
+// `verify-recheck` is the gate; `VerifyRecheck.maxon` holds the argument.
+//
+// ⚠ **WHY INVALIDATE RATHER THAN CLONE, OR STOP MUTATING.** Cloning on every serve was BUILT, MEASURED
+// and REFUSED — this file's own store header records +47% on a ten-compile process and 5× the memory,
+// under the rule that a memo needing a deep copy per use cannot save more than producing it costs.
+// Making resolution non-destructive is the structurally cleaner answer and touches every reader of
+// those two fields; it stays available and this does not block it. Dropping the memo costs ONE re-fold
+// — `foldEveryFileIntoAModule`, measured at ~63 ms of a ~704 ms frontend on a 71-file project — and
+// every file's TOKENS and PARSE stay hits, because those memos are untouched by any of this.
+// ⇒ **The expensive caches survive; only the fold that assembles them re-runs.**
+//
+// Called by `compileToCodeResult` as it takes the module, not after it finishes: a compile that throws
+// half way through has mutated just as much as one that completes, and the memo must not survive
+// either. ⚖ User ruling, 2026-09-01.
+export function invalidateAllModuleCache(project Project)
+	project.db.allModuleCache = ModuleMemo.empty()
+end 'invalidateAllModuleCache'

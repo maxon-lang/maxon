@@ -149,6 +149,7 @@ function main() returns ExitCode
 	return match args.command 'cmd'
 		build gives runBuild(args)
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
+		verifyRecheck gives runVerifyRecheck(args)
 		specTest gives runSpecTest(args)
 		scaleTest gives runScaleTest(args)
 		unknown gives unknownCommand()
@@ -383,6 +384,39 @@ function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 
 	return 1
 end 'runVerifyWarmRebuild'
+
+// The `verify-recheck <file|dir>` command: assert one `Project` survives being checked more than
+// once. Shaped exactly like `runVerifyWarmRebuild` next door — same single-positional contract, same
+// host target, and the same "the gate printed its own reasons" exit rule.
+function runVerifyRecheck(args MaxonArgs) returns ExitCode
+	let usage = "maxon-shv2 verify-recheck <file|dir>"
+	if refusedPositionalBeyond(args, allowed: 1, usage: usage) 'tooManyPaths'
+		return 1
+	end 'tooManyPaths'
+
+	let spelling = args.solePositional()
+	if spelling.isEmpty() 'noPath'
+		printError("Usage: {usage}\n")
+		return 1
+	end 'noPath'
+
+	let inputPath = try FilePath.from(spelling) otherwise 'badPath'
+		printError("error: invalid path: {spelling}\n")
+		return 1
+	end 'badPath'
+
+	let target = detectHostTarget()
+	let allPass = try verifyRecheck(inputPath, target: target) otherwise (e) 'verifyErr'
+		reportCompileError(e)
+		return 1
+	end 'verifyErr'
+
+	if allPass 'passed'
+		return 0
+	end 'passed'
+
+	return 1
+end 'runVerifyRecheck'
 
 // The `spec-test [dir]` command: run every active test in `dir` (default `specs-shv2`) on a pool of
 // persistent worker subprocesses, print per-test PASS/FAIL + an `N passed, M failed` summary, and
@@ -840,6 +874,12 @@ function printUsage()
 	print("  build <file|directory>...     Compile a Maxon program to an executable. Several paths\n")
 	print("                                are compiled as ONE program, in the order given\n")
 	print("  verify-warm-rebuild <file>    Assert the query spine is deterministic + incremental\n")
+	print("  verify-recheck <file|dir>     Assert ONE Project can be re-checked: two checks over\n")
+	print("                                unchanged input agree, and a diagnostic introduced by an\n")
+	print("                                edit CLEARS when the edit is undone. verify-warm-rebuild\n")
+	print("                                gates the query spine without ever running the pipeline;\n")
+	print("                                this gates the pipeline over it, which is what an editor\n")
+	print("                                holding one project open for hours actually does.\n")
 	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
 	print("  scale-test                    Compile a ladder of generated programs, each rung double the\n")
 	print("                                last, and report the per-phase MEMORY — allocations, frees and\n")
@@ -913,6 +953,7 @@ end 'printUsage'
 enum MaxonCommand
 	build
 	verifyWarmRebuild
+	verifyRecheck
 	specTest
 	scaleTest
 	unknown
@@ -1072,7 +1113,9 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.build
 			end 'buildCmd' else if arg == "verify-warm-rebuild" 'verifyCmd'
 				parsed.command = MaxonCommand.verifyWarmRebuild
-			end 'verifyCmd' else if arg == SpecTestCommandName 'specTestCmd'
+			end 'verifyCmd' else if arg == "verify-recheck" 'recheckCmd'
+				parsed.command = MaxonCommand.verifyRecheck
+			end 'recheckCmd' else if arg == SpecTestCommandName 'specTestCmd'
 				parsed.command = MaxonCommand.specTest
 			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
 				parsed.command = MaxonCommand.scaleTest

@@ -1,0 +1,188 @@
+// VerifyRecheck — the RE-CHECK gate. `verify-recheck <file|dir>` asserts that driving ONE
+// `Project` through the check pipeline more than once answers the same thing every time, and
+// that a diagnostic which appears when a buffer breaks GOES AWAY when the buffer is fixed.
+//
+// ⭐ **WHY THIS GATE EXISTS, AND WHY IT IS SEPARATE FROM `verify-warm-rebuild`.** That gate proves
+// the QUERY SPINE is sound — a re-query over unchanged input hits, a re-query over changed input
+// misses, and only the memos that read the changed input miss. It proves all of that WITHOUT EVER
+// RUNNING THE PIPELINE: `verifyCacheHit` calls only `queryAllModule`, and its own header says why —
+// *"the memoized module is never mutated"*. So the spine is gated and the PIPELINE OVER IT is not.
+//
+// That gap is exactly where an editor lives. A language server holds one `Project` open for hours
+// and re-checks it on every keystroke, which is the one thing nothing in this tree does today: every
+// `maxon build` gets a fresh `Project`, and `verifyWarmRebuild` deliberately gives each of its probes
+// its own (the mutate-the-memo trap in that file's header). ⇒ **"the pipeline is re-runnable" is an
+// UNTESTED PREMISE**, and a premise nothing tests is the shape this project keeps being bitten by.
+//
+// ⚠ **IT IS EXPECTED TO FAIL WHEN FIRST INTRODUCED, AND THAT IS THE POINT.** It was written to
+// MEASURE what a second check does rather than to certify that it works — `resolveTypes` rewrites the
+// memoized module's signatures in place and `installManagedGlobalInit` appends to it, so the honest
+// starting position is that nobody knows. Read a FAIL here as the measurement it is: the gate names
+// which property broke and in which direction, which is the input to fixing it.
+//
+// ⭐ **WHAT IT DOES *NOT* ASSERT: that a re-check is FAST.** It is a correctness gate. The cost of a
+// re-check is `scale-test`'s and the trend log's business, and conflating the two would give this one
+// a verdict about a number, which is the mistake `scale-test`'s own header spends a section refusing.
+
+// How many diagnostics a check reported. A count over `project.diagnostics`, which is an `Array`, so
+// its upper bound is that container's.
+typealias DiagnosticTally = int(0 to i64.max)
+
+// The number of source files below which the clearing property cannot be asked. It is 1 rather than
+// `verifyInvalidation`'s 2: this gate edits one file and demands its diagnostic clear, and a
+// single-file project answers that question perfectly well.
+let MinFilesForRecheck = 1 as DiagnosticTally
+
+// ⭐ **THE BROKEN EDIT IS A *SEMANTIC* ERROR, NOT A PARSE ERROR, AND THE CHOICE IS THE MEASUREMENT.**
+// A parse error is reported by the per-file parse and never reaches the passes this gate is about —
+// it would prove the file-level memo clears and say nothing about `resolveTypes` or `semanticCheck`,
+// which are the mutating half. A call to a function nobody declared survives the parse, survives the
+// merge, and is refused past type resolution, so the diagnostic it produces is one only a full
+// re-check can clear.
+let SemanticBreakEditText = "function recheckProbeBroken() returns bool\n\treturn recheckProbeNobodyDeclaredThis()\nend 'recheckProbeBroken'"
+
+// Drive `project` through the whole pipeline once and report how many diagnostics stand afterwards.
+//
+// ⚠ **THE REFUSAL IS AN EXPECTED OUTCOME HERE, NOT AN ERROR TO REPORT.** Half of this gate's runs are
+// over a deliberately broken buffer, where `compileToCodeResult` prints and throws by design. The
+// throw is swallowed and the printing is captured so the gate's own output stays readable; the
+// MEASUREMENT is `project.diagnostics`, which the refusing and the succeeding path both leave behind.
+function checkOnce(project Project) returns DiagnosticTally
+	beginDiagnosticCapture()
+	_ = compileCompleted(project)
+	_ = endDiagnosticCapture()
+
+	return project.diagnostics.count()
+end 'checkOnce'
+
+// True if the pipeline produced a `CodeResult`, false if it refused. Split out because
+// `otherwise ignore` is rejected in value position (E3059), so swallowing the refusal needs a
+// handler that diverges — and a handler that diverges needs its own function to diverge out of.
+function compileCompleted(project Project) returns bool
+	_ = try compileToCodeResult(project) otherwise 'refused'
+		return false
+	end 'refused'
+
+	return true
+end 'compileCompleted'
+
+// Print the diagnostics standing on `project`, one per line, under a caller-supplied heading.
+//
+// ⭐ **A FAILURE HERE MUST NAME WHAT APPEARED, NOT ONLY THAT A NUMBER MOVED.** "0 became 5" is a
+// verdict; the five rendered lines are the evidence, and they are what says WHICH pass re-reported —
+// which is the whole difference between a gate that reports a bug and a gate that starts an
+// investigation. Routed through `Diagnostic.render()` so these read exactly as the compiler's own
+// output does, rather than through a second opinion about how a diagnostic looks.
+function printStandingDiagnostics(project Project, heading String)
+	printError("{heading}\n")
+	for diagnostic in project.diagnostics 'each'
+		printError("    {diagnostic.render()}\n")
+	end 'each'
+end 'printStandingDiagnostics'
+
+export function verifyRecheck(inputPath FilePath, target Target) returns bool throws CompileError
+	print("verify-recheck {inputPath}\n")
+
+	let stabilityOk = try verifyRecheckStability(inputPath, target: target)
+	let clearingOk = try verifyDiagnosticsClear(inputPath, target: target)
+
+	let allOk = stabilityOk and clearingOk
+	if allOk 'passed'
+		print("verify-recheck: PASS (stability + clearing)\n")
+		return true
+	end 'passed'
+
+	printError("verify-recheck: FAIL\n")
+	return false
+end 'verifyRecheck'
+
+// --- Property 1: stability (a second check over unchanged input answers what the first did) ---
+//
+// The weakest thing that can be asked, and the first thing an editor needs: nothing about the input
+// moved between the two calls, so nothing about the answer may move either. A count that GROWS is
+// diagnostics accumulating on a sink nothing clears; a count that SHRINKS is a pass that consumed a
+// one-shot input and cannot report it twice. The two read differently and the message says which
+// happened, because they have different fixes.
+function verifyRecheckStability(inputPath FilePath, target Target) returns bool throws CompileError
+	var project = try loadProject([inputPath], target: target)
+
+	let first = checkOnce(project)
+	let second = checkOnce(project)
+
+	if first == second 'stable'
+		print("PASS stability: two checks over unchanged input both reported {first} diagnostic(s)\n")
+		return true
+	end 'stable'
+
+	if second > first 'grew'
+		printError("FAIL stability: the first check reported {first} diagnostic(s) and the second {second}, over input that did not change. Diagnostics ACCUMULATE — `project.diagnostics` is appended to by every reporting pass and nothing clears it between runs, so a long-lived project re-reports everything it has ever seen.\n")
+		printStandingDiagnostics(project, heading: "  standing after the second check:")
+		return false
+	end 'grew'
+
+	printError("FAIL stability: the first check reported {first} diagnostic(s) and the second {second}, over input that did not change. The count SHRANK, which is the more dangerous direction: a pass consumed a one-shot input (a drained pending-check list, a registry emptied on first use) and cannot report the same problem twice. An editor would show an error once and then silently lose it.\n")
+	return false
+end 'verifyRecheckStability'
+
+// --- Property 2: clearing (a fixed buffer stops reporting the error) ---
+//
+// ⭐ **THIS IS THE ONE WITH TEETH, AND IT IS THE LITERAL EDITOR SCENARIO:** type an error, see it,
+// fix it, and the squiggle must go away. Property 1 can hold while this fails — a pipeline that
+// reports nothing at all is perfectly stable — so the two are asked separately, and the middle step
+// is asserted to actually BREAK the program, which is what stops this passing vacuously.
+function verifyDiagnosticsClear(inputPath FilePath, target Target) returns bool throws CompileError
+	var project = try loadProject([inputPath], target: target)
+	let fileCount = project.db.sourcePaths.count()
+
+	if fileCount < MinFilesForRecheck 'cannotProve'
+		printError("FAIL clearing: this project has no source files, so there is nothing to break and nothing to fix\n")
+		return false
+	end 'cannotProve'
+
+	// ⚠ **BOTH ARE OWNED COPIES, for the reason `verifyInvalidation` states at length**: `editedPath`
+	// is an element of the array `fileChanged` pushes to, and `original` is the content of the map
+	// entry every `fileChanged` upserts. Reading either through the storage an edit writes is a
+	// use-after-free — the borrow checker catches it for the array and does not watch the map.
+	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyDiagnosticsClear: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
+	let editedPath = try FilePath.from(firstPath.path.clone()) otherwise panic("verifyDiagnosticsClear: that path came out of the project's own source list, so it cannot fail to re-parse as a path")
+	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyDiagnosticsClear: sourcePaths lists a file that sourceFiles has no entry for")
+	let original = entry.content.clone()
+
+	let beforeBreak = checkOnce(project)
+
+	// ⚠ **THE PROPERTY CANNOT BE ASKED OF A PROJECT THAT IS ALREADY RED, and that is a fact about the
+	// PIPELINE rather than a shortcoming of this gate.** The error gates stop the compile between
+	// phases, so on a program that already reports something the synthetic break below is never reached
+	// and never reported — the count would go from N to N, and "the probe broke nothing" would be the
+	// wrong diagnosis of the right observation. Refused up front, with the fix named, exactly as
+	// `verifyInvalidation` refuses a single-file project rather than reporting a vacuous pass on one.
+	if beforeBreak != 0 'startsRed'
+		printError("FAIL clearing: this project reports {beforeBreak} diagnostic(s) BEFORE any edit, so the clearing property cannot be measured on it — the pipeline stops at its first error gate, so the synthetic break below would never be reached and the count would not move. Point the gate at a program that compiles clean; the diagnostics standing now are:\n")
+		printStandingDiagnostics(project, heading: "  already standing:")
+		return false
+	end 'startsRed'
+
+	fileChanged(project, path: editedPath, content: "{original}\n{SemanticBreakEditText}\n")
+	let whileBroken = checkOnce(project)
+
+	fileChanged(project, path: editedPath, content: original.clone())
+	let afterFix = checkOnce(project)
+
+	// ⚠ **ASKED FIRST, BECAUSE IT IS THIS GATE'S OWN PREMISE.** If the synthetic edit did not actually
+	// break the program then `afterFix == beforeBreak` proves nothing — a diagnostic that never
+	// appeared cannot fail to clear, and the property would pass for the one reason it must never
+	// pass. Same shape as `verifyInvalidation`'s "probe broke the program" refusal, inverted.
+	if whileBroken <= beforeBreak 'probeDidNotBreakIt'
+		printError("FAIL clearing: the synthetic break took the diagnostic count from {beforeBreak} to {whileBroken}, so it broke nothing. The measurement below would pass vacuously — a diagnostic that never appeared cannot fail to clear. `SemanticBreakEditText` no longer names an undeclared callee, or the check that refuses one moved.\n")
+		return false
+	end 'probeDidNotBreakIt'
+
+	if afterFix == beforeBreak 'cleared'
+		print("PASS clearing: {beforeBreak} diagnostic(s) clean, {whileBroken} while broken, back to {afterFix} once fixed\n")
+		return true
+	end 'cleared'
+
+	printError("FAIL clearing: the buffer was broken ({beforeBreak} -> {whileBroken} diagnostics) and then restored byte-for-byte, but the count came back to {afterFix} instead of {beforeBreak}. An error the user has already fixed is still being reported. This is the defect a long-lived editor session shows first and a `maxon build` can never show, because a build gets a fresh Project every time.\n")
+	printStandingDiagnostics(project, heading: "  standing after the fix:")
+	return false
+end 'verifyDiagnosticsClear'

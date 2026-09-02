@@ -400,11 +400,26 @@ end 'stdlibDirFor'
 // (semanticCheck) reports a diagnostic. What each gate then DOES is `refuseCompile`'s, in one place
 // (including the reason it must be a fresh throw rather than a rethrow).
 export function compileToCodeResult(project Project) returns CodeResult throws CompileError
-	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module (P1.7 slice 2a). It is the
-	// memoized `queryAllModule` result and mutating it in place is the established discipline here —
-	// `resolveTypes` already rewrites its signatures — which is exactly why `verifyWarmRebuild` compiles
-	// each of its probes into its OWN fresh `Project` (see that file's mutate-the-memo header).
+	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** Nothing
+	// cleared this sink, which no `maxon build` could notice (a build gets a fresh `Project` and runs one
+	// compile) and which an editor notices immediately: re-check a file whose error you have just FIXED and
+	// the error is still standing, because it is still in the array. Safe to clear because everything that
+	// should be reported is RE-DERIVED — a parse that reported a diagnostic is never cached
+	// (`queryParseOps`, "only cache a clean parse"), and every later check re-runs over the re-folded
+	// module below.
+	project.diagnostics.clear()
+
+	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module (P1.7 slice 2a), and
+	// `resolveTypes` rewrites its signatures in place.
 	var module = try queryAllModule(project)
+
+	// ⭐⭐ **AND BECAUSE THIS COMPILE IS ABOUT TO MUTATE THAT MODULE, THE MEMO MAY NOT SERVE IT AGAIN.**
+	// The bytes have not moved, so the content hash still matches and the memo would answer VALID with a
+	// module the pipeline had edited — measured as 5 invented E3016s on a 3-line program and a panic on a
+	// 71-file one. Dropped HERE, immediately after the read and before the first mutation, so a compile
+	// that throws part way through leaves no more behind than one that completes. The full argument, the
+	// measurements, and why this rather than a clone, are in `invalidateAllModuleCache`.
+	invalidateAllModuleCache(project)
 
 	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81) — HERE, before the pipeline.** Every
 	// function-value ternary/match recorded its arms' names at parse; now that `queryAllModule` has merged
