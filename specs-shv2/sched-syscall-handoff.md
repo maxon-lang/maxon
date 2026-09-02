@@ -17,20 +17,72 @@ serially**, however many green threads are ready. The cure has two halves and th
 the kernel; and **Go-style P handoff plus a sysmon**, so a call that still blocks has its P taken away and
 given to another M rather than idled.
 
-⭐ **THE COST IS ALREADY MEASURABLE, AND IT IS A CLEAN SERIALIZATION RATHER THAN A STALL.** Eight services
-each running `cmd /c exit 0` through `Subprocess.run`, all eight sends in flight before any reply is
-awaited, same binary, one box:
+⛔⛔ **THIS FILE USED TO CARRY A TABLE SHOWING THAT COST, AND THE TABLE WAS A COLD-CACHE ARTEFACT.** It read
+**566 ms** at one processor against 107 / 108 / 95 ms at two, four and sixteen, and concluded that the batch
+of eight *"falls off a cliff between one processor and two"*. **The 566 was a first-ever run of a
+freshly-written binary** — a cold file cache, a cold `cmd.exe` image and a cold loader — and the three
+numbers beside it were the same program measured once each, in ascending order, after it had warmed up.
+Re-measured WARM and INTERLEAVED, the cliff is not there:
 
-| `MAXON_MAX_PROCS` | wall |
-|---|---|
-| 1 | **566 ms** |
-| 2 | 107 ms |
-| 4 | 108 ms |
-| 16 | 95 ms |
+| `MAXON_MAX_PROCS` | 1 | 2 | 4 | 16 |
+|---|---|---|---|---|
+| **wall, median of 21** | **61 ms** | 61 ms | 61 ms | 62 ms |
 
-Eight children at one processor cost eight times one child; at two or more they overlap. ⇒ **the wait
-genuinely occupies an M** — that is the reading the rung exists for, and it is why the batch of eight
-falls off a cliff between one processor and two.
+⭐ **THE METHOD IS THE MEASUREMENT, SO IT IS RECORDED HERE RATHER THAN LEFT TO BE GUESSED AT.** One warm-up
+run per cell, DISCARDED; then 21 rounds, each round running every processor count once, so that drift in the
+machine's state lands on all four counts equally instead of on whichever was measured last. **And the two
+compilers ran as EACH OTHER'S CONTROL** — the same program built by this tree and by its parent, interleaved
+in the same rounds, 21 runs per cell per binary, 168 runs in all. Every one answered `aggregate=8 last=1` and
+exited 0, and the two binaries agree cell for cell within 1 ms. The subject is
+`a-blocking-subprocess-wait-does-not-stall-a-sibling` below, run as a standalone binary with
+`MAXON_MAX_PROCS` set per run.
+
+⛔⛔ **IT TOOK TWO CORRECTIONS TO GET HERE, AND THAT IS THE MOST USEFUL THING THIS PARAGRAPH CAN TELL YOU.**
+The committed 566/107/108/95 was the first attempt. A SECOND reading — **143 / 128 / 128 / 127 ms**, taken
+warm and interleaved, 9 runs per count — was offered as the correction, and it does not survive either: it
+was still measured against no second binary and with a sample too small for a bimodal population, and the
+answer it produced is more than twice the one 21 controlled rounds give. **A number that does not reproduce
+under a warm interleaved control with a second binary is wrong, however carefully it was taken** — and this
+one had to be taken three times before it stopped moving.
+
+⚠⚠ **AND A MEDIAN IS THE WRONG STATISTIC TO QUOTE ALONE HERE, WHICH IS THE SECOND HALF OF WHY THE OLD TABLE
+MISLED.** The distribution is BIMODAL: a fast mode at 45–62 ms and a slow mode at ~280–500 ms, with roughly
+**one run in four** landing in the slow mode **at every processor count**. It is `cmd.exe` spawn cost, not
+scheduling — the proportion does not move with the count, and it does not move between two different
+compilers either. A sample of one, or of a handful taken in count order, will therefore produce a "curve" of
+any shape you like; the 566/107/108/95 row is what that looks like.
+
+⇒ **EIGHT CHILDREN AT ONE PROCESSOR DO *NOT* COST EIGHT TIMES ONE CHILD, AND THE MECHANISM IS NAMED RATHER
+THAN GUESSED AT — BECAUSE "NO EFFECT HERE" OTHERWISE READS AS "THE EFFECT IS NOT REAL".**
+`__gt_subp_wait_collect` (`SubprocessRuntime.maxon:1176`) **IS A POLL LOOP AND NEVER MAKES AN UNBOUNDED
+KERNEL CALL.** Each pass asks the child's handle whether it has exited with a **ZERO-timeout**
+`WaitForSingleObject`, peeks each pipe before committing to any read, and — on the one path where a pass
+moved no bytes and the child is still running — sleeps **GREEN**, through `__gt_sleep(SubpPollMs)`. That
+function's own header states it: *"it sleeps GREEN, so the whole scheduler runs while it waits"*.
+
+⇒ **the wait PARKS the green thread and GIVES THE M BACK, so this program never occupied an M to begin
+with.** The flat 61–62 ms is therefore **the correct answer for a program that does not exhibit the effect**,
+not a failure to observe one — and eight of these at one processor were never serialised, which is exactly
+why there is no cliff to find.
+
+⭐⭐ **THE CALL THAT DOES HOLD ITS M IS `stdin`, AND THAT IS WHERE THIS FILE'S SUBJECT ACTUALLY LIVES.**
+`Console.stdin().readLine()` reaches `__con_read_stdin` (`ConsoleRuntime.maxon:40`), which is a plain
+synchronous `osReadFile` on the standard-input handle — **no overlapped read, no peek, no park**. A green
+thread inside it is a green thread whose OS thread is in the kernel until the user presses return, holding
+the processor with it. ⚠ **MEASURED BY THE PASS THAT IDENTIFIED THIS MECHANISM AND NOT RE-RUN HERE**: the
+same two-service shape reads `reader-got | sibling` at `MAXON_MAX_PROCS=1` — the sibling cannot run until the
+read returns — and flips to `sibling | reader-got` at two or more, where a second processor still has an M to
+run it on. **That ordering, not a wall clock, is what a serialised M looks like when you can see it.**
+
+⚠ **NONE OF THIS RETIRES THE RUNG, AND THE `stdin` READING IS WHY THAT IS A STATEMENT RATHER THAN A HOPE.**
+The claim at the head of this file — a green thread inside a genuinely blocking kernel call takes its M with
+it — is untouched, and now has a live example pointing at it. What has been withdrawn is one program's claim
+to *demonstrate* it, and the reason that program never could is that its wait is green. Every call that
+really does block (the standard-input read above, a synchronous read of a slow device, a `connect` to an
+unreachable host) still costs its processor for the duration, and `handoffp` is still what gives that
+processor to somebody else. **The
+correct reading of this file is that it has TWO passing cases and no committed timing evidence**, which is
+what the paragraph below already says the cases are for.
 
 ⛔⛔ **BUT IT IS NOT A DEADLOCK, AND THIS FILE MUST NOT CLAIM THAT IT IS.** A file read and a child's exit
 both complete on their own: the kernel returns, the M comes back, the P picks up the next green thread.
@@ -166,16 +218,18 @@ aggregate=80 last=1
 <!-- test: a-blocking-subprocess-wait-does-not-stall-a-sibling -->
 <!-- targets: x64-windows -->
 <!-- procs: 2 -->
-**THE SAME SHAPE ON THE WAIT THAT COSTS THE MOST.** `Subprocess.run` is the surface behind the 566 ms /
-107 ms table above: eight `cmd /c exit 0` children, all eight sends posted before any reply is awaited,
-two processors. Each service answers `1` for a child that exited cleanly, so the aggregate is the count
-and a child whose wait was lost subtracts its own one.
+**THE SAME SHAPE ON THE WAIT THAT COSTS THE MOST.** `Subprocess.run` is the surface the timing paragraph at
+the head of this file measures: eight `cmd /c exit 0` children, all eight sends posted before any reply is
+awaited, two processors. Each service answers `1` for a child that exited cleanly, so the aggregate is the
+count and a child whose wait was lost subtracts its own one.
 
-⚠ **A CHILD'S WAIT IS THE LONGEST BLOCKING CALL A SPEC CASE CAN CHEAPLY MAKE — ~70 ms against a file
-read's microseconds** — which is why it, and not the file read above, is the case whose serialization is
-visible in a wall clock at all. The assertion is still the ANSWER: `cmd /c exit 0` does no IO, writes
-nothing and depends on nothing, so the eight are interchangeable and their sum is fixed however the
-scheduler interleaves them.
+⚠ **A CHILD'S WAIT IS THE LONGEST BLOCKING CALL A SPEC CASE CAN CHEAPLY MAKE — tens of milliseconds against
+a file read's microseconds** — which is why it, and not the file read above, is the program a wall clock was
+ever pointed at. ⛔ **That is a statement about which program is MEASURABLE, not about what the measurement
+found**: warm and interleaved it shows no dependence on the processor count at all, and the paragraph at the
+head of this file carries what was withdrawn and why. The assertion here is, and always was, the ANSWER:
+`cmd /c exit 0` does no IO, writes nothing and depends on nothing, so the eight are interchangeable and
+their sum is fixed however the scheduler interleaves them.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias RunnerHandleArray = Array with Runner.handle

@@ -33,15 +33,29 @@ blocked in a kernel call, would this field still be true of it?***
 | on the **M** | on the **P** |
 |---|---|
 | `currentP` — the processor it holds, **or 0** | `id`, the shard index and the run-queue ring |
-| `currentGt` — the green thread it is executing | the steal count, the idle/quiesced flags, the wake event |
+| `currentGt` — the green thread it is executing | the steal count |
 | `systemStackSP` — its own 64 KB syscall stack | the deferred re-enqueue slots and the remote-free queue |
-| its inline scheduler green thread (Go's `g0`) | `status`, which is what OFFERS the P to a waker |
+| its inline scheduler green thread (Go's `g0`) | `status`, and its link on the idle-P list |
+| **its park event, and its place on the idle-M list** | |
+| **the spinning bit and the three deadlock words** | |
+| **its OS thread handle, and its link on the roster** | |
 
-⚠ **`M->currentP` IS THE FIELD THE SPLIT EXISTS TO CREATE, AND IT IS THE ONLY NEW STATE.** *"This thread
-holds no processor"* is now one load and one compare; before the split the runtime had no way to write it
-down at all, because TLS pointed at the processor. ⛔ **NO SCHEDULING CHANGED**: an M still takes one P at
-birth and holds it until it dies, so a `currentP` of 0 is a state the code can EXPRESS and that nothing
-today PRODUCES. `entersyscall`/`handoffp`/`sysmon` — the rung that produces it — are still ahead.
+⚠ **`M->currentP` IS THE FIELD THE SPLIT EXISTS TO CREATE.** *"This thread holds no processor"* is one load
+and one compare; before the split the runtime had no way to write it down at all, because TLS pointed at the
+processor.
+
+⛔⛔ **AND W213-C2 GAVE THAT ZERO A PRODUCER — THE THREE ROWS IN BOLD ARE ITS DOING, AND THIS PARAGRAPH USED
+TO SAY THE OPPOSITE.** It read *"NO SCHEDULING CHANGED: an M still takes one P at birth and holds it until it
+dies, so a `currentP` of 0 is a state the code can EXPRESS and that nothing today PRODUCES"*. That is no
+longer true and the correction is behavioural, not cosmetic: **a worker M that finds nothing to run RELEASES
+its processor onto the idle-P list and parks on its OWN event with `currentP == 0`**, and a waker takes a
+processor and a machine off the two lists and binds them. So an idle machine no longer occupies a processor,
+a processor can sit idle with no machine, and the two need not be the pair they were before.
+
+⚠ **WHAT IS STILL AHEAD IS THE OTHER HALF.** Nothing yet takes a processor away from a machine that is BUSY,
+so a green thread inside a blocking kernel call still holds its processor for the duration. That is
+`entersyscall`/`handoffp`/`sysmon`, and `handoffp`'s last step — *park the P, not the M* — is precisely the
+idle-P list this rung built.
 
 ⚠ **THE HOT READS DID NOT GET LONGER.** The syscall shim and the prologue stack guard want `currentGt` and
 the syscall stack, and both are the M's, so they are the same two loads through the same TLS slot they were

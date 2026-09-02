@@ -489,7 +489,7 @@ end 'gtStackGuardMargin'
 let GtStackGuardMarginBytes = 0x3A0 as ParsedInt
 
 // The SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB region
-// committed once PER M by `emitSchedStartM`, its TOP held in `M->systemStackSP`. The syscall shim switches
+// committed once PER M by `emitSchedBecomeM`, its TOP held in `M->systemStackSP`. The syscall shim switches
 // RSP here for a Win32 / libSystem call so the kernel's deep stack usage (RPC, TIB probes) never touches the
 // GT's own small stack — the infrastructure that makes slice 2's 2 KB GT stacks safe. 0x10000 is byte-
 // identical to the authoritative layout's `PSystemStackSize` (`GtLayout.cs:178`), whose name still says P
@@ -942,8 +942,9 @@ let GtAnyCompletedName = b"__gt_any_completed"
 // releaser decrefs, which step the very counter `__mm_leak_check` is about to read; without the join those
 // two race, and the failure is an intermittent exit 101 on a program with no leak. `ExitProcess` would end
 // the workers instead of joining them, which is why this waits on their thread handles
-// (`SchedRuntime.POffOsThreadHandle`, stored *"for the teardown that joins the workers out"* — this is that
-// teardown).
+// (`SchedRuntime.MOffOsThreadHandle`, stored *"for the teardown that joins the workers out"* — this is that
+// teardown, and it walks `__sched_allm` rather than the processor array because a parked machine is on no
+// processor).
 //
 // EXPORTED for its two cross-file readers: `Targets/BackendDispatch` emits the stub's call, and
 // `DeadFunctionElimination` roots the name for it (nothing in the Std module calls it — exactly
@@ -2262,7 +2263,7 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	// ⚠ **THE 64 KB SYSCALL STACK IS NO LONGER ALLOCATED HERE (G1), NOR PER P (W213-C1).** It used to be ONE
 	// global region whose top was published to a `.data` word, and the invariant that made that safe was the
 	// prose *"single-M runs one thing at a time"* — which multi-M falsifies by definition, as silent
-	// interleaved corruption. Each OS thread that becomes an M now commits its own (`emitSchedStartM`), and
+	// interleaved corruption. Each OS thread that becomes an M now commits its own (`emitSchedBecomeM`), and
 	// the shim reaches it through the M it is already reading `currentGt` from. See
 	// `SchedRuntime.MOffSystemStackSP`.
 	// ⭐ **NO SUBPROCESS SCRATCH IS TAKEN HERE ANY MORE (S3).** Until this rung, three fixed-size buffers were
@@ -3754,13 +3755,19 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 		anyCompleted then module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create()))
 		statusEquals or liveCountZero then break 'initBeforeTheFirstSchedulerRead'
 	end 'initBeforeTheFirstSchedulerRead'
-	// The M this driver runs on and the P that M holds, read ONCE in `entry` — which dominates every block
-	// below, so the run/park arms address both through the same pointers rather than re-reading TLS at each
-	// of them. ⚠ **TWO POINTERS SINCE W213-C1, AND THEY ARE TWO DIFFERENT QUESTIONS**: the running green
-	// thread and the scheduler context belong to the M (`emitGtRunOne`), while the quiescence flags, the
-	// deferred slots and the ring belong to the P.
+	// The M this driver runs on, read ONCE in `entry` — which dominates every block below, so the run and
+	// park arms address it through the same pointer rather than re-reading TLS at each of them.
+	//
+	// ⚠⚠ **THE DRIVER'S `M->currentP` IS NO LONGER READ HERE, AND W213-C2 IS WHY IT COULD NOT STAY.** This
+	// function cached the processor ONCE in `entry` and reused it in seven `emitSchedSetQuiesced` calls, in
+	// `emitSchedConfirmQuiet`, and — since W219 — in the driver park's arm, wait and disarm. Every one of
+	// those sits across a context switch, a blocking wait or an IOCP wait, which are precisely the points at
+	// which a processor can now change hands, so a cached P would have become a stale pointer used to publish
+	// this thread's own liveness and to name the event it is asleep on. **Every one of those states was
+	// always the MACHINE's** — *"has this thread concluded there is nothing to run?"*, *"is this thread's
+	// driver waiting for an answer, and on what?"* — so they take `driverMachine`, which is stable for the
+	// life of the OS thread and needs no re-read at all.
 	let driverMachine = emitLoadCurrentM(module, block: entry, ids: ids)
-	let driverProc = emitLoadField(module, block: entry, record: driverMachine, offset: MOffCurrentP, ids: ids)
 	let selfGt = emitLoadField(module, block: entry, record: driverMachine, offset: MOffCurrentGt, ids: ids)
 	// ⭐⭐ **THE GREEN THREAD WHOSE COROUTINES THIS DRIVER MAY RUN (EC10)** — read here for the same reason
 	// `selfGt` is: `entry` dominates every block. `selfGt` is a driver in a CHAIN (GT0 for a top-level await, a
@@ -3818,10 +3825,10 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 
 	// ⭐ **FOUND SOMETHING — SO THIS M IS NOT QUIESCENT, AND THE DEADLOCK DETECTOR'S FLAG COMES DOWN (A1).**
 	// Both edges into `run` are "a driveable thread was handed back" (this owner's coroutine queue, or the
-	// scheduler's three tiers), which is one of the exactly two events `POffQuiesced` is cleared by; `done` is
+	// scheduler's three tiers), which is one of the exactly two events `MOffQuiesced` is cleared by; `done` is
 	// the other. Clearing it anywhere else — at the loop top, say — would make the flag a snapshot of the last
 	// few microseconds instead of a state, and the detector a race again.
-	emitSchedSetQuiesced(module, block: run, p: driverProc, waiting: false, ids: ids)
+	emitSchedSetQuiesced(module, block: run, m: driverMachine, waiting: false, ids: ids)
 	emitGtRunOne(module, run: run, handOff: handOff, g: runGt, selfGt: selfGt, m: driverMachine, continuation: loopHdr, ids: ids)
 
 	// netpoll: nothing is runnable anywhere. Block this M until something becomes ready — a parked TIMER fires
@@ -3863,7 +3870,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 
 		// ioPending: a read is in flight → block on __io_done_event. No timer → INFINITE; else bound by the timer.
 		// ⭐ A read in flight IS a wakeup source, so this M is not quiesced however long it blocks (A1).
-		emitSchedSetQuiesced(module, block: ioPending, p: driverProc, waiting: false, ids: ids)
+		emitSchedSetQuiesced(module, block: ioPending, m: driverMachine, waiting: false, ids: ids)
 		let noTimersIo = ids.mint()
 		module.appendOp(ioPending, op: StdOp.cmp(noTimersIo, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 		module.setTerminator(ioPending, op: StdOp.condBranch(noTimersIo, thenBlockId: ioInfinite.id, elseBlockId: ioTimerDecide.id))
@@ -3941,8 +3948,8 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// one entry. ⚠ It is no longer UNCONDITIONAL even there: the confirmation run below applies at every
 	// processor count, so a single-M deadlock aborts after `DeadlockConfirmPolls` polls rather than on the
 	// first, which is why that constant's table records the one-processor timing too.
-	// `SchedRuntime.POffQuiesced` carries the stickiness argument and the stale-read analysis.
-	emitSchedSetQuiesced(module, block: otherMs, p: driverProc, waiting: true, ids: ids)
+	// `SchedRuntime.MOffQuiesced` carries the stickiness argument and the stale-read analysis.
+	emitSchedSetQuiesced(module, block: otherMs, m: driverMachine, waiting: true, ids: ids)
 	let anyExecuting = ids.mint()
 	module.appendOp(otherMs, op: StdOp.call(anyExecuting, callee: SchedAnyExecutingName, args: ValueIdArray.create()))
 	let noneExecuting = emitCmp(module, block: otherMs, a: anyExecuting, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
@@ -3955,17 +3962,17 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// because what the run has to establish is that the system was dead throughout, not that it was dead
 	// sixteen times with work in between. Without this reset a long-lived program that goes momentarily quiet
 	// often enough would accumulate its way to an abort while never being stuck for two polls together.
-	emitSchedSetQuiesced(module, block: someoneRunning, p: driverProc, waiting: false, ids: ids)
+	emitSchedSetQuiesced(module, block: someoneRunning, m: driverMachine, waiting: false, ids: ids)
 	module.setTerminator(someoneRunning, op: StdOp.branch(awaitOtherM.id))
 
-	// ⭐⭐ **ONE READING IS NOT A DEADLOCK — the corroboration term (A1).** `SchedRuntime.POffQuietPolls`
+	// ⭐⭐ **ONE READING IS NOT A DEADLOCK — the corroboration term (A1).** `SchedRuntime.MOffQuietPolls`
 	// carries why a census this runtime cannot take under a lock has to be confirmed rather than believed,
 	// and why erring LATE is the only acceptable direction: a false 92 kills a program that was working.
 	// ⛔⛔⛔ **THE NOT-PROVED EDGE KEEPS THE PLAIN SLEEP, AND THAT IS W219's ONE DELIBERATE NON-CONVERSION.**
 	// `SchedRuntime.DeadlockConfirmPolls` ends *"a poll is not a millisecond … re-bisect it if the poll
 	// changes"*, and its 16 was bisected against `Sleep(1)`'s real ~35 ms tick. An interruptible wait here
-	// would let any `SetEvent` for this P — including the stray ones `POffWakeEvent` records as harmless —
-	// return in microseconds, so sixteen CONSECUTIVE quiet polls could elapse in no time at all and
+	// would let any `osSetEvent` for this machine — including the stray ones `MOffParkEvent` records as
+	// harmless — return in microseconds, so sixteen CONSECUTIVE quiet polls could elapse in no time at all and
 	// `RuntimeAbort.schedulerDeadlock` would start firing on live programs. That constant's own table calls
 	// that the unacceptable direction: *"a late abort costs a third of a second, and an early one kills a
 	// correct program."*
@@ -3982,7 +3989,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// ⚠ `someoneRunning`'s edge is the opposite case and takes the park: another M IS executing, so it is
 	// exactly the party that may answer this driver's promise.
 	var confirmWait = module.addBlock(func, label: b"confirmwait")
-	let proved = emitSchedConfirmQuiet(module, cur: confirmQuiet, p: driverProc, ids: ids)
+	let proved = emitSchedConfirmQuiet(module, cur: confirmQuiet, m: driverMachine, ids: ids)
 	module.setTerminator(confirmQuiet, op: StdOp.condBranch(proved, thenBlockId: nothingLeft.id, elseBlockId: confirmWait.id))
 	module.appendOp(confirmWait, op: StdOp.osSleepMs(emitConst(module, block: confirmWait, value: OtherWorkerPollMs, ids: ids)))
 	module.setTerminator(confirmWait, op: StdOp.branch(loopHdr.id))
@@ -4018,10 +4025,16 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	module.setTerminator(awaitOtherM, op: StdOp.branch(driverPark.id))
 	awaitOtherM.branchEdges.push(BranchEdge.create(driverPark.id, argIds: argsOf(pollMs)))
 
-	// driverPark: publish this driver on its own P, so a completer can find it. See
-	// `SchedRuntime.POffParkedDriverOwner` for what the slot means, why it is NOT `POffIdleFlag`, and why the
-	// completer compares the owner rather than following it.
-	emitSchedArmParkedDriver(module, block: driverPark, p: driverProc, owner: owner, ids: ids)
+	// driverPark: publish this driver on its own MACHINE, so a completer can find it. See
+	// `SchedRuntime.MOffParkedDriverOwner` for what the slot means, why it is not the idle state beside it,
+	// and why the completer compares the owner rather than following it.
+	//
+	// ⚠ **IT WAS THE P's SLOT WHEN W219 BUILT IT, AND W213-C2 IS WHY IT MOVED RATHER THAN STAYING.** A driver
+	// that parks does not release its processor — nothing here does — but the processor it holds is no longer
+	// the thing that names it: `__sched_wake_parked_drivers` walks `__sched_allm`, because that is the only
+	// roster every machine is on. The move also makes the slot's *"single writer"* claim structural instead of
+	// circumstantial: the only writer is the machine itself.
+	emitSchedArmParkedDriver(module, block: driverPark, m: driverMachine, owner: owner, ids: ids)
 	module.setTerminator(driverPark, op: StdOp.branch(driverParkRecheck.id))
 
 	// driverParkRecheck: the Dekker pair's second half. The arm's `lock xadd` on `__sched_parked_drivers` is
@@ -4030,16 +4043,17 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// its `SetEvent` is already pending on an AUTO-RESET event, which the wait below takes at once. Without
 	// this re-test both can miss, which is the lost wakeup the whole pair exists to prevent.
 	//
-	// ⚠ **IT ASKS ONLY THE EXIT CONDITION, NOT "IS THERE WORK?".** This driver is not published as an idle M
-	// — `POffParkedDriverOwner` carries why it must not be — so no publisher reads it and no publisher signals
-	// it. A green thread queued during this wait is picked up when the timeout expires, exactly as it was
-	// before this rung; what changed is the condition the loop is actually waiting on.
+	// ⚠ **IT ASKS ONLY THE EXIT CONDITION, NOT "IS THERE WORK?".** This driver does not join `__sched_midle`
+	// and is not findable as an idle machine — `MOffParkedDriverOwner` carries why it must not be — so no
+	// publisher reads it and no publisher signals it. A green thread queued during this wait is picked up when
+	// the timeout expires; what the park changed is the condition the loop is actually waiting on.
 	emitDriveExitTest(module, block: driverParkRecheck, exit: exit, ids: ids, targetGt: targetGt, targetStatus: targetStatus, promiseArray: promiseArray, zeroConst: zeroConst, reachedBlock: driverParkDisarm, elseBlock: driverParkWait, carriesTheAnswer: false)
 
-	// driverParkWait: the wait itself — this P's own auto-reset event, with the caller's interval as the
-	// TIMEOUT. The result is unread for `buildSchedWorkerLoop`'s reason: signalled and timed-out lead to the
-	// same re-check, and which of them happened is a question the loop top answers better than a return code.
-	let parkEvent = emitLoadField(module, block: driverParkWait, record: driverProc, offset: POffWakeEvent, ids: ids)
+	// driverParkWait: the wait itself — this MACHINE's own auto-reset event, with the caller's interval as
+	// the TIMEOUT. The result is unread for `buildSchedWorkerLoop`'s reason: signalled and timed-out lead to
+	// the same re-check, and which of them happened is a question the loop top answers better than a return
+	// code.
+	let parkEvent = emitLoadField(module, block: driverParkWait, record: driverMachine, offset: MOffParkEvent, ids: ids)
 	let parkWaitResult = ids.mint()
 	module.appendOp(driverParkWait, op: StdOp.osWaitHandle(parkWaitResult, handleId: parkEvent, timeoutMsId: parkTimeoutMs))
 	module.setTerminator(driverParkWait, op: StdOp.branch(driverParkDisarm.id))
@@ -4047,7 +4061,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// driverParkDisarm: EVERY road out of the park passes through here, including the re-test that never
 	// waited — a slot left published on a driver that has gone back to running is a `SetEvent` delivered to
 	// nobody on every later completion, and a gate count that never comes down.
-	emitSchedDisarmParkedDriver(module, block: driverParkDisarm, p: driverProc, ids: ids)
+	emitSchedDisarmParkedDriver(module, block: driverParkDisarm, m: driverMachine, ids: ids)
 	module.setTerminator(driverParkDisarm, op: StdOp.branch(loopHdr.id))
 
 	// timerDecide: if the earliest deadline has passed → firenow, else → sleepwait.
@@ -4055,9 +4069,9 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// ⭐ **A TIMER EXISTS, SO THIS M IS NOT QUIESCED (A1) — and this is the arm whose omission produced a
 	// SPURIOUS ABORT.** Both roads out of here are progress or a bounded wait on a real deadline: `firenow`
 	// fires due timers and PUBLISHES the coroutines they wake, and `sleepwait` sleeps on the delta. An M
-	// carrying a stale `waiting` through either would let another M read every P as quiesced while this one
+	// carrying a stale `waiting` through either would let another M read every machine as quiesced while this one
 	// was doing the work. `SchedRuntime.emitSchedSetQuiesced` carries the measurement.
-	emitSchedSetQuiesced(module, block: timerDecide, p: driverProc, waiting: false, ids: ids)
+	emitSchedSetQuiesced(module, block: timerDecide, m: driverMachine, waiting: false, ids: ids)
 	let isDue = ids.mint()
 	module.appendOp(timerDecide, op: StdOp.cmp(isDue, lhs: earliest, rhs: now, pred: StdCmpPred.le, operandType: StdType.i64))
 	module.setTerminator(timerDecide, op: StdOp.condBranch(isDue, thenBlockId: firenow.id, elseBlockId: sleepwait.id))
@@ -4118,7 +4132,7 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 
 	// haveProcs (pc >= 1): block on the children. No timer bounds the wait → INFINITE; else bound it by the timer.
 	// ⭐ A parked child IS a wakeup source, so this M is not quiesced however long the wait runs (A1).
-	emitSchedSetQuiesced(module, block: haveProcs, p: driverProc, waiting: false, ids: ids)
+	emitSchedSetQuiesced(module, block: haveProcs, m: driverMachine, waiting: false, ids: ids)
 	let noTimersProcs = ids.mint()
 	module.appendOp(haveProcs, op: StdOp.cmp(noTimersProcs, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(haveProcs, op: StdOp.condBranch(noTimersProcs, thenBlockId: procInfinite.id, elseBlockId: procTimerDecide.id))
@@ -4154,10 +4168,10 @@ function buildGtDriveLoop(module StdModule, name ByteArray, exit DriveExit, uses
 	// ⭐⭐ **LEAVING THE DRIVER IS THE OTHER EVENT THAT CLEARS THE QUIESCED FLAG (A1), AND IT IS THE ONE THAT
 	// IS EASY TO MISS.** Every road out of this loop passes through here, including `nothingLeft`'s
 	// `liveCountZero` arm. Without it, a `main` whose await completed after a spell in `awaitOtherM` would go
-	// back to ORDINARY USER CODE with P0 still published as quiesced — and another M reaching `otherMs` would
+	// back to ORDINARY USER CODE with M0 still published as quiesced — and another M reaching `otherMs` would
 	// then count a running main as a waiting one and abort a program that was making progress. That is the
 	// spurious-abort direction, so it is the store that must not be forgotten.
-	emitSchedSetQuiesced(module, block: doneBlock, p: driverProc, waiting: false, ids: ids)
+	emitSchedSetQuiesced(module, block: doneBlock, m: driverMachine, waiting: false, ids: ids)
 
 	// `done` RETURNS WHAT THE SIGNATURE PROMISED, read off the signature — a loop declared to answer a value
 	// and `ret`ting void is a shape no diagnostic catches.
@@ -4370,7 +4384,8 @@ end 'awaitExitTerminator'
 // argument about which SITES the parser emits and not about how many Ms reach one of them (`cancel`
 // specifically arrives by a road that analysis does not walk). Swapping the load-then-clear for
 // `CAS(releaser, observed -> 0)` makes the caller that WINS the swap the only one that calls, which is
-// `emitSchedClaimProc`'s shape one struct over and for the identical reason.
+// `SchedRuntime.POffStatus`'s shape one struct over and for the identical reason — that note carries the
+// heap corruption a read/test/store produced there, and names the emitter it cost.
 //
 // ⚠ **NO RETRY LOOP, AND THAT IS A PROPERTY OF THE WORD RATHER THAN AN OMISSION.** `gt.releaser` is written
 // exactly twice in its life — once by the spawn, before the GT is published, and once to 0 here — so a
@@ -5152,8 +5167,8 @@ function buildGtRunnerDone(module StdModule)
 	// ⛔⛔ **`owner` IS READ IN `entry` AND USED HERE, AND THAT IS NOT A MISSED SINK.** The arrival above may
 	// hand this struct to `__gt_reclaim`, after which every field of it is the allocator's — so the pointer
 	// has to be taken while the struct is provably live. It is passed as a VALUE and never dereferenced (see
-	// `SchedRuntime.POffParkedDriverOwner`), so a green thread that has itself been reclaimed since costs a
-	// spurious `SetEvent` at worst.
+	// `SchedRuntime.MOffParkedDriverOwner`), so a green thread that has itself been reclaimed since costs a
+	// spurious `osSetEvent` at worst.
 	//
 	// ⚠ **THE STORELOAD BARRIER THE WAKE NEEDS IS `emitGtTeardownArrive`'s `lock xadd`, THREE LINES UP.** The
 	// caller's *"status = completed"* store must be visible before `__sched_wake_parked_drivers` reads the
@@ -7471,8 +7486,8 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// to be written at the very END of this function — *"a failed spawn never reaches it and leaves the slot
 	// free"* — so a slot stayed readable as FREE across `CreateProcessA`, and two Ms scanning at once both took
 	// the same index and then wired two different children's pipe ends into one slot. `CAS(inUse, 0 -> claimed)`
-	// makes the SCAN the claim, so a loser simply walks on to the next index (`emitSchedClaimProc`'s shape, one
-	// table over), and the one path out of here that produces no handle gives the claim back.
+	// makes the SCAN the claim, so a loser simply walks on to the next index (`SchedRuntime.POffStatus`'s
+	// shape, one table over), and the one path out of here that produces no handle gives the claim back.
 	let probeSlot = emitSubpSlotAddr(module, block: slotCheck, ids: ids, table: table, handle: slotIdx)
 	let inUseAddr = emitFieldAddr(module, block: slotCheck, record: probeSlot, offset: SubpSlotInUse as ByteOffset, ids: ids)
 	let claimedValue = emitConst(module, block: slotCheck, value: SubpSlotClaimed, ids: ids)

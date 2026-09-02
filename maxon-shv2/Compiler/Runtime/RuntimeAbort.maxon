@@ -276,6 +276,52 @@ export enum RuntimeAbort
 	// reaching a reclamation path that has no answer for it. This registry's founding rule: two different
 	// faults may not report one number.
 	schedulerPromiseParkedOnAMailbox = 94
+	// ⛔⛔⛔ `emitSchedPidlePutLocked`: a processor was being put on `__sched_pidle` WITH A NON-EMPTY RUN
+	// QUEUE — `runqhead != runqtail`. **This is Go's own assertion, ported with the code it guards**
+	// (`vendor/go/src/runtime/proc.go:7425`: `pidleput` throws `"pidleput: P has non-empty run queue"`),
+	// and it states the invariant the idle-P list exists under: **a processor on that list has no runnable
+	// work, by invariant rather than by hope.** Whoever wants to idle a processor that still holds work
+	// must hand it to a machine (`handoffp`) instead of parking it.
+	//
+	// ⭐⭐ **IT IS HERE BECAUSE ITS ABSENCE COST A WRONG ANSWER THAT THREE FULL SUITES DID NOT SEE.** W213-C2's
+	// first cut released a processor without draining its ring and narrowed the park's final look to the
+	// GLOBAL queue alone, on the written claim that this was *"provably the whole set a publish can strand"*.
+	// It was not: work published to a ring just before that ring's processor went idle was visible to nobody
+	// — no machine held the processor, and the global-only look could not see the ring — until something
+	// unrelated happened to wake a machine. **MEASURED: `awaitAny` returned the wrong completed index on
+	// 7.5% of runs at `MAXON_MAX_PROCS=16`** (`track0/awaitany-index-race.sh`), because by the time anything
+	// re-scanned, BOTH promises had completed and the scan correctly answered the lowest index. Not a
+	// premature read and not a recycled cell — a LATE one, which a version-stamped build ruled the other two
+	// out of over 560 runs.
+	//
+	// ⇒ **the drain is what SATISFIES it, and this is the guard that makes the invariant checkable.** A
+	// COMPILER bug rather than a program's: no Maxon program can reach it except through a scheduler that
+	// idles a processor it should have handed off.
+	//
+	// ⭐⭐⭐ **AND IT EARNED ITS PLACE BY KILLING THE HYPOTHESIS THAT MOTIVATED IT, ON ITS FIRST OUTING.** The
+	// wrong answer above was diagnosed — confidently, and by two people — as *"a processor idled with work in
+	// its ring, invisible to a global-only final look"*. Removing the drain and leaving this assertion armed
+	// produced **ZERO aborts in 200 runs at `MAXON_MAX_PROCS=16`**, while the wrong answer went on happening
+	// at its usual rate: every release found `runqhead == runqtail`, so the diagnosed state never occurs and
+	// the drain fixed nothing. **An assertion that refutes its own author is worth more than one that never
+	// speaks**, and it is why this is permanent rather than a debugging aid retired once the drain landed.
+	//
+	// ✅ **THE ACTUAL CAUSE WAS FOUND AND FIXED AT W219, AND IT WAS PRE-EXISTING RATHER THAN THIS RUNG's.**
+	// This entry used to end *"the actual cause is elsewhere and is not closed: narrowed to `__gt_timer_check`
+	// run by a machine holding NO processor — removing that one call reads 200/200 clean where keeping it
+	// reads ~6-8% wrong"*. That narrowing was a TIMING correlation and not the mechanism: `__gt_drive_until`'s
+	// netpoll blocked its driver on `StdOp.osSleepMs` — a wait on no waitable object — so a promise answered
+	// on another machine was invisible until the interval expired, by which time the driver's own deadline had
+	// fired too and the scan answered the promise that finished SECOND. Deleting a timer-firing site moved the
+	// window; it did not close it. ⇒ **removing a call from `wpoll` is not a fix and must not be attempted as
+	// one.** `track0/README.md` owns W219's measurement, and `SchedRuntime.MOffParkedDriverOwner` is the cure.
+	//
+	// ⚠ **NONE OF THAT RETIRES THIS ABORT, AND THE PARAGRAPH ABOVE IS WHY.** The 200-run refutation still
+	// stands on its own terms — every release found `runqhead == runqtail` — so the drain at `wpark` remains a
+	// road nothing currently takes, kept because `pidleput`'s invariant has to be SATISFIED by somebody and
+	// `handoffp` is the road that will take it. This is what says so on the first run rather than the
+	// five-hundredth.
+	schedulerIdledAProcessorHoldingWork = 95
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

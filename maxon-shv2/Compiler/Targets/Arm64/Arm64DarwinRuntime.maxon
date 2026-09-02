@@ -3016,9 +3016,10 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinSleepMsChunk())
 		// MAC3's host objects, on the same bit and for the same reason: `installSchedRuntime` builds the P/M
 		// tier whenever `installGtRuntime` runs, and every one of these chunks is the target-side body of an op
-		// that tier emits UNCONDITIONALLY — the TLS slot, the run-queue lock, each P's wake event, the worker
-		// spawn and join, and the `MAXON_MAX_PROCS` read. One bit, two tiers, so a `bl` to an absent symbol is
-		// not merely unlikely but unreachable.
+		// that tier emits UNCONDITIONALLY — the TLS slot, the run-queue lock, each MACHINE's own park event
+		// (it was each P's wake event until W213-C2 moved the idle state onto the M), the worker spawn and
+		// join, and the `MAXON_MAX_PROCS` read. One bit, two tiers, so a `bl` to an absent symbol is not
+		// merely unlikely but unreachable.
 		chunks.push(buildArm64DarwinWaitNewChunk(globalData))
 		chunks.push(buildArm64DarwinEventSetChunk())
 		chunks.push(buildArm64DarwinThreadCreateChunk())

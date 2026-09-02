@@ -773,9 +773,10 @@ type StdToArm64Lowering
 			osIocpCreate then panic("lowerStdToArm64: `osIocpCreate` reached the arm64 isel — a completion port is emitted ONLY by `GtRuntime.buildIoInit`, which is built under `IoCompletionShape.completionPort`, and every arm64 lane answers `inlineCompletion` (a read completes in its caller, so there is nothing to poll and nothing to wake). Reaching here means the IO-completion shape fork was bypassed")
 			// ⭐⭐ **MAC3: the P/M tier's own five ops, which sit INSIDE the IOCP band by declaration order and
 			// have nothing to do with IOCP.** `__sched_init_procs` builds them unconditionally under `usesGt`,
-			// so every one is reachable in a plain `async` program: the run-queue lock, each P's wake event and
-			// a worker M's birth. See `Arm64DarwinRuntime`'s `DarwinWaitObject` for why an event is a condition
-			// variable here and why one object serves both kinds of handle.
+			// so every one is reachable in a plain `async` program: the run-queue lock, each MACHINE's own
+			// park event (it was each P's wake event until W213-C2) and a worker M's birth. See
+			// `Arm64DarwinRuntime`'s `DarwinWaitObject` for why an event is a condition variable here and why
+			// one object serves both kinds of handle.
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstRef: dstRef)
 			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstRef: dstRef)
 			osLockInit(lockPtrId) then self.lowerOsLockInit(lockPtrId, dstRef: dstRef)
