@@ -53,10 +53,64 @@ public static class FormatterSelfTest {
 
     new("ByteStringInsideFunction",
       "function main() returns ExitCode\n\tlet s = b\"\n\"\n\t// inside after literal\n\treturn 0\nend 'main'\n"),
+
+    // ⛔ A STRING CAN CONTAIN A STRING, and the comment harvester is a raw line scanner
+    // that has to know it. `"{f("//x")}"` is ONE literal - the interpolation's expression
+    // holds a second string - so a single in-string bool closes at the INNER quote and reads
+    // the tail as a trailing comment, appending a phantom copy of it to the line. That is
+    // corruption by DUPLICATION: nothing is lost, so a "did we keep every comment" check
+    // phrased as presence would pass; only MULTIPLICITY catches it, which is why CommentsIn
+    // counts rather than lists.
+    new("NestedStringInsideInterpolation",
+      "let m = \"{f(\"//x\")}\"\nlet a = 1  // owns a\n"),
+
+    // The CONTROL for the case above, and it is the whole point of having one: a `//` inside
+    // an ORDINARY string was always handled correctly, so this passed throughout that
+    // defect's life. Passing it says nothing about nesting.
+    new("UrlInPlainString",
+      "let s = \"http://example.com\"\nlet a = 1  // owns a\n"),
+  ];
+
+  /// ⛔⛔ SOURCES THE LEXER REJECTS, WHICH `Format` MUST RETURN **BYTE-IDENTICAL**.
+  ///
+  /// <para>A lexer error is a TOKEN, not a throw — `Lexer` mints `TokenType.Error` carrying a prefixed
+  /// message that `ReportLexerErrors` decodes much later, and to the formatter's emit loop every token's
+  /// Value is source. So the formatter WROTE THE ERROR MESSAGE INTO THE FILE. Measured before the fix, in
+  /// both spellings, exit 0 and reported as `formatted:`:
+  /// `let s = "unterminated` became `let s = __unterminated_string__:Unterminated string literal`, and
+  /// `/* unterminated` became `__unterminated_block_comment__:Unterminated block comment`.</para>
+  ///
+  /// <para>⚠ THE ASSERTION IS BYTE-IDENTITY, NOT COMMENT COUNT, because that is the only claim that holds
+  /// for a file with no comments in it — and because "does nothing" is the whole contract for a source the
+  /// formatter cannot read. The `Cases` above could not have caught this: every one of them lexes.</para>
+  private static readonly Case[] UnlexableCases = [
+    new("UnterminatedBlockComment", "let a = 1\n/* unterminated\n"),
+    new("UnterminatedString", "let a = 1\nlet s = \"unterminated\nlet b = 2\n"),
+    new("UnterminatedCharLiteral", "let a = 1\nlet c = 'x\nlet b = 2\n"),
+    // A comment riding along, so a future regression that preserved the CODE but ate the
+    // prose would still be caught here rather than only by byte-identity's fine print.
+    new("UnterminatedStringAfterComment", "// keep me\nlet s = \"unterminated\n"),
   ];
 
   public static int Run() {
     var failures = 0;
+
+    foreach (var testCase in UnlexableCases) {
+      string formatted;
+      try {
+        formatted = Lsp.MaxonFormatter.Format(testCase.Source);
+      } catch (Exception ex) {
+        Console.Error.WriteLine($"fmt-selftest FAIL [{testCase.Name}]: formatter threw {ex.GetType().Name}: {ex.Message}");
+        failures++;
+        continue;
+      }
+      if (formatted != testCase.Source) {
+        Console.Error.WriteLine(
+          $"fmt-selftest FAIL [{testCase.Name}]: the lexer rejects this source, so formatting must return it "
+          + "unchanged. It came back MODIFIED, which means an error token was emitted into the file as source.");
+        failures++;
+      }
+    }
 
     foreach (var testCase in Cases) {
       string formatted;
@@ -92,7 +146,8 @@ public static class FormatterSelfTest {
 
     if (failures == 0) {
       Console.WriteLine(
-        $"fmt-selftest: OK - {Cases.Length} source shapes, every comment preserved and formatting idempotent");
+        $"fmt-selftest: OK - {Cases.Length} source shapes, every comment preserved and formatting idempotent; "
+        + $"{UnlexableCases.Length} unlexable sources returned unchanged");
     }
     return failures == 0 ? 0 : 1;
   }

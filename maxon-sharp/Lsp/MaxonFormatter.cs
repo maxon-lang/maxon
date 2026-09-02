@@ -97,22 +97,44 @@ private record SourceComment(string Text, bool WholeLine);
   private static Dictionary<int, SourceComment> ExtractLineComments(string source) {
     var comments = new Dictionary<int, SourceComment>();
     var lines = source.Split('\n');
-    bool inString = false;
-    char stringChar = '"';
+    // ⛔⛔ A NESTING STACK, NOT AN `inString` FLAG - A STRING CAN CONTAIN A STRING.
+    // `"{f("//x")}"` is ONE literal: the interpolation's expression holds a second
+    // string. A single bool closes at the INNER quote, and the scanner then reads
+    // `//x")}"` as a trailing comment, which the emit path appends to the line as a
+    // phantom copy. MEASURED before this fix, exit 0, reported as `formatted:`:
+    //     let m = "{f("//x")}"     became     let m = "{f("//x")}"  //x")}"
+    // That is source corruption by DUPLICATION - which no comment-count check can
+    // catch, because nothing was lost, and which is perfectly idempotent on a rerun.
+    //
+    // Each entry says what we are INSIDE: '"' a string, '\'' a char literal, '{' an
+    // interpolation's expression. It persists across lines because a `b"..."` may span
+    // them. A comment is recognized ONLY when the stack is EMPTY: inside an
+    // interpolation the bytes are expression source, and reading a `//` there as
+    // prose is the same mistake one level down.
+    var nesting = new Stack<char>();
     for (int i = 0; i < lines.Length; i++) {
       var line = lines[i];
       int j = 0;
       while (j < line.Length) {
         char c = line[j];
-        if (inString) {
-          if (c == '\\' && j + 1 < line.Length) { j += 2; continue; }
-          if (c == stringChar) inString = false;
+        if (nesting.Count > 0) {
+          var context = nesting.Peek();
+          if (context == '"' || context == '\'') {
+            if (c == '\\' && j + 1 < line.Length) { j += 2; continue; }
+            if (c == context) nesting.Pop();
+            else if (c == '{' && context == '"') nesting.Push('{');
+            j++;
+            continue;
+          }
+          // context == '{' - an interpolation's expression: ordinary code, which may
+          // open a string of its own, and whose '}' closes back into the literal.
+          if (c == '"' || c == '\'') nesting.Push(c);
+          else if (c == '}') nesting.Pop();
           j++;
           continue;
         }
         if (c == '"' || c == '\'') {
-          inString = true;
-          stringChar = c;
+          nesting.Push(c);
           j++;
           continue;
         }
@@ -136,8 +158,8 @@ private record SourceComment(string Text, bool WholeLine);
           string curLine = line;
           // Walk forward until `*/` is found OR we run out of source lines.
           // Unterminated block comments are not the formatter's problem —
-          // `Format()` catches the lexer's UnterminatedBlockComment error
-          // and returns the source unchanged before reaching token emission.
+          // `FormatCore` returns the source unchanged when the lexer reports one.
+          // ⚠ It detects that as an ERROR TOKEN, not as a throw; see the guard there.
           while (si < lines.Length) {
             if (sj >= curLine.Length) {
               // End of this line — store the segment we have for `si` and
@@ -237,6 +259,22 @@ private record SourceComment(string Text, bool WholeLine);
     } catch {
       return source;
     }
+
+    // A LEXER ERROR IS A TOKEN HERE, NOT A THROW, so the catch above never fires for
+    // one and the emit loop below would write the error's own sentinel text into the
+    // file as though it were source. `Lexer` mints `TokenType.Error` whose Value is a
+    // prefixed message (`__unterminated_string__:...`) that `ReportLexerErrors`
+    // decodes much later; every token's Value is source to the emit loop.
+    //
+    // MEASURED, and it is destructive in both spellings: `let s = "unterminated`
+    // became `let s = __unterminated_string__:Unterminated string literal`, and
+    // `/* unterminated` became `__unterminated_block_comment__:Unterminated block
+    // comment` -- exit 0, reported as `formatted:`, the author's text gone.
+    //
+    // Asked of the TOKEN TYPE rather than of the two sentinel spellings, so a third
+    // lexer error cannot quietly reopen it: there are four mint sites today and the
+    // set is the lexer's to grow.
+    if (tokens.Any(t => t.Type == TokenType.Error)) return source;
 
     var lineComments = ExtractLineComments(source);
 
