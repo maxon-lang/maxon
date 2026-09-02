@@ -550,19 +550,43 @@ let ArgBufBytes = MaxAsyncArgs * GtArgSlotBytes
 export let StackWordBytes = 8
 
 // --- Timer store (P1.5 mid-body-yield) ---
-// The parked-GT deadline store: a fixed array of (deadline, gt) entries, one per sleeping GT. Its ENTRY
-// LAYOUT mirrors the reference exactly — `TimerEntrySize` bytes, `TimerOffDeadline`@0, `TimerOffGt`@8, capacity
-// `TimerHeapCapacity` — so a min-heap discipline can be retrofitted later with zero layout change. At THIS
-// rung it is an UNSORTED array (append to add; linear scan to find the earliest / fire the due ones), a
-// DELIBERATE simplification over the reference's min-heap: the concurrent-timer count is bounded by the number
+// The parked-GT deadline store: a MIN-HEAP of (deadline, gt, seq) entries, one per sleeping GT, ordered by
+// `(deadline, seq)` ascending. `__gt_timer_add` appends and sifts up, `__gt_timer_earliest` reads the root,
+// and `__gt_timer_check` pops the root while it is due — so a due set fires in DEADLINE ORDER however it was
+// armed, and the peek the netpoll does on every poll is one load rather than a scan.
+//
+// ⛔⛔ **IT WAS AN UNSORTED ARRAY, AND THE FIRING ORDER WAS THE ARMING ORDER — A WRONG ANSWER, NOT A SLOW
+// ONE.** This header used to argue for the flat array: *"the concurrent-timer count is bounded by the number
 // of simultaneously-sleeping GTs (2 in the interleave spec, 1 in a sequential sleep loop), where O(n) is
 // indistinguishable from O(log n), and a hand-built-Std sift-down is exactly the subtle-corruption class this
-// substrate must avoid. The heap region itself is `__slab_alloc`'d once in `__gt_init` (a 4 KiB zeroed block)
-// rather than a `.data` reservation, because `.data` entries are single scalar slots.
+// substrate must avoid."* That is an argument about COST, and the defect was CORRECTNESS: `__gt_timer_check`
+// walked the array and fired every due entry in the order it happened to find them, so a poll that found
+// SEVERAL deadlines already elapsed woke the LONGEST sleeper first. `async-sleep.md`'s
+// `coalesced-pass-fires-in-deadline-order` pins it — four sleepers armed longest-first and held past every
+// deadline by a green thread that never yields, where the flat array answered **1432** and deadline order is
+// **4321**.
+//
+// ⚠ **IT WAS MASKED, NOT ABSENT.** Ordinary programs never saw it because the netpoll waits on the EARLIEST
+// deadline and so usually hands this walk exactly one due entry — an argument about the CALLER that the
+// walk itself never made. Anything that coalesces a pass turns it back into a wrong answer: a loaded box, a
+// coarse OS timer, a thread that hogs its M, or a second bug (`aebf410c2f`'s bounded waits, which ignored
+// their timeout and slept a flat 1.000 s, did exactly that by accident and is how it was found).
+//
+// ⭐ **TIES FIRE IN ARMING ORDER, AND THAT IS WHAT `TimerOffSeq` BUYS.** A binary heap is not stable, so
+// keying on the deadline alone would leave two GTs that armed the SAME deadline — two `sleep(50)`s inside
+// one clock tick — firing in whatever order the sifts happened to leave them. `__gt_timer_seq` is a monotone
+// counter stamped into each entry as it is armed, and the key is the PAIR `(deadline, seq)`, which is total:
+// earlier deadline first, and among equal deadlines the one armed first. One extra i64 per parked thread is
+// the whole price of a defined answer, and the reference does not pay it (v1's heap keys on the deadline
+// alone and leaves ties to the sift).
+//
+// The heap region itself is `__slab_alloc`'d once in `__gt_init` (a zeroed block) rather than a `.data`
+// reservation, because `.data` entries are single scalar slots.
 let TimerHeapCapacity = 256
-let TimerEntrySize = 16
+let TimerEntrySize = 24
 let TimerOffDeadline = 0
 let TimerOffGt = 8
+let TimerOffSeq = 16
 let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 
 // ⭐ **HOW LONG A DRIVER WAITS ON ANOTHER M BEFORE RE-CHECKING (G1).** It bounds the LATENCY of noticing that
@@ -1417,6 +1441,12 @@ let GtTimerHeapBaseLabel = b"__gt_timer_heap_base"
 // because `__gt_timer_add` doubles the store when it fills — the constant is the seed, this is the truth.
 let GtTimerCapacityLabel = b"__gt_timer_capacity"
 
+// The ARM SEQUENCE stamped into every timer entry — the tiebreaker that makes the heap's order TOTAL. A
+// monotone counter bumped once per `__gt_timer_add` under the scheduler lock, so two entries carrying the
+// same deadline still compare, and they compare in arming order. Slab-zeroed, so nothing seeds it, and a
+// program would have to arm 2^63 timers to wrap it.
+let GtTimerSeqLabel = b"__gt_timer_seq"
+
 // The async-trace id dispenser: `__gt_spawn` pre-increments it and stores the result in `gt.traceId`, so ids
 // run 1, 2, 3 in SPAWN order and the very first spawned thread is `#1`. Slab-zeroed, so nothing seeds it.
 let GtTraceCounterLabel = b"__gt_trace_counter"
@@ -1984,6 +2014,7 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: GtTimerCountLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTimerHeapBaseLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTimerCapacityLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: GtTimerSeqLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep)
 	// P1.5 subprocess store: the parked-child count + the two parallel-array bases.
 	pushRuntimeGlobal(out, label: GtProcCountLabel, sharing: MultiMSharing.underSchedLock)
@@ -2915,8 +2946,177 @@ function buildGtNowNs(module StdModule)
 	module.functions.push(func)
 end 'buildGtNowNs'
 
-// `__gt_timer_add(gt, deadline)` — append a parked GT's (deadline, gt) entry to the timer store. An UNSORTED
-// append (see the store's header note on the min-heap deviation): store the pair at `heap[count]`, count++.
+// ⭐⭐ **THE (deadline, gt, seq) TRIPLE OF ONE TIMER ENTRY, IN REGISTERS — and the ONE place the entry's
+// field set is written down.** Every heap operation below moves WHOLE entries: the two sift walks exchange a
+// pair, a pop moves the last entry over the root, `__gt_promise_drop`'s remove moves it over an arbitrary
+// hole. Each of those is `emitTimerEntryLoad` + `emitTimerEntryStore`, so adding a field to the entry is an
+// edit to exactly those two functions and every mover learns about it at once.
+//
+// ⚠ It REPLACES `emitTimerSwapDown`, which enumerated the fields for a one-directional COPY. That was the
+// same anti-duplication device for the one mover the flat store had; a heap has three, and one of them is an
+// exchange rather than a copy, so a copy-shaped helper would have needed a second enumeration beside it.
+type TimerEntry
+	export let deadline as ValueId
+	export let gt as ValueId
+	export let seq as ValueId
+
+	export static function create(deadline ValueId, gt ValueId, seq ValueId) returns TimerEntry
+		return Self{deadline: deadline, gt: gt, seq: seq}
+	end 'create'
+end 'TimerEntry'
+
+// `&heap[index]` — the `base + index * TimerEntrySize` arithmetic every heap site needs. It was written out
+// longhand at NINE sites while the store was flat, and the heap has TWELVE.
+function emitTimerEntryAddr(module StdModule, block IrBlock, ids ValueMinter, heapBase ValueId, index ValueId) returns ValueId
+	let entrySize = emitConst(module, block: block, value: TimerEntrySize, ids: ids)
+	let offset = emitBin(module, block: block, a: index, b: entrySize, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: heapBase, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitTimerEntryAddr'
+
+// Read the entry at `addr` into registers.
+function emitTimerEntryLoad(module StdModule, block IrBlock, ids ValueMinter, addr ValueId) returns TimerEntry
+	let deadline = emitLoadField(module, block: block, record: addr, offset: TimerOffDeadline, ids: ids)
+	let gt = emitLoadField(module, block: block, record: addr, offset: TimerOffGt, ids: ids)
+	let seq = emitLoadField(module, block: block, record: addr, offset: TimerOffSeq, ids: ids)
+	return TimerEntry.create(deadline, gt: gt, seq: seq)
+end 'emitTimerEntryLoad'
+
+// Write `entry` to the slot at `addr`.
+function emitTimerEntryStore(module StdModule, block IrBlock, addr ValueId, entry TimerEntry)
+	emitStoreField(module, block: block, record: addr, offset: TimerOffDeadline, value: entry.deadline)
+	emitStoreField(module, block: block, record: addr, offset: TimerOffGt, value: entry.gt)
+	emitStoreField(module, block: block, record: addr, offset: TimerOffSeq, value: entry.seq)
+end 'emitTimerEntryStore'
+
+// ⭐⭐ **THE HEAP'S ORDER, STATED ONCE: `a` comes before `b` iff `(a.deadline, a.seq) < (b.deadline, b.seq)`.**
+// The sequence half is what makes the order TOTAL — see the store's header — and it is what makes the answer
+// to a tie "the one armed first" rather than "whichever the sifts left on top". Every comparison in this
+// family asks it here, so no site can key on the deadline alone by accident.
+//
+// BRANCH-FREE on purpose. A comparison's value lives in the 0/1 domain — `StdToX64Conversion`'s
+// `BoolFalseImm` states that contract for x64, and `cset` and `i64.lt_s` give the same domain on the other
+// two lanes — so the lexicographic test is `lt | (eq & seqLt)`, five ops in the caller's own block against
+// the four-block diamond a branching form would cost at each of the four sites that ask.
+function emitTimerEntryBefore(module StdModule, block IrBlock, ids ValueMinter, a TimerEntry, b TimerEntry) returns ValueId
+	let earlier = emitCmp(module, block: block, a: a.deadline, b: b.deadline, pred: StdCmpPred.lt, ids: ids)
+	let sameDeadline = emitCmp(module, block: block, a: a.deadline, b: b.deadline, pred: StdCmpPred.eq, ids: ids)
+	let armedFirst = emitCmp(module, block: block, a: a.seq, b: b.seq, pred: StdCmpPred.lt, ids: ids)
+	let wonTheTie = emitBin(module, block: block, a: sameDeadline, b: armedFirst, opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitBin(module, block: block, a: earlier, b: wonTheTie, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitTimerEntryBefore'
+
+// Restore the heap UPWARDS from `startIndex`, then branch to `cont`: while the entry there comes before its
+// parent, exchange the two and follow it up. O(log n) exchanges.
+//
+// The caller has just placed an entry at `startIndex` that may be too EARLY for where it sits — the append
+// in `__gt_timer_add`, or the moved-last entry in `emitGtTimerStoreRemove` — and everything else is already a
+// heap, so walking the ancestor chain is the whole repair.
+function emitTimerSiftUp(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, heapBase ValueId, startIndex ValueId, cont IrBlock)
+	var hdr = module.addBlock(func, label: b"siftuphdr")
+	var body = module.addBlock(func, label: b"siftupbody")
+	var exchange = module.addBlock(func, label: b"siftupswap")
+
+	module.setTerminator(startBlock, op: StdOp.branch(hdr.id))
+	startBlock.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(startIndex)))
+
+	// hdr(i): the root has no parent, so it is where every walk stops.
+	let i = ids.mint()
+	hdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let zeroConst = emitConst(module, block: hdr, value: 0, ids: ids)
+	let atRoot = emitCmp(module, block: hdr, a: i, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(hdr, op: StdOp.condBranch(atRoot, thenBlockId: cont.id, elseBlockId: body.id))
+
+	// body: parent = (i - 1) >> 1. `i >= 1` on this edge, so the numerator is non-negative and the logical
+	// shift is the halving. Both entries are read here, which is also what the exchange needs.
+	let oneConst = emitConst(module, block: body, value: 1, ids: ids)
+	let iMinusOne = emitBin(module, block: body, a: i, b: oneConst, opcode: StdBinOpcode.sub, ids: ids)
+	let parent = emitBin(module, block: body, a: iMinusOne, b: oneConst, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let childAddr = emitTimerEntryAddr(module, block: body, ids: ids, heapBase: heapBase, index: i)
+	let parentAddr = emitTimerEntryAddr(module, block: body, ids: ids, heapBase: heapBase, index: parent)
+	let child = emitTimerEntryLoad(module, block: body, ids: ids, addr: childAddr)
+	let parentEntry = emitTimerEntryLoad(module, block: body, ids: ids, addr: parentAddr)
+	let beatsParent = emitTimerEntryBefore(module, block: body, ids: ids, a: child, b: parentEntry)
+	module.setTerminator(body, op: StdOp.condBranch(beatsParent, thenBlockId: exchange.id, elseBlockId: cont.id))
+
+	// exchange: both entries are already in registers, so the swap is four stores and no reload.
+	emitTimerEntryStore(module, block: exchange, addr: childAddr, entry: parentEntry)
+	emitTimerEntryStore(module, block: exchange, addr: parentAddr, entry: child)
+	module.setTerminator(exchange, op: StdOp.branch(hdr.id))
+	exchange.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(parent)))
+end 'emitTimerSiftUp'
+
+// Restore the heap DOWNWARDS from `startIndex` over the first `count` entries, then branch to `cont`: while
+// the earlier of the two children comes before the entry, exchange and follow it down. O(log n) exchanges.
+//
+// The caller has just placed an entry at `startIndex` that may be too LATE for where it sits — the last live
+// entry moved over the hole a pop or a remove opened.
+function emitTimerSiftDown(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, heapBase ValueId, count ValueId, startIndex ValueId, cont IrBlock)
+	var hdr = module.addBlock(func, label: b"siftdownhdr")
+	var haveLeft = module.addBlock(func, label: b"siftdownhaveleft")
+	var chooseChild = module.addBlock(func, label: b"siftdownchoose")
+	var takeLeft = module.addBlock(func, label: b"siftdowntakeleft")
+	var takeRight = module.addBlock(func, label: b"siftdowntakeright")
+	var compare = module.addBlock(func, label: b"siftdowncompare")
+	var exchange = module.addBlock(func, label: b"siftdownswap")
+
+	module.setTerminator(startBlock, op: StdOp.branch(hdr.id))
+	startBlock.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(startIndex)))
+
+	// hdr(i): left = 2i + 1. No left child means `i` is a leaf, and a leaf is where every walk stops.
+	let i = ids.mint()
+	hdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let oneConst = emitConst(module, block: hdr, value: 1, ids: ids)
+	let twoI = emitBin(module, block: hdr, a: i, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let left = emitBin(module, block: hdr, a: twoI, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
+	let isLeaf = emitCmp(module, block: hdr, a: left, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(hdr, op: StdOp.condBranch(isLeaf, thenBlockId: cont.id, elseBlockId: haveLeft.id))
+
+	// haveLeft: right = left + 1. Past the live region and the left child is the only candidate.
+	let rightOne = emitConst(module, block: haveLeft, value: 1, ids: ids)
+	let right = emitBin(module, block: haveLeft, a: left, b: rightOne, opcode: StdBinOpcode.add, ids: ids)
+	let noRight = emitCmp(module, block: haveLeft, a: right, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(haveLeft, op: StdOp.condBranch(noRight, thenBlockId: takeLeft.id, elseBlockId: chooseChild.id))
+
+	// chooseChild: both children exist, so the candidate is whichever comes first — and the tie rule decides
+	// when their deadlines match, which is what keeps two same-deadline entries in arming order.
+	let leftAddr = emitTimerEntryAddr(module, block: chooseChild, ids: ids, heapBase: heapBase, index: left)
+	let rightAddr = emitTimerEntryAddr(module, block: chooseChild, ids: ids, heapBase: heapBase, index: right)
+	let leftEntry = emitTimerEntryLoad(module, block: chooseChild, ids: ids, addr: leftAddr)
+	let rightEntry = emitTimerEntryLoad(module, block: chooseChild, ids: ids, addr: rightAddr)
+	let rightWins = emitTimerEntryBefore(module, block: chooseChild, ids: ids, a: rightEntry, b: leftEntry)
+	module.setTerminator(chooseChild, op: StdOp.condBranch(rightWins, thenBlockId: takeRight.id, elseBlockId: takeLeft.id))
+
+	// takeLeft / takeRight: two blocks rather than one two-armed edge, because a block carries ONE argument
+	// list per successor and these two arms disagree about the index they pass.
+	module.setTerminator(takeLeft, op: StdOp.branch(compare.id))
+	takeLeft.branchEdges.push(BranchEdge.create(compare.id, argIds: argsOf(left)))
+	module.setTerminator(takeRight, op: StdOp.branch(compare.id))
+	takeRight.branchEdges.push(BranchEdge.create(compare.id, argIds: argsOf(right)))
+
+	// compare(child): the heap property holds here as soon as the entry comes before its earliest child.
+	let child = ids.mint()
+	compare.blockArgs.push(IrBlockArg.create(child, argType: StdType.i64))
+	let childAddr = emitTimerEntryAddr(module, block: compare, ids: ids, heapBase: heapBase, index: child)
+	let parentAddr = emitTimerEntryAddr(module, block: compare, ids: ids, heapBase: heapBase, index: i)
+	let childEntry = emitTimerEntryLoad(module, block: compare, ids: ids, addr: childAddr)
+	let parentEntry = emitTimerEntryLoad(module, block: compare, ids: ids, addr: parentAddr)
+	let childWins = emitTimerEntryBefore(module, block: compare, ids: ids, a: childEntry, b: parentEntry)
+	module.setTerminator(compare, op: StdOp.condBranch(childWins, thenBlockId: exchange.id, elseBlockId: cont.id))
+
+	// exchange: both entries are already in registers, so the swap is four stores and no reload.
+	emitTimerEntryStore(module, block: exchange, addr: parentAddr, entry: childEntry)
+	emitTimerEntryStore(module, block: exchange, addr: childAddr, entry: parentEntry)
+	module.setTerminator(exchange, op: StdOp.branch(hdr.id))
+	exchange.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(child)))
+end 'emitTimerSiftDown'
+
+// `__gt_timer_add(gt, deadline)` — insert a parked GT's entry into the timer MIN-HEAP: stamp it with the arm
+// sequence (`__gt_timer_seq`, the tiebreaker the store's header explains), append it at `heap[count]`,
+// count++, and sift it up to its place. O(log n) in the number of parked threads.
+//
+// ⭐ **IT USED TO BE A BARE APPEND, WHICH IS WHY THE FIRING ORDER WAS THE ARMING ORDER.** The store's header
+// carries the measurement and the reason the flat array was chosen; the sift is what the store was NAMED for
+// all along (`__gt_timer_heap_base`, `TimerHeapCapacity`) and what the reference has always done.
 //
 // ⛔⛔ **IT IS CAPACITY-GUARDED, AND IT WAS NOT — THAT WAS A SILENT BUFFER OVERFLOW.** The header here used to
 // read *"No capacity guard: the concurrent-timer count is bounded by simultaneously-sleeping GTs (≤2 in the
@@ -2956,17 +3156,19 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	var entry = module.addBlock(func, label: b"entry")
 	var grow = module.addBlock(func, label: b"grow")
 	var doAdd = module.addBlock(func, label: b"doadd")
+	var doneBlock = module.addBlock(func, label: b"done")
 	emitParams(module, block: entry, count: 2)
 	let gt = 0 as ValueId
 	let deadline = 1 as ValueId
 
-	// ⛔⛔ **THE WHOLE APPEND RUNS UNDER THE RUN-QUEUE LOCK (G2), AND THE GROW IS WHY IT MUST BE THE WHOLE OF
-	// IT RATHER THAN THE COUNT ALONE.** The store is three `.data` words plus a heap region, and a full store
+	// ⛔⛔ **THE WHOLE INSERT RUNS UNDER THE RUN-QUEUE LOCK (G2), AND THE GROW IS WHY IT MUST BE THE WHOLE OF
+	// IT RATHER THAN THE COUNT ALONE.** The store is four `.data` words plus a heap region, and a full store
 	// REPUBLISHES the base and `rawFree`s the old region — so a second M scanning it (`__gt_timer_earliest`,
-	// `__gt_timer_check`, `__gt_promise_drop`'s unlink) would be walking freed memory, and two Ms appending
+	// `__gt_timer_check`, `__gt_promise_drop`'s unlink) would be walking freed memory, and two Ms inserting
 	// would both write slot `count` and lose one entry. An atomic per word cannot express any of that: what is
 	// indivisible here is the transaction, not a word. `__sched_lock` is the scheduler's one lock and the store
-	// is the scheduler's state, so there is no second lock and no order to remember.
+	// is the scheduler's state, so there is no second lock and no order to remember. The SIFT is inside it for
+	// the same reason and one more: mid-sift the array is not a heap, so no reader may see it.
 	emitSchedLockEnter(module, block: entry, ids: ids)
 
 	let countAddr = ids.mint()
@@ -2984,7 +3186,8 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	module.setTerminator(entry, op: StdOp.condBranch(isFull, thenBlockId: grow.id, elseBlockId: doAdd.id))
 
 	// grow: newCapacity = capacity * 2; copy the `count` live entries into a fresh region; republish both. The
-	// copy is byte-exact (`count * TimerEntrySize`), so a later min-heap discipline needs no change here.
+	// copy is a byte-exact image (`count * TimerEntrySize`) and a heap is an ARRAY, so the heap property rides
+	// across untouched — which is why the doubling needed no change when the discipline arrived.
 	let twoConst = ids.mint()
 	module.appendOp(grow, op: StdOp.const(twoConst, value: 2, valueType: StdType.i64))
 	let newCapacity = ids.mint()
@@ -3010,134 +3213,65 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	module.appendOp(copied, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(oldBase)))
 	module.setTerminator(copied, op: StdOp.branch(doAdd.id))
 
-	let heapBaseAddr = ids.mint()
-	module.appendOp(doAdd, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
-	let heapBase = ids.mint()
-	module.appendOp(doAdd, op: StdOp.loadIndirect(heapBase, addrId: heapBaseAddr, offset: 0, valueType: StdType.i64))
-	// &heap[count] = heapBase + count * TimerEntrySize.
-	let entrySizeConst = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(entrySizeConst, value: TimerEntrySize, valueType: StdType.i64))
-	let entryOff = ids.mint()
-	module.appendOp(doAdd, op: StdOp.binOp(entryOff, lhs: count, rhs: entrySizeConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let entryAddr = ids.mint()
-	module.appendOp(doAdd, op: StdOp.binOp(entryAddr, lhs: heapBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(doAdd, op: StdOp.storeIndirect(entryAddr, offset: TimerOffDeadline, valueId: deadline, valueType: StdType.i64))
-	module.appendOp(doAdd, op: StdOp.storeIndirect(entryAddr, offset: TimerOffGt, valueId: gt, valueType: StdType.i64))
-	// count++.
-	let oneConst = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let newCount = ids.mint()
-	module.appendOp(doAdd, op: StdOp.binOp(newCount, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let heapBase = emitLoadGlobalWord(module, block: doAdd, label: GtTimerHeapBaseLabel, ids: ids)
+	// Stamp the arm sequence and bump the dispenser. Under the lock like every other word of the store, so two
+	// Ms arming at once cannot take the same number — which is exactly what the tie rule needs of it.
+	let seq = emitLoadGlobalWord(module, block: doAdd, label: GtTimerSeqLabel, ids: ids)
+	let oneConst = emitConst(module, block: doAdd, value: 1, ids: ids)
+	let nextSeq = emitBin(module, block: doAdd, a: seq, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreGlobalWord(module, block: doAdd, label: GtTimerSeqLabel, value: nextSeq, ids: ids)
+	// heap[count] = {deadline, gt, seq}; count++.
+	let entryAddr = emitTimerEntryAddr(module, block: doAdd, ids: ids, heapBase: heapBase, index: count)
+	emitTimerEntryStore(module, block: doAdd, addr: entryAddr, entry: TimerEntry.create(deadline, gt: gt, seq: seq))
+	let newCount = emitBin(module, block: doAdd, a: count, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(doAdd, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
-	emitSchedLockLeave(module, block: doAdd, ids: ids)
-	module.setTerminator(doAdd, op: StdOp.retVoid)
+	// The appended entry is the only one out of place, so sifting it up restores the whole heap.
+	emitTimerSiftUp(module, func: func, ids: ids, startBlock: doAdd, heapBase: heapBase, startIndex: count, cont: doneBlock)
+
+	emitSchedLockLeave(module, block: doneBlock, ids: ids)
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildGtTimerAdd'
 
 // `__gt_timer_earliest() -> i64` — the smallest deadline in the store, or `TimerNoDeadline` (0) when empty.
-// A linear min-scan (the unsorted store makes peek-min O(n); n is tiny). The netpoll uses it to size its
-// `Sleep`, and an empty store there means "no parked GT and the run queue is empty" — a deadlock the caller
-// bails on.
+// The heap's ROOT is the minimum, so this is one load.
+//
+// ⭐ **IT WAS A LINEAR MIN-SCAN, AND THE NETPOLL ASKS IT ON EVERY POLL** — so the scan cost O(n) per wakeup
+// over n parked threads and O(n²) across them, for an answer the heap already holds at offset 0. The scan is
+// gone with the flat store that forced it; nothing else about the call changed.
+//
+// An empty store here means "no parked GT and the run queue is empty" — a deadlock the caller bails on.
 function buildGtTimerEarliest(module StdModule)
 	var func = IrFunction.createFromStd(GtTimerEarliestName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var initBlock = module.addBlock(func, label: b"init")
-	var scanHdr = module.addBlock(func, label: b"scanhdr")
-	var scanBody = module.addBlock(func, label: b"scanbody")
-	var takeCur = module.addBlock(func, label: b"takecur")
-	var keepBest = module.addBlock(func, label: b"keepbest")
+	var readRoot = module.addBlock(func, label: b"readroot")
 	var emptyBlock = module.addBlock(func, label: b"empty")
-	var doneBlock = module.addBlock(func, label: b"done")
 
 	// A READER still takes the lock: `__gt_timer_add`'s grow republishes the base and frees the old region, so
-	// an unlocked scan can walk memory the allocator has already handed to somebody else. See that function.
+	// an unlocked read can touch memory the allocator has already handed to somebody else, and a read taken
+	// mid-sift would see an array that is not yet a heap. See that function.
 	emitSchedLockEnter(module, block: entry, ids: ids)
 
-	let countAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtTimerCountLabel))
-	let count = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let isEmpty = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isEmpty, lhs: count, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: emptyBlock.id, elseBlockId: initBlock.id))
+	let count = emitLoadGlobalWord(module, block: entry, label: GtTimerCountLabel, ids: ids)
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: count, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: emptyBlock.id, elseBlockId: readRoot.id))
 
-	// init: best = heap[0].deadline; enter the scan at i = 1.
-	let heapBaseAddr = ids.mint()
-	module.appendOp(initBlock, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
-	let heapBase = ids.mint()
-	module.appendOp(initBlock, op: StdOp.loadIndirect(heapBase, addrId: heapBaseAddr, offset: 0, valueType: StdType.i64))
-	let best0 = ids.mint()
-	module.appendOp(initBlock, op: StdOp.loadIndirect(best0, addrId: heapBase, offset: TimerOffDeadline, valueType: StdType.i64))
-	let oneConst = ids.mint()
-	module.appendOp(initBlock, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	module.setTerminator(initBlock, op: StdOp.branch(scanHdr.id))
+	// readRoot: the root sits at index 0, so the region's base IS its address.
+	let heapBase = emitLoadGlobalWord(module, block: readRoot, label: GtTimerHeapBaseLabel, ids: ids)
+	let earliest = emitLoadField(module, block: readRoot, record: heapBase, offset: TimerOffDeadline, ids: ids)
+	emitSchedLockLeave(module, block: readRoot, ids: ids)
+	module.setTerminator(readRoot, op: StdOp.ret(earliest))
 
-	// scanHdr(i, best): if i >= count → done(best), else → scanBody.
-	let i = ids.mint()
-	let best = ids.mint()
-	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	scanHdr.blockArgs.push(IrBlockArg.create(best, argType: StdType.i64))
-	initBlock.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(oneConst, second: best0)))
-	let atEnd = ids.mint()
-	module.appendOp(scanHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: doneBlock.id, elseBlockId: scanBody.id))
-
-	// scanBody: di = heap[i].deadline; iNext = i+1; if di < best → takeCur, else → keepBest.
-	let entrySizeConst = ids.mint()
-	module.appendOp(scanBody, op: StdOp.const(entrySizeConst, value: TimerEntrySize, valueType: StdType.i64))
-	let iOff = ids.mint()
-	module.appendOp(scanBody, op: StdOp.binOp(iOff, lhs: i, rhs: entrySizeConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let entryAddr = ids.mint()
-	module.appendOp(scanBody, op: StdOp.binOp(entryAddr, lhs: heapBase, rhs: iOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let di = ids.mint()
-	module.appendOp(scanBody, op: StdOp.loadIndirect(di, addrId: entryAddr, offset: TimerOffDeadline, valueType: StdType.i64))
-	let oneStep = ids.mint()
-	module.appendOp(scanBody, op: StdOp.const(oneStep, value: 1, valueType: StdType.i64))
-	let iNext = ids.mint()
-	module.appendOp(scanBody, op: StdOp.binOp(iNext, lhs: i, rhs: oneStep, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let isLess = ids.mint()
-	module.appendOp(scanBody, op: StdOp.cmp(isLess, lhs: di, rhs: best, pred: StdCmpPred.lt, operandType: StdType.i64))
-	module.setTerminator(scanBody, op: StdOp.condBranch(isLess, thenBlockId: takeCur.id, elseBlockId: keepBest.id))
-
-	// takeCur: best' = di. keepBest: best' = best. Both loop to scanHdr(iNext, best').
-	module.setTerminator(takeCur, op: StdOp.branch(scanHdr.id))
-	takeCur.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(iNext, second: di)))
-	module.setTerminator(keepBest, op: StdOp.branch(scanHdr.id))
-	keepBest.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(iNext, second: best)))
-
-	// done(best): return the minimum. empty: return the sentinel.
-	let doneBest = ids.mint()
-	doneBlock.blockArgs.push(IrBlockArg.create(doneBest, argType: StdType.i64))
-	scanHdr.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(best)))
-	emitSchedLockLeave(module, block: doneBlock, ids: ids)
-	module.setTerminator(doneBlock, op: StdOp.ret(doneBest))
-
-	let emptyResult = ids.mint()
-	module.appendOp(emptyBlock, op: StdOp.const(emptyResult, value: TimerNoDeadline, valueType: StdType.i64))
+	let emptyResult = emitConst(module, block: emptyBlock, value: TimerNoDeadline, ids: ids)
 	emitSchedLockLeave(module, block: emptyBlock, ids: ids)
 	module.setTerminator(emptyBlock, op: StdOp.ret(emptyResult))
 
 	module.functions.push(func)
 end 'buildGtTimerEarliest'
-
-// ⭐ **THE ONE PLACE A TIMER ENTRY'S FIELDS ARE COPIED ON A SWAP-REMOVE (P1.5-B2 #88, Finding 3).** Copy the
-// (deadline, gt) fields of the entry at `lastAddr` into the hole at `holeAddr`. Shared by `__gt_timer_check`'s
-// netpoll afterFire and `__gt_promise_drop`'s timer-store remove, so the set of fields carried on a swap is
-// enumerated ONCE — add a field to the entry, update this, and both swap sites carry it. A self-copy (the
-// removed entry WAS the last) is harmless.
-function emitTimerSwapDown(module StdModule, block IrBlock, ids ValueMinter, lastAddr ValueId, holeAddr ValueId)
-	let movedDeadline = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(movedDeadline, addrId: lastAddr, offset: TimerOffDeadline, valueType: StdType.i64))
-	let movedGt = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(movedGt, addrId: lastAddr, offset: TimerOffGt, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(holeAddr, offset: TimerOffDeadline, valueId: movedDeadline, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(holeAddr, offset: TimerOffGt, valueId: movedGt, valueType: StdType.i64))
-end 'emitTimerSwapDown'
 
 // ⭐ **THE ONE PLACE A PROC ENTRY'S FIELDS ARE COPIED ON A SWAP-REMOVE (Finding 3).** Copy the (handle, gt)
 // parallel-array entries at byte offset `lastOff` into `holeOff`, across BOTH proc-store arrays in lockstep.
@@ -3160,19 +3294,29 @@ function emitProcSwapDown(module StdModule, block IrBlock, ids ValueMinter, hand
 	module.appendOp(block, op: StdOp.storeIndirect(holeGtAddr, offset: 0, valueId: movedGt, valueType: StdType.i64))
 end 'emitProcSwapDown'
 
-// `__gt_timer_check(now)` — fire every parked GT whose deadline has passed: set its status to `ready`,
-// re-enqueue it (UNLESS it is this M's own current GT — a self-driving GT0 polling its OWN deadline is already on
-// its stack, so status=ready alone wakes it and enqueueing would double-schedule it), and remove its entry
-// from the store (swap the last entry into the hole, count--; re-examine the same index). Deadline order is
-// preserved by the netpoll waking on the earliest deadline first, so the shorter sleeper resumes first.
+// `__gt_timer_check(now)` — fire every parked GT whose deadline has passed, IN DEADLINE ORDER: while the
+// heap's root is due, pop it, set that GT's status to `ready` and re-enqueue it (UNLESS it is this M's own
+// current GT — a self-driving GT0 polling its OWN deadline is already on its stack, so status=ready alone
+// wakes it and enqueueing would double-schedule it), sifting the moved last entry back down after each pop.
+//
+// ⛔⛔ **THE ORDER IS THIS FUNCTION'S ANSWER, NOT THE NETPOLL'S.** This header used to end *"Deadline order is
+// preserved by the netpoll waking on the earliest deadline first, so the shorter sleeper resumes first"* —
+// which is an argument that the walk is only ever handed ONE due entry, and it is not an argument about the
+// walk. Hand the old unsorted walk several due entries in one pass and it fired them in ARMING order; the
+// store's header carries the measurement and the spec case that pins it. A pop-min loop needs no such premise
+// about its caller: whatever a pass is handed, it publishes in `(deadline, seq)` order.
+//
+// The root's deadline also ENDS the walk, which the flat version could not do: nothing behind the earliest
+// entry can be due, so the first not-due root is the last comparison rather than the first of n.
 function buildGtTimerCheck(module StdModule)
 	var func = IrFunction.createFromStd(GtTimerCheckName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var loopHdr = module.addBlock(func, label: b"loophdr")
-	var loopBody = module.addBlock(func, label: b"loopbody")
-	var advance = module.addBlock(func, label: b"advance")
+	var checkDue = module.addBlock(func, label: b"checkdue")
+	var popRoot = module.addBlock(func, label: b"poproot")
+	var moveLast = module.addBlock(func, label: b"movelast")
 	var fire = module.addBlock(func, label: b"fire")
 	var doEnqueue = module.addBlock(func, label: b"enqueue")
 	var afterFire = module.addBlock(func, label: b"afterfire")
@@ -3183,23 +3327,17 @@ function buildGtTimerCheck(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let now = 0 as ValueId
 
-	// The walk MUTATES the store (each fire swap-removes an entry), so it runs under the run-queue lock for
-	// `__gt_timer_add`'s stated reason. The wake is deliberately NOT inside it — see `doneBlock` below.
+	// The walk MUTATES the store (each pop removes an entry and sifts what is left), so it runs under the
+	// run-queue lock for `__gt_timer_add`'s stated reason. The wake is deliberately NOT inside it — see
+	// `doneBlock` below.
 	emitSchedLockEnter(module, block: entry, ids: ids)
 
-	let countAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtTimerCountLabel))
-	let count0 = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(count0, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let heapBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
-	let heapBase = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(heapBase, addrId: heapBaseAddr, offset: 0, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let count0 = emitLoadGlobalWord(module, block: entry, label: GtTimerCountLabel, ids: ids)
+	let heapBase = emitLoadGlobalWord(module, block: entry, label: GtTimerHeapBaseLabel, ids: ids)
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
 
-	// loopHdr(i, count, owesWake): if i >= count → done(count, owesWake), else → loopBody.
+	// loopHdr(count, owesWake): an empty heap ends the walk; otherwise ask the root.
 	//
 	// ⭐⭐ **`owesWake` IS THE WALK'S ANSWER TO "DID I MAKE ANY GREEN THREAD RUNNABLE?" (SV1), AND IT IS
 	// LOOP-CARRIED BECAUSE THE WAKE MAY NOT HAPPEN INSIDE THE LOCK.** A GREEN thread re-readied here goes to
@@ -3209,98 +3347,73 @@ function buildGtTimerCheck(module StdModule)
 	// (`track0/pin-matrix.sh` reads exactly that, as `workers`). So the walk REMEMBERS whether it published any
 	// green thread and wakes ONCE after the release, which is also the only point where the StoreLoad fence
 	// the Dekker pair needs exists.
-	let i = ids.mint()
 	let count = ids.mint()
 	let owesWake = ids.mint()
-	loopHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	loopHdr.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
 	loopHdr.blockArgs.push(IrBlockArg.create(owesWake, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: threeArgs(zeroConst, second: count0, third: zeroConst)))
-	let atEnd = ids.mint()
-	module.appendOp(loopHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(loopHdr, op: StdOp.condBranch(atEnd, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
+	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(count0, second: zeroConst)))
+	let isEmpty = emitCmp(module, block: loopHdr, a: count, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loopHdr, op: StdOp.condBranch(isEmpty, thenBlockId: doneBlock.id, elseBlockId: checkDue.id))
 
-	// loopBody: di = heap[i].deadline; if di <= now → fire, else → advance.
-	let entrySizeConst = ids.mint()
-	module.appendOp(loopBody, op: StdOp.const(entrySizeConst, value: TimerEntrySize, valueType: StdType.i64))
-	let iOff = ids.mint()
-	module.appendOp(loopBody, op: StdOp.binOp(iOff, lhs: i, rhs: entrySizeConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let entryAddr = ids.mint()
-	module.appendOp(loopBody, op: StdOp.binOp(entryAddr, lhs: heapBase, rhs: iOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let di = ids.mint()
-	module.appendOp(loopBody, op: StdOp.loadIndirect(di, addrId: entryAddr, offset: TimerOffDeadline, valueType: StdType.i64))
-	let isDue = ids.mint()
-	module.appendOp(loopBody, op: StdOp.cmp(isDue, lhs: di, rhs: now, pred: StdCmpPred.le, operandType: StdType.i64))
-	module.setTerminator(loopBody, op: StdOp.condBranch(isDue, thenBlockId: fire.id, elseBlockId: advance.id))
+	// checkDue: the root is the earliest `(deadline, seq)` in the store, so a root that is not due ends the
+	// walk — nothing below it can be due either. Index 0 sits at offset 0, so the base IS its address.
+	let rootDeadline = emitLoadField(module, block: checkDue, record: heapBase, offset: TimerOffDeadline, ids: ids)
+	let isDue = emitCmp(module, block: checkDue, a: rootDeadline, b: now, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(checkDue, op: StdOp.condBranch(isDue, thenBlockId: popRoot.id, elseBlockId: doneBlock.id))
 
-	// advance: not due → loopHdr(i+1, count, owesWake).
-	let oneAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.const(oneAdv, value: 1, valueType: StdType.i64))
-	let iAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.binOp(iAdv, lhs: i, rhs: oneAdv, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(advance, op: StdOp.branch(loopHdr.id))
-	advance.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: threeArgs(iAdv, second: count, third: owesWake)))
+	// popRoot: take the root's entry and shrink the live region by one. When it WAS the last entry there is
+	// nothing to move over the hole and nothing to sift.
+	let root = emitTimerEntryLoad(module, block: popRoot, ids: ids, addr: heapBase)
+	let oneConst = emitConst(module, block: popRoot, value: 1, ids: ids)
+	let newCount = emitBin(module, block: popRoot, a: count, b: oneConst, opcode: StdBinOpcode.sub, ids: ids)
+	let heapNowEmpty = emitCmp(module, block: popRoot, a: newCount, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(popRoot, op: StdOp.condBranch(heapNowEmpty, thenBlockId: fire.id, elseBlockId: moveLast.id))
 
-	// fire: gt = heap[i].gt; gt.status = ready; skip the publish when gt drives itself — see
+	// moveLast: the last live entry fills the root's hole and sifts down to its place — the standard pop. The
+	// sift chain runs to `fire`, so the GT is woken only once the store is a heap again.
+	let lastAddr = emitTimerEntryAddr(module, block: moveLast, ids: ids, heapBase: heapBase, index: newCount)
+	let last = emitTimerEntryLoad(module, block: moveLast, ids: ids, addr: lastAddr)
+	emitTimerEntryStore(module, block: moveLast, addr: heapBase, entry: last)
+	emitTimerSiftDown(module, func: func, ids: ids, startBlock: moveLast, heapBase: heapBase, count: newCount, startIndex: zeroConst, cont: fire)
+
+	// fire: the popped GT becomes runnable; skip the publish when it drives itself — see
 	// `emitGtIsSchedulerContext` for why that question is about the GT and not about this M.
-	let fireEntrySizeConst = ids.mint()
-	module.appendOp(fire, op: StdOp.const(fireEntrySizeConst, value: TimerEntrySize, valueType: StdType.i64))
-	let fireOff = ids.mint()
-	module.appendOp(fire, op: StdOp.binOp(fireOff, lhs: i, rhs: fireEntrySizeConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let fireEntryAddr = ids.mint()
-	module.appendOp(fire, op: StdOp.binOp(fireEntryAddr, lhs: heapBase, rhs: fireOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let gt = ids.mint()
-	module.appendOp(fire, op: StdOp.loadIndirect(gt, addrId: fireEntryAddr, offset: TimerOffGt, valueType: StdType.i64))
-	let readyConst = ids.mint()
-	module.appendOp(fire, op: StdOp.const(readyConst, value: GtStatusReady, valueType: StdType.i64))
-	module.appendOp(fire, op: StdOp.storeIndirect(gt, offset: GtOffStatus, valueId: readyConst, valueType: StdType.i64))
-	let firesItself = emitGtIsSchedulerContext(module, block: fire, gt: gt, ids: ids)
+	let readyConst = emitConst(module, block: fire, value: GtStatusReady, ids: ids)
+	emitStoreField(module, block: fire, record: root.gt, offset: GtOffStatus, value: readyConst)
+	let firesItself = emitGtIsSchedulerContext(module, block: fire, gt: root.gt, ids: ids)
 	module.setTerminator(fire, op: StdOp.condBranch(firesItself, thenBlockId: afterFire.id, elseBlockId: doEnqueue.id))
 
 	// doEnqueue: publish the woken thread on whichever queue its KIND belongs to (SV1) — its owner's
 	// coroutine queue, or this P's ring for a green thread. This walk already holds `__sched_lock`, which is
 	// exactly the lock `__sched_publish_locked` requires of its caller, so the publish rides the critical
 	// section it is already inside rather than taking one of its own — and answers whether a wake is owed.
-	let firePublished = emitSchedPublishLocked(module, block: doEnqueue, gt: gt, ids: ids)
+	//
+	// ⭐ The order these publishes happen in IS the order the threads resume in, which is what makes the
+	// pop-min above observable at all: the ring is FIFO, so deadline order here is deadline order there.
+	let firePublished = emitSchedPublishLocked(module, block: doEnqueue, gt: root.gt, ids: ids)
 	let fireNowOwes = emitBin(module, block: doEnqueue, a: owesWake, b: firePublished, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(doEnqueue, op: StdOp.branch(afterFire.id))
 
-	// afterFire(owesWakeAfter): remove entry i — copy the last live entry over it, count--, re-examine i
-	// (don't advance). Its block argument is the wake debt, because its two predecessors disagree about it:
-	// the self-driving arm published nothing, the enqueue arm may have published a green thread.
+	// afterFire(owesWakeAfter): the pop is complete — go round with the shrunken heap. Its block argument is
+	// the wake debt, because its two predecessors disagree about it: the self-driving arm published nothing,
+	// the enqueue arm may have published a green thread.
 	let owesWakeAfter = ids.mint()
 	afterFire.blockArgs.push(IrBlockArg.create(owesWakeAfter, argType: StdType.i64))
 	fire.branchEdges.push(BranchEdge.create(afterFire.id, argIds: argsOf(owesWake)))
 	doEnqueue.branchEdges.push(BranchEdge.create(afterFire.id, argIds: argsOf(fireNowOwes)))
-	let oneRem = ids.mint()
-	module.appendOp(afterFire, op: StdOp.const(oneRem, value: 1, valueType: StdType.i64))
-	let newCount = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let afEntrySize = ids.mint()
-	module.appendOp(afterFire, op: StdOp.const(afEntrySize, value: TimerEntrySize, valueType: StdType.i64))
-	let lastOff = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(lastOff, lhs: newCount, rhs: afEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let lastAddr = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(lastAddr, lhs: heapBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let curOff = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(curOff, lhs: i, rhs: afEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let holeAddr = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(holeAddr, lhs: heapBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	// Copy the last entry (deadline, gt) into the hole — the shared swap-down (Finding 3).
-	emitTimerSwapDown(module, block: afterFire, ids: ids, lastAddr: lastAddr, holeAddr: holeAddr)
 	module.setTerminator(afterFire, op: StdOp.branch(loopHdr.id))
-	afterFire.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: threeArgs(i, second: newCount, third: owesWakeAfter)))
+	afterFire.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(newCount, second: owesWakeAfter)))
 
 	// done(count, owesWake): publish the surviving entry count, release, and only THEN wake — see
-	// `emitSchedWakeIfOwed`, which carries why the release has to come first.
+	// `emitSchedWakeIfOwed`, which carries why the release has to come first. Its two predecessors are the
+	// two ways the walk ends: an emptied heap and a root that is not due yet.
 	let doneCount = ids.mint()
 	let doneOwesWake = ids.mint()
 	doneBlock.blockArgs.push(IrBlockArg.create(doneCount, argType: StdType.i64))
 	doneBlock.blockArgs.push(IrBlockArg.create(doneOwesWake, argType: StdType.i64))
 	loopHdr.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: twoArgs(count, second: owesWake)))
-	let doneCountAddr = ids.mint()
-	module.appendOp(doneBlock, op: StdOp.globalAddr(doneCountAddr, label: GtTimerCountLabel))
-	module.appendOp(doneBlock, op: StdOp.storeIndirect(doneCountAddr, offset: 0, valueId: doneCount, valueType: StdType.i64))
+	checkDue.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: twoArgs(count, second: owesWake)))
+	emitStoreGlobalWord(module, block: doneBlock, label: GtTimerCountLabel, value: doneCount, ids: ids)
 	emitSchedLockLeave(module, block: doneBlock, ids: ids)
 	emitSchedWakeIfOwed(module, cur: doneBlock, owed: doneOwesWake, wake: wakeBlock, cont: retBlock, ids: ids)
 	module.setTerminator(retBlock, op: StdOp.retVoid)
@@ -5389,77 +5502,82 @@ function buildGtRunnerDone(module StdModule)
 	module.functions.push(func)
 end 'buildGtRunnerDone'
 
-// Remove `gt`'s entry from the UNSORTED timer store (swap the last live entry into the hole, count--), then
-// branch to `cont`. Used by `__gt_promise_drop`'s waiting arm. Mirrors `__gt_timer_check`'s afterFire
-// swap-remove, but keyed on `gt == entry.gt` rather than a due deadline. A GT is on the timer at most once,
-// so the first match removes and stops; a GT NOT on the timer (parked on a process instead) scans to the end
-// and branches to `cont` untouched.
+// Remove `gt`'s entry from the timer MIN-HEAP, then branch to `cont`. Used by `__gt_promise_drop`'s waiting
+// arm. Keyed on `gt == entry.gt`, so FINDING the entry is a linear scan and always was: the heap is ordered
+// by `(deadline, seq)` and says nothing about which GT sits where. A GT is on the timer at most once, so the
+// first match removes and stops; a GT NOT on the timer (parked on a process instead) scans to the end and
+// branches to `cont` untouched.
+//
+// ⭐ **REMOVING FROM THE MIDDLE OF A HEAP NEEDS BOTH DIRECTIONS, AND THIS PICKS THE ONE THAT APPLIES.** The
+// last live entry fills the hole, and from there it may be too EARLY for its new parent or too LATE for its
+// new children — never both, because the rest of the array is still a heap. Comparing it against its parent
+// answers which, so exactly one sift walk runs. Removing the last entry itself leaves a heap already.
 function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
 	var scanHdr = module.addBlock(func, label: b"tmscanhdr")
 	var scanBody = module.addBlock(func, label: b"tmscanbody")
 	var advance = module.addBlock(func, label: b"tmadvance")
 	var removeAt = module.addBlock(func, label: b"tmremoveat")
+	var fillHole = module.addBlock(func, label: b"tmfillhole")
+	var parentCmp = module.addBlock(func, label: b"tmparentcmp")
+	var siftUpStart = module.addBlock(func, label: b"tmsiftup")
+	var siftDownStart = module.addBlock(func, label: b"tmsiftdown")
 
 	let countAddr = ids.mint()
 	module.appendOp(startBlock, op: StdOp.globalAddr(countAddr, label: GtTimerCountLabel))
 	let count = ids.mint()
 	module.appendOp(startBlock, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let heapBaseAddr = ids.mint()
-	module.appendOp(startBlock, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
-	let heapBase = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(heapBase, addrId: heapBaseAddr, offset: 0, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(startBlock, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let heapBase = emitLoadGlobalWord(module, block: startBlock, label: GtTimerHeapBaseLabel, ids: ids)
+	let zeroConst = emitConst(module, block: startBlock, value: 0, ids: ids)
 	module.setTerminator(startBlock, op: StdOp.branch(scanHdr.id))
 	startBlock.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
 
 	// scanHdr(i): if i >= count → cont; else inspect entry i.
 	let i = ids.mint()
 	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let atEnd = ids.mint()
-	module.appendOp(scanHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
+	let atEnd = emitCmp(module, block: scanHdr, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: scanBody.id))
 
 	// scanBody: entryGt = heap[i].gt; if it is our GT → removeAt, else → advance.
-	let entrySizeConst = ids.mint()
-	module.appendOp(scanBody, op: StdOp.const(entrySizeConst, value: TimerEntrySize, valueType: StdType.i64))
-	let iOff = ids.mint()
-	module.appendOp(scanBody, op: StdOp.binOp(iOff, lhs: i, rhs: entrySizeConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let entryAddr = ids.mint()
-	module.appendOp(scanBody, op: StdOp.binOp(entryAddr, lhs: heapBase, rhs: iOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let entryGt = ids.mint()
-	module.appendOp(scanBody, op: StdOp.loadIndirect(entryGt, addrId: entryAddr, offset: TimerOffGt, valueType: StdType.i64))
-	let isMatch = ids.mint()
-	module.appendOp(scanBody, op: StdOp.cmp(isMatch, lhs: entryGt, rhs: gt, pred: StdCmpPred.eq, operandType: StdType.i64))
+	let entryAddr = emitTimerEntryAddr(module, block: scanBody, ids: ids, heapBase: heapBase, index: i)
+	let entryGt = emitLoadField(module, block: scanBody, record: entryAddr, offset: TimerOffGt, ids: ids)
+	let isMatch = emitCmp(module, block: scanBody, a: entryGt, b: gt, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(scanBody, op: StdOp.condBranch(isMatch, thenBlockId: removeAt.id, elseBlockId: advance.id))
 
 	// advance: i + 1 → scanHdr.
-	let oneAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.const(oneAdv, value: 1, valueType: StdType.i64))
-	let iAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.binOp(iAdv, lhs: i, rhs: oneAdv, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let oneAdv = emitConst(module, block: advance, value: 1, ids: ids)
+	let iAdv = emitBin(module, block: advance, a: i, b: oneAdv, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(advance, op: StdOp.branch(scanHdr.id))
 	advance.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(iAdv)))
 
-	// removeAt: copy the last live entry (deadline, gt) into slot i, count--. A self-copy when i == last is
-	// harmless. Then stop (a GT is on the timer at most once) → cont.
-	let oneRem = ids.mint()
-	module.appendOp(removeAt, op: StdOp.const(oneRem, value: 1, valueType: StdType.i64))
-	let newCount = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let remEntrySize = ids.mint()
-	module.appendOp(removeAt, op: StdOp.const(remEntrySize, value: TimerEntrySize, valueType: StdType.i64))
-	let lastOff = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(lastOff, lhs: newCount, rhs: remEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let lastAddr = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(lastAddr, lhs: heapBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let curOff = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(curOff, lhs: i, rhs: remEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let holeAddr = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(holeAddr, lhs: heapBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	emitTimerSwapDown(module, block: removeAt, ids: ids, lastAddr: lastAddr, holeAddr: holeAddr)
+	// removeAt: the live region shrinks by one. If `i` WAS the last live slot the array is a heap already.
+	let oneRem = emitConst(module, block: removeAt, value: 1, ids: ids)
+	let newCount = emitBin(module, block: removeAt, a: count, b: oneRem, opcode: StdBinOpcode.sub, ids: ids)
 	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
-	module.setTerminator(removeAt, op: StdOp.branch(cont.id))
+	let removedLast = emitCmp(module, block: removeAt, a: i, b: newCount, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(removeAt, op: StdOp.condBranch(removedLast, thenBlockId: cont.id, elseBlockId: fillHole.id))
+
+	// fillHole: the last live entry fills slot i. At the ROOT there is no parent to compare against, so down
+	// is the only direction it can move.
+	let lastAddr = emitTimerEntryAddr(module, block: fillHole, ids: ids, heapBase: heapBase, index: newCount)
+	let moved = emitTimerEntryLoad(module, block: fillHole, ids: ids, addr: lastAddr)
+	let holeAddr = emitTimerEntryAddr(module, block: fillHole, ids: ids, heapBase: heapBase, index: i)
+	emitTimerEntryStore(module, block: fillHole, addr: holeAddr, entry: moved)
+	let atRoot = emitCmp(module, block: fillHole, a: i, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(fillHole, op: StdOp.condBranch(atRoot, thenBlockId: siftDownStart.id, elseBlockId: parentCmp.id))
+
+	// parentCmp: parent = (i - 1) >> 1 — `i >= 1` on this edge, so the numerator is non-negative and the
+	// logical shift is the halving. The moved entry goes UP iff it beats that parent; otherwise its ancestors
+	// are already in order and only its descendants can be wrong.
+	let parentOne = emitConst(module, block: parentCmp, value: 1, ids: ids)
+	let iMinusOne = emitBin(module, block: parentCmp, a: i, b: parentOne, opcode: StdBinOpcode.sub, ids: ids)
+	let parent = emitBin(module, block: parentCmp, a: iMinusOne, b: parentOne, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let parentAddr = emitTimerEntryAddr(module, block: parentCmp, ids: ids, heapBase: heapBase, index: parent)
+	let parentEntry = emitTimerEntryLoad(module, block: parentCmp, ids: ids, addr: parentAddr)
+	let goesUp = emitTimerEntryBefore(module, block: parentCmp, ids: ids, a: moved, b: parentEntry)
+	module.setTerminator(parentCmp, op: StdOp.condBranch(goesUp, thenBlockId: siftUpStart.id, elseBlockId: siftDownStart.id))
+
+	emitTimerSiftUp(module, func: func, ids: ids, startBlock: siftUpStart, heapBase: heapBase, startIndex: i, cont: cont)
+	emitTimerSiftDown(module, func: func, ids: ids, startBlock: siftDownStart, heapBase: heapBase, count: newCount, startIndex: i, cont: cont)
 end 'emitGtTimerStoreRemove'
 
 // Remove `gt`'s entry from the process store (parallel `procHandles`/`procGts` arrays), CLOSING the child's

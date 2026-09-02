@@ -62,6 +62,25 @@ arm64-macOS — and the others do not, so `SemanticCheck` refuses it with **E310
 the `rejected-on-wasm` and `rejected-on-a-native-target` cases below PIN, and why they carry the inverse marker naming
 only the target they are about.
 
+### Deadline order is the TIMER STORE's answer, not the netpoller's
+
+The paragraph above says threads resume in deadline order *because* the netpoll waits on the earliest
+deadline. That is a true statement about the netpoller and it was, for a while, the whole of the
+implementation's argument — and it is an argument about the CALLER. It says the scheduler usually hands its
+timer walk exactly one due deadline at a time; it says nothing about what the walk does when it is handed
+several at once.
+
+**Several at once is reachable.** A green thread that never yields holds its M for as long as it runs, so
+every deadline that elapses meanwhile is still pending when the scheduler next looks — and so is a machine
+under load, a coarse OS timer, or a park that overslept. In that pass the store, not the netpoller, decides
+who wakes first.
+
+⇒ **the store is a MIN-HEAP keyed on `(deadline, arm sequence)`, and every pass pops it in that order.** The
+rule is total and has no ties left in it: **an earlier deadline resumes first, and among threads whose
+deadlines are equal, the one that armed its timer first resumes first.** `coalesced-pass-fires-in-deadline-order`
+below is the case that holds it, and it is a RED-GATE pin: the store used to be a flat array fired in
+ARMING order, and that case answered `1432` where the rule says `4321`.
+
 ## Tests
 
 <!-- test: async-sleep.basic -->
@@ -131,6 +150,67 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 21
+```
+
+<!-- test: async-sleep.coalesced-pass-fires-in-deadline-order -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- procs: 1 -->
+**FOUR DEADLINES DUE IN ONE PASS, ARMED IN EXACTLY THE WRONG ORDER.** The four sleepers are spawned
+longest-first, so their arming order (400, 300, 200, 100) is the reverse of their deadline order, and a
+fifth thread spawned after them BUSY-WAITS for 600 ms on the clock without ever yielding. Pinned to one
+processor there is one M, so nothing polls the timer store while that thread runs: by the time it returns,
+all four deadlines have elapsed and a single `__gt_timer_check` is handed the whole set. Each sleeper folds
+its tag into a global as it resumes, so the printed number IS the firing order.
+
+⇒ `4321` — deadline order. This is the case `interleave` above cannot reach: there the netpoll wakes on
+each deadline separately, so the walk is handed one entry at a time and its own ordering is never asked.
+Here it is the only thing being asked, and the flat unsorted store it replaced answered **`1432`** —
+firing the 400 ms sleeper first because it had been armed first, then the rest in the order its
+swap-removes happened to leave them.
+
+The busy wait is bounded by `Clock`, not by an iteration count, so it holds the M for 600 ms of real time
+on a fast machine and a slow one alike; 600 ms clears the longest deadline by 200.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Millis = int(0 to u64.max)
+
+var order = 0
+
+function sleeper(ms Millis, tag Integer) returns Integer
+	sleep(ms)
+	order = order * 10 + tag
+	return tag
+end 'sleeper'
+
+function hog(ns DurationNanos) returns Integer
+	let started = Clock.nowNanos()
+	var spins = 0
+	while Clock.elapsedNanos(started) < ns 'spin'
+		spins = spins + 1
+	end 'spin'
+	return spins
+end 'hog'
+
+function main() returns ExitCode
+	let p1 = async sleeper(400, tag: 1)
+	let p2 = async sleeper(300, tag: 2)
+	let p3 = async sleeper(200, tag: 3)
+	let p4 = async sleeper(100, tag: 4)
+	let busy = async hog(600000000)
+	_ = await p1
+	_ = await p2
+	_ = await p3
+	_ = await p4
+	_ = await busy
+	print("order={order}")
+	return 0
+end 'main'
+```
+```stdout
+order=4321
+```
+```exitcode
+0
 ```
 
 <!-- test: async-sleep.zero -->
