@@ -23,9 +23,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -46,14 +47,15 @@ func @main {
     arm64.movImm x1, 30
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
+    arm64.leaRdata x1, __layout_Array_Int
     arm64.movRegReg x0, x19
-    arm64.bl __managed_pop
+    arm64.bl Array.pop
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
     arm64.b tryok
   tryerr:
-    arm64.movImm x0, -1
+    arm64.movImm x0, 18446744073709551615
     arm64.b trycont
   tryok:
     arm64.b trycont
@@ -61,7 +63,7 @@ func @main {
     arm64.cmp x0, 30
     arm64.cset x0, ne
     arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b ifcont#5
   check:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -71,13 +73,12 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_count
+  ifcont#5:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 2
     arm64.cset x0, ne
     arm64.cbnz x0, cnt
-    arm64.b ifcont
+    arm64.b ifcont#7
   cnt:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
@@ -87,7 +88,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#7:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref

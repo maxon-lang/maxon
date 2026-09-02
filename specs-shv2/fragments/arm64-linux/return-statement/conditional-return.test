@@ -1,5 +1,5 @@
 // Test: conditional-return
-function firstOver(x int) returns int
+function firstOver(x Integer) returns Integer
 	if x > 3 'check'
 		return 1
 	end 'check'
@@ -17,51 +17,45 @@ function main() returns ExitCode
 
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @firstOver {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 3
-    arm64.cset x0, gt
-    arm64.cbnz x0, check
-    arm64.b ifcont
-  check:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 5
-    arm64.bl firstOver
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.b check
+  check:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#5
+  __il_cont#5:
     arm64.cmp x0, 1
     arm64.cset x0, ne
     arm64.cbnz x0, branchTaken
-    arm64.b ifcont
+    arm64.b ifcont#2
   branchTaken:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 1
-    arm64.bl firstOver
+  ifcont#2:
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#9
+  __il_cont#9:
     arm64.cmp x0, 0
     arm64.cset x0, ne
     arm64.cbnz x0, branchNotTaken
-    arm64.b ifcont
+    arm64.b ifcont#4
   branchNotTaken:
     arm64.movImm x0, 3
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

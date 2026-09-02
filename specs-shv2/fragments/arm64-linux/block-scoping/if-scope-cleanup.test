@@ -17,9 +17,10 @@ end 'main'
 ExitCode: 10
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -36,25 +37,60 @@ func @main {
     arm64.bl __managed_resize
     arm64.movImm x1, 0
     arm64.movImm x2, 10
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow#14
+    arm64.b __im_owned#15
+  __im_owned#15:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow#14
+    arm64.b __im_bounds#16
+  __im_bounds#16:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#14
+    arm64.b __im_buffer#17
+  __im_buffer#17:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#14
+    arm64.b __im_viewed#18
+  __im_viewed#18:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow#14
+    arm64.b __im_store#19
+  __im_slow#14:
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
+    arm64.b __im_cont#13
+  __im_store#19:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#13
+  __im_cont#13:
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_rec_1
-    arm64.movImm x0, 134
-    arm64.syscall 94
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at if-scope-cleanup.test:8: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  tryok:
-    arm64.movImm x0, 1
-    arm64.cbnz x0, block
-    arm64.b ifcont
+  tryok#1:
+    arm64.b block
   block:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -65,42 +101,125 @@ func @main {
     arm64.bl __managed_resize
     arm64.movImm x1, 0
     arm64.movImm x2, 20
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow#21
+    arm64.b __im_owned#22
+  __im_owned#22:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow#21
+    arm64.b __im_bounds#23
+  __im_bounds#23:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#21
+    arm64.b __im_buffer#24
+  __im_buffer#24:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#21
+    arm64.b __im_viewed#25
+  __im_viewed#25:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow#21
+    arm64.b __im_store#26
+  __im_slow#21:
     arm64.movRegReg x0, x20
     arm64.bl __managed_set
+    arm64.b __im_cont#20
+  __im_store#26:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#20
+  __im_cont#20:
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_rec_1
-    arm64.movImm x0, 134
-    arm64.syscall 94
+    arm64.cbnz x0, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at if-scope-cleanup.test:12: test invariant: set OOB\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  tryok:
+  tryok#4:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.b ifcont
   ifcont:
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#28
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#31
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#28
+    arm64.b critsplit#32
+  __im_slow#28:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
+    arm64.b __im_cont#27
+  critsplit#32:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#27
+  critsplit#31:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#27
+  __im_cont#27:
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
     arm64.movImm x20, 0
     arm64.b trycont
-  tryok:
+  tryok#7:
     arm64.movRegReg x20, x0
     arm64.b trycont
   trycont:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at if-scope-cleanup.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

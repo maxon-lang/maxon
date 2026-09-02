@@ -16,10 +16,18 @@ end 'perms'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if perms(1) == 31 'a' n = n + 1 end 'a'
-	if perms(3) == 28 'b' n = n + 1 end 'b'
-	if perms(5) == 16 'c' n = n + 1 end 'c'
-	if perms(6) == 0 'd' n = n + 1 end 'd'
+	if perms(1) == 31 'a'
+		n = n + 1
+	end 'a'
+	if perms(3) == 28 'b'
+		n = n + 1
+	end 'b'
+	if perms(5) == 16 'c'
+		n = n + 1
+	end 'c'
+	if perms(6) == 0 'd'
+		n = n + 1
+	end 'd'
 	return n as ExitCode
 end 'main'
 ---
@@ -28,56 +36,74 @@ ExitCode: 4
 func @perms {
   entry:
     arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#9
+    arm64.b __rc_chk#10
+  __rc_chk#10:
+    arm64.movImm x16, 1000000
+    arm64.cmp x0, x16
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#9
+    arm64.b __rc_ok#8
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.fallthrough-tree-carried.test:4: Range check failed: value outside typealias 'N'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#8:
     arm64.movImm x1, 0
     arm64.sub x0, x0, 1
-    arm64.jumpTable x0, default=matchdefault [[0]=matcharm, [1]=critsplit, [2]=critsplit, [3]=critsplit, [4]=critsplit] @__jumptable_1
+    arm64.jumpTable x0, default=matchdefault [[0]=matcharm#1, [1]=critsplit#14, [2]=critsplit#15, [3]=critsplit#16, [4]=critsplit#17] @__jumptable_3
   matchdefault:
     arm64.movImm x0, 0
     arm64.b matchcont
-  matcharm:
+  matcharm#1:
     arm64.add x0, x1, 1
-    arm64.b matcharm
-  critsplit:
+    arm64.b matcharm#2
+  critsplit#14:
     arm64.movRegReg x0, x1
-    arm64.b matcharm
-  matcharm:
+    arm64.b matcharm#2
+  matcharm#2:
     arm64.add x0, x0, 2
-    arm64.b matcharm
-  critsplit:
+    arm64.b matcharm#3
+  critsplit#15:
     arm64.movRegReg x0, x1
-    arm64.b matcharm
-  matcharm:
+    arm64.b matcharm#3
+  matcharm#3:
     arm64.add x0, x0, 4
-    arm64.b matcharm
-  critsplit:
+    arm64.b matcharm#4
+  critsplit#16:
     arm64.movRegReg x0, x1
-    arm64.b matcharm
-  matcharm:
+    arm64.b matcharm#4
+  matcharm#4:
     arm64.add x0, x0, 8
-    arm64.b matcharm
-  critsplit:
+    arm64.b matcharm#5
+  critsplit#17:
     arm64.movRegReg x0, x1
-    arm64.b matcharm
-  matcharm:
+    arm64.b matcharm#5
+  matcharm#5:
     arm64.add x0, x0, 16
     arm64.b matchcont
   matchcont:
     arm64.cmp x0, 0
     arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x0, 1000000
+    arm64.cbnz x1, __rc_panic#12
+    arm64.b __rc_chk#13
+  __rc_chk#13:
+    arm64.movImm x16, 1000000
+    arm64.cmp x0, x16
     arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.movImm x0, 1
-    arm64.syscall 94
+    arm64.cbnz x1, __rc_panic#12
+    arm64.b __rc_ok#11
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch.fallthrough-tree-carried.test:14: Range check failed: value outside typealias 'N'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  __rc_ok:
+  __rc_ok#11:
     arm64.epilogue 16
     arm64.ret
 }
@@ -92,50 +118,80 @@ func @main {
     arm64.cmp x0, 31
     arm64.cset x0, eq
     arm64.cbnz x0, a
-    arm64.b critsplit
+    arm64.b critsplit#15
   a:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.movImm x19, 1
+    arm64.b ifcont#2
+  critsplit#15:
+    arm64.b ifcont#2
+  ifcont#2:
     arm64.movImm x0, 3
     arm64.bl perms
     arm64.cmp x0, 28
     arm64.cset x0, eq
     arm64.cbnz x0, b
-    arm64.b critsplit
+    arm64.b critsplit#16
   b:
     arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#4
+  critsplit#16:
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movImm x0, 5
     arm64.bl perms
     arm64.cmp x0, 16
     arm64.cset x0, eq
     arm64.cbnz x0, c
-    arm64.b critsplit
+    arm64.b critsplit#17
   c:
     arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#6
+  critsplit#17:
+    arm64.b ifcont#6
+  ifcont#6:
     arm64.movImm x0, 6
     arm64.bl perms
     arm64.cmp x0, 0
     arm64.cset x0, eq
     arm64.cbnz x0, d
-    arm64.b critsplit
+    arm64.b critsplit#18
   d:
     arm64.add x0, x19, 1
-    arm64.b ifcont
-  critsplit:
+    arm64.b ifcont#8
+  critsplit#18:
     arm64.movRegReg x0, x19
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#10
+    arm64.b __rc_chk#11
+  __rc_chk#11:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#10
+    arm64.b __rc_ok#9
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at dispatch.fallthrough-tree-carried.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#9:
+    arm64.cbnz x1, __rc_panic#13
+    arm64.b __rc_chk#14
+  __rc_chk#14:
+    arm64.cbnz x2, __rc_panic#13
+    arm64.b __rc_ok#12
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at dispatch.fallthrough-tree-carried.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#12:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

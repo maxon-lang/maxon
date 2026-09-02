@@ -1,5 +1,5 @@
 // Test: dispatch.dense-scalar-range-arm
-function scalar(x int) returns int
+function scalar(x Integer) returns Integer
 	return match x 'm'
 		0 gives 100
 		1 gives 101
@@ -15,162 +15,386 @@ function main() returns ExitCode
 	// hole. Every covered value hits its arm; the hole, the two just-outside-span neighbours, a negative,
 	// and a far value all fall to the default.
 	var n = 0 as ExitCode
-	if scalar(0) == 100 'a' n = n + 1 end 'a'
-	if scalar(3) == 102 'b' n = n + 1 end 'b'
-	if scalar(4) == 102 'c' n = n + 1 end 'c'
-	if scalar(5) == 105 'd' n = n + 1 end 'd'
-	if scalar(6) == 999 'e' n = n + 1 end 'e'
-	if scalar(7) == 107 'f' n = n + 1 end 'f'
-	if scalar(8) == 999 'g' n = n + 1 end 'g'
-	if scalar(-1) == 999 'h' n = n + 1 end 'h'
-	if scalar(100000) == 999 'i' n = n + 1 end 'i'
+	if scalar(0) == 100 'a'
+		n = n + 1
+	end 'a'
+	if scalar(3) == 102 'b'
+		n = n + 1
+	end 'b'
+	if scalar(4) == 102 'c'
+		n = n + 1
+	end 'c'
+	if scalar(5) == 105 'd'
+		n = n + 1
+	end 'd'
+	if scalar(6) == 999 'e'
+		n = n + 1
+	end 'e'
+	if scalar(7) == 107 'f'
+		n = n + 1
+	end 'f'
+	if scalar(8) == 999 'g'
+		n = n + 1
+	end 'g'
+	if scalar(-1) == 999 'h'
+		n = n + 1
+	end 'h'
+	if scalar(100000) == 999 'i'
+		n = n + 1
+	end 'i'
 	return n as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 9
 ---
-func @scalar {
-  entry:
-    arm64.prologue 16
-    arm64.jumpTable x0, default=matchdefault [[0]=matcharm, [1]=matcharm, [2..4]=matcharm, [5]=matcharm, [6]=matchdefault, [7]=matcharm] @__jumptable_0
-  matchdefault:
-    arm64.movImm x0, 999
-    arm64.b matchcont
-  matcharm:
-    arm64.movImm x0, 100
-    arm64.b matchcont
-  matcharm:
-    arm64.movImm x0, 101
-    arm64.b matchcont
-  matcharm:
-    arm64.movImm x0, 102
-    arm64.b matchcont
-  matcharm:
-    arm64.movImm x0, 105
-    arm64.b matchcont
-  matcharm:
-    arm64.movImm x0, 107
-    arm64.b matchcont
-  matchcont:
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 0
+    arm64.prologue 16
     arm64.movImm x0, 0
-    arm64.bl scalar
-    arm64.cmp x0, 100
-    arm64.cset x0, eq
-    arm64.cbnz x0, a
-    arm64.b critsplit
+    arm64.movImm x1, 0
+    arm64.b __il_body#26
+  __il_body#26:
+    arm64.jumpTable x1, default=matchdefault#32 [[0]=matcharm#27, [1]=matcharm#28, [2..4]=matcharm#29, [5]=matcharm#30, [6]=matchdefault#32, [7]=matcharm#31] @__jumptable_1
+  matchdefault#32:
+    arm64.movImm x1, 999
+    arm64.b matchcont#33
+  matcharm#27:
+    arm64.movImm x1, 100
+    arm64.b matchcont#33
+  matcharm#28:
+    arm64.movImm x1, 101
+    arm64.b matchcont#33
+  matcharm#29:
+    arm64.movImm x1, 102
+    arm64.b matchcont#33
+  matcharm#30:
+    arm64.movImm x1, 105
+    arm64.b matchcont#33
+  matcharm#31:
+    arm64.movImm x1, 107
+    arm64.b matchcont#33
+  matchcont#33:
+    arm64.b __il_cont#25
+  __il_cont#25:
+    arm64.cmp x1, 100
+    arm64.cset x1, eq
+    arm64.cbnz x1, a
+    arm64.b critsplit#106
   a:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 3
-    arm64.bl scalar
-    arm64.cmp x0, 102
-    arm64.cset x0, eq
-    arm64.cbnz x0, b
-    arm64.b critsplit
+    arm64.movImm x0, 1
+    arm64.b ifcont#2
+  critsplit#106:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.movImm x1, 3
+    arm64.b __il_body#35
+  __il_body#35:
+    arm64.jumpTable x1, default=matchdefault#41 [[0]=matcharm#36, [1]=matcharm#37, [2..4]=matcharm#38, [5]=matcharm#39, [6]=matchdefault#41, [7]=matcharm#40] @__jumptable_2
+  matchdefault#41:
+    arm64.movImm x1, 999
+    arm64.b matchcont#42
+  matcharm#36:
+    arm64.movImm x1, 100
+    arm64.b matchcont#42
+  matcharm#37:
+    arm64.movImm x1, 101
+    arm64.b matchcont#42
+  matcharm#38:
+    arm64.movImm x1, 102
+    arm64.b matchcont#42
+  matcharm#39:
+    arm64.movImm x1, 105
+    arm64.b matchcont#42
+  matcharm#40:
+    arm64.movImm x1, 107
+    arm64.b matchcont#42
+  matchcont#42:
+    arm64.b __il_cont#34
+  __il_cont#34:
+    arm64.cmp x1, 102
+    arm64.cset x1, eq
+    arm64.cbnz x1, b
+    arm64.b critsplit#107
   b:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 4
-    arm64.bl scalar
-    arm64.cmp x0, 102
-    arm64.cset x0, eq
-    arm64.cbnz x0, c
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#4
+  critsplit#107:
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.movImm x1, 4
+    arm64.b __il_body#44
+  __il_body#44:
+    arm64.jumpTable x1, default=matchdefault#50 [[0]=matcharm#45, [1]=matcharm#46, [2..4]=matcharm#47, [5]=matcharm#48, [6]=matchdefault#50, [7]=matcharm#49] @__jumptable_3
+  matchdefault#50:
+    arm64.movImm x1, 999
+    arm64.b matchcont#51
+  matcharm#45:
+    arm64.movImm x1, 100
+    arm64.b matchcont#51
+  matcharm#46:
+    arm64.movImm x1, 101
+    arm64.b matchcont#51
+  matcharm#47:
+    arm64.movImm x1, 102
+    arm64.b matchcont#51
+  matcharm#48:
+    arm64.movImm x1, 105
+    arm64.b matchcont#51
+  matcharm#49:
+    arm64.movImm x1, 107
+    arm64.b matchcont#51
+  matchcont#51:
+    arm64.b __il_cont#43
+  __il_cont#43:
+    arm64.cmp x1, 102
+    arm64.cset x1, eq
+    arm64.cbnz x1, c
+    arm64.b critsplit#108
   c:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 5
-    arm64.bl scalar
-    arm64.cmp x0, 105
-    arm64.cset x0, eq
-    arm64.cbnz x0, d
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#6
+  critsplit#108:
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.movImm x1, 5
+    arm64.b __il_body#53
+  __il_body#53:
+    arm64.jumpTable x1, default=matchdefault#59 [[0]=matcharm#54, [1]=matcharm#55, [2..4]=matcharm#56, [5]=matcharm#57, [6]=matchdefault#59, [7]=matcharm#58] @__jumptable_4
+  matchdefault#59:
+    arm64.movImm x1, 999
+    arm64.b matchcont#60
+  matcharm#54:
+    arm64.movImm x1, 100
+    arm64.b matchcont#60
+  matcharm#55:
+    arm64.movImm x1, 101
+    arm64.b matchcont#60
+  matcharm#56:
+    arm64.movImm x1, 102
+    arm64.b matchcont#60
+  matcharm#57:
+    arm64.movImm x1, 105
+    arm64.b matchcont#60
+  matcharm#58:
+    arm64.movImm x1, 107
+    arm64.b matchcont#60
+  matchcont#60:
+    arm64.b __il_cont#52
+  __il_cont#52:
+    arm64.cmp x1, 105
+    arm64.cset x1, eq
+    arm64.cbnz x1, d
+    arm64.b critsplit#109
   d:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 6
-    arm64.bl scalar
-    arm64.cmp x0, 999
-    arm64.cset x0, eq
-    arm64.cbnz x0, e
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#8
+  critsplit#109:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.movImm x1, 6
+    arm64.b __il_body#62
+  __il_body#62:
+    arm64.jumpTable x1, default=matchdefault#68 [[0]=matcharm#63, [1]=matcharm#64, [2..4]=matcharm#65, [5]=matcharm#66, [6]=matchdefault#68, [7]=matcharm#67] @__jumptable_5
+  matchdefault#68:
+    arm64.movImm x1, 999
+    arm64.b matchcont#69
+  matcharm#63:
+    arm64.movImm x1, 100
+    arm64.b matchcont#69
+  matcharm#64:
+    arm64.movImm x1, 101
+    arm64.b matchcont#69
+  matcharm#65:
+    arm64.movImm x1, 102
+    arm64.b matchcont#69
+  matcharm#66:
+    arm64.movImm x1, 105
+    arm64.b matchcont#69
+  matcharm#67:
+    arm64.movImm x1, 107
+    arm64.b matchcont#69
+  matchcont#69:
+    arm64.b __il_cont#61
+  __il_cont#61:
+    arm64.cmp x1, 999
+    arm64.cset x1, eq
+    arm64.cbnz x1, e
+    arm64.b critsplit#110
   e:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 7
-    arm64.bl scalar
-    arm64.cmp x0, 107
-    arm64.cset x0, eq
-    arm64.cbnz x0, f
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#10
+  critsplit#110:
+    arm64.b ifcont#10
+  ifcont#10:
+    arm64.movImm x1, 7
+    arm64.b __il_body#71
+  __il_body#71:
+    arm64.jumpTable x1, default=matchdefault#77 [[0]=matcharm#72, [1]=matcharm#73, [2..4]=matcharm#74, [5]=matcharm#75, [6]=matchdefault#77, [7]=matcharm#76] @__jumptable_6
+  matchdefault#77:
+    arm64.movImm x1, 999
+    arm64.b matchcont#78
+  matcharm#72:
+    arm64.movImm x1, 100
+    arm64.b matchcont#78
+  matcharm#73:
+    arm64.movImm x1, 101
+    arm64.b matchcont#78
+  matcharm#74:
+    arm64.movImm x1, 102
+    arm64.b matchcont#78
+  matcharm#75:
+    arm64.movImm x1, 105
+    arm64.b matchcont#78
+  matcharm#76:
+    arm64.movImm x1, 107
+    arm64.b matchcont#78
+  matchcont#78:
+    arm64.b __il_cont#70
+  __il_cont#70:
+    arm64.cmp x1, 107
+    arm64.cset x1, eq
+    arm64.cbnz x1, f
+    arm64.b critsplit#111
   f:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 8
-    arm64.bl scalar
-    arm64.cmp x0, 999
-    arm64.cset x0, eq
-    arm64.cbnz x0, g
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#12
+  critsplit#111:
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.movImm x1, 8
+    arm64.b __il_body#80
+  __il_body#80:
+    arm64.jumpTable x1, default=matchdefault#86 [[0]=matcharm#81, [1]=matcharm#82, [2..4]=matcharm#83, [5]=matcharm#84, [6]=matchdefault#86, [7]=matcharm#85] @__jumptable_7
+  matchdefault#86:
+    arm64.movImm x1, 999
+    arm64.b matchcont#87
+  matcharm#81:
+    arm64.movImm x1, 100
+    arm64.b matchcont#87
+  matcharm#82:
+    arm64.movImm x1, 101
+    arm64.b matchcont#87
+  matcharm#83:
+    arm64.movImm x1, 102
+    arm64.b matchcont#87
+  matcharm#84:
+    arm64.movImm x1, 105
+    arm64.b matchcont#87
+  matcharm#85:
+    arm64.movImm x1, 107
+    arm64.b matchcont#87
+  matchcont#87:
+    arm64.b __il_cont#79
+  __il_cont#79:
+    arm64.cmp x1, 999
+    arm64.cset x1, eq
+    arm64.cbnz x1, g
+    arm64.b critsplit#112
   g:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, -1
-    arm64.bl scalar
-    arm64.cmp x0, 999
-    arm64.cset x0, eq
-    arm64.cbnz x0, h
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#14
+  critsplit#112:
+    arm64.b ifcont#14
+  ifcont#14:
+    arm64.movImm x1, 18446744073709551615
+    arm64.b __il_body#89
+  __il_body#89:
+    arm64.jumpTable x1, default=matchdefault#95 [[0]=matcharm#90, [1]=matcharm#91, [2..4]=matcharm#92, [5]=matcharm#93, [6]=matchdefault#95, [7]=matcharm#94] @__jumptable_8
+  matchdefault#95:
+    arm64.movImm x1, 999
+    arm64.b matchcont#96
+  matcharm#90:
+    arm64.movImm x1, 100
+    arm64.b matchcont#96
+  matcharm#91:
+    arm64.movImm x1, 101
+    arm64.b matchcont#96
+  matcharm#92:
+    arm64.movImm x1, 102
+    arm64.b matchcont#96
+  matcharm#93:
+    arm64.movImm x1, 105
+    arm64.b matchcont#96
+  matcharm#94:
+    arm64.movImm x1, 107
+    arm64.b matchcont#96
+  matchcont#96:
+    arm64.b __il_cont#88
+  __il_cont#88:
+    arm64.cmp x1, 999
+    arm64.cset x1, eq
+    arm64.cbnz x1, h
+    arm64.b critsplit#113
   h:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 100000
-    arm64.bl scalar
-    arm64.cmp x0, 999
-    arm64.cset x0, eq
-    arm64.cbnz x0, i
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#16
+  critsplit#113:
+    arm64.b ifcont#16
+  ifcont#16:
+    arm64.movImm x1, 100000
+    arm64.b __il_body#98
+  __il_body#98:
+    arm64.jumpTable x1, default=matchdefault#104 [[0]=matcharm#99, [1]=matcharm#100, [2..4]=matcharm#101, [5]=matcharm#102, [6]=matchdefault#104, [7]=matcharm#103] @__jumptable_9
+  matchdefault#104:
+    arm64.movImm x1, 999
+    arm64.b matchcont#105
+  matcharm#99:
+    arm64.movImm x1, 100
+    arm64.b matchcont#105
+  matcharm#100:
+    arm64.movImm x1, 101
+    arm64.b matchcont#105
+  matcharm#101:
+    arm64.movImm x1, 102
+    arm64.b matchcont#105
+  matcharm#102:
+    arm64.movImm x1, 105
+    arm64.b matchcont#105
+  matcharm#103:
+    arm64.movImm x1, 107
+    arm64.b matchcont#105
+  matchcont#105:
+    arm64.b __il_cont#97
+  __il_cont#97:
+    arm64.cmp x1, 999
+    arm64.cset x1, eq
+    arm64.cbnz x1, i
+    arm64.b critsplit#114
   i:
-    arm64.add x0, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.movRegReg x0, x19
-    arm64.b ifcont
-  ifcont:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.add x0, x0, 1
+    arm64.b ifcont#18
+  critsplit#114:
+    arm64.b ifcont#18
+  ifcont#18:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#20
+    arm64.b __rc_chk#21
+  __rc_chk#21:
+    arm64.cmp x0, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __rc_panic#20
+    arm64.b __rc_ok#19
+  __rc_panic#20:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.dense-scalar-range-arm.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#19:
+    arm64.cbnz x1, __rc_panic#23
+    arm64.b __rc_chk#24
+  __rc_chk#24:
+    arm64.cbnz x2, __rc_panic#23
+    arm64.b __rc_ok#22
+  __rc_panic#23:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.dense-scalar-range-arm.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#22:
+    arm64.epilogue 16
     arm64.ret
 }

@@ -10,9 +10,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -28,27 +29,27 @@ func @main {
     arm64.storeSlotReg slot3, x21
     arm64.storeSlotReg slot2, x20
     arm64.storeSlotReg slot1, x19
-    arm64.leaRdata x0, __str_rec_1
-    arm64.leaRdata x1, __str_rec_3
-    arm64.leaRdata x2, __str_rec_5
+    arm64.leaRdata x0, __str_rec_4  ; "A"
+    arm64.leaRdata x1, __str_rec_5  ; "B"
+    arm64.leaRdata x2, __str_rec_6  ; "C"
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x21, [x1 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x1 + 8]
     arm64.loadRegBaseDisp.word64 x23, [x2 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x2 + 8]
-    arm64.leaRdata x0, __str_rec_7
+    arm64.leaRdata x0, __str_rec_7  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.add x0, x20, x22
     arm64.add x0, x0, x24
     arm64.add x0, x0, x26
     arm64.storeSlotReg slot0, x0
-    arm64.add x0, x0, 49
+    arm64.add x0, x0, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x27, x0
-    arm64.add x28, x27, 48
+    arm64.add x28, x27, 56
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x19
     arm64.movRegReg x2, x20
@@ -72,12 +73,12 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.loadRegSlot x0, slot0
     arm64.storeBaseDispReg.word64 [x27 + 8], x0
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x27 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
     arm64.movRegReg x0, x27
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x0, 0

@@ -5,7 +5,7 @@ enum Fault implements Error
 	broken
 end 'Fault'
 
-function risky(n Code) returns Code throws Fault
+function risky(_ Code) returns Code throws Fault
 	throw Fault.broken
 end 'risky'
 
@@ -26,8 +26,7 @@ ExitCode: 4
 func @risky {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
@@ -64,6 +63,24 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.b whilehdr
   whileexit:
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at error.try-label-block-in-while.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

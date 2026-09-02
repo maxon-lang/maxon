@@ -21,13 +21,27 @@ end 'kind'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if kind(Day.mon) == 1 'a' n = n + 1 end 'a'
-	if kind(Day.tue) == 2 'b' n = n + 1 end 'b'
-	if kind(Day.wed) == 3 'c' n = n + 1 end 'c'
-	if kind(Day.thu) == 3 'd' n = n + 1 end 'd'
-	if kind(Day.fri) == 3 'e' n = n + 1 end 'e'
-	if kind(Day.sat) == 4 'f' n = n + 1 end 'f'
-	if kind(Day.sun) == 5 'g' n = n + 1 end 'g'
+	if kind(Day.mon) == 1 'a'
+		n = n + 1
+	end 'a'
+	if kind(Day.tue) == 2 'b'
+		n = n + 1
+	end 'b'
+	if kind(Day.wed) == 3 'c'
+		n = n + 1
+	end 'c'
+	if kind(Day.thu) == 3 'd'
+		n = n + 1
+	end 'd'
+	if kind(Day.fri) == 3 'e'
+		n = n + 1
+	end 'e'
+	if kind(Day.sat) == 4 'f'
+		n = n + 1
+	end 'f'
+	if kind(Day.sun) == 5 'g'
+		n = n + 1
+	end 'g'
 	return n
 end 'main'
 ---
@@ -36,24 +50,40 @@ ExitCode: 7
 func @kind {
   entry:
     arm64.prologue 16
-    arm64.jumpTable x0, default=matchdead [[0]=matcharm, [1]=matcharm, [2..4]=matcharm, [5]=matcharm, [6]=matcharm] @__jumptable_0
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2..4]=matcharm#3, [5]=matcharm#4, [6]=matcharm#5] @__jumptable_2
   matchdead:
-  matcharm:
+  matcharm#1:
     arm64.movImm x0, 1
     arm64.b matchcont
-  matcharm:
+  matcharm#2:
     arm64.movImm x0, 2
     arm64.b matchcont
-  matcharm:
+  matcharm#3:
     arm64.movImm x0, 3
     arm64.b matchcont
-  matcharm:
+  matcharm#4:
     arm64.movImm x0, 4
     arm64.b matchcont
-  matcharm:
+  matcharm#5:
     arm64.movImm x0, 5
     arm64.b matchcont
   matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.enum-range-arm.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }
@@ -64,90 +94,352 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x0, 0
+    arm64.b __il_body#19
+  __il_body#19:
+    arm64.jumpTable x0, default=matchdead#25 [[0]=matcharm#20, [1]=matcharm#21, [2..4]=matcharm#22, [5]=matcharm#23, [6]=matcharm#24] @__jumptable_3
+  matchdead#25:
+  matcharm#20:
+    arm64.movImm x1, 1
+    arm64.b matchcont#26
+  matcharm#21:
+    arm64.movImm x1, 2
+    arm64.b matchcont#26
+  matcharm#22:
+    arm64.movImm x1, 3
+    arm64.b matchcont#26
+  matcharm#23:
+    arm64.movImm x1, 4
+    arm64.b matchcont#26
+  matcharm#24:
+    arm64.movImm x1, 5
+    arm64.b matchcont#26
+  matchcont#26:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#29
+    arm64.b __rc_chk#28
+  __rc_chk#28:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#29
+    arm64.b __rc_ok#27
+  __il_slow#29:
     arm64.bl kind
+    arm64.b __il_cont#18
+  __rc_ok#27:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#18
+  __il_cont#18:
     arm64.cmp x0, 1
     arm64.cset x0, eq
     arm64.cbnz x0, a
-    arm64.b critsplit
+    arm64.b critsplit#102
   a:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.movImm x19, 1
+    arm64.b ifcont#2
+  critsplit#102:
+    arm64.b ifcont#2
+  ifcont#2:
     arm64.movImm x0, 1
+    arm64.b __il_body#31
+  __il_body#31:
+    arm64.jumpTable x0, default=matchdead#37 [[0]=matcharm#32, [1]=matcharm#33, [2..4]=matcharm#34, [5]=matcharm#35, [6]=matcharm#36] @__jumptable_4
+  matchdead#37:
+  matcharm#32:
+    arm64.movImm x1, 1
+    arm64.b matchcont#38
+  matcharm#33:
+    arm64.movImm x1, 2
+    arm64.b matchcont#38
+  matcharm#34:
+    arm64.movImm x1, 3
+    arm64.b matchcont#38
+  matcharm#35:
+    arm64.movImm x1, 4
+    arm64.b matchcont#38
+  matcharm#36:
+    arm64.movImm x1, 5
+    arm64.b matchcont#38
+  matchcont#38:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#41
+    arm64.b __rc_chk#40
+  __rc_chk#40:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#41
+    arm64.b __rc_ok#39
+  __il_slow#41:
     arm64.bl kind
+    arm64.b __il_cont#30
+  __rc_ok#39:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#30
+  __il_cont#30:
     arm64.cmp x0, 2
     arm64.cset x0, eq
     arm64.cbnz x0, b
-    arm64.b critsplit
+    arm64.b critsplit#103
   b:
     arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#4
+  critsplit#103:
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movImm x0, 2
+    arm64.b __il_body#43
+  __il_body#43:
+    arm64.jumpTable x0, default=matchdead#49 [[0]=matcharm#44, [1]=matcharm#45, [2..4]=matcharm#46, [5]=matcharm#47, [6]=matcharm#48] @__jumptable_5
+  matchdead#49:
+  matcharm#44:
+    arm64.movImm x1, 1
+    arm64.b matchcont#50
+  matcharm#45:
+    arm64.movImm x1, 2
+    arm64.b matchcont#50
+  matcharm#46:
+    arm64.movImm x1, 3
+    arm64.b matchcont#50
+  matcharm#47:
+    arm64.movImm x1, 4
+    arm64.b matchcont#50
+  matcharm#48:
+    arm64.movImm x1, 5
+    arm64.b matchcont#50
+  matchcont#50:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#53
+    arm64.b __rc_chk#52
+  __rc_chk#52:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#53
+    arm64.b __rc_ok#51
+  __il_slow#53:
     arm64.bl kind
+    arm64.b __il_cont#42
+  __rc_ok#51:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#42
+  __il_cont#42:
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.cbnz x0, c
-    arm64.b critsplit
+    arm64.b critsplit#104
   c:
     arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#6
+  critsplit#104:
+    arm64.b ifcont#6
+  ifcont#6:
     arm64.movImm x0, 3
+    arm64.b __il_body#55
+  __il_body#55:
+    arm64.jumpTable x0, default=matchdead#61 [[0]=matcharm#56, [1]=matcharm#57, [2..4]=matcharm#58, [5]=matcharm#59, [6]=matcharm#60] @__jumptable_6
+  matchdead#61:
+  matcharm#56:
+    arm64.movImm x1, 1
+    arm64.b matchcont#62
+  matcharm#57:
+    arm64.movImm x1, 2
+    arm64.b matchcont#62
+  matcharm#58:
+    arm64.movImm x1, 3
+    arm64.b matchcont#62
+  matcharm#59:
+    arm64.movImm x1, 4
+    arm64.b matchcont#62
+  matcharm#60:
+    arm64.movImm x1, 5
+    arm64.b matchcont#62
+  matchcont#62:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#65
+    arm64.b __rc_chk#64
+  __rc_chk#64:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#65
+    arm64.b __rc_ok#63
+  __il_slow#65:
     arm64.bl kind
+    arm64.b __il_cont#54
+  __rc_ok#63:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#54
+  __il_cont#54:
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.cbnz x0, d
-    arm64.b critsplit
+    arm64.b critsplit#105
   d:
     arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#8
+  critsplit#105:
+    arm64.b ifcont#8
+  ifcont#8:
     arm64.movImm x0, 4
+    arm64.b __il_body#67
+  __il_body#67:
+    arm64.jumpTable x0, default=matchdead#73 [[0]=matcharm#68, [1]=matcharm#69, [2..4]=matcharm#70, [5]=matcharm#71, [6]=matcharm#72] @__jumptable_7
+  matchdead#73:
+  matcharm#68:
+    arm64.movImm x1, 1
+    arm64.b matchcont#74
+  matcharm#69:
+    arm64.movImm x1, 2
+    arm64.b matchcont#74
+  matcharm#70:
+    arm64.movImm x1, 3
+    arm64.b matchcont#74
+  matcharm#71:
+    arm64.movImm x1, 4
+    arm64.b matchcont#74
+  matcharm#72:
+    arm64.movImm x1, 5
+    arm64.b matchcont#74
+  matchcont#74:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#77
+    arm64.b __rc_chk#76
+  __rc_chk#76:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#77
+    arm64.b __rc_ok#75
+  __il_slow#77:
     arm64.bl kind
+    arm64.b __il_cont#66
+  __rc_ok#75:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#66
+  __il_cont#66:
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.cbnz x0, e
-    arm64.b critsplit
+    arm64.b critsplit#106
   e:
     arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#10
+  critsplit#106:
+    arm64.b ifcont#10
+  ifcont#10:
     arm64.movImm x0, 5
+    arm64.b __il_body#79
+  __il_body#79:
+    arm64.jumpTable x0, default=matchdead#85 [[0]=matcharm#80, [1]=matcharm#81, [2..4]=matcharm#82, [5]=matcharm#83, [6]=matcharm#84] @__jumptable_8
+  matchdead#85:
+  matcharm#80:
+    arm64.movImm x1, 1
+    arm64.b matchcont#86
+  matcharm#81:
+    arm64.movImm x1, 2
+    arm64.b matchcont#86
+  matcharm#82:
+    arm64.movImm x1, 3
+    arm64.b matchcont#86
+  matcharm#83:
+    arm64.movImm x1, 4
+    arm64.b matchcont#86
+  matcharm#84:
+    arm64.movImm x1, 5
+    arm64.b matchcont#86
+  matchcont#86:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#89
+    arm64.b __rc_chk#88
+  __rc_chk#88:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#89
+    arm64.b __rc_ok#87
+  __il_slow#89:
     arm64.bl kind
+    arm64.b __il_cont#78
+  __rc_ok#87:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#78
+  __il_cont#78:
     arm64.cmp x0, 4
     arm64.cset x0, eq
     arm64.cbnz x0, f
-    arm64.b critsplit
+    arm64.b critsplit#107
   f:
     arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#12
+  critsplit#107:
+    arm64.b ifcont#12
+  ifcont#12:
     arm64.movImm x0, 6
+    arm64.b __il_body#91
+  __il_body#91:
+    arm64.jumpTable x0, default=matchdead#97 [[0]=matcharm#92, [1]=matcharm#93, [2..4]=matcharm#94, [5]=matcharm#95, [6]=matcharm#96] @__jumptable_9
+  matchdead#97:
+  matcharm#92:
+    arm64.movImm x1, 1
+    arm64.b matchcont#98
+  matcharm#93:
+    arm64.movImm x1, 2
+    arm64.b matchcont#98
+  matcharm#94:
+    arm64.movImm x1, 3
+    arm64.b matchcont#98
+  matcharm#95:
+    arm64.movImm x1, 4
+    arm64.b matchcont#98
+  matcharm#96:
+    arm64.movImm x1, 5
+    arm64.b matchcont#98
+  matchcont#98:
+    arm64.cmp x1, 0
+    arm64.cset x2, lt
+    arm64.cbnz x2, __il_slow#101
+    arm64.b __rc_chk#100
+  __rc_chk#100:
+    arm64.cmp x1, 255
+    arm64.cset x2, gt
+    arm64.cbnz x2, __il_slow#101
+    arm64.b __rc_ok#99
+  __il_slow#101:
     arm64.bl kind
+    arm64.b __il_cont#90
+  __rc_ok#99:
+    arm64.movRegReg x0, x1
+    arm64.b __il_cont#90
+  __il_cont#90:
     arm64.cmp x0, 5
     arm64.cset x0, eq
     arm64.cbnz x0, g
-    arm64.b critsplit
+    arm64.b critsplit#108
   g:
     arm64.add x0, x19, 1
-    arm64.b ifcont
-  critsplit:
+    arm64.b ifcont#14
+  critsplit#108:
     arm64.movRegReg x0, x19
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#14
+  ifcont#14:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk#17
+  __rc_chk#17:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok#15
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch.enum-range-arm.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#15:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

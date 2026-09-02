@@ -14,20 +14,20 @@ end 'shrBy'
 function main() returns ExitCode
 	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
 	// answer needs all 64.
-	let narrow = 0 - 8 as I32
-	if narrow shl 29 != shlBy(0 - 8, d: 29) 'signedFoldVsEmitted'
+	let narrow = -8 as I32
+	if narrow shl 29 != shlBy(-8, d: 29) 'signedFoldVsEmitted'
 		return 1
 	end 'signedFoldVsEmitted'
-	if narrow shl 29 != 0 - 4294967296 'signedValue'
+	if narrow shl 29 != -4294967296 'signedValue'
 		return 2
 	end 'signedValue'
 
 	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
 	// `shr 33` would have quietly become `shr 1`.
-	if narrow shr 33 != shrBy(0 - 8, d: 33) 'signedCountFoldVsEmitted'
+	if narrow shr 33 != shrBy(-8, d: 33) 'signedCountFoldVsEmitted'
 		return 3
 	end 'signedCountFoldVsEmitted'
-	if narrow shr 33 != 0 - 1 'signedCountValue'
+	if narrow shr 33 != -1 'signedCountValue'
 		return 4
 	end 'signedCountValue'
 
@@ -45,7 +45,7 @@ function main() returns ExitCode
 
 	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
 	// agree with it rather than merely with each other.
-	let plain = 0 - 8 as Num
+	let plain = -8 as Num
 	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
 		return 8
 	end 'rangedAgreesWithPlain'
@@ -55,172 +55,77 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @shlBy {
-  entry:
-    arm64.prologue 16
-    arm64.and x2, x1, -64
-    arm64.neg x6, x2
-    arm64.orr x2, x2, x6
-    arm64.asr x2, x2, 63
-    arm64.lslv x0, x0, x1
-    arm64.mvn x1, x2
-    arm64.and x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @shrBy {
-  entry:
-    arm64.prologue 16
-    arm64.and x2, x1, -64
-    arm64.neg x6, x2
-    arm64.orr x2, x2, x6
-    arm64.asr x2, x2, 63
-    arm64.orr x1, x1, x2
-    arm64.asrv x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 0
-    arm64.sub x19, x0, 8
-    arm64.lsl x20, x19, 29
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 8
-    arm64.movImm x1, 29
-    arm64.bl shlBy
-    arm64.cmp x20, x0
+    arm64.prologue 16
+    arm64.movImm x0, 18446744069414584320
+    arm64.b __il_body#18
+  __il_body#18:
+    arm64.movImm x1, 18446744069414584320
+    arm64.b __il_cont#17
+  __il_cont#17:
+    arm64.cmp x0, x1
     arm64.cset x0, ne
     arm64.cbnz x0, signedFoldVsEmitted
-    arm64.b ifcont
+    arm64.b ifcont#2
   signedFoldVsEmitted:
     arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.lsl x0, x19, 29
-    arm64.movImm x1, 0
-    arm64.movImm x2, 4294967296
-    arm64.sub x1, x1, x2
-    arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, signedValue
-    arm64.b ifcont
-  signedValue:
-    arm64.movImm x0, 2
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  ifcont:
-    arm64.asr x20, x19, 33
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 8
-    arm64.movImm x1, 33
-    arm64.bl shrBy
-    arm64.cmp x20, x0
+  ifcont#2:
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_body#20
+  __il_body#20:
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.cmp x0, -1
     arm64.cset x0, ne
     arm64.cbnz x0, signedCountFoldVsEmitted
-    arm64.b ifcont
+    arm64.b ifcont#6
   signedCountFoldVsEmitted:
     arm64.movImm x0, 3
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.asr x0, x19, 33
-    arm64.movImm x1, 0
-    arm64.sub x1, x1, 1
+  ifcont#6:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.movImm x0, 18446744065119617024
+    arm64.b __il_body#22
+  __il_body#22:
+    arm64.movImm x1, 18446744065119617024
+    arm64.b __il_cont#21
+  __il_cont#21:
     arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, signedCountValue
-    arm64.b ifcont
-  signedCountValue:
-    arm64.movImm x0, 4
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  ifcont:
-    arm64.movImm x20, 4294967295
-    arm64.lsl x21, x20, 33
-    arm64.movImm x0, 4294967295
-    arm64.movImm x1, 33
-    arm64.bl shlBy
-    arm64.cmp x21, x0
     arm64.cset x0, ne
     arm64.cbnz x0, unsignedFoldVsEmitted
-    arm64.b ifcont
+    arm64.b ifcont#10
   unsignedFoldVsEmitted:
     arm64.movImm x0, 5
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.asr x21, x20, 4
-    arm64.movImm x0, 4294967295
-    arm64.movImm x1, 4
-    arm64.bl shrBy
-    arm64.cmp x21, x0
+  ifcont#10:
+    arm64.movImm x0, 268435455
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.b __il_cont#23
+  __il_cont#23:
+    arm64.movImm x16, 268435455
+    arm64.cmp x0, x16
     arm64.cset x0, ne
     arm64.cbnz x0, unsignedShrFoldVsEmitted
-    arm64.b ifcont
+    arm64.b ifcont#12
   unsignedShrFoldVsEmitted:
     arm64.movImm x0, 6
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.asr x0, x20, 4
-    arm64.cmp x0, 268435455
-    arm64.cset x0, ne
-    arm64.cbnz x0, unsignedShrValue
-    arm64.b ifcont
-  unsignedShrValue:
-    arm64.movImm x0, 7
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 8
-    arm64.lsl x0, x0, 29
-    arm64.lsl x1, x19, 29
-    arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, rangedAgreesWithPlain
-    arm64.b ifcont
-  rangedAgreesWithPlain:
-    arm64.movImm x0, 8
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  ifcont:
+  ifcont#12:
+    arm64.b ifcont#14
+  ifcont#14:
+    arm64.b ifcont#16
+  ifcont#16:
     arm64.movImm x0, 42
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
 }

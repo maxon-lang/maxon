@@ -16,31 +16,55 @@ ExitCode: 0
 ---
 data {
   __data_msg@0 = i64 0
-  __slab_cursor@8 = i64 0
-  __slab_end@16 = i64 0
-  __mm_alloc_count@24 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @bump {
   entry:
-    arm64.prologue 16
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.leaGlobal x0, __data_msg
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.leaRdata x1, __str_rec_1
-    arm64.bl __str_append
-    arm64.epilogue 16
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.leaRdata x20, __str_rec_2  ; "!"
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl String.append
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 
 func @main {
   entry:
-    arm64.prologue 16
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.bl bump
     arm64.bl bump
     arm64.leaGlobal x0, __data_msg
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __print_string
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
     arm64.movImm x0, 0
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
 }

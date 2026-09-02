@@ -31,78 +31,65 @@ end 'main'
 ExitCode: 3
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @directionValue {
-  entry:
-    arm64.prologue 16
-    arm64.jumpTable x0, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm] @__jumptable_0
-  matchdead:
-  matcharm:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  matcharm:
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-  matcharm:
-    arm64.movImm x0, 3
-    arm64.epilogue 16
-    arm64.ret
-  matcharm:
-    arm64.movImm x0, 4
-    arm64.epilogue 16
-    arm64.ret
-  matchcont:
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 2
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x19
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm#1
     arm64.b matchnext
-  matcharm:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-    arm64.bl directionValue
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b __il_body
+  __il_body:
+    arm64.jumpTable x1, default=matchdead#12 [[0]=matcharm#8, [1]=matcharm#9, [2]=matcharm#10, [3]=matcharm#11] @__jumptable_0
+  matchdead#12:
+  matcharm#8:
+    arm64.movImm x19, 1
+    arm64.b __il_cont
+  matcharm#9:
+    arm64.movImm x19, 2
+    arm64.b __il_cont
+  matcharm#10:
+    arm64.movImm x19, 3
+    arm64.b __il_cont
+  matcharm#11:
+    arm64.movImm x19, 4
+    arm64.b __il_cont
+  __il_cont:
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   matchnext:
-    arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
-  matcharm:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchdead#3
+  matcharm#2:
     arm64.movImm x19, 0
-    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  matchdead:
-  matchcont:
+  matchdead#3:
+  matchcont#5:
+  matchcont#13:
 }

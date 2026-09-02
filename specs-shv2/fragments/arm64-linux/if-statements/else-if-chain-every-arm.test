@@ -1,5 +1,5 @@
 // Test: else-if-chain-every-arm
-function classify(x int) returns int
+function classify(x Integer) returns Integer
 	if x == 0 'zero'
 		return 0
 	end 'zero' else if x < 10 'small'
@@ -30,94 +30,87 @@ function main() returns ExitCode
 
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @classify {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, zero
-    arm64.b ifelse
-  zero:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  ifelse:
-    arm64.cmp x0, 10
-    arm64.cset x1, lt
-    arm64.cbnz x1, small
-    arm64.b ifelse
-  small:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  ifelse:
-    arm64.cmp x0, 100
-    arm64.cset x0, lt
-    arm64.cbnz x0, medium
-    arm64.b ifelse
-  medium:
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-  ifelse:
-    arm64.movImm x0, 3
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-  ifcont:
-  ifcont:
-}
-
 func @main {
   entry:
     arm64.prologue 16
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.b zero
+  zero:
     arm64.movImm x0, 0
-    arm64.bl classify
+    arm64.b __il_cont#9
+  __il_cont#9:
     arm64.cmp x0, 0
     arm64.cset x0, ne
     arm64.cbnz x0, zeroArm
-    arm64.b ifcont
+    arm64.b ifcont#2
   zeroArm:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 5
-    arm64.bl classify
+  ifcont#2:
+    arm64.b __il_body#21
+  __il_body#21:
+    arm64.b ifelse#23
+  ifelse#23:
+    arm64.b small
+  small:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#20
+  __il_cont#20:
     arm64.cmp x0, 1
     arm64.cset x0, ne
     arm64.cbnz x0, smallArm
-    arm64.b ifcont
+    arm64.b ifcont#4
   smallArm:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 50
-    arm64.bl classify
+  ifcont#4:
+    arm64.b __il_body#32
+  __il_body#32:
+    arm64.b ifelse#34
+  ifelse#34:
+    arm64.b ifelse#36
+  ifelse#36:
+    arm64.b medium
+  medium:
+    arm64.movImm x0, 2
+    arm64.b __il_cont#31
+  __il_cont#31:
     arm64.cmp x0, 2
     arm64.cset x0, ne
     arm64.cbnz x0, mediumArm
-    arm64.b ifcont
+    arm64.b ifcont#6
   mediumArm:
     arm64.movImm x0, 3
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 200
-    arm64.bl classify
+  ifcont#6:
+    arm64.b __il_body#43
+  __il_body#43:
+    arm64.b ifelse#45
+  ifelse#45:
+    arm64.b ifelse#47
+  ifelse#47:
+    arm64.b ifelse#49
+  ifelse#49:
+    arm64.movImm x0, 3
+    arm64.b __il_cont#42
+  __il_cont#42:
     arm64.cmp x0, 3
     arm64.cset x0, ne
     arm64.cbnz x0, largeArm
-    arm64.b ifcont
+    arm64.b ifcont#8
   largeArm:
     arm64.movImm x0, 4
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#8:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

@@ -1,10 +1,10 @@
 // Test: shr-is-arithmetic
 function main() returns ExitCode
-	let neg = 0 - 8
-	if neg shr 60 != 0 - 1 'sixtyWrong'
+	let neg = -8
+	if neg shr 60 != -1 'sixtyWrong'
 		return 1
 	end 'sixtyWrong'
-	if neg shr 1 != 0 - 4 'oneWrong'
+	if neg shr 1 != -4 'oneWrong'
 		return 2
 	end 'oneWrong'
 	return 42
@@ -15,32 +15,10 @@ ExitCode: 42
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 8
-    arm64.asr x1, x0, 60
-    arm64.movImm x2, 0
-    arm64.sub x2, x2, 1
-    arm64.cmp x1, x2
-    arm64.cset x1, ne
-    arm64.cbnz x1, sixtyWrong
-    arm64.b ifcont
-  sixtyWrong:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.asr x0, x0, 1
-    arm64.movImm x1, 0
-    arm64.sub x1, x1, 4
-    arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, oneWrong
-    arm64.b ifcont
-  oneWrong:
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret

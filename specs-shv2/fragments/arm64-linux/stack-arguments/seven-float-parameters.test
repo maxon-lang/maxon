@@ -1,5 +1,5 @@
 // Test: seven-float-parameters
-function sumf7(a float, b float, c float, d float, e float, f float, g float) returns float
+function sumf7(a Real, b Real, c Real, d Real, e Real, f Real, g Real) returns Real
 	return a + b + c + d + e + f + g
 end 'sumf7'
 
@@ -10,34 +10,19 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 0
 ---
-func @sumf7 {
-  entry:
-    arm64.prologue 16
-    arm64.fadd d0, d0, d1
-    arm64.fadd d0, d0, d2
-    arm64.fadd d0, d0, d3
-    arm64.fadd d0, d0, d4
-    arm64.fadd d0, d0, d5
-    arm64.fadd d0, d0, d6
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
-    arm64.fpLoadRdata d1, [rdata + __fconst_1]
-    arm64.fpLoadRdata d2, [rdata + __fconst_2]
-    arm64.fpLoadRdata d3, [rdata + __fconst_3]
-    arm64.fpLoadRdata d4, [rdata + __fconst_4]
-    arm64.fpLoadRdata d5, [rdata + __fconst_5]
-    arm64.fpLoadRdata d6, [rdata + __fconst_6]
-    arm64.bl sumf7
-    arm64.fpLoadRdata d1, [rdata + __fconst_7]
+    arm64.b __il_body
+  __il_body:
+    arm64.fpLoadRdata d0, [rdata + __fconst_127]
+    arm64.b __il_cont
+  __il_cont:
+    arm64.fpLoadRdata d1, [rdata + __fconst_127]
     arm64.fcmp d0, d1
     arm64.cset x0, eq
     arm64.cbnz x0, ok

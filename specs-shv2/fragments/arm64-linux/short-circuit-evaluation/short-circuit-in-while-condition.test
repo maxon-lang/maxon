@@ -24,9 +24,13 @@ data {
   __data_trace@0 = i64 0
 }
 
-func @check {
+func @main {
   entry:
     arm64.prologue 16
+    arm64.b whilehdr
+  whilehdr:
+    arm64.b __il_body#10
+  __il_body#10:
     arm64.leaGlobal x0, __data_trace
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, 1
@@ -36,34 +40,22 @@ func @check {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 3
     arm64.cset x0, lt
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @alwaysFalse {
-  entry:
-    arm64.prologue 16
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.b __il_body#12
+  __il_body#12:
     arm64.leaGlobal x0, __data_trace
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, 100
     arm64.leaGlobal x1, __data_trace
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.b whilehdr
-  whilehdr:
-    arm64.bl check
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit
-  andrhs:
-    arm64.bl alwaysFalse
+    arm64.b __il_cont#11
+  __il_cont#11:
     arm64.b scmerge
   critsplit:
     arm64.movRegReg x0, x1
@@ -78,6 +70,22 @@ func @main {
   whileexit:
     arm64.leaGlobal x0, __data_trace
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at short-circuit-in-while-condition.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }

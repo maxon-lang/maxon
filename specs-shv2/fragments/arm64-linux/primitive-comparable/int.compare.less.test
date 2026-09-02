@@ -15,61 +15,38 @@ ExitCode: 0
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 10
-    arm64.movImm x1, 20
-    arm64.bl int.compare
+    arm64.b __il_body
+  __il_body:
+    arm64.b lt
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 0
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x1, matcharm#1
+    arm64.b matchnext#5
+  matcharm#1:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  matchnext:
+  matchnext#5:
     arm64.cmp x0, 1
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchnext#6
+  matcharm#2:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  matchnext:
+  matchnext#6:
     arm64.cmp x0, 2
     arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
+    arm64.cbnz x0, matcharm#3
     arm64.b matchdead
-  matcharm:
+  matcharm#3:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
   matchdead:
-  matchcont:
-}
-
-func @int.compare {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, less
-    arm64.b notLess
-  less:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  notLess:
-    arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, greater
-    arm64.b equal
-  greater:
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-  equal:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
 }

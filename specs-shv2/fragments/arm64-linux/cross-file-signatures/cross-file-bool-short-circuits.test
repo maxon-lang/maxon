@@ -1,16 +1,20 @@
 // Test: cross-file-bool-short-circuits
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
 
 export function ready() returns bool
 	return false
 end 'ready'
 
+function opaqueZero() returns Integer
+	return 0
+end 'opaqueZero'
+
 export function enabled() returns bool
-	var zero = 0
-	return 1 / zero == 0
+	let zero = opaqueZero()
+	return (try (1 / zero) otherwise panic("`and` did not short-circuit: enabled() was evaluated")) == 0
 end 'enabled'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: b.maxon
 function main() returns ExitCode
 	if not (ready() and enabled()) 'skipped'
@@ -21,38 +25,14 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @ready {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @enabled {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.movImm x1, 1
-    arm64.sdiv x0, x1, x0
-    arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.bl ready
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit
-  andrhs:
-    arm64.bl enabled
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x1
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movImm x0, 0
     arm64.b scmerge
   scmerge:
     arm64.eor x0, x0, 1

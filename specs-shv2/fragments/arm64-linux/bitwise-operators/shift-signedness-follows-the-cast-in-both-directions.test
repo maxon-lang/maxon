@@ -16,7 +16,7 @@ function main() returns ExitCode
 	if sourceKeepsItsOwnType(u64.max) != 16 'sourceKeeps'
 		return 1
 	end 'sourceKeeps'
-	if castToSigned(u64.max) != 0 - 1 'toSigned'
+	if castToSigned(u64.max) != -1 'toSigned'
 		return 2
 	end 'toSigned'
 	return 42
@@ -24,53 +24,37 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @sourceKeepsItsOwnType {
-  entry:
-    arm64.prologue 16
-    arm64.add x1, x0, 0
-    arm64.lsr x1, x1, 60
-    arm64.asr x0, x0, 60
-    arm64.sub x0, x1, x0
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @castToSigned {
-  entry:
-    arm64.prologue 16
-    arm64.add x0, x0, 0
-    arm64.asr x0, x0, 60
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, -1
-    arm64.bl sourceKeepsItsOwnType
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.movImm x0, 16
+    arm64.b __il_cont#5
+  __il_cont#5:
     arm64.cmp x0, 16
     arm64.cset x0, ne
     arm64.cbnz x0, sourceKeeps
-    arm64.b ifcont
+    arm64.b ifcont#2
   sourceKeeps:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, -1
-    arm64.bl castToSigned
-    arm64.movImm x1, 0
-    arm64.sub x1, x1, 1
-    arm64.cmp x0, x1
+  ifcont#2:
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.cmp x0, -1
     arm64.cset x0, ne
     arm64.cbnz x0, toSigned
-    arm64.b ifcont
+    arm64.b ifcont#4
   toSigned:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret

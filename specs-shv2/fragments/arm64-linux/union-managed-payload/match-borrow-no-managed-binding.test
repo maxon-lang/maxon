@@ -26,9 +26,10 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Body.create {
@@ -61,21 +62,38 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
     arm64.cset x2, eq
-    arm64.cbnz x2, matcharm
+    arm64.cbnz x2, matcharm#1
     arm64.b matchnext
-  matcharm:
+  matcharm#1:
     arm64.movImm x19, 1
     arm64.b matchcont
   matchnext:
     arm64.cmp x1, 1
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
+    arm64.cbnz x1, matcharm#2
     arm64.b matchdead
-  matcharm:
+  matcharm#2:
     arm64.movImm x19, 2
     arm64.b matchcont
   matchcont:
     arm64.bl __destruct_Shape
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at match-borrow-no-managed-binding.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32

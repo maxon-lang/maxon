@@ -16,9 +16,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -28,35 +29,29 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
-    arm64.bl __managed_create
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.movImm x1, 10
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 20
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 30
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 40
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 50
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 5
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x1, 1
     arm64.movImm x2, 4
+    arm64.leaRdata x3, __layout_Array_int
     arm64.movRegReg x0, x19
-    arm64.bl __managed_slice
+    arm64.bl Array.slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -67,19 +62,56 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#1:
     arm64.movImm x1, 0
     arm64.movImm x2, 92
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow#23
+    arm64.b __im_owned#24
+  __im_owned#24:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow#23
+    arm64.b __im_bounds#25
+  __im_bounds#25:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#23
+    arm64.b __im_buffer#26
+  __im_buffer#26:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#23
+    arm64.b __im_viewed#27
+  __im_viewed#27:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow#23
+    arm64.b __im_store#28
+  __im_slow#23:
     arm64.movRegReg x0, x20
     arm64.bl __managed_set
+    arm64.b __im_cont#22
+  __im_store#28:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#22
+  __im_cont#22:
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_rec_1
-    arm64.movImm x0, 134
-    arm64.syscall 94
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at both-sides-detach-slice-first.test:5: index 0 is in bounds\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -87,19 +119,57 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#3:
     arm64.movImm x1, 1
     arm64.movImm x2, 91
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow#30
+    arm64.b __im_owned#31
+  __im_owned#31:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow#30
+    arm64.b __im_bounds#32
+  __im_bounds#32:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#30
+    arm64.b __im_buffer#33
+  __im_buffer#33:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#30
+    arm64.b __im_viewed#34
+  __im_viewed#34:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow#30
+    arm64.b __im_store#35
+  __im_slow#30:
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
+    arm64.b __im_cont#29
+  __im_store#35:
+    arm64.add x0, x0, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#29
+  __im_cont#29:
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_rec_3
-    arm64.movImm x0, 134
-    arm64.syscall 94
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at both-sides-detach-slice-first.test:6: index 1 is in bounds\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -107,72 +177,158 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#5:
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#37
+    arm64.b __im_load#38
+  __im_load#38:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#39
+    arm64.b critsplit#50
+  __im_empty#39:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#37
+    arm64.b critsplit#51
+  __im_slow#37:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
+    arm64.b __im_cont#36
+  critsplit#51:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#36
+  critsplit#50:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#36
+  __im_cont#36:
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
     arm64.movImm x21, 0
-    arm64.b trycont
-  tryok:
+    arm64.b trycont#9
+  tryok#7:
     arm64.movRegReg x21, x0
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#9
+  trycont#9:
     arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#41
+    arm64.b __im_load#42
+  __im_load#42:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#43
+    arm64.b critsplit#52
+  __im_empty#43:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#41
+    arm64.b critsplit#53
+  __im_slow#41:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
+    arm64.b __im_cont#40
+  critsplit#53:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#40
+  critsplit#52:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#40
+  __im_cont#40:
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#11
+    arm64.b tryok#10
+  tryerr#11:
     arm64.movImm x22, 0
-    arm64.b trycont
-  tryok:
+    arm64.b trycont#12
+  tryok#10:
     arm64.movRegReg x22, x0
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#12
+  trycont#12:
     arm64.movImm x1, 2
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 2
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow#45
+    arm64.b __im_load#46
+  __im_load#46:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty#47
+    arm64.b critsplit#54
+  __im_empty#47:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow#45
+    arm64.b critsplit#55
+  __im_slow#45:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
+    arm64.b __im_cont#44
+  critsplit#55:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#44
+  critsplit#54:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#44
+  __im_cont#44:
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#14
+    arm64.b tryok#13
+  tryerr#14:
     arm64.movImm x0, 0
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#15
+  tryok#13:
+    arm64.b trycont#15
+  trycont#15:
     arm64.cmp x21, 92
     arm64.cset x1, eq
     arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs
-    arm64.b critsplit
-  andrhs:
+    arm64.cbnz x1, andrhs#16
+    arm64.b critsplit#48
+  andrhs#16:
     arm64.cmp x22, 91
     arm64.cset x1, eq
-    arm64.b scmerge
-  critsplit:
+    arm64.b scmerge#17
+  critsplit#48:
     arm64.movRegReg x1, x2
-    arm64.b scmerge
-  scmerge:
+    arm64.b scmerge#17
+  scmerge#17:
     arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs
-    arm64.b critsplit
-  andrhs:
+    arm64.cbnz x1, andrhs#18
+    arm64.b critsplit#49
+  andrhs#18:
     arm64.cmp x0, 30
     arm64.cset x0, eq
-    arm64.b scmerge
-  critsplit:
+    arm64.b scmerge#19
+  critsplit#49:
     arm64.movRegReg x0, x2
-    arm64.b scmerge
-  scmerge:
+    arm64.b scmerge#19
+  scmerge#19:
     arm64.cbnz x0, ok
     arm64.b ifcont
   ok:

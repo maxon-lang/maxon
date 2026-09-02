@@ -18,43 +18,37 @@ ExitCode: 7
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
-    arm64.fpLoadRdata d1, [rdata + __fconst_1]
-    arm64.fcmp d0, d1
-    arm64.cset x1, gt
-    arm64.cbnz x1, e310IsPositive
-    arm64.b critsplit
+    arm64.b e310IsPositive
   e310IsPositive:
-    arm64.add x0, x0, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.fpLoadRdata d0, [rdata + __fconst_2]
-    arm64.fpLoadRdata d1, [rdata + __fconst_1]
-    arm64.fcmp d0, d1
-    arm64.cset x1, gt
-    arm64.cbnz x1, e320IsPositive
-    arm64.b critsplit
+    arm64.movImm x0, 1
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b e320IsPositive
   e320IsPositive:
     arm64.add x0, x0, 2
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
-    arm64.fpLoadRdata d1, [rdata + __fconst_2]
-    arm64.fcmp d0, d1
-    arm64.cset x1, gt
-    arm64.cbnz x1, ordered
-    arm64.b critsplit
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b ordered
   ordered:
     arm64.add x0, x0, 4
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at subnormals.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }

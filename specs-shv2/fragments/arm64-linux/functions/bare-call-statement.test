@@ -1,5 +1,5 @@
 // Test: bare-call-statement
-function noop(x int) returns int
+function noop(x Integer) returns Integer
 	return x
 end 'noop'
 
@@ -7,21 +7,17 @@ function main() returns ExitCode
 	noop(5)
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @noop {
-  entry:
-    arm64.prologue 16
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 5
-    arm64.bl noop
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

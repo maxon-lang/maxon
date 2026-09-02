@@ -1,11 +1,11 @@
 // Test: back-edge-rotate-three
-function rotate3(p int) returns int
+function rotate3(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
 	var i = 0
 	while i < 4 'loop'
-		var t = a
+		let t = a
 		a = b
 		b = c
 		c = t
@@ -21,43 +21,39 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @rotate3 {
-  entry:
-    arm64.prologue 16
-    arm64.add x1, x0, 1
-    arm64.add x2, x0, 2
-    arm64.add x0, x0, 3
-    arm64.movImm x6, 0
-    arm64.b whilehdr
-  whilehdr:
-    arm64.cmp x6, 4
-    arm64.cset x7, lt
-    arm64.cbnz x7, loop
-    arm64.b whileexit
-  loop:
-    arm64.add x6, x6, 1
-    arm64.xchgRegReg x1, x2
-    arm64.xchgRegReg x2, x0
-    arm64.b whilehdr
-  whileexit:
-    arm64.movImm x16, 100
-    arm64.mul x1, x1, x16
-    arm64.movImm x16, 10
-    arm64.mul x2, x2, x16
-    arm64.add x1, x1, x2
-    arm64.add x0, x1, x0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.bl rotate3
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 3
+    arm64.movImm x3, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x3, 4
+    arm64.cset x4, lt
+    arm64.cbnz x4, loop
+    arm64.b whileexit
+  loop:
+    arm64.add x3, x3, 1
+    arm64.xchgRegReg x0, x1
+    arm64.xchgRegReg x1, x2
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x16, 100
+    arm64.mul x0, x0, x16
+    arm64.movImm x16, 10
+    arm64.mul x1, x1, x16
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 231
     arm64.cset x0, eq
     arm64.cbnz x0, ok

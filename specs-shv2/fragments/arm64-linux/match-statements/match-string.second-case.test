@@ -14,29 +14,29 @@ func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
-    arm64.leaRdata x1, __str_rec_3
+    arm64.leaRdata x19, __str_rec_2  ; "bob"
+    arm64.leaRdata x1, __str_rec_3  ; "alice"
     arm64.movRegReg x0, x19
     arm64.bl __str_eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x0, matcharm#1
+    arm64.b matchnext#2
+  matcharm#1:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  matchnext:
-    arm64.leaRdata x1, __str_rec_1
+  matchnext#2:
+    arm64.leaRdata x1, __str_rec_2  ; "bob"
     arm64.movRegReg x0, x19
     arm64.bl __str_eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x0, matcharm#3
+    arm64.b matchnext#4
+  matcharm#3:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  matchnext:
+  matchnext#4:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32

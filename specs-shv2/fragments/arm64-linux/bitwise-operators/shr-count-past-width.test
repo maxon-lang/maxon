@@ -1,6 +1,6 @@
 // Test: shr-count-past-width
 function main() returns ExitCode
-	if (0 - 1) shr 100 != 0 - 1 'negWrong'
+	if (-1) shr 100 != -1 'negWrong'
 		return 1
 	end 'negWrong'
 	if 8 shr 100 != 0 'posWrong'
@@ -14,31 +14,10 @@ ExitCode: 42
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 1
-    arm64.asr x0, x0, 63
-    arm64.movImm x1, 0
-    arm64.sub x1, x1, 1
-    arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, negWrong
-    arm64.b ifcont
-  negWrong:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 8
-    arm64.asr x0, x0, 63
-    arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, posWrong
-    arm64.b ifcont
-  posWrong:
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret

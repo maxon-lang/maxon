@@ -13,9 +13,10 @@ ExitCode: 6
 ---
 data {
   __data_Buffer@0 = i64 0
-  __slab_cursor@8 = i64 0
-  __slab_end@16 = i64 0
-  __mm_alloc_count@24 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -24,7 +25,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.leaGlobal x0, __data_Buffer
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __managed_count
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
     arm64.cset x0, ne
     arm64.cbnz x0, notEmpty
@@ -43,7 +44,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.movImm x0, 6
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, -2
+    arm64.movImm x0, 18446744073709551614
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -54,7 +55,24 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
     arm64.leaGlobal x0, __data_Buffer
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __managed_count
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at byte-string-literal.top-level-var.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

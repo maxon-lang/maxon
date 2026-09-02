@@ -30,10 +30,9 @@ func @compute {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x6, x3
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x6
+    arm64.movRegReg x2, x3
     arm64.blr x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -46,9 +45,24 @@ func @main {
     arm64.leaFuncAddr x0, __fnref_add
     arm64.movImm x1, 15
     arm64.movImm x2, 27
-    arm64.movImm x6, 0
-    arm64.movRegReg x3, x6
+    arm64.movImm x3, 0
     arm64.bl compute
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.typealias-multi-param.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }

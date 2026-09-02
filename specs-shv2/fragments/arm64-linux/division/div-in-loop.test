@@ -1,9 +1,11 @@
 // Test: div-in-loop
+typealias Positive = int(1 to i64.max)
+
 function main() returns ExitCode
 	var sum = 0
 	var i = 1
 	while i <= 6 'loop'
-		sum = sum + 100 / i
+		sum = sum + 100 / (i as Positive)
 		i = i + 1
 	end 'loop'
 	return sum
@@ -24,11 +26,38 @@ func @main {
     arm64.b whileexit
   loop:
     arm64.movImm x2, 100
-    arm64.sdiv x2, x2, x1
+    arm64.cmp x1, 1
+    arm64.cset x3, lt
+    arm64.cbnz x3, __rc_panic#5
+    arm64.b __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at div-in-loop.test:8: Range check failed: value outside typealias 'Positive'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.udiv x2, x2, x1
     arm64.add x0, x0, x2
     arm64.add x1, x1, 1
     arm64.b whilehdr
   whileexit:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic#7
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic#7
+    arm64.b __rc_ok#6
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at div-in-loop.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#6:
     arm64.epilogue 16
     arm64.ret
 }

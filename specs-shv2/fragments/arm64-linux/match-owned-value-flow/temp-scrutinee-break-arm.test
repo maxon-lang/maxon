@@ -7,11 +7,11 @@ union Num
 end 'Num'
 
 function main() returns ExitCode
-	var result = 7
+	let result = 7
 	while result > 0 'loop'
 		match Num.val(1) 'check'
 			zero then return 0
-			val(n) then break
+			val(n) then break 'loop'
 		end 'check'
 	end 'loop'
 	return result
@@ -20,9 +20,10 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -33,10 +34,7 @@ func @main {
     arm64.movImm x19, 7
     arm64.b whilehdr
   whilehdr:
-    arm64.cmp x19, 0
-    arm64.cset x0, gt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b loop
   loop:
     arm64.movImm x20, 1
     arm64.movImm x0, 16
@@ -48,9 +46,9 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
     arm64.cset x2, eq
-    arm64.cbnz x2, matcharm
+    arm64.cbnz x2, matcharm#4
     arm64.b matchnext
-  matcharm:
+  matcharm#4:
     arm64.movImm x19, 0
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
@@ -61,18 +59,17 @@ func @main {
   matchnext:
     arm64.cmp x1, 1
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
+    arm64.cbnz x1, matcharm#5
     arm64.b matchdead
-  matcharm:
+  matcharm#5:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.bl __mm_decref
     arm64.b whileexit
-  matchdead:
   whileexit:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  matchcont:
+  matchdead:
 }

@@ -1,0 +1,33 @@
+// Test: error.a-stored-reply-that-names-the-wrong-errors-is-refused
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Integer, by Integer) returns Integer throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	var ps = ReplyPromiseArray.create()
+	ps.push(h.divide(10, by: 2))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3098: <fragment>:28:5: 'ReplyPromise' names the error type 'ServiceError', but a reply from 'Calc.divide' throws 'Calc.divide.errors'

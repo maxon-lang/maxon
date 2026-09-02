@@ -1,9 +1,9 @@
 // Test: return-a-minus-b
-function diff(a int, b int) returns int
+function diff(a Integer, b Integer) returns Integer
 	return a - b
 end 'diff'
 
-function chainDiff(a int, b int, c int) returns int
+function chainDiff(a Integer, b Integer, c Integer) returns Integer
 	return a - b - c
 end 'chainDiff'
 
@@ -14,52 +14,36 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @diff {
-  entry:
-    arm64.prologue 16
-    arm64.sub x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @chainDiff {
-  entry:
-    arm64.prologue 16
-    arm64.sub x0, x0, x1
-    arm64.sub x0, x0, x2
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 200
-    arm64.movImm x1, 137
-    arm64.bl diff
+    arm64.prologue 16
+    arm64.b __il_body#5
+  __il_body#5:
+    arm64.movImm x0, 63
+    arm64.b __il_cont#4
+  __il_cont#4:
     arm64.movImm x16, 1000
-    arm64.mul x19, x0, x16
-    arm64.movImm x0, 90
-    arm64.movImm x1, 20
-    arm64.movImm x2, 5
-    arm64.bl chainDiff
-    arm64.add x0, x19, x0
-    arm64.cmp x0, 63065
+    arm64.mul x0, x0, x16
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.b __il_cont#3
+  __il_cont#3:
+    arm64.add x0, x0, 65
+    arm64.movImm x16, 63065
+    arm64.cmp x0, x16
     arm64.cset x0, eq
     arm64.cbnz x0, ok
     arm64.b ifcont
   ok:
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
   ifcont:
     arm64.movImm x0, 99
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }

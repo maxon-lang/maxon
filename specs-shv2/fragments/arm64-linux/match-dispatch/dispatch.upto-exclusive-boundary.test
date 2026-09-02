@@ -1,5 +1,5 @@
 // Test: dispatch.upto-exclusive-boundary
-function classify(x int) returns int
+function classify(x Integer) returns Integer
 	return match x 'm'
 		10 upto 20 gives 1
 		20 upto 30 gives 2
@@ -11,123 +11,154 @@ end 'classify'
 function main() returns ExitCode
 	// `upto` excludes its upper: 10..20 covers 10..19, 20..30 covers 20..29, and 30 is its own arm.
 	var n = 0 as ExitCode
-	if classify(19) == 1 'a' n = n + 1 end 'a'
-	if classify(20) == 2 'b' n = n + 1 end 'b'
-	if classify(29) == 2 'c' n = n + 1 end 'c'
-	if classify(30) == 3 'd' n = n + 1 end 'd'
-	if classify(9) == 0 'e' n = n + 1 end 'e'
+	if classify(19) == 1 'a'
+		n = n + 1
+	end 'a'
+	if classify(20) == 2 'b'
+		n = n + 1
+	end 'b'
+	if classify(29) == 2 'c'
+		n = n + 1
+	end 'c'
+	if classify(30) == 3 'd'
+		n = n + 1
+	end 'd'
+	if classify(9) == 0 'e'
+		n = n + 1
+	end 'e'
 	return n
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 5
 ---
-func @classify {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 10
-    arm64.cset x1, ge
-    arm64.cmp x0, 19
-    arm64.cset x2, le
-    arm64.and x1, x1, x2
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
-    arm64.movImm x0, 1
-    arm64.b matchcont
-  matchnext:
-    arm64.cmp x0, 20
-    arm64.cset x1, ge
-    arm64.cmp x0, 29
-    arm64.cset x2, le
-    arm64.and x1, x1, x2
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
-    arm64.movImm x0, 2
-    arm64.b matchcont
-  matchnext:
-    arm64.cmp x0, 30
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdefault
-  matcharm:
-    arm64.movImm x0, 3
-    arm64.b matchcont
-  matchdefault:
-    arm64.movImm x0, 0
-    arm64.b matchcont
-  matchcont:
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 0
-    arm64.movImm x0, 19
-    arm64.bl classify
-    arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, a
-    arm64.b critsplit
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.b __il_body#15
+  __il_body#15:
+    arm64.b matcharm#16
+  matcharm#16:
+    arm64.movImm x1, 1
+    arm64.b matchcont#22
+  matchcont#22:
+    arm64.b __il_cont#14
+  __il_cont#14:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, a
+    arm64.b critsplit#59
   a:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 20
-    arm64.bl classify
-    arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, b
-    arm64.b critsplit
+    arm64.movImm x0, 1
+    arm64.b ifcont#2
+  critsplit#59:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b __il_body#24
+  __il_body#24:
+    arm64.b matchnext#29
+  matchnext#29:
+    arm64.b matcharm#26
+  matcharm#26:
+    arm64.movImm x1, 2
+    arm64.b matchcont#31
+  matchcont#31:
+    arm64.b __il_cont#23
+  __il_cont#23:
+    arm64.cmp x1, 2
+    arm64.cset x1, eq
+    arm64.cbnz x1, b
+    arm64.b critsplit#60
   b:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 29
-    arm64.bl classify
-    arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, c
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#4
+  critsplit#60:
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b __il_body#33
+  __il_body#33:
+    arm64.b matchnext#38
+  matchnext#38:
+    arm64.b matcharm#35
+  matcharm#35:
+    arm64.movImm x1, 2
+    arm64.b matchcont#40
+  matchcont#40:
+    arm64.b __il_cont#32
+  __il_cont#32:
+    arm64.cmp x1, 2
+    arm64.cset x1, eq
+    arm64.cbnz x1, c
+    arm64.b critsplit#61
   c:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 30
-    arm64.bl classify
-    arm64.cmp x0, 3
-    arm64.cset x0, eq
-    arm64.cbnz x0, d
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#6
+  critsplit#61:
+    arm64.b ifcont#6
+  ifcont#6:
+    arm64.b __il_body#42
+  __il_body#42:
+    arm64.b matchnext#47
+  matchnext#47:
+    arm64.b matchnext#48
+  matchnext#48:
+    arm64.b matcharm#45
+  matcharm#45:
+    arm64.movImm x1, 3
+    arm64.b matchcont#49
+  matchcont#49:
+    arm64.b __il_cont#41
+  __il_cont#41:
+    arm64.cmp x1, 3
+    arm64.cset x1, eq
+    arm64.cbnz x1, d
+    arm64.b critsplit#62
   d:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x0, 9
-    arm64.bl classify
-    arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, e
-    arm64.b critsplit
+    arm64.add x0, x0, 1
+    arm64.b ifcont#8
+  critsplit#62:
+    arm64.b ifcont#8
+  ifcont#8:
+    arm64.b __il_body#51
+  __il_body#51:
+    arm64.b matchnext#56
+  matchnext#56:
+    arm64.b matchnext#57
+  matchnext#57:
+    arm64.b matchdefault
+  matchdefault:
+    arm64.movImm x1, 0
+    arm64.b matchcont#58
+  matchcont#58:
+    arm64.b __il_cont#50
+  __il_cont#50:
+    arm64.cmp x1, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, e
+    arm64.b critsplit#63
   e:
-    arm64.add x0, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.movRegReg x0, x19
-    arm64.b ifcont
-  ifcont:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.add x0, x0, 1
+    arm64.b ifcont#10
+  critsplit#63:
+    arm64.b ifcont#10
+  ifcont#10:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.upto-exclusive-boundary.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
     arm64.ret
 }

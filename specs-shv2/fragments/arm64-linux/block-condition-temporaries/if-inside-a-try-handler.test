@@ -14,9 +14,10 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -26,61 +27,106 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.movImm x0, 8
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
-    arm64.bl __managed_create
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-    arm64.movImm x1, 10
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_push
-    arm64.movImm x1, 20
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_push
-    arm64.movImm x1, 30
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_push
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 3
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x20 + 24], x0
     arm64.movImm x1, 9
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 9
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.add x0, x0, 72
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#14
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_slow
+    arm64.b critsplit#15
+  __im_slow:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
+    arm64.b __im_cont
+  critsplit#15:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#14:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
-    arm64.movImm x0, 8
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_push
+    arm64.bl __mm_alloc
+    arm64.leaRdata x1, __barr_blob_1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.movImm x1, 2
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_push
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_count
-    arm64.cmp x0, 2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 8
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x1, 2
     arm64.cset x21, eq
-    arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.cbnz x21, y
-    arm64.b critsplit
+    arm64.b critsplit#13
   y:
     arm64.movImm x0, 4
     arm64.b ifcont
-  critsplit:
+  critsplit#13:
     arm64.movRegReg x0, x19
     arm64.b ifcont
   ifcont:
+    arm64.movRegReg x19, x0
     arm64.b trycont
   tryok:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x19
     arm64.b trycont
   trycont:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at if-inside-a-try-handler.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

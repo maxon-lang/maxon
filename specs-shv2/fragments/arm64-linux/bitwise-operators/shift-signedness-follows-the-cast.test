@@ -26,68 +26,56 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @viaCast {
-  entry:
-    arm64.prologue 16
-    arm64.add x0, x0, 0
-    arm64.lsr x0, x0, 60
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @viaParam {
-  entry:
-    arm64.prologue 16
-    arm64.lsr x0, x0, 60
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, -1
-    arm64.bl viaParam
+    arm64.prologue 16
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.movImm x0, 15
+    arm64.b __il_cont#7
+  __il_cont#7:
     arm64.cmp x0, 15
     arm64.cset x0, ne
     arm64.cbnz x0, declaredParam
-    arm64.b ifcont
+    arm64.b ifcont#2
   declaredParam:
     arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, -1
-    arm64.bl viaCast
+  ifcont#2:
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x0, 15
+    arm64.b __il_cont#9
+  __il_cont#9:
     arm64.cmp x0, 15
     arm64.cset x0, ne
     arm64.cbnz x0, castLocal
-    arm64.b ifcont
+    arm64.b ifcont#4
   castLocal:
     arm64.movImm x0, 2
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, -1
-    arm64.bl viaCast
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, -1
-    arm64.bl viaParam
-    arm64.cmp x19, x0
+  ifcont#4:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.movImm x0, 15
+    arm64.b __il_cont#12
+  __il_cont#12:
+    arm64.b __il_body#14
+  __il_body#14:
+    arm64.b __il_cont#11
+  __il_cont#11:
+    arm64.cmp x0, 15
     arm64.cset x0, ne
     arm64.cbnz x0, twoRoutesOneType
-    arm64.b ifcont
+    arm64.b ifcont#6
   twoRoutesOneType:
     arm64.movImm x0, 3
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#6:
     arm64.movImm x0, 42
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }

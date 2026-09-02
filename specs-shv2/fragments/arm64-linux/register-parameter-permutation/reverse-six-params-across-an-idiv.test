@@ -1,9 +1,9 @@
 // Test: reverse-six-params-across-an-idiv
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function divPermute(a int, b int, c int, d int, e int, f int) returns int
+function divPermute(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
 	let sum = a + b + c + d + e + f
 	let q = sum / 2
 	let r = digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
@@ -17,61 +17,41 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @digits6 {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x6, x3
-    arm64.movRegReg x7, x4
-    arm64.movRegReg x8, x5
-    arm64.movImm x16, 100000
-    arm64.mul x0, x0, x16
-    arm64.movImm x16, 10000
-    arm64.mul x1, x1, x16
-    arm64.add x0, x0, x1
-    arm64.movImm x16, 1000
-    arm64.mul x1, x2, x16
-    arm64.add x0, x0, x1
-    arm64.movImm x16, 100
-    arm64.mul x1, x6, x16
-    arm64.add x0, x0, x1
-    arm64.movImm x16, 10
-    arm64.mul x1, x7, x16
-    arm64.add x0, x0, x1
-    arm64.add x0, x0, x8
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @divPermute {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x6, x0
-    arm64.movRegReg x7, x1
-    arm64.movRegReg x8, x2
-    arm64.movRegReg x9, x3
-    arm64.movRegReg x10, x4
-    arm64.movRegReg x11, x5
-    arm64.add x0, x6, x7
-    arm64.add x0, x0, x8
-    arm64.add x0, x0, x9
-    arm64.add x0, x0, x10
-    arm64.add x0, x0, x11
-    arm64.movImm x1, 2
-    arm64.sdiv x19, x0, x1
-    arm64.movRegReg x0, x11
-    arm64.movRegReg x1, x10
-    arm64.movRegReg x2, x9
-    arm64.movRegReg x3, x8
-    arm64.movRegReg x4, x7
-    arm64.movRegReg x5, x6
-    arm64.bl digits6
-    arm64.add x0, x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.prologue 16
+    arm64.add x6, x0, x1
+    arm64.add x6, x6, x2
+    arm64.add x6, x6, x3
+    arm64.add x6, x6, x4
+    arm64.add x6, x6, x5
+    arm64.movImm x7, 2
+    arm64.sdiv x6, x6, x7
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x16, 100000
+    arm64.mul x5, x5, x16
+    arm64.movImm x16, 10000
+    arm64.mul x4, x4, x16
+    arm64.add x4, x5, x4
+    arm64.movImm x16, 1000
+    arm64.mul x3, x3, x16
+    arm64.add x3, x4, x3
+    arm64.movImm x16, 100
+    arm64.mul x2, x2, x16
+    arm64.add x2, x3, x2
+    arm64.movImm x16, 10
+    arm64.mul x1, x1, x16
+    arm64.add x1, x2, x1
+    arm64.add x0, x1, x0
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x0, x0, x6
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -81,14 +61,12 @@ func @main {
     arm64.movImm x0, 1
     arm64.movImm x1, 2
     arm64.movImm x2, 3
-    arm64.movImm x6, 4
-    arm64.movImm x7, 5
-    arm64.movImm x8, 6
-    arm64.movRegReg x3, x6
-    arm64.movRegReg x4, x7
-    arm64.movRegReg x5, x8
+    arm64.movImm x3, 4
+    arm64.movImm x4, 5
+    arm64.movImm x5, 6
     arm64.bl divPermute
-    arm64.cmp x0, 654331
+    arm64.movImm x16, 654331
+    arm64.cmp x0, x16
     arm64.cset x0, eq
     arm64.cbnz x0, ok
     arm64.b ifcont
