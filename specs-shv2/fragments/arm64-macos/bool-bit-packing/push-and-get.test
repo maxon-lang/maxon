@@ -25,9 +25,10 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -36,7 +37,7 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 1
+    arm64.movImm x0, 18446744073709551615
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
@@ -54,68 +55,68 @@ func @main {
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
     arm64.movImm x20, 0
-    arm64.b trycont
-  tryok:
+    arm64.b trycont#3
+  tryok#1:
     arm64.movRegReg x20, x0
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#3
+  trycont#3:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
     arm64.movImm x21, 1
-    arm64.b trycont
-  tryok:
+    arm64.b trycont#6
+  tryok#4:
     arm64.movRegReg x21, x0
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#6
+  trycont#6:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
     arm64.movImm x0, 0
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#9
+  tryok#7:
+    arm64.b trycont#9
+  trycont#9:
     arm64.movImm x1, 0
     arm64.cbnz x20, c0
-    arm64.b critsplit
+    arm64.b critsplit#19
   c0:
-    arm64.add x1, x1, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.movImm x1, 1
+    arm64.b ifcont#11
+  critsplit#19:
+    arm64.b ifcont#11
+  ifcont#11:
     arm64.cbnz x21, c1
-    arm64.b critsplit
+    arm64.b critsplit#20
   c1:
     arm64.add x1, x1, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#13
+  critsplit#20:
+    arm64.b ifcont#13
+  ifcont#13:
     arm64.cbnz x0, c2
-    arm64.b critsplit
+    arm64.b critsplit#21
   c2:
     arm64.add x20, x1, 1
-    arm64.b ifcont
-  critsplit:
+    arm64.b ifcont#15
+  critsplit#21:
     arm64.movRegReg x20, x1
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#15
+  ifcont#15:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
@@ -123,13 +124,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x20, x0
+    arm64.cmp x20, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at push-and-get.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

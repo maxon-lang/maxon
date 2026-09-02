@@ -1,6 +1,6 @@
 // Test: crossfile-payload-free-enum-field-off-a-temporary
 // --- file: color.maxon
-export enum Color
+public enum Color
 	red
 	green
 end 'Color'
@@ -25,49 +25,34 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @Gate.make {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 1
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.bl Gate.make
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.bl __mm_decref
-    arm64.cmp x19, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
+    arm64.leaRegSlot x0, slot0
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#1
     arm64.b matchnext
-  matcharm:
+  matcharm#1:
     arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
   matchnext:
-    arm64.cmp x19, 1
+    arm64.cmp x0, 1
     arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
+    arm64.cbnz x0, matcharm#2
     arm64.b matchdead
-  matcharm:
+  matcharm#2:
     arm64.movImm x0, 42
-    arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
   matchdead:

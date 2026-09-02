@@ -1,7 +1,7 @@
 // Test: int-and-float-overflow-share-one-stack-area
 typealias Integer = int(i64.min to i64.max)
 
-function mix(i1 Integer, i2 Integer, i3 Integer, i4 Integer, i5 Integer, i6 Integer, i7 Integer, f1 float, f2 float, f3 float, f4 float, f5 float, f6 float, f7 float) returns Integer
+function mix(i1 Integer, i2 Integer, i3 Integer, i4 Integer, i5 Integer, i6 Integer, i7 Integer, f1 Real, f2 Real, f3 Real, f4 Real, f5 Real, f6 Real, f7 Real) returns Integer
 	if f1 + f2 + f3 + f4 + f5 + f6 + f7 == 127.0 'floatsOk'
 		return i1 + i2 + i3 + i4 + i5 + i6 + i7
 	end 'floatsOk'
@@ -11,75 +11,31 @@ end 'mix'
 function main() returns ExitCode
 	return mix(1, i2: 2, i3: 4, i4: 8, i5: 16, i6: 32, i7: 64, f1: 1.0, f2: 2.0, f3: 4.0, f4: 8.0, f5: 16.0, f6: 32.0, f7: 64.0)
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 127
 ---
-func @mix {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x7, x3
-    arm64.movRegReg x8, x4
-    arm64.movRegReg x9, x5
-    arm64.fadd d0, d0, d1
-    arm64.fadd d0, d0, d2
-    arm64.fadd d0, d0, d3
-    arm64.fadd d0, d0, d4
-    arm64.fadd d0, d0, d5
-    arm64.fadd d0, d0, d6
-    arm64.fpLoadRdata d1, [rdata + __fconst_1]
-    arm64.fcmp d0, d1
-    arm64.cset x10, eq
-    arm64.cbnz x10, floatsOk
-    arm64.b ifcont
-  floatsOk:
-    arm64.add x0, x0, x1
-    arm64.add x0, x0, x2
-    arm64.add x0, x0, x7
-    arm64.add x0, x0, x8
-    arm64.add x0, x0, x9
-    arm64.add x0, x0, x6
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 1
-    arm64.movImm x1, 2
-    arm64.movImm x2, 4
-    arm64.movImm x6, 8
-    arm64.movImm x7, 16
-    arm64.movImm x8, 32
-    arm64.movImm x9, 64
-    arm64.fpLoadRdata d0, [rdata + __fconst_2]
-    arm64.fpLoadRdata d1, [rdata + __fconst_3]
-    arm64.fpLoadRdata d2, [rdata + __fconst_4]
-    arm64.fpLoadRdata d3, [rdata + __fconst_5]
-    arm64.fpLoadRdata d4, [rdata + __fconst_6]
-    arm64.fpLoadRdata d5, [rdata + __fconst_7]
-    arm64.fpLoadRdata d6, [rdata + __fconst_8]
-    arm64.movRegReg x3, x6
-    arm64.movRegReg x4, x7
-    arm64.movRegReg x5, x8
-    arm64.movRegReg x6, x9
-    arm64.bl mix
+    arm64.b __il_body
+  __il_body:
+    arm64.b floatsOk
+  floatsOk:
+    arm64.movImm x0, 127
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 0
     arm64.cset x1, lt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at int-and-float-overflow-share-one-stack-area.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

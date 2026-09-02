@@ -26,9 +26,10 @@ end 'main'
 ExitCode: 108
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @echoTrivial {
@@ -84,32 +85,16 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 99
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.leaRdata x20, __str_rec_1
+    arm64.leaRdata x20, __str_rec_5  ; "a heap allocated tuple element"
     arm64.movImm x22, 3
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x23, x0
     arm64.storeSlotReg slot2, x23
-    arm64.loadRegBaseDisp.word64 x24, [x20 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
-    arm64.add x0, x20, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x25, x0
-    arm64.add x26, x25, 48
-    arm64.movRegReg x0, x26
-    arm64.movRegReg x1, x24
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x0, x26, x20
-    arm64.storeBaseDispReg.word64 [x25 + 0], x26
-    arm64.storeBaseDispReg.word64 [x25 + 8], x20
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x25 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x25 + 24], x0
-    arm64.storeBaseDispReg.word64 [x23 + 0], x25
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
     arm64.storeBaseDispReg.word64 [x23 + 8], x22
     arm64.movRegReg x0, x23
     arm64.bl echoManaged
@@ -117,7 +102,7 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.movImm x0, 99
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.leaRdata x0, __str_rec_3
+    arm64.leaRdata x0, __str_rec_6  ; "trivial a.1="
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x21, [x21 + 8]
@@ -129,7 +114,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __int_to_string
     arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_7  ; " b.1="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot11, x1
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
@@ -142,7 +127,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __int_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_7
+    arm64.leaRdata x0, __str_rec_8  ; " managed m.1="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot9, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
@@ -155,7 +140,7 @@ func @main {
     arm64.movRegReg x0, x23
     arm64.bl __int_to_string
     arm64.movRegReg x23, x0
-    arm64.leaRdata x0, __str_rec_9
+    arm64.leaRdata x0, __str_rec_9  ; " n.1="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot7, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
@@ -176,11 +161,11 @@ func @main {
     arm64.add x1, x1, x27
     arm64.add x0, x1, x0
     arm64.storeSlotReg slot4, x0
-    arm64.add x0, x0, 49
+    arm64.add x0, x0, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeSlotReg slot5, x0
-    arm64.add x20, x0, 48
+    arm64.add x20, x0, 56
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x24
@@ -229,7 +214,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 0], x20
     arm64.loadRegSlot x0, slot4
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -242,7 +227,7 @@ func @main {
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot3
@@ -256,13 +241,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x19, x0
+    arm64.cmp x19, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_10
+    arm64.leaRdata x0, __str_blob_10  ; "panic at returned-tuple-copies-only-when-trivial.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13

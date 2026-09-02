@@ -1,6 +1,6 @@
 // Test: stdlib-user-shadows.user-method-shadows-a-listed-modules-method
 type Clock
-	export var x as int
+	export var x as Integer
 
 	export static function nowMs() returns ExitCode
 		return 11
@@ -10,21 +10,18 @@ end 'Clock'
 function main() returns ExitCode
 	return Clock.nowMs()
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 11
 ---
-func @Clock.nowMs {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 11
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.bl Clock.nowMs
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x0, 11
+    arm64.b __il_cont
+  __il_cont:
     arm64.epilogue 16
     arm64.ret
 }

@@ -27,16 +27,15 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
@@ -52,58 +51,59 @@ func @main {
     arm64.movImm x1, 30
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.movImm x20, 0
-    arm64.movImm x21, 0
-    arm64.b forhdr
-  forhdr:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_count
-    arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop1
-    arm64.b forexit
-  loop1:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get_unchecked
-    arm64.add x20, x20, x0
-    arm64.b forstep
-  forstep:
-    arm64.add x21, x21, 1
-    arm64.b forhdr
-  forexit:
-    arm64.movImm x21, 0
-    arm64.movImm x22, 0
-    arm64.xchgRegReg x21, x22
-    arm64.b forhdr
-  forhdr:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_count
-    arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop2
-    arm64.b forexit
-  loop2:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get_unchecked
-    arm64.add x22, x22, x0
-    arm64.b forstep
-  forstep:
-    arm64.add x21, x21, 1
-    arm64.b forhdr
-  forexit:
-    arm64.cmp x20, 60
-    arm64.cset x0, eq
+    arm64.movImm x0, 0
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x1, x2
+    arm64.cset x4, lt
+    arm64.cbnz x4, loop1
+    arm64.b forexit#4
+  loop1:
+    arm64.arm64AddLsl x4, x3, x1, lsl #3
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
+    arm64.b __im_cont#13
+  __im_cont#13:
+    arm64.add x0, x0, x4
+    arm64.b forstep#3
+  forstep#3:
+    arm64.add x1, x1, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x4, [x19 + 0]
+    arm64.b forhdr#5
+  forhdr#5:
+    arm64.cmp x2, x3
+    arm64.cset x5, lt
+    arm64.cbnz x5, loop2
+    arm64.b forexit#8
+  loop2:
+    arm64.arm64AddLsl x5, x4, x2, lsl #3
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
+    arm64.b __im_cont#14
+  __im_cont#14:
+    arm64.add x1, x1, x5
+    arm64.b forstep#7
+  forstep#7:
+    arm64.add x2, x2, 1
+    arm64.b forhdr#5
+  forexit#8:
+    arm64.cmp x0, 60
+    arm64.cset x0, eq
+    arm64.movImm x2, 0
     arm64.cbnz x0, andrhs
     arm64.b critsplit
   andrhs:
-    arm64.cmp x22, 60
+    arm64.cmp x1, 60
     arm64.cset x0, eq
     arm64.b scmerge
   critsplit:
-    arm64.movRegReg x0, x1
+    arm64.movRegReg x0, x2
     arm64.b scmerge
   scmerge:
     arm64.cbnz x0, check
@@ -115,9 +115,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   ifcont:
     arm64.movImm x20, 1
@@ -126,8 +124,6 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
 }

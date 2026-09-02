@@ -1,47 +1,39 @@
 // Test: div-and-mod-into-rdx-and-rax
-function take3(p1 int, p2 int, p3 int) returns int
+function take3(p1 Integer, p2 Integer, p3 Integer) returns Integer
 	return p1 * 10000 + p2 * 100 + p3
 end 'take3'
 
 function main() returns ExitCode
-	var n = 97
-	var d = 5
+	let n = 97
+	let d = 5
 	let r = take3(1, p2: n / d, p3: n mod d)
 	if r == 11902 'ok'
 		return 0
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @take3 {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x16, 10000
-    arm64.mul x0, x0, x16
-    arm64.movImm x16, 100
-    arm64.mul x1, x1, x16
-    arm64.add x0, x0, x1
-    arm64.add x0, x0, x2
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 97
     arm64.movImm x1, 5
-    arm64.movImm x2, 1
-    arm64.sdiv x6, x0, x1
+    arm64.sdiv x2, x0, x1
     arm64.sdiv x16, x0, x1
-    arm64.msub x7, x16, x1, x0
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x1, x6
-    arm64.movRegReg x2, x7
-    arm64.bl take3
-    arm64.cmp x0, 11902
+    arm64.msub x0, x16, x1, x0
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x16, 100
+    arm64.mul x1, x2, x16
+    arm64.add x1, x1, 10000
+    arm64.add x0, x1, x0
+    arm64.b __il_cont
+  __il_cont:
+    arm64.movImm x16, 11902
+    arm64.cmp x0, x16
     arm64.cset x0, eq
     arm64.cbnz x0, ok
     arm64.b ifcont

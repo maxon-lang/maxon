@@ -41,16 +41,15 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Container.create {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
+    arm64.prologue 48
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -64,41 +63,14 @@ func @Container.create {
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.storeBaseDispReg.word64 [x21 + 0], x20
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-    arm64.add x0, x19, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x19
-    arm64.bl __str_copy
-    arm64.add x0, x23, x19
-    arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.storeBaseDispReg.word64 [x21 + 8], x22
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
-}
-
-func @Container.count {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __managed_count
-    arm64.epilogue 16
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -116,18 +88,24 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_1  ; "numbers"
     arm64.leaRdata x1, __layout_Container_SmallInt
     arm64.bl Container.create
     arm64.movRegReg x19, x0
     arm64.movImm x1, 10
+    arm64.leaRdata x2, __layout_Container_SmallInt
     arm64.movRegReg x0, x19
     arm64.bl Container.push
     arm64.movImm x1, 20
+    arm64.leaRdata x2, __layout_Container_SmallInt
     arm64.movRegReg x0, x19
     arm64.bl Container.push
-    arm64.movRegReg x0, x19
-    arm64.bl Container.count
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 2
     arm64.cset x0, eq
     arm64.cbnz x0, check

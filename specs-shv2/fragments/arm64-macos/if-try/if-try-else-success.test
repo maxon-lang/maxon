@@ -1,21 +1,18 @@
 // Test: if-try-else-success
 
-typealias Integer = int(i64.min to i64.max)
-
 enum MyError implements Error
 	failed
 end 'MyError'
 
-function mayFail(succeed bool) returns Integer throws MyError
+function runStep(succeed bool) throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(true) 'check'
+	if try runStep(true) 'check'
 		result = 1
 	end 'check' else 'err'
 		result = 2
@@ -25,20 +22,19 @@ end 'main'
 ---
 ExitCode: 1
 ---
-func @mayFail {
+func @runStep {
   entry:
     arm64.prologue 16
     arm64.eor x0, x0, 1
     arm64.cbnz x0, check
     arm64.b ifcont
   check:
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
   ifcont:
-    arm64.movImm x0, 42
+    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
@@ -48,7 +44,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 1
-    arm64.bl mayFail
+    arm64.bl runStep
     arm64.cmp x9, 0
     arm64.cset x0, eq
     arm64.cbnz x0, check
@@ -65,13 +61,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-else-success.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

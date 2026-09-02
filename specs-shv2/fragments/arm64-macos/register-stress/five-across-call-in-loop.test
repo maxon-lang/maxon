@@ -1,9 +1,9 @@
 // Test: five-across-call-in-loop
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
-function fourAcross(p int) returns int
+function fourAcross(p Integer) returns Integer
 	var a1 = p + 1
 	var a2 = p + 2
 	var a3 = p + 3
@@ -27,55 +27,40 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @bump {
-  entry:
-    arm64.prologue 16
-    arm64.add x0, x0, 1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @fourAcross {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.add x19, x0, 1
-    arm64.add x20, x0, 2
-    arm64.add x21, x0, 3
-    arm64.add x22, x0, 4
-    arm64.movImm x23, 0
+    arm64.prologue 16
+    arm64.add x1, x0, 1
+    arm64.add x2, x0, 2
+    arm64.add x3, x0, 3
+    arm64.add x0, x0, 4
+    arm64.movImm x4, 0
     arm64.b whilehdr
   whilehdr:
-    arm64.cmp x23, 3
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
+    arm64.cmp x4, 3
+    arm64.cset x5, lt
+    arm64.cbnz x5, loop
     arm64.b whileexit
   loop:
-    arm64.movRegReg x0, x23
-    arm64.bl bump
-    arm64.add x19, x19, x0
-    arm64.add x20, x20, x0
-    arm64.add x21, x21, x0
-    arm64.add x22, x22, x0
-    arm64.add x23, x23, 1
+    arm64.b __il_body
+  __il_body:
+    arm64.add x4, x4, 1
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x1, x1, x4
+    arm64.add x2, x2, x4
+    arm64.add x3, x3, x4
+    arm64.add x0, x0, x4
     arm64.b whilehdr
   whileexit:
-    arm64.add x0, x19, x20
-    arm64.add x0, x0, x21
-    arm64.add x0, x0, x22
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
     arm64.ret
 }
 

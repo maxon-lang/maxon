@@ -46,133 +46,91 @@ end 'main'
 ---
 ExitCode: 3
 ---
-func @isScalar {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.cset x1, ge
-    arm64.cmp x0, 2
-    arm64.cset x2, le
-    arm64.and x1, x1, x2
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
-    arm64.movImm x0, 1
-    arm64.b matchcont
-  matchnext:
-    arm64.cmp x0, 3
-    arm64.cset x1, ge
-    arm64.cmp x0, 6
-    arm64.cset x0, le
-    arm64.and x0, x1, x0
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
-  matcharm:
-    arm64.movImm x0, 0
-    arm64.b matchcont
-  matchcont:
-    arm64.epilogue 16
-    arm64.ret
-  matchdead:
-}
-
-func @pickFloat {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @pickBoolean {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @pickNamed {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 3
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 0
-    arm64.bl pickFloat
-    arm64.bl isScalar
-    arm64.cbnz x0, f
-    arm64.b critsplit
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.b __il_cont#11
+  __il_cont#11:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.b matcharm#14
+  matcharm#14:
+    arm64.movImm x1, 1
+    arm64.b matchcont#18
+  matchcont#18:
+    arm64.b __il_cont#10
+  __il_cont#10:
+    arm64.cbnz x1, f
+    arm64.b critsplit#37
   f:
-    arm64.add x19, x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.bl pickBoolean
-    arm64.bl isScalar
-    arm64.cbnz x0, b
-    arm64.b critsplit
+    arm64.movImm x0, 1
+    arm64.b ifcont#2
+  critsplit#37:
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b __il_body#21
+  __il_body#21:
+    arm64.b __il_cont#20
+  __il_cont#20:
+    arm64.b __il_body#22
+  __il_body#22:
+    arm64.b matcharm#23
+  matcharm#23:
+    arm64.movImm x1, 1
+    arm64.b matchcont#27
+  matchcont#27:
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.cbnz x1, b
+    arm64.b critsplit#38
   b:
-    arm64.add x19, x19, 2
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.bl pickNamed
-    arm64.bl isScalar
-    arm64.cbnz x0, n
-    arm64.b critsplit
+    arm64.add x0, x0, 2
+    arm64.b ifcont#4
+  critsplit#38:
+    arm64.b ifcont#4
+  ifcont#4:
+    arm64.b __il_body#30
+  __il_body#30:
+    arm64.b __il_cont#29
+  __il_cont#29:
+    arm64.b __il_body#31
+  __il_body#31:
+    arm64.b matchnext
+  matchnext:
+    arm64.b matcharm#33
+  matcharm#33:
+    arm64.movImm x1, 0
+    arm64.b matchcont#36
+  matchcont#36:
+    arm64.b __il_cont#28
+  __il_cont#28:
+    arm64.cbnz x1, n
+    arm64.b critsplit#39
   n:
-    arm64.add x0, x19, 4
-    arm64.b ifcont
-  critsplit:
-    arm64.movRegReg x0, x19
-    arm64.b ifcont
-  ifcont:
+    arm64.add x0, x0, 4
+    arm64.b ifcont#6
+  critsplit#39:
+    arm64.b ifcont#6
+  ifcont#6:
     arm64.cmp x0, 0
     arm64.cset x1, lt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at main.maxon:31: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
   __rc_ok:
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }

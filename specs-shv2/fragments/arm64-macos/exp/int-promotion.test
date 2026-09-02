@@ -9,8 +9,7 @@ ExitCode: 20
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 3
-    arm64.scvtf d0, x0
+    arm64.fpLoadRdata d0, [rdata + __fconst_3]
     arm64.bl Math.exp
     arm64.fcvtzs x0, d0
     arm64.cmp x0, 0
@@ -18,181 +17,17 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
+    arm64.leaRdata x0, __str_blob_2  ; "panic at int-promotion.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
   __rc_ok:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Math.exp {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, d8
-    arm64.movRegReg d8, d0
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
-    arm64.fcmp d8, d0
-    arm64.cset x0, eq
-    arm64.cbnz x0, zero
-    arm64.b ifcont
-  zero:
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
-    arm64.loadRegSlot d8, slot0
-    arm64.epilogue 32
-    arm64.ret
-  ifcont:
-    arm64.movRegReg d0, d8
-    arm64.bl Math.isPositiveInfinity
-    arm64.cbnz x0, positiveInfinity
-    arm64.b ifcont
-  positiveInfinity:
-    arm64.movRegReg d0, d8
-    arm64.loadRegSlot d8, slot0
-    arm64.epilogue 32
-    arm64.ret
-  ifcont:
-    arm64.movRegReg d0, d8
-    arm64.bl Math.isNegativeInfinity
-    arm64.cbnz x0, negativeInfinity
-    arm64.b ifcont
-  negativeInfinity:
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
-    arm64.loadRegSlot d8, slot0
-    arm64.epilogue 32
-    arm64.ret
-  ifcont:
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
-    arm64.fcmp d8, d0
-    arm64.cset x0, mi
-    arm64.cbnz x0, neg
-    arm64.b critsplit
-  neg:
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
-    arm64.fsub d0, d0, d8
-    arm64.b ifcont
-  critsplit:
-    arm64.movRegReg d0, d8
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x1, 0
-    arm64.b whilehdr
-  whilehdr:
-    arm64.fpLoadRdata d1, [rdata + __fconst_4]
-    arm64.fcmp d0, d1
-    arm64.cset x2, gt
-    arm64.cbnz x2, reduce
-    arm64.b whileexit
-  reduce:
-    arm64.fpLoadRdata d1, [rdata + __fconst_5]
-    arm64.fdiv d0, d0, d1
-    arm64.add x1, x1, 1
-    arm64.b whilehdr
-  whileexit:
-    arm64.fpLoadRdata d1, [rdata + __fconst_4]
-    arm64.fpLoadRdata d2, [rdata + __fconst_4]
-    arm64.fpLoadRdata d3, [rdata + __fconst_4]
-    arm64.fpLoadRdata d4, [rdata + __fconst_6]
-    arm64.b whilehdr
-  whilehdr:
-    arm64.fcmp d3, d4
-    arm64.cset x2, mi
-    arm64.cbnz x2, series
-    arm64.b whileexit
-  series:
-    arm64.fmul d1, d1, d0
-    arm64.fpLoadRdata d5, [rdata + __fconst_3]
-    arm64.fcmp d3, d5
-    arm64.cset x2, eq
-    arm64.fdiv d1, d1, d3
-    arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0
-    arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
-    arm64.loadRegSlot d8, slot0
-    arm64.epilogue 32
-    arm64.ret
-  tryok:
-    arm64.fadd d2, d2, d1
-    arm64.movImm x2, 1
-    arm64.scvtf d5, x2
-    arm64.fadd d3, d3, d5
-    arm64.b whilehdr
-  whileexit:
-    arm64.movImm x2, 0
-    arm64.b forhdr
-  forhdr:
-    arm64.cmp x2, x1
-    arm64.cset x6, lt
-    arm64.cbnz x6, square
-    arm64.b forexit
-  square:
-    arm64.fmul d2, d2, d2
-    arm64.b forstep
-  forstep:
-    arm64.add x2, x2, 1
-    arm64.b forhdr
-  forexit:
-    arm64.cbnz x0, invert
-    arm64.b critsplit
-  invert:
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
-    arm64.fpLoadRdata d1, [rdata + __fconst_3]
-    arm64.fcmp d2, d1
-    arm64.cset x0, eq
-    arm64.fdiv d0, d0, d2
-    arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_1
-    arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_3]
-    arm64.loadRegSlot d8, slot0
-    arm64.epilogue 32
-    arm64.ret
-  tryok:
-    arm64.b ifcont
-  critsplit:
-    arm64.movRegReg d0, d2
-    arm64.b ifcont
-  ifcont:
-    arm64.loadRegSlot d8, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Math.isPositiveInfinity {
-  entry:
-    arm64.prologue 16
-    arm64.fmov x0, d0
-    arm64.movImm x1, 9218868437227405312
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Math.isNegativeInfinity {
-  entry:
-    arm64.prologue 16
-    arm64.fmov x0, d0
-    arm64.movImm x1, -4503599627370496
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
     arm64.epilogue 16
     arm64.ret
 }

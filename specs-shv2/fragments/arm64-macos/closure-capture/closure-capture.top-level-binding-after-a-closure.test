@@ -53,7 +53,7 @@ func @main {
     arm64.leaGlobal x0, __data_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x19, x0, 20
-    arm64.movImm x0, -1
+    arm64.movImm x0, 18446744073709551615
     arm64.bl bumped
     arm64.add x0, x19, x0
     arm64.cmp x0, 0
@@ -61,13 +61,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at closure-capture.top-level-binding-after-a-closure.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

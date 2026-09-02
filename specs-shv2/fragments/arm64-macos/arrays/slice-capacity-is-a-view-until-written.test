@@ -2,7 +2,7 @@
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
 	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
-	let notMine = 0 - 1
+	let notMine = -1
 	let asView = sub.capacity()
 	try sub.set(0, value: 99) otherwise panic("index 0 is in bounds")
 	let afterWrite = sub.capacity()
@@ -15,47 +15,41 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
-    arm64.bl __managed_create
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.movImm x1, 10
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 20
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 30
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 40
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 50
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 5
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x1, 1
     arm64.movImm x2, 4
+    arm64.leaRdata x3, __layout_Array_int
     arm64.movRegReg x0, x19
-    arm64.bl __managed_slice
+    arm64.bl Array.slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -63,37 +57,71 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
-    arm64.movImm x0, 0
-    arm64.sub x21, x0, 1
+  tryok#1:
     arm64.movRegReg x0, x20
-    arm64.bl __managed_capacity
-    arm64.movRegReg x22, x0
+    arm64.bl Array.capacity
+    arm64.movRegReg x21, x0
     arm64.movImm x1, 0
     arm64.movImm x2, 99
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_owned
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_bounds
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_buffer
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_viewed
+  __im_viewed:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_slow
+    arm64.b __im_store
+  __im_slow:
     arm64.movRegReg x0, x20
     arm64.bl __managed_set
+    arm64.b __im_cont
+  __im_store:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at slice-capacity-is-a-view-until-written.test:7: index 0 is in bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#3:
     arm64.movRegReg x0, x20
-    arm64.bl __managed_capacity
-    arm64.cmp x22, x21
+    arm64.bl Array.capacity
+    arm64.cmp x21, -1
     arm64.cset x1, eq
     arm64.movImm x2, 0
     arm64.cbnz x1, andrhs
@@ -118,7 +146,6 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont:
@@ -131,7 +158,6 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

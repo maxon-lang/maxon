@@ -25,8 +25,7 @@ ExitCode: 42
 func @mayFail {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
@@ -63,13 +62,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at used-otherwise-binding.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

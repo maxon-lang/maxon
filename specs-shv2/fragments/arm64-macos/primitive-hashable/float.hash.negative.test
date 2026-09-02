@@ -1,7 +1,7 @@
 // Test: float.hash.negative
 function main() returns ExitCode
 	let pos = 3.14
-	let neg = 0.0 - 3.14
+	let neg = -3.14
 	if neg.hash() != pos.hash() 'signMasked'
 		return 1
 	end 'signMasked'
@@ -15,59 +15,60 @@ ExitCode: 0
 ---
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, d9
-    arm64.storeSlotReg slot1, d8
-    arm64.storeSlotReg slot0, x19
-    arm64.fpLoadRdata d8, [rdata + __fconst_0]
-    arm64.fpLoadRdata d0, [rdata + __fconst_1]
-    arm64.fpLoadRdata d1, [rdata + __fconst_0]
-    arm64.fsub d9, d0, d1
-    arm64.movRegReg d0, d9
-    arm64.bl float.hash
-    arm64.movRegReg x19, x0
-    arm64.movRegReg d0, d8
-    arm64.bl float.hash
-    arm64.cmp x19, x0
+    arm64.prologue 16
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.b ifcont#9
+  ifcont#9:
+    arm64.movImm x0, 1374389535
+    arm64.b __rc_chk#11
+  __rc_chk#11:
+    arm64.b __rc_ok#10
+  __rc_ok#10:
+    arm64.b __il_cont#6
+  __il_cont#6:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.b ifcont#15
+  ifcont#15:
+    arm64.movImm x1, 1374389535
+    arm64.b __rc_chk#17
+  __rc_chk#17:
+    arm64.b __rc_ok#16
+  __rc_ok#16:
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.cmp x0, x1
     arm64.cset x0, ne
     arm64.cbnz x0, signMasked
-    arm64.b ifcont
+    arm64.b ifcont#2
   signMasked:
     arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot d8, slot1
-    arm64.loadRegSlot d9, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movRegReg d0, d9
-    arm64.bl float.hash
-    arm64.cmp x0, 1374389535
+  ifcont#2:
+    arm64.b __il_body#20
+  __il_body#20:
+    arm64.b ifcont#22
+  ifcont#22:
+    arm64.movImm x0, 1374389535
+    arm64.b __rc_chk#24
+  __rc_chk#24:
+    arm64.b __rc_ok#23
+  __rc_ok#23:
+    arm64.b __il_cont#19
+  __il_cont#19:
+    arm64.movImm x16, 1374389535
+    arm64.cmp x0, x16
     arm64.cset x0, ne
     arm64.cbnz x0, pinned
-    arm64.b ifcont
+    arm64.b ifcont#4
   pinned:
     arm64.movImm x0, 2
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot d8, slot1
-    arm64.loadRegSlot d9, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot d8, slot1
-    arm64.loadRegSlot d9, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @float.hash {
-  entry:
-    arm64.prologue 16
-    arm64.fmov x0, d0
-    arm64.movImm x1, 4294967295
-    arm64.and x0, x0, x1
     arm64.epilogue 16
     arm64.ret
 }

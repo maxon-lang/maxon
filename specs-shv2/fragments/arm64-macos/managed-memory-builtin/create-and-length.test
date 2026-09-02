@@ -13,9 +13,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -38,12 +39,11 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   tryok:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_count
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
     arm64.cset x0, ne
     arm64.cbnz x0, badLen
-    arm64.b ifcont
+    arm64.b ifcont#4
   badLen:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -53,13 +53,13 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movRegReg x0, x19
     arm64.bl __managed_capacity
     arm64.cmp x0, 4
     arm64.cset x0, lt
     arm64.cbnz x0, badCap
-    arm64.b ifcont
+    arm64.b ifcont#6
   badCap:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
@@ -69,7 +69,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#6:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref

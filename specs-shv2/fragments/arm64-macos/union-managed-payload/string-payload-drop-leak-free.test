@@ -7,15 +7,17 @@ end 'Message'
 
 function main() returns ExitCode
 	let m = Message.text("hello world this is a long enough string to be heap")
+	print("{m}")
 	return 9
 end 'main'
 ---
 ExitCode: 9
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -26,32 +28,48 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
+    arm64.leaRdata x19, __str_rec_3  ; "hello world this is a long enough string to be heap"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-    arm64.add x0, x19, 49
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.leaRdata x2, __str_rec_4  ; "silent"
+    arm64.mul x1, x1, x2
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.leaRdata x2, __str_rec_5  ; "text"
+    arm64.mul x0, x0, x2
+    arm64.add x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
+    arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x19
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
     arm64.bl __str_copy
-    arm64.add x0, x23, x19
+    arm64.add x0, x23, x21
     arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x22
+    arm64.movRegReg x0, x22
+    arm64.bl print
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
     arm64.movImm x19, 9
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Message

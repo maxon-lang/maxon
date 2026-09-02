@@ -1,6 +1,6 @@
 // Test: reuse-copy-outlives
 function main() returns ExitCode
-	var a = 20
+	let a = 20
 	var b = 5
 	var i = 0
 	while i < 3 'loop'
@@ -21,8 +21,8 @@ func @main {
     arm64.b whilehdr
   whilehdr:
     arm64.cmp x2, 3
-    arm64.cset x6, lt
-    arm64.cbnz x6, loop
+    arm64.cset x3, lt
+    arm64.cbnz x3, loop
     arm64.b whileexit
   loop:
     arm64.sub x1, x0, x1
@@ -34,13 +34,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x1, x0
+    arm64.cmp x1, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at reuse-copy-outlives.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

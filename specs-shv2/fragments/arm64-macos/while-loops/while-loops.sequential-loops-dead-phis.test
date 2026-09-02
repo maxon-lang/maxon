@@ -1,9 +1,9 @@
 // Test: while-loops.sequential-loops-dead-phis
-function work(x int) returns int
+function work(x Integer) returns Integer
 	return x + 1
 end 'work'
 
-function big(n int) returns int
+function big(n Integer) returns Integer
 	var total = 0
 	var a0 = 1
 	var a1 = 2
@@ -47,102 +47,79 @@ end 'big'
 function main() returns ExitCode
 	return big(3)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 114
 ---
-func @work {
-  entry:
-    arm64.prologue 16
-    arm64.add x0, x0, 1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @big {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot8, x27
-    arm64.storeSlotReg slot7, x26
-    arm64.storeSlotReg slot6, x25
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 1
-    arm64.movImm x21, 2
-    arm64.movImm x22, 3
-    arm64.movImm x23, 4
-    arm64.movImm x24, 5
-    arm64.movImm x25, 6
-    arm64.movImm x26, 0
-    arm64.b whilehdr
-  whilehdr:
-    arm64.cmp x26, x19
-    arm64.cset x0, lt
-    arm64.cbnz x0, L0
-    arm64.b whileexit
+    arm64.prologue 16
+    arm64.movImm x1, 1
+    arm64.movImm x2, 2
+    arm64.movImm x3, 3
+    arm64.movImm x4, 4
+    arm64.movImm x5, 5
+    arm64.movImm x6, 6
+    arm64.movImm x7, 0
+    arm64.b whilehdr#1
+  whilehdr#1:
+    arm64.cmp x7, x0
+    arm64.cset x8, lt
+    arm64.cbnz x8, L0
+    arm64.b whileexit#3
   L0:
-    arm64.movRegReg x0, x26
-    arm64.bl work
-    arm64.add x20, x20, x0
-    arm64.add x21, x21, x0
-    arm64.add x22, x22, x0
-    arm64.add x23, x23, x0
-    arm64.add x24, x24, x0
-    arm64.add x25, x25, x0
-    arm64.add x26, x26, 1
-    arm64.b whilehdr
-  whileexit:
-    arm64.add x0, x20, 0
-    arm64.add x0, x0, x21
-    arm64.add x0, x0, x22
-    arm64.add x0, x0, x23
-    arm64.add x0, x0, x24
-    arm64.add x20, x0, x25
-    arm64.movImm x21, 1
-    arm64.movImm x22, 2
-    arm64.movImm x23, 3
-    arm64.movImm x24, 4
-    arm64.movImm x25, 5
-    arm64.movImm x26, 6
-    arm64.movImm x27, 0
-    arm64.b whilehdr
-  whilehdr:
-    arm64.cmp x27, x19
-    arm64.cset x0, lt
-    arm64.cbnz x0, L1
-    arm64.b whileexit
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.add x7, x7, 1
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.add x1, x1, x7
+    arm64.add x2, x2, x7
+    arm64.add x3, x3, x7
+    arm64.add x4, x4, x7
+    arm64.add x5, x5, x7
+    arm64.add x6, x6, x7
+    arm64.b whilehdr#1
+  whileexit#3:
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x3
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x5
+    arm64.add x1, x1, x6
+    arm64.movImm x2, 1
+    arm64.movImm x3, 2
+    arm64.movImm x4, 3
+    arm64.movImm x5, 4
+    arm64.movImm x6, 5
+    arm64.movImm x7, 6
+    arm64.movImm x8, 0
+    arm64.b whilehdr#4
+  whilehdr#4:
+    arm64.cmp x8, x0
+    arm64.cset x9, lt
+    arm64.cbnz x9, L1
+    arm64.b whileexit#6
   L1:
-    arm64.movRegReg x0, x27
-    arm64.bl work
-    arm64.add x21, x21, x0
-    arm64.add x22, x22, x0
-    arm64.add x23, x23, x0
-    arm64.add x24, x24, x0
-    arm64.add x25, x25, x0
-    arm64.add x26, x26, x0
-    arm64.add x27, x27, 1
-    arm64.b whilehdr
-  whileexit:
-    arm64.add x0, x20, x21
-    arm64.add x0, x0, x22
-    arm64.add x0, x0, x23
-    arm64.add x0, x0, x24
-    arm64.add x0, x0, x25
-    arm64.add x0, x0, x26
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.add x8, x8, 1
+    arm64.b __il_cont#9
+  __il_cont#9:
+    arm64.add x2, x2, x8
+    arm64.add x3, x3, x8
+    arm64.add x4, x4, x8
+    arm64.add x5, x5, x8
+    arm64.add x6, x6, x8
+    arm64.add x7, x7, x8
+    arm64.b whilehdr#4
+  whileexit#6:
+    arm64.add x0, x1, x2
+    arm64.add x0, x0, x3
+    arm64.add x0, x0, x4
+    arm64.add x0, x0, x5
+    arm64.add x0, x0, x6
+    arm64.add x0, x0, x7
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -156,13 +133,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at while-loops.sequential-loops-dead-phis.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

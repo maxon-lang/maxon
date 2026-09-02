@@ -13,8 +13,7 @@ ExitCode: 0
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.scvtf d0, x0
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
     arm64.bl Math.cos
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fcmp d0, d1
@@ -27,98 +26,6 @@ func @main {
     arm64.ret
   ifcont:
     arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Math.reduceToPiRange {
-  entry:
-    arm64.prologue 16
-    arm64.b whilehdr
-  whilehdr:
-    arm64.fpLoadRdata d1, [rdata + __fconst_2]
-    arm64.fcmp d0, d1
-    arm64.cset x0, gt
-    arm64.cbnz x0, reduce_pos
-    arm64.b whileexit
-  reduce_pos:
-    arm64.fpLoadRdata d1, [rdata + __fconst_3]
-    arm64.fsub d0, d0, d1
-    arm64.b whilehdr
-  whileexit:
-    arm64.b whilehdr
-  whilehdr:
-    arm64.fpLoadRdata d1, [rdata + __fconst_2]
-    arm64.fpLoadRdata d2, [rdata + __fconst_4]
-    arm64.fsub d1, d2, d1
-    arm64.fcmp d0, d1
-    arm64.cset x0, mi
-    arm64.cbnz x0, reduce_neg
-    arm64.b whileexit
-  reduce_neg:
-    arm64.fpLoadRdata d1, [rdata + __fconst_3]
-    arm64.fadd d0, d0, d1
-    arm64.b whilehdr
-  whileexit:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Math.cos {
-  entry:
-    arm64.prologue 16
-    arm64.fpLoadRdata d1, [rdata + __fconst_4]
-    arm64.fcmp d0, d1
-    arm64.cset x0, eq
-    arm64.cbnz x0, zero
-    arm64.b ifcont
-  zero:
-    arm64.fpLoadRdata d0, [rdata + __fconst_1]
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.bl Math.reduceToPiRange
-    arm64.fmul d0, d0, d0
-    arm64.fpLoadRdata d1, [rdata + __fconst_1]
-    arm64.fpLoadRdata d2, [rdata + __fconst_1]
-    arm64.fpLoadRdata d3, [rdata + __fconst_1]
-    arm64.fpLoadRdata d4, [rdata + __fconst_5]
-    arm64.b whilehdr
-  whilehdr:
-    arm64.fcmp d3, d4
-    arm64.cset x0, mi
-    arm64.cbnz x0, series
-    arm64.b whileexit
-  series:
-    arm64.fpLoadRdata d5, [rdata + __fconst_6]
-    arm64.fmul d5, d5, d3
-    arm64.fpLoadRdata d6, [rdata + __fconst_4]
-    arm64.fsub d6, d6, d0
-    arm64.fmul d1, d1, d6
-    arm64.fpLoadRdata d6, [rdata + __fconst_1]
-    arm64.fsub d6, d5, d6
-    arm64.fmul d5, d6, d5
-    arm64.fpLoadRdata d6, [rdata + __fconst_4]
-    arm64.fcmp d5, d6
-    arm64.cset x0, eq
-    arm64.fdiv d1, d1, d5
-    arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0
-    arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_4]
-    arm64.epilogue 16
-    arm64.ret
-  tryok:
-    arm64.fadd d2, d2, d1
-    arm64.fpLoadRdata d5, [rdata + __fconst_1]
-    arm64.fadd d3, d3, d5
-    arm64.b whilehdr
-  whileexit:
-    arm64.movRegReg d0, d2
     arm64.epilogue 16
     arm64.ret
 }

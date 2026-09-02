@@ -1,41 +1,41 @@
 // Test: tuple-element-names-join-injectively
 type A_B
-	export let alpha as int
+	export let alpha as Integer
 
-	export static function create(alpha int) returns Self
+	export static function create(alpha Integer) returns Self
 		return Self{alpha: alpha}
 	end 'create'
 end 'A_B'
 
 type A
-	export let gamma as int
+	export let gamma as Integer
 
-	export static function create(gamma int) returns Self
+	export static function create(gamma Integer) returns Self
 		return Self{gamma: gamma}
 	end 'create'
 end 'A'
 
 type C
-	export let beta as int
+	export let beta as Integer
 
-	export static function create(beta int) returns Self
+	export static function create(beta Integer) returns Self
 		return Self{beta: beta}
 	end 'create'
 end 'C'
 
 type B_C
-	export let delta as int
+	export let delta as Integer
 
-	export static function create(delta int) returns Self
+	export static function create(delta Integer) returns Self
 		return Self{delta: delta}
 	end 'create'
 end 'B_C'
 
-function first(t (A_B, C)) returns int
+function first(t (A_B, C)) returns Integer
 	return t.0.alpha + t.1.beta
 end 'first'
 
-function second(t (A, B_C)) returns int
+function second(t (A, B_C)) returns Integer
 	return t.0.gamma * 10 + t.1.delta
 end 'second'
 
@@ -44,13 +44,15 @@ function main() returns ExitCode
 	let q = (A.create(3), B_C.create(4))
 	return first(p) + second(q)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 37
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @A_B.create {
@@ -109,36 +111,9 @@ func @B_C.create {
     arm64.ret
 }
 
-func @first {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x0, x1, x0
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @second {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.movImm x16, 10
-    arm64.mul x1, x1, x16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x0, x1, x0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -163,16 +138,29 @@ func @main {
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x19
-    arm64.storeBaseDispReg.word64 [x22 + 8], x20
-    arm64.movRegReg x0, x21
-    arm64.bl first
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x22
-    arm64.bl second
-    arm64.add x19, x19, x0
-    arm64.movRegReg x0, x22
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.add x1, x1, x2
+    arm64.b __il_cont#5
+  __il_cont#5:
+    arm64.b __il_body#7
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x16, 10
+    arm64.mul x2, x2, x16
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.add x2, x2, x3
+    arm64.b __il_cont#4
+  __il_cont#4:
+    arm64.add x19, x1, x2
     arm64.bl __destruct___Tuple2.A.B_C
     arm64.movRegReg x0, x21
     arm64.bl __destruct___Tuple2.A_B.C
@@ -181,19 +169,17 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x19, x0
+    arm64.cmp x19, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at tuple-element-names-join-injectively.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __rc_ok:
@@ -201,7 +187,6 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

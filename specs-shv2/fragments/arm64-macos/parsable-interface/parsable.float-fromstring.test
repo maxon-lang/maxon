@@ -9,9 +9,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -24,19 +25,19 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_49  ; "3.14"
     arm64.bl __float_fromString
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
     arm64.b trycont
   tryok:
     arm64.b trycont
   trycont:
-    arm64.fpLoadRdata d1, [rdata + __fconst_6]
+    arm64.fpLoadRdata d1, [rdata + __fconst_100]
     arm64.fmul d0, d0, d1
     arm64.fcvtzs x19, d0
     arm64.movImm x0, 21
@@ -47,15 +48,15 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __int_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_3
+    arm64.leaRdata x0, __str_rec_50  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x23, x19, x22
-    arm64.add x0, x23, 49
+    arm64.add x0, x23, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.add x25, x24, 48
+    arm64.add x25, x24, 56
     arm64.movRegReg x0, x25
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x19
@@ -68,14 +69,14 @@ func @main {
     arm64.add x0, x19, x22
     arm64.storeBaseDispReg.word64 [x24 + 0], x25
     arm64.storeBaseDispReg.word64 [x24 + 8], x23
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.movImm x0, 0
@@ -86,271 +87,6 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
-    arm64.epilogue 80
-    arm64.ret
-}
-
-func @__float_fromString {
-  entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot7, d9
-    arm64.storeSlotReg slot6, d8
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 0
-    arm64.fpLoadRdata d8, [rdata + __fconst_5]
-    arm64.fpLoadRdata d9, [rdata + __fconst_7]
-    arm64.movImm x21, 0
-    arm64.movImm x22, 0
-    arm64.movImm x23, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x24
-    arm64.bl __str_to_codepoints
-    arm64.movImm x19, 0
-    arm64.b forhdr
-  forhdr:
-    arm64.movRegReg x0, x24
-    arm64.bl __managed_count
-    arm64.cmp x19, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, chars
-    arm64.b forexit
-  chars:
-    arm64.movRegReg x0, x24
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_get_unchecked
-    arm64.cmp x0, 46
-    arm64.cset x1, eq
-    arm64.cbnz x1, dot
-    arm64.b ifelse
-  dot:
-    arm64.cbnz x21, double_dot
-    arm64.b ifcont
-  double_dot:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x24
-    arm64.bl __managed_decref
-    arm64.add x9, x19, 1
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
-    arm64.epilogue 80
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 1
-    arm64.movRegReg x1, x22
-    arm64.movRegReg x2, x23
-    arm64.b ifcont
-  ifelse:
-    arm64.cmp x0, 45
-    arm64.cset x1, eq
-    arm64.cbnz x1, minus
-    arm64.b ifelse
-  minus:
-    arm64.cbnz x23, minus_after_digits
-    arm64.b ifcont
-  minus_after_digits:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x24
-    arm64.bl __managed_decref
-    arm64.add x9, x19, 1
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
-    arm64.epilogue 80
-    arm64.ret
-  ifcont:
-    arm64.cbnz x21, minus_after_dot
-    arm64.b ifcont
-  minus_after_dot:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x24
-    arm64.bl __managed_decref
-    arm64.add x9, x19, 1
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
-    arm64.epilogue 80
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 1
-    arm64.movRegReg x1, x23
-    arm64.b ifcont
-  ifelse:
-    arm64.cmp x0, 48
-    arm64.cset x1, ge
-    arm64.cbnz x1, maybe_digit
-    arm64.b ifelse
-  maybe_digit:
-    arm64.cmp x0, 57
-    arm64.cset x1, le
-    arm64.cbnz x1, is_digit
-    arm64.b ifelse
-  is_digit:
-    arm64.movImm x1, 1
-    arm64.sub x0, x0, 48
-    arm64.cbnz x21, after_dot
-    arm64.b ifelse
-  after_dot:
-    arm64.fpLoadRdata d0, [rdata + __fconst_8]
-    arm64.fmul d0, d9, d0
-    arm64.scvtf d1, x0
-    arm64.fpLoadRdata d2, [rdata + __fconst_5]
-    arm64.fcmp d0, d2
-    arm64.cset x0, eq
-    arm64.fdiv d1, d1, d0
-    arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_4
-    arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
-    arm64.epilogue 80
-    arm64.ret
-  tryok:
-    arm64.fadd d1, d8, d1
-    arm64.b ifcont
-  ifelse:
-    arm64.movImm x16, 10
-    arm64.mul x2, x20, x16
-    arm64.add x0, x2, x0
-    arm64.movRegReg x20, x0
-    arm64.movRegReg d1, d8
-    arm64.movRegReg d0, d9
-    arm64.b ifcont
-  ifcont:
-    arm64.b ifcont
-  ifcont:
-    arm64.b ifcont
-  ifcont:
-    arm64.movRegReg d8, d1
-    arm64.movRegReg d9, d0
-    arm64.movRegReg x0, x22
-    arm64.b ifcont
-  ifcont:
-    arm64.movRegReg x2, x1
-    arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x21
-    arm64.b ifcont
-  ifcont:
-    arm64.b forstep
-  forstep:
-    arm64.add x19, x19, 1
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x22, x1
-    arm64.movRegReg x23, x2
-    arm64.b forhdr
-  ifelse:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x24
-    arm64.bl __managed_decref
-    arm64.add x9, x19, 1
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
-    arm64.epilogue 80
-    arm64.ret
-  ifelse:
-    arm64.movImm x19, 0
-    arm64.movRegReg x0, x24
-    arm64.bl __managed_decref
-    arm64.add x9, x19, 1
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
-    arm64.epilogue 80
-    arm64.ret
-  forexit:
-    arm64.movRegReg x0, x24
-    arm64.bl __managed_decref
-    arm64.eor x0, x23, 1
-    arm64.cbnz x0, empty
-    arm64.b ifcont
-  empty:
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
-    arm64.fpLoadRdata d0, [rdata + __fconst_5]
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
-    arm64.epilogue 80
-    arm64.ret
-  ifcont:
-    arm64.scvtf d0, x20
-    arm64.fadd d0, d0, d8
-    arm64.cbnz x22, negate
-    arm64.b critsplit
-  negate:
-    arm64.fpLoadRdata d1, [rdata + __fconst_5]
-    arm64.fsub d0, d1, d0
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot d8, slot6
-    arm64.loadRegSlot d9, slot7
     arm64.epilogue 80
     arm64.ret
 }

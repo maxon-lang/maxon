@@ -18,101 +18,66 @@ end 'main'
 ---
 ExitCode: 0
 ---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
 func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
-    arm64.leaRdata x1, __str_rec_1
+    arm64.leaRdata x19, __str_rec_4  ; "ab"
+    arm64.leaRdata x1, __str_rec_4  ; "ab"
     arm64.movRegReg x0, x19
     arm64.bl String.equals
     arm64.eor x0, x0, 1
     arm64.cbnz x0, same
-    arm64.b ifcont
+    arm64.b ifcont#2
   same:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.leaRdata x1, __str_rec_3
+  ifcont#2:
+    arm64.leaRdata x1, __str_rec_5  ; "ac"
     arm64.movRegReg x0, x19
     arm64.bl String.equals
     arm64.cbnz x0, differentByte
-    arm64.b ifcont
+    arm64.b ifcont#4
   differentByte:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.leaRdata x1, __str_rec_5
+  ifcont#4:
+    arm64.leaRdata x1, __str_rec_6  ; "abc"
     arm64.movRegReg x0, x19
     arm64.bl String.equals
     arm64.cbnz x0, differentLength
-    arm64.b ifcont
+    arm64.b ifcont#6
   differentLength:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.leaRdata x0, __str_rec_7
-    arm64.leaRdata x1, __str_rec_7
+  ifcont#6:
+    arm64.leaRdata x0, __str_rec_7  ; ""
+    arm64.leaRdata x1, __str_rec_7  ; ""
     arm64.bl String.equals
     arm64.eor x0, x0, 1
     arm64.cbnz x0, bothEmpty
-    arm64.b ifcont
+    arm64.b ifcont#8
   bothEmpty:
     arm64.movImm x0, 4
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#8:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
-}
-
-func @String.equals {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x1 + 8]
-    arm64.cmp x2, x6
-    arm64.cset x6, eq
-    arm64.cbnz x6, lenMatch
-    arm64.b notEqual
-  lenMatch:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.movImm x6, 0
-    arm64.b cmphdr
-  cmphdr:
-    arm64.cmp x6, x2
-    arm64.cset x7, ge
-    arm64.cbnz x7, allMatch
-    arm64.b cmpbody
-  allMatch:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  cmpbody:
-    arm64.add x7, x0, x6
-    arm64.loadRegBaseDisp.byte x7, [x7 + 0]
-    arm64.add x8, x1, x6
-    arm64.loadRegBaseDisp.byte x8, [x8 + 0]
-    arm64.movImm x9, 1
-    arm64.add x6, x6, x9
-    arm64.cmp x7, x8
-    arm64.cset x7, eq
-    arm64.cbnz x7, critsplit
-    arm64.b notEqual
-  critsplit:
-    arm64.b cmphdr
-  notEqual:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
     arm64.ret
 }

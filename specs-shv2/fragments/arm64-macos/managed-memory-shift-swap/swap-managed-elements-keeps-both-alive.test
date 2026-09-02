@@ -38,12 +38,12 @@ func @main {
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_4
+    arm64.leaRdata x0, __str_rec_4  ; "alpha heap string long enough to require an allocation"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_5  ; "beta heap string long enough to require an allocation"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
@@ -109,7 +109,7 @@ func @main {
     arm64.cbnz x1, tryerr#4
     arm64.b tryok#3
   tryerr#4:
-    arm64.leaRdata x20, __str_rec_6
+    arm64.leaRdata x20, __str_rec_6  ; "missing"
     arm64.b trycont#5
   tryok#3:
     arm64.movRegReg x20, x0
@@ -152,7 +152,7 @@ func @main {
     arm64.cbnz x1, tryerr#7
     arm64.b tryok#6
   tryerr#7:
-    arm64.leaRdata x21, __str_rec_6
+    arm64.leaRdata x21, __str_rec_6  ; "missing"
     arm64.b trycont#8
   tryok#6:
     arm64.movRegReg x21, x0
@@ -160,7 +160,7 @@ func @main {
   trycont#8:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
-    arm64.leaRdata x0, __str_rec_7
+    arm64.leaRdata x0, __str_rec_7  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.add x25, x20, x24
@@ -191,7 +191,7 @@ func @main {
     arm64.bl __str_decref
     arm64.loadRegBaseDisp.word64 x20, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x21 + 8]
-    arm64.leaRdata x0, __str_rec_7
+    arm64.leaRdata x0, __str_rec_7  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.add x24, x21, x23
@@ -233,7 +233,7 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_8
+    arm64.leaRdata x0, __str_blob_8  ; "panic at swap-managed-elements-keeps-both-alive.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

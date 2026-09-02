@@ -43,7 +43,7 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_3
+    arm64.leaRdata x19, __str_rec_3  ; "the first nested payload, long enough to be a real heap allocation"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -80,7 +80,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.leaRdata x23, __str_rec_4
+    arm64.leaRdata x23, __str_rec_4  ; "a replacement, also a real heap allocation"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -107,7 +107,7 @@ func @main {
     arm64.add x21, x21, 1
     arm64.b matchcont
   matchcont:
-    arm64.leaRdata x22, __str_rec_5
+    arm64.leaRdata x22, __str_rec_5  ; "the next round's payload, a real heap allocation too"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -145,7 +145,7 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_6
+    arm64.leaRdata x0, __str_blob_6  ; "panic at write-back-through-a-loop-carried-nested-union-payload.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

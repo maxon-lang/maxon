@@ -17,21 +17,30 @@ end 'main'
 ExitCode: 5
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Holder.create {
   entry:
     arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct___Tuple2.Array_Byte.int
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
@@ -41,38 +50,30 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
-    arm64.movImm x0, 1
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __str_to_bytes
-    arm64.movImm x19, 7
+    arm64.leaRdata x0, __str_rec_1  ; "hello"
+    arm64.bl String.toByteArray
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 7
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
-    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
     arm64.bl Holder.create
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __managed_count
-    arm64.movRegReg x20, x0
-    arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x1 + 8]
+    arm64.cmp x19, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x20, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
+    arm64.cmp x19, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
+    arm64.leaRdata x0, __str_blob_3  ; "panic at tuple-through-a-struct-field-serves-the-roster.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -80,9 +81,8 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_ok:
-    arm64.movRegReg x0, x19
     arm64.bl __destruct_Holder
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

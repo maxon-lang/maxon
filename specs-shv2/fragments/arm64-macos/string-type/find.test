@@ -13,9 +13,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -30,41 +31,41 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
-    arm64.leaRdata x1, __str_rec_3
+    arm64.leaRdata x19, __str_rec_5  ; "hello world"
+    arm64.leaRdata x1, __str_rec_6  ; "world"
     arm64.movRegReg x0, x19
-    arm64.bl __strix_first
+    arm64.bl String.findFirst
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
     arm64.movRegReg x0, x19
-    arm64.bl __strix_end
+    arm64.bl String.endIndex
     arm64.movRegReg x20, x0
-    arm64.b trycont
-  tryok:
+    arm64.b trycont#3
+  tryok#1:
     arm64.movRegReg x20, x0
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#3
+  trycont#3:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_7  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.add x25, x21, x24
-    arm64.add x0, x25, 49
+    arm64.add x0, x25, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x26, x0
-    arm64.add x27, x26, 48
+    arm64.add x27, x26, 56
     arm64.movRegReg x0, x27
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x21
@@ -77,34 +78,34 @@ func @main {
     arm64.add x0, x21, x24
     arm64.storeBaseDispReg.word64 [x26 + 0], x27
     arm64.storeBaseDispReg.word64 [x26 + 8], x25
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x26 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
-    arm64.leaRdata x1, __str_rec_7
+    arm64.leaRdata x1, __str_rec_8  ; "xyz"
     arm64.movRegReg x0, x19
-    arm64.bl __strix_first
+    arm64.bl String.findFirst
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#5
+    arm64.b tryok#4
+  tryerr#5:
     arm64.movRegReg x0, x19
-    arm64.bl __strix_end
+    arm64.bl String.endIndex
     arm64.movRegReg x21, x0
-    arm64.b trycont
-  tryok:
+    arm64.b trycont#6
+  tryok#4:
     arm64.movRegReg x21, x0
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#6
+  trycont#6:
     arm64.movRegReg x0, x19
-    arm64.bl __strix_end
+    arm64.bl String.endIndex
     arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.cmp x1, x2
@@ -113,8 +114,8 @@ func @main {
     arm64.cbnz x19, not_found
     arm64.b ifcont
   not_found:
-    arm64.leaRdata x0, __str_rec_9
-    arm64.bl __print_string
+    arm64.leaRdata x0, __str_rec_9  ; "-1\x0a"
+    arm64.bl print
     arm64.b ifcont
   ifcont:
     arm64.movImm x19, 0

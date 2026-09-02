@@ -22,7 +22,7 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_2
+    arm64.leaRdata x19, __str_rec_2  ; "one long heap allocated string value here"
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
@@ -36,7 +36,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl Array.reserve
     arm64.movImm x19, 2
-    arm64.leaRdata x0, __str_rec_3
+    arm64.leaRdata x0, __str_rec_3  ; "two long heap allocated string value here"
     arm64.bl __str_retain
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
@@ -108,7 +108,7 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_5
+    arm64.leaRdata x0, __str_blob_5  ; "panic at set-past-the-live-length-is-refused.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

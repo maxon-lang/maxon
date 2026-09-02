@@ -27,15 +27,15 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
@@ -73,40 +73,42 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x20, 0
-    arm64.movImm x21, 0
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b forhdr
   forhdr:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_count
-    arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
+    arm64.cmp x0, x1
+    arm64.cset x3, lt
+    arm64.cbnz x3, loop
     arm64.b forexit
   loop:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get_unchecked
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm
+    arm64.arm64AddLsl x3, x2, x0, lsl #3
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+    arm64.b __im_cont
+  __im_cont:
+    arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
+    arm64.cmp x4, 0
+    arm64.cset x5, eq
+    arm64.cbnz x5, matcharm#5
     arm64.b matchnext
-  matcharm:
+  matcharm#5:
+    arm64.movRegReg x3, x20
     arm64.b matchcont
   matchnext:
-    arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
+    arm64.cmp x4, 1
+    arm64.cset x4, eq
+    arm64.cbnz x4, matcharm#7
     arm64.b matchdead
-  matcharm:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.add x0, x20, x0
-    arm64.movRegReg x20, x0
+  matcharm#7:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
+    arm64.add x3, x20, x3
     arm64.b matchcont
   matchcont:
     arm64.b forstep
   forstep:
-    arm64.add x21, x21, 1
+    arm64.add x0, x0, 1
+    arm64.movRegReg x20, x3
     arm64.b forhdr
   matchdead:
   forexit:
@@ -117,26 +119,23 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x20, x0
+    arm64.cmp x20, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at associated-value-for-iterator.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   __rc_ok:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   afterbreak:
 }

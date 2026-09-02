@@ -1,5 +1,5 @@
 // Test: deep-reuse-chain
-function chain(p int) returns int
+function chain(p Integer) returns Integer
 	let a = p + 100
 	let b = p + 1
 	let c = p + 2
@@ -21,37 +21,18 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @chain {
-  entry:
-    arm64.prologue 16
-    arm64.add x1, x0, 100
-    arm64.add x2, x0, 1
-    arm64.add x6, x0, 2
-    arm64.add x7, x0, 3
-    arm64.add x8, x0, 4
-    arm64.add x0, x0, 5
-    arm64.sub x2, x1, x2
-    arm64.sub x6, x1, x6
-    arm64.sub x7, x1, x7
-    arm64.sub x8, x1, x8
-    arm64.sub x0, x1, x0
-    arm64.add x2, x2, x6
-    arm64.add x2, x2, x7
-    arm64.add x2, x2, x8
-    arm64.add x0, x2, x0
-    arm64.add x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.bl chain
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x0, 585
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 585
     arm64.cset x0, eq
     arm64.cbnz x0, ok

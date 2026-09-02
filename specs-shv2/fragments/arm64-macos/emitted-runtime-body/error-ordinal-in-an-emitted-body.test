@@ -8,107 +8,89 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
+    arm64.leaRdata x19, __str_rec_3  ; "a"
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-    arm64.add x0, x19, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x19
-    arm64.bl __str_copy
-    arm64.add x0, x23, x19
-    arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x22
     arm64.bl __managed_push
-    arm64.leaRdata x0, __str_rec_3
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.add x0, x21, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x21
-    arm64.bl __str_copy
-    arm64.add x0, x23, x21
-    arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x0, __str_rec_4  ; "b"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x22
     arm64.bl __managed_push
     arm64.movImm x19, 1
-    arm64.leaRdata x0, __str_rec_5
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.add x0, x22, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.add x24, x23, 48
-    arm64.movRegReg x0, x24
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x22
-    arm64.bl __str_copy
-    arm64.add x0, x24, x22
-    arm64.storeBaseDispReg.word64 [x23 + 0], x24
-    arm64.storeBaseDispReg.word64 [x23 + 8], x22
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x23 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.leaRdata x0, __str_rec_5  ; "c"
+    arm64.bl __str_retain
+    arm64.movRegReg x2, x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_owned
+  __im_owned:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_bounds
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_buffer
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_slow
+    arm64.b __im_viewed
+  __im_viewed:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, __im_slow
+    arm64.b __im_store
+  __im_slow:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x23
     arm64.bl __managed_set
+    arm64.b __im_cont
+  __im_store:
+    arm64.add x0, x0, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.leaRdata x0, __str_blob_6
+    arm64.leaRdata x0, __str_blob_6  ; "panic at error-ordinal-in-an-emitted-body.test:4: set rejected a valid index\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 32
     arm64.ret
   tryok:
     arm64.movImm x19, 0
@@ -117,11 +99,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 32
     arm64.ret
 }
 
@@ -139,24 +117,18 @@ func @__managed_set {
     arm64.movRegReg x20, x1
     arm64.movRegReg x21, x2
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.movImm x1, 0
-    arm64.cmp x20, x1
-    arm64.cset x1, lt
     arm64.cmp x20, x0
-    arm64.cset x0, ge
-    arm64.orr x0, x1, x0
+    arm64.cset x0, hs
     arm64.cbnz x0, oob
     arm64.b store
   oob:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 40]
-    arm64.movImm x0, 0
-    arm64.cmp x19, x0
+    arm64.cmp x19, 0
     arm64.cset x0, ne
     arm64.cbnz x0, rejchk
     arm64.b rejcont
   rejchk:
-    arm64.movImm x0, 0
-    arm64.cmp x21, x0
+    arm64.cmp x21, 0
     arm64.cset x0, ne
     arm64.cbnz x0, rejdrop
     arm64.b rejcont
@@ -181,11 +153,9 @@ func @__managed_set {
     arm64.bl __managed_cow_detach
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 24]
-    arm64.movImm x0, 1
-    arm64.add x24, x20, x0
+    arm64.add x24, x20, 1
     arm64.loadRegBaseDisp.word64 x19, [x19 + 40]
-    arm64.movImm x0, 0
-    arm64.cmp x19, x0
+    arm64.cmp x19, 0
     arm64.cset x0, ne
     arm64.cbnz x0, mwalk
     arm64.b mcont
@@ -203,8 +173,7 @@ func @__managed_set {
     arm64.mul x0, x25, x23
     arm64.add x0, x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x1, 0
-    arm64.cmp x0, x1
+    arm64.cmp x0, 0
     arm64.cset x1, ne
     arm64.cbnz x1, dtordo
     arm64.b dtorstep
@@ -212,10 +181,65 @@ func @__managed_set {
     arm64.blr x19
     arm64.b dtorstep
   dtorstep:
-    arm64.movImm x0, 1
-    arm64.add x25, x25, x0
+    arm64.add x25, x25, 1
     arm64.b dtorh
   mcont:
+    arm64.cmp x23, 8
+    arm64.cset x0, eq
+    arm64.cbnz x0, stword
+    arm64.b esbyte
+  stword:
+    arm64.mul x0, x20, x23
+    arm64.add x0, x22, x0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.b stjoin
+  esbyte:
+    arm64.cmp x23, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, stbyte
+    arm64.b stother
+  stbyte:
+    arm64.mul x0, x20, x23
+    arm64.add x0, x22, x0
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b stjoin
+  stother:
+    arm64.cmp x23, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, stpk
+    arm64.b stby
+  stpk:
+    arm64.asr x0, x23, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x1, x0, x16
+    arm64.movImm x2, 0
+    arm64.sub x2, x2, x23
+    arm64.lsl x3, x23, 3
+    arm64.and x0, x2, x0
+    arm64.and x1, x3, x1
+    arm64.orr x0, x0, x1
+    arm64.mul x1, x20, x0
+    arm64.lsr x2, x1, 3
+    arm64.and x1, x1, 7
+    arm64.movImm x3, 64
+    arm64.sub x3, x3, x0
+    arm64.movImm x4, 18446744073709551615
+    arm64.lsrv x3, x4, x3
+    arm64.add x0, x1, x0
+    arm64.add x0, x0, 7
+    arm64.lsr x0, x0, 3
+    arm64.add x0, x22, x2
+    arm64.loadRegBaseDisp.byte x2, [x0 + 0]
+    arm64.lslv x4, x3, x1
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x4, x4, x16
+    arm64.and x2, x2, x4
+    arm64.and x3, x21, x3
+    arm64.lslv x1, x3, x1
+    arm64.orr x1, x2, x1
+    arm64.storeBaseDispReg.byte [x0 + 0], x1
+    arm64.b stjoin
+  stby:
     arm64.mul x0, x20, x23
     arm64.add x0, x22, x0
     arm64.movImm x1, 0
@@ -226,6 +250,8 @@ func @__managed_set {
     arm64.cbnz x2, sted
     arm64.b steb
   sted:
+    arm64.b stjoin
+  stjoin:
     arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
@@ -238,12 +264,11 @@ func @__managed_set {
     arm64.epilogue 80
     arm64.ret
   steb:
-    arm64.movImm x2, 8
-    arm64.mul x2, x1, x2
+    arm64.movImm x16, 8
+    arm64.mul x2, x1, x16
     arm64.lsrv x2, x21, x2
-    arm64.add x6, x0, x1
-    arm64.storeBaseDispReg.byte [x6 + 0], x2
-    arm64.movImm x2, 1
-    arm64.add x1, x1, x2
+    arm64.add x3, x0, x1
+    arm64.storeBaseDispReg.byte [x3 + 0], x2
+    arm64.add x1, x1, 1
     arm64.b steh
 }

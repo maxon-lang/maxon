@@ -43,22 +43,31 @@ data {
   __gt_timer_count@32 = i64 0
   __gt_timer_heap_base@40 = i64 0
   __gt_timer_capacity@48 = i64 0
-  __gt_trace_counter@56 = i64 0
-  __gt_proc_count@64 = i64 0
-  __gt_proc_handles_base@72 = i64 0
-  __gt_proc_gts_base@80 = i64 0
-  __gt_live_count@88 = i64 0
-  __sched_active_workers@96 = i64 1
-  __sched_max_active_workers@104 = i64 1
-  __sched_tls_index@112 = i64 0
-  __sched_tls_teb_offset@120 = i64 0
-  __sched_procs@128 = i64 0
-  __sched_num_procs@136 = i64 0
-  __sched_shutdown_flag@144 = i64 0
-  __sched_lock@152 = i64 0
-  __slab_arena_list@160 = i64 0
-  __slab_arena_map_l1@168 = i64 0
-  __slab_state@176 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __slab_arena_list@232 = i64 0
+  __slab_arena_map_l1@240 = i64 0
+  __slab_state@248 = i64 0
 }
 
 func @makeValue {
@@ -73,11 +82,12 @@ func @makeValue {
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __gt_promise_drop
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.leaFuncAddr x0, makeValue
@@ -88,7 +98,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl __managed_push
-    arm64.movImm x1, 0
+    arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
     arm64.cset x0, ls
@@ -96,22 +106,23 @@ func @main {
     arm64.b __im_load
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.movImm x0, 0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
-    arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, __im_empty
     arm64.b critsplit#25
   __im_empty:
-    arm64.cmp x20, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
+    arm64.cmp x21, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_slow
     arm64.b critsplit#26
   __im_slow:
     arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
     arm64.bl __managed_get
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.b __im_cont
   critsplit#26:
     arm64.movRegReg x9, x0
@@ -131,14 +142,15 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   tryok:
-    arm64.movImm x21, 0
+    arm64.movImm x22, 0
     arm64.movImm x0, 0
     arm64.b whilehdr
   whilehdr:
-    arm64.cmp x21, 100
+    arm64.cmp x22, 100
     arm64.cset x1, lt
     arm64.movImm x2, 0
     arm64.cbnz x1, andrhs
@@ -155,18 +167,18 @@ func @main {
     arm64.b whileexit
   drive:
     arm64.bl Runtime.yield
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __gt_is_complete
-    arm64.add x21, x21, 1
+    arm64.add x22, x22, 1
     arm64.b whilehdr
   whileexit:
-    arm64.movImm x21, 0
+    arm64.movImm x22, 0
     arm64.cmp x0, 1
     arm64.cset x0, eq
     arm64.cbnz x0, itwasalreadycompletebeforethecall
     arm64.b critsplit#22
   itwasalreadycompletebeforethecall:
-    arm64.movImm x21, 1
+    arm64.movImm x22, 1
     arm64.b ifcont#9
   critsplit#22:
     arm64.b ifcont#9
@@ -178,22 +190,25 @@ func @main {
     arm64.cbnz x0, thecompletedslotisnamed
     arm64.b critsplit#23
   thecompletedslotisnamed:
-    arm64.add x21, x21, 2
+    arm64.add x22, x22, 2
     arm64.b ifcont#11
   critsplit#23:
     arm64.b ifcont#11
   ifcont#11:
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_vacate
+    arm64.movRegReg x0, x21
     arm64.bl __gt_await
     arm64.cmp x0, 42
     arm64.cset x0, eq
     arm64.cbnz x0, stillawaitable
     arm64.b critsplit#24
   stillawaitable:
-    arm64.add x20, x21, 4
+    arm64.add x20, x22, 4
     arm64.b ifcont#13
   critsplit#24:
-    arm64.movRegReg x20, x21
+    arm64.movRegReg x20, x22
     arm64.b ifcont#13
   ifcont#13:
     arm64.cmp x20, 0
@@ -212,6 +227,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __rc_ok:
@@ -221,6 +237,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

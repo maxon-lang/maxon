@@ -29,9 +29,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Box.make {
@@ -49,7 +50,7 @@ func @Box.make {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4
+    arm64.leaRdata x0, __str_blob_4  ; "panic at struct-equality-needs-no-conformance.test:7: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -62,17 +63,6 @@ func @Box.make {
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
-}
-
-func @Box.equals {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.epilogue 16
     arm64.ret
 }
 
@@ -92,27 +82,37 @@ func @main {
     arm64.movImm x0, 2
     arm64.bl Box.make
     arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl Box.equals
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b __il_cont#5
+  __il_cont#5:
     arm64.cbnz x0, eq
-    arm64.b ifcont
+    arm64.b ifcont#2
   eq:
-    arm64.leaRdata x0, __str_rec_1
-    arm64.bl __print_string
-    arm64.b ifcont
-  ifcont:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl Box.equals
+    arm64.leaRdata x0, __str_rec_2  ; "equal\x0a"
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b __il_cont#7
+  __il_cont#7:
     arm64.eor x0, x0, 1
     arm64.cbnz x0, neq
-    arm64.b ifcont
+    arm64.b ifcont#4
   neq:
-    arm64.leaRdata x0, __str_rec_3
-    arm64.bl __print_string
-    arm64.b ifcont
-  ifcont:
+    arm64.leaRdata x0, __str_rec_3  ; "not equal\x0a"
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movImm x22, 0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref

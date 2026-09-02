@@ -6,9 +6,9 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function main() returns ExitCode
-	let d = ident(0 - 1)
+	let d = ident(-1)
 	let a = try (ident(100) mod d) otherwise 77
-	let b = try (ident(0 - 7) mod d) otherwise 77
+	let b = try (ident(-7) mod d) otherwise 77
 	let c = try (ident(0) mod d) otherwise 77
 	print("a={a} b={b} c={c}\n")
 	return 0
@@ -17,16 +17,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @ident {
-  entry:
-    arm64.prologue 16
-    arm64.epilogue 16
-    arm64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -42,86 +36,60 @@ func @main {
     arm64.storeSlotReg slot9, x21
     arm64.storeSlotReg slot8, x20
     arm64.storeSlotReg slot7, x19
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 1
-    arm64.bl ident
-    arm64.movRegReg x19, x0
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.b __il_cont#11
+  __il_cont#11:
     arm64.movImm x0, 100
-    arm64.bl ident
-    arm64.cmp x19, 0
-    arm64.cset x1, eq
-    arm64.cmp x19, -1
-    arm64.cset x2, eq
-    arm64.add x2, x2, -1
-    arm64.and x0, x0, x2
-    arm64.orr x2, x19, x1
-    arm64.sdiv x16, x0, x2
-    arm64.msub x20, x16, x2, x0
-    arm64.cmp x1, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.movImm x20, 77
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
-  trycont:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.b __il_cont#10
+  __il_cont#10:
+    arm64.movImm x16, 0
+    arm64.and x0, x0, x16
+    arm64.movImm x1, 18446744073709551615
+    arm64.sdiv x16, x0, x1
+    arm64.msub x19, x16, x1, x0
+    arm64.b tryok#1
+  tryok#1:
+    arm64.b trycont#3
+  trycont#3:
+    arm64.b __il_body#15
+  __il_body#15:
+    arm64.b __il_cont#14
+  __il_cont#14:
     arm64.movImm x0, 0
-    arm64.sub x0, x0, 7
-    arm64.bl ident
-    arm64.cmp x19, 0
-    arm64.cset x1, eq
-    arm64.cmp x19, -1
-    arm64.cset x2, eq
-    arm64.add x2, x2, -1
-    arm64.and x0, x0, x2
-    arm64.orr x2, x19, x1
-    arm64.sdiv x16, x0, x2
-    arm64.msub x21, x16, x2, x0
-    arm64.cmp x1, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.movImm x21, 77
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
-  trycont:
+    arm64.movImm x1, 18446744073709551615
+    arm64.sdiv x16, x0, x1
+    arm64.msub x20, x16, x1, x0
+    arm64.b tryok#4
+  tryok#4:
+    arm64.b trycont#6
+  trycont#6:
+    arm64.b __il_body#17
+  __il_body#17:
+    arm64.b __il_cont#16
+  __il_cont#16:
     arm64.movImm x0, 0
-    arm64.bl ident
-    arm64.cmp x19, 0
-    arm64.cset x1, eq
-    arm64.cmp x19, -1
-    arm64.cset x2, eq
-    arm64.add x2, x2, -1
-    arm64.and x0, x0, x2
-    arm64.orr x2, x19, x1
-    arm64.sdiv x16, x0, x2
-    arm64.msub x19, x16, x2, x0
-    arm64.cmp x1, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.movImm x19, 77
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
-  trycont:
-    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x1, 18446744073709551615
+    arm64.sdiv x16, x0, x1
+    arm64.msub x21, x16, x1, x0
+    arm64.b tryok#7
+  tryok#7:
+    arm64.b trycont#9
+  trycont#9:
+    arm64.leaRdata x0, __str_rec_4  ; "a="
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x24
     arm64.bl __int_to_string
-    arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_3
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_5  ; " b="
     arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.movImm x0, 21
@@ -129,10 +97,10 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.storeSlotReg slot6, x1
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.bl __int_to_string
-    arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_5
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_6  ; " c="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot5, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
@@ -140,82 +108,82 @@ func @main {
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x28, x0
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x28
     arm64.bl __int_to_string
     arm64.storeSlotReg slot4, x0
-    arm64.leaRdata x1, __str_rec_7
+    arm64.leaRdata x1, __str_rec_7  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.storeSlotReg slot3, x2
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.storeSlotReg slot2, x1
-    arm64.add x2, x23, x20
+    arm64.add x2, x23, x19
     arm64.add x2, x2, x26
-    arm64.add x2, x2, x21
+    arm64.add x2, x2, x20
     arm64.add x2, x2, x27
     arm64.add x0, x2, x0
     arm64.add x0, x0, x1
     arm64.storeSlotReg slot0, x0
-    arm64.add x0, x0, 49
+    arm64.add x0, x0, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeSlotReg slot1, x0
-    arm64.add x19, x0, 48
-    arm64.movRegReg x0, x19
+    arm64.add x21, x0, 56
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
-    arm64.add x22, x19, x23
+    arm64.add x22, x21, x23
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x24
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x2, x19
     arm64.bl __str_copy
-    arm64.add x20, x22, x20
-    arm64.movRegReg x0, x20
+    arm64.add x19, x22, x19
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x25
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
-    arm64.add x20, x20, x26
-    arm64.movRegReg x0, x20
+    arm64.add x19, x19, x26
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x22, slot6
     arm64.movRegReg x1, x22
-    arm64.movRegReg x2, x21
+    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x20, x20, x21
-    arm64.movRegReg x0, x20
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x1, slot5
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
-    arm64.add x20, x20, x27
-    arm64.movRegReg x0, x20
+    arm64.add x19, x19, x27
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
-    arm64.loadRegSlot x21, slot4
-    arm64.movRegReg x2, x21
+    arm64.loadRegSlot x20, slot4
+    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x20, x20, x21
-    arm64.movRegReg x0, x20
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x1, slot3
-    arm64.loadRegSlot x21, slot2
-    arm64.movRegReg x2, x21
+    arm64.loadRegSlot x20, slot2
+    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x20, x21
-    arm64.loadRegSlot x20, slot1
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.add x0, x19, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x21
     arm64.loadRegSlot x0, slot0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __print_string
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot7

@@ -1,5 +1,7 @@
 // Test: neg-chain
-function negs(p int) returns int
+var seed = 0
+
+function negs(p Integer) returns Integer
 	let x = p + 7
 	let n1 = -x
 	let n2 = -n1
@@ -8,18 +10,27 @@ function negs(p int) returns int
 end 'negs'
 
 function main() returns ExitCode
-	let r = negs(0)
+	let r = negs(seed)
 	if r == 707 'ok'
 		return 0
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @negs {
+data {
+  __data_seed@0 = i64 0
+}
+
+func @main {
   entry:
     arm64.prologue 16
+    arm64.leaGlobal x0, __data_seed
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __il_body
+  __il_body:
     arm64.add x0, x0, 7
     arm64.neg x1, x0
     arm64.neg x1, x1
@@ -27,15 +38,8 @@ func @negs {
     arm64.movImm x16, 100
     arm64.mul x0, x0, x16
     arm64.sub x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.bl negs
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 707
     arm64.cset x0, eq
     arm64.cbnz x0, ok

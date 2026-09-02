@@ -17,9 +17,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -38,21 +39,21 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
+    arm64.cbnz x1, matcharm#1
     arm64.b matchnext
-  matcharm:
-    arm64.leaRdata x0, __str_rec_1
-    arm64.bl __print_string
+  matcharm#1:
+    arm64.leaRdata x0, __str_rec_2  ; "z"
+    arm64.bl print
     arm64.b matchcont
   matchnext:
     arm64.cmp x0, 1
     arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
+    arm64.cbnz x0, matcharm#2
     arm64.b matchdead
-  matcharm:
+  matcharm#2:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-    arm64.leaRdata x0, __str_rec_3
-    arm64.bl __print_string
+    arm64.leaRdata x0, __str_rec_3  ; "v"
+    arm64.bl print
     arm64.b matchcont
   matchcont:
     arm64.movImm x19, 0

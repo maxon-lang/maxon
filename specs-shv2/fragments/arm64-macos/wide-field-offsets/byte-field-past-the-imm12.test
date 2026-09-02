@@ -552,9 +552,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Flags.create {
@@ -1651,7 +1652,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x1, [x0 + 4088]
     arm64.eor x1, x1, 1
     arm64.cbnz x1, lastInside
-    arm64.b ifcont
+    arm64.b ifcont#2
   lastInside:
     arm64.movImm x19, 11
     arm64.bl __mm_decref
@@ -1659,12 +1660,12 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.add x16, x0, 4096
     arm64.loadRegBaseDisp.byte x1, [x16 + 0]
     arm64.eor x1, x1, 1
     arm64.cbnz x1, firstPast
-    arm64.b ifcont
+    arm64.b ifcont#4
   firstPast:
     arm64.movImm x19, 12
     arm64.bl __mm_decref
@@ -1672,12 +1673,12 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.add x16, x0, 4152
     arm64.loadRegBaseDisp.byte x1, [x16 + 0]
     arm64.eor x1, x1, 1
     arm64.cbnz x1, wellPast
-    arm64.b ifcont
+    arm64.b ifcont#6
   wellPast:
     arm64.movImm x19, 13
     arm64.bl __mm_decref
@@ -1685,10 +1686,10 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#6:
     arm64.loadRegBaseDisp.byte x1, [x0 + 4080]
     arm64.cbnz x1, untouchedInside
-    arm64.b ifcont
+    arm64.b ifcont#8
   untouchedInside:
     arm64.movImm x19, 14
     arm64.bl __mm_decref
@@ -1696,11 +1697,11 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#8:
     arm64.add x16, x0, 4104
     arm64.loadRegBaseDisp.byte x1, [x16 + 0]
     arm64.cbnz x1, untouchedPast
-    arm64.b ifcont
+    arm64.b ifcont#10
   untouchedPast:
     arm64.movImm x19, 15
     arm64.bl __mm_decref
@@ -1708,7 +1709,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#10:
     arm64.movImm x19, 0
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19

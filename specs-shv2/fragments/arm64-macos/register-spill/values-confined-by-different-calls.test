@@ -1,9 +1,9 @@
 // Test: values-confined-by-different-calls
-function sink(x int) returns int
+function sink(x Integer) returns Integer
 	return x
 end 'sink'
 
-function pick(k int) returns int
+function pick(k Integer) returns Integer
 	let v1 = k + 11
 	let v2 = k + 22
 	let v3 = k + 33
@@ -54,101 +54,95 @@ function main() returns ExitCode
 	end 'a6'
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @sink {
-  entry:
-    arm64.prologue 16
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @pick {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.add x19, x0, 11
-    arm64.add x20, x0, 22
-    arm64.add x21, x0, 33
-    arm64.add x22, x0, 44
-    arm64.add x23, x0, 55
-    arm64.add x24, x0, 66
+    arm64.prologue 16
+    arm64.add x1, x0, 11
+    arm64.add x2, x0, 22
+    arm64.add x3, x0, 33
+    arm64.add x4, x0, 44
+    arm64.add x5, x0, 55
+    arm64.add x6, x0, 66
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, b1
-    arm64.b ifelse
+    arm64.cset x7, eq
+    arm64.cbnz x7, b1
+    arm64.b ifelse#2
   b1:
-    arm64.movImm x0, 1
-    arm64.bl sink
-    arm64.add x0, x19, x0
-    arm64.b ifcont
-  ifelse:
+    arm64.b __il_body#17
+  __il_body#17:
+    arm64.b __il_cont#16
+  __il_cont#16:
+    arm64.add x0, x1, 1
+    arm64.b ifcont#15
+  ifelse#2:
     arm64.cmp x0, 2
     arm64.cset x1, eq
     arm64.cbnz x1, b2
-    arm64.b ifelse
+    arm64.b ifelse#4
   b2:
-    arm64.movImm x0, 2
-    arm64.bl sink
-    arm64.add x0, x20, x0
-    arm64.b ifcont
-  ifelse:
+    arm64.b __il_body#19
+  __il_body#19:
+    arm64.b __il_cont#18
+  __il_cont#18:
+    arm64.add x0, x2, 2
+    arm64.b ifcont#14
+  ifelse#4:
     arm64.cmp x0, 3
     arm64.cset x1, eq
     arm64.cbnz x1, b3
-    arm64.b ifelse
+    arm64.b ifelse#6
   b3:
-    arm64.movImm x0, 3
-    arm64.bl sink
-    arm64.add x0, x21, x0
-    arm64.b ifcont
-  ifelse:
+    arm64.b __il_body#21
+  __il_body#21:
+    arm64.b __il_cont#20
+  __il_cont#20:
+    arm64.add x0, x3, 3
+    arm64.b ifcont#13
+  ifelse#6:
     arm64.cmp x0, 4
     arm64.cset x1, eq
     arm64.cbnz x1, b4
-    arm64.b ifelse
+    arm64.b ifelse#8
   b4:
-    arm64.movImm x0, 4
-    arm64.bl sink
-    arm64.add x0, x22, x0
-    arm64.b ifcont
-  ifelse:
+    arm64.b __il_body#23
+  __il_body#23:
+    arm64.b __il_cont#22
+  __il_cont#22:
+    arm64.add x0, x4, 4
+    arm64.b ifcont#12
+  ifelse#8:
     arm64.cmp x0, 5
     arm64.cset x0, eq
     arm64.cbnz x0, b5
-    arm64.b ifelse
+    arm64.b ifelse#10
   b5:
-    arm64.movImm x0, 5
-    arm64.bl sink
-    arm64.add x0, x23, x0
-    arm64.b ifcont
-  ifelse:
-    arm64.movImm x0, 6
-    arm64.bl sink
-    arm64.add x0, x24, x0
-    arm64.b ifcont
-  ifcont:
-    arm64.b ifcont
-  ifcont:
-    arm64.b ifcont
-  ifcont:
-    arm64.b ifcont
-  ifcont:
-    arm64.b ifcont
-  ifcont:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.b __il_body#25
+  __il_body#25:
+    arm64.b __il_cont#24
+  __il_cont#24:
+    arm64.add x0, x5, 5
+    arm64.b ifcont#11
+  ifelse#10:
+    arm64.b __il_body#27
+  __il_body#27:
+    arm64.b __il_cont#26
+  __il_cont#26:
+    arm64.add x0, x6, 6
+    arm64.b ifcont#11
+  ifcont#11:
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.b ifcont#13
+  ifcont#13:
+    arm64.b ifcont#14
+  ifcont#14:
+    arm64.b ifcont#15
+  ifcont#15:
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -160,67 +154,67 @@ func @main {
     arm64.cmp x0, 13
     arm64.cset x0, ne
     arm64.cbnz x0, a1
-    arm64.b ifcont
+    arm64.b ifcont#2
   a1:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.movImm x0, 2
     arm64.bl pick
     arm64.cmp x0, 26
     arm64.cset x0, ne
     arm64.cbnz x0, a2
-    arm64.b ifcont
+    arm64.b ifcont#4
   a2:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x0, 3
     arm64.bl pick
     arm64.cmp x0, 39
     arm64.cset x0, ne
     arm64.cbnz x0, a3
-    arm64.b ifcont
+    arm64.b ifcont#6
   a3:
     arm64.movImm x0, 3
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#6:
     arm64.movImm x0, 4
     arm64.bl pick
     arm64.cmp x0, 52
     arm64.cset x0, ne
     arm64.cbnz x0, a4
-    arm64.b ifcont
+    arm64.b ifcont#8
   a4:
     arm64.movImm x0, 4
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#8:
     arm64.movImm x0, 5
     arm64.bl pick
     arm64.cmp x0, 65
     arm64.cset x0, ne
     arm64.cbnz x0, a5
-    arm64.b ifcont
+    arm64.b ifcont#10
   a5:
     arm64.movImm x0, 5
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#10:
     arm64.movImm x0, 6
     arm64.bl pick
     arm64.cmp x0, 78
     arm64.cset x0, ne
     arm64.cbnz x0, a6
-    arm64.b ifcont
+    arm64.b ifcont#12
   a6:
     arm64.movImm x0, 6
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#12:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

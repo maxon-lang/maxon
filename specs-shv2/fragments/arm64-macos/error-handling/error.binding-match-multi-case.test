@@ -51,27 +51,24 @@ func @mayFail {
     arm64.cmp x0, 1
     arm64.cset x1, eq
     arm64.cbnz x1, c1
-    arm64.b ifcont
+    arm64.b ifcont#2
   c1:
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, 2
     arm64.cset x0, eq
     arm64.cbnz x0, c2
-    arm64.b ifcont
+    arm64.b ifcont#4
   c2:
-    arm64.movImm x0, 1
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 2
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 2
-    arm64.add x9, x0, 1
+  ifcont#4:
+    arm64.movImm x9, 3
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
@@ -92,25 +89,25 @@ func @main {
     arm64.sub x0, x9, 1
     arm64.cmp x0, 0
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x1, matcharm#3
+    arm64.b matchnext#7
+  matcharm#3:
     arm64.movImm x0, 10
     arm64.b matchcont
-  matchnext:
+  matchnext#7:
     arm64.cmp x0, 1
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x1, matcharm#4
+    arm64.b matchnext#8
+  matcharm#4:
     arm64.movImm x0, 20
     arm64.b matchcont
-  matchnext:
+  matchnext#8:
     arm64.cmp x0, 2
     arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
+    arm64.cbnz x0, matcharm#5
     arm64.b matchdead
-  matcharm:
+  matcharm#5:
     arm64.movImm x0, 30
     arm64.b matchcont
   matchcont:
@@ -125,13 +122,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at error.binding-match-multi-case.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

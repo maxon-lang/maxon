@@ -38,14 +38,16 @@ end 'main'
 ExitCode: 10
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Item.create {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
@@ -53,11 +55,18 @@ func @Item.create {
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -76,15 +85,15 @@ func @appendFromHelper {
     arm64.leaFuncAddr x1, __destruct_Item
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_5  ; "hello from source that is long enough"
     arm64.movImm x21, 10
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.add x0, x23, 49
+    arm64.add x0, x23, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.add x25, x24, 48
+    arm64.add x25, x24, 56
     arm64.movRegReg x0, x25
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x23
@@ -92,7 +101,7 @@ func @appendFromHelper {
     arm64.add x0, x25, x23
     arm64.storeBaseDispReg.word64 [x24 + 0], x25
     arm64.storeBaseDispReg.word64 [x24 + 8], x23
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
@@ -102,15 +111,15 @@ func @appendFromHelper {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.leaRdata x0, __str_rec_3
+    arm64.leaRdata x0, __str_rec_6  ; "second item from source long enough"
     arm64.movImm x21, 20
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.add x0, x23, 49
+    arm64.add x0, x23, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.add x25, x24, 48
+    arm64.add x25, x24, 56
     arm64.movRegReg x0, x25
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x23
@@ -118,7 +127,7 @@ func @appendFromHelper {
     arm64.add x0, x25, x23
     arm64.storeBaseDispReg.word64 [x24 + 0], x25
     arm64.storeBaseDispReg.word64 [x24 + 8], x23
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
@@ -128,15 +137,15 @@ func @appendFromHelper {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_7  ; "third item from source long enough"
     arm64.movImm x21, 30
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.add x0, x23, 49
+    arm64.add x0, x23, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.add x25, x24, 48
+    arm64.add x25, x24, 56
     arm64.movRegReg x0, x25
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x23
@@ -144,7 +153,7 @@ func @appendFromHelper {
     arm64.add x0, x25, x23
     arm64.storeBaseDispReg.word64 [x24 + 0], x25
     arm64.storeBaseDispReg.word64 [x24 + 8], x23
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
@@ -184,15 +193,15 @@ func @main {
     arm64.leaFuncAddr x1, __destruct_Item
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_7
+    arm64.leaRdata x0, __str_rec_8  ; "dest item that is long enough for heap"
     arm64.movImm x20, 1
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.add x0, x22, 49
+    arm64.add x0, x22, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x23, x0
-    arm64.add x24, x23, 48
+    arm64.add x24, x23, 56
     arm64.movRegReg x0, x24
     arm64.movRegReg x1, x21
     arm64.movRegReg x2, x22
@@ -200,7 +209,7 @@ func @main {
     arm64.add x0, x24, x22
     arm64.storeBaseDispReg.word64 [x23 + 0], x24
     arm64.storeBaseDispReg.word64 [x23 + 8], x22
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
@@ -212,8 +221,7 @@ func @main {
     arm64.bl __managed_push
     arm64.movRegReg x0, x19
     arm64.bl appendFromHelper
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_count
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 4
     arm64.cset x0, ne
     arm64.cbnz x0, badCount
@@ -233,23 +241,52 @@ func @main {
     arm64.ret
   ifcont:
     arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.cset x2, ne
+    arm64.cbnz x2, __im_empty
+    arm64.b critsplit#13
+  __im_empty:
+    arm64.cmp x20, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b critsplit#14
+  __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.movRegReg x20, x0
+    arm64.b __im_cont
+  critsplit#14:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  critsplit#13:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont
+  __im_cont:
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.leaRdata x0, __str_rec_9
+    arm64.leaRdata x0, __str_rec_9  ; ""
     arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.add x0, x22, 49
+    arm64.add x0, x22, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x23, x0
-    arm64.add x24, x23, 48
+    arm64.add x24, x23, 56
     arm64.movRegReg x0, x24
     arm64.movRegReg x1, x21
     arm64.movRegReg x2, x22
@@ -257,7 +294,7 @@ func @main {
     arm64.add x0, x24, x22
     arm64.storeBaseDispReg.word64 [x23 + 0], x24
     arm64.storeBaseDispReg.word64 [x23 + 8], x22
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
@@ -280,13 +317,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x20, x0
+    arm64.cmp x20, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_10
+    arm64.leaRdata x0, __str_blob_10  ; "panic at append-struct-source-freed.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

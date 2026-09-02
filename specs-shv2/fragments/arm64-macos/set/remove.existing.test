@@ -11,9 +11,10 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -21,59 +22,82 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 2
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movImm x1, 3
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
+    arm64.movImm x19, 1
+    arm64.leaRdata x0, __layout_Set_int
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
-    arm64.movRegReg x0, x19
-    arm64.bl __set_from
+    arm64.bl Set.create
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movImm x1, 2
-    arm64.leaRdata x2, __witness_int.Hashable
-    arm64.leaRdata x6, __witness_int.Equatable
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
     arm64.movRegReg x0, x20
-    arm64.movRegReg x3, x6
-    arm64.bl __set_remove
+    arm64.movRegReg x1, x19
+    arm64.bl Set.insert
+    arm64.movImm x1, 2
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl Set.insert
+    arm64.movImm x1, 3
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl Set.insert
+    arm64.movImm x1, 2
+    arm64.leaRdata x2, __layout_Set_int
+    arm64.leaRdata x3, __witness_int.Hashable
+    arm64.leaRdata x4, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.bl Set.remove
     arm64.cbnz x0, check
     arm64.b ifcont
   check:
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.b __il_body
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 24]
+    arm64.cmp x19, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __il_slow
+    arm64.b __rc_chk#9
+  __rc_chk#9:
+    arm64.movImm x0, 4611686018427387904
+    arm64.cmp x19, x0
+    arm64.cset x0, gt
+    arm64.cbnz x0, __il_slow
+    arm64.b __rc_ok#8
+  __il_slow:
     arm64.movRegReg x0, x20
-    arm64.bl __set_count
+    arm64.bl Set.count
     arm64.movRegReg x19, x0
+    arm64.b __il_cont
+  __rc_ok#8:
+    arm64.b __il_cont
+  __il_cont:
     arm64.movRegReg x0, x20
-    arm64.bl __set_decref
+    arm64.bl __destruct_Set_int
     arm64.cmp x19, 0
     arm64.cset x0, lt
     arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x19, x0
+    arm64.b __rc_chk#5
+  __rc_chk#5:
+    arm64.cmp x19, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b __rc_ok#3
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_18  ; "panic at remove.existing.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
+  __rc_ok#3:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -82,36 +106,10 @@ func @main {
   ifcont:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
-    arm64.bl __set_decref
+    arm64.bl __destruct_Set_int
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
-}
-
-func @int.hash {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x1, 4294967295
-    arm64.and x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @int.equals {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.cbnz x0, equal
-    arm64.b notEqual
-  equal:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  notEqual:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
     arm64.ret
 }

@@ -1,5 +1,5 @@
 // Test: used-before-and-after-peak
-function usedBeforeAndAfter(p int) returns int
+function usedBeforeAndAfter(p Integer) returns Integer
 	let a1 = p + 1
 	let w = a1 + p
 	let b1 = p + 1
@@ -25,52 +25,46 @@ end 'usedBeforeAndAfter'
 function main() returns ExitCode
 	return usedBeforeAndAfter(0)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 122
 ---
 func @usedBeforeAndAfter {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 16
     arm64.add x1, x0, 1
     arm64.add x2, x1, x0
-    arm64.add x6, x0, 1
-    arm64.add x7, x0, 2
-    arm64.add x8, x0, 3
-    arm64.add x9, x0, 4
-    arm64.add x10, x0, 5
-    arm64.add x11, x0, 6
-    arm64.add x19, x0, 7
-    arm64.add x20, x0, 8
-    arm64.add x21, x0, 9
-    arm64.add x3, x0, 10
-    arm64.add x4, x0, 11
-    arm64.add x5, x0, 12
-    arm64.add x12, x0, 13
-    arm64.add x13, x0, 14
+    arm64.add x3, x0, 2
+    arm64.add x4, x0, 3
+    arm64.add x5, x0, 4
+    arm64.add x6, x0, 5
+    arm64.add x7, x0, 6
+    arm64.add x8, x0, 7
+    arm64.add x9, x0, 8
+    arm64.add x10, x0, 9
+    arm64.add x11, x0, 10
+    arm64.add x12, x0, 11
+    arm64.add x13, x0, 12
+    arm64.add x14, x0, 13
+    arm64.add x15, x0, 14
     arm64.add x0, x0, 15
-    arm64.add x6, x6, x7
-    arm64.add x6, x6, x8
-    arm64.add x6, x6, x9
-    arm64.add x6, x6, x10
-    arm64.add x6, x6, x11
-    arm64.add x6, x6, x19
-    arm64.add x6, x6, x20
-    arm64.add x6, x6, x21
-    arm64.add x6, x6, x3
-    arm64.add x6, x6, x4
-    arm64.add x6, x6, x5
-    arm64.add x6, x6, x12
-    arm64.add x6, x6, x13
-    arm64.add x0, x6, x0
+    arm64.add x3, x1, x3
+    arm64.add x3, x3, x4
+    arm64.add x3, x3, x5
+    arm64.add x3, x3, x6
+    arm64.add x3, x3, x7
+    arm64.add x3, x3, x8
+    arm64.add x3, x3, x9
+    arm64.add x3, x3, x10
+    arm64.add x3, x3, x11
+    arm64.add x3, x3, x12
+    arm64.add x3, x3, x13
+    arm64.add x3, x3, x14
+    arm64.add x3, x3, x15
+    arm64.add x0, x3, x0
     arm64.add x0, x0, x2
     arm64.add x0, x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -84,13 +78,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at used-before-and-after-peak.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

@@ -31,20 +31,15 @@ ExitCode: 42
 func @main {
   entry:
     arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
     arm64.b __il_body
   __il_body:
     arm64.b __il_cont
   __il_cont:
-    arm64.fpLoadRdata d1, [rdata + __fconst_2]
-    arm64.fpLoadRdata d2, [rdata + __fconst_1]
-    arm64.fcmp d0, d2
-    arm64.cset x0, eq
+    arm64.fpLoadRdata d1, [rdata + __fconst_100]
+    arm64.movImm x0, 1
     arm64.fdiv d0, d1, d0
-    arm64.cmp x0, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryblkerr
-    arm64.b tryblkok
+    arm64.b tryblkerr
   tryblkerr:
     arm64.sub x0, x0, 1
     arm64.cmp x0, 0
@@ -53,23 +48,8 @@ func @main {
     arm64.b matchdead
   matcharm:
     arm64.movImm x0, 42
-    arm64.b matchcont#8
-  matchcont#8:
-    arm64.b tryblkcont
-  matchdead:
-  tryblkok:
-    arm64.fpLoadRdata d1, [rdata + __fconst_1]
-    arm64.fcmp d0, d1
-    arm64.cset x0, gt
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
-  ternarytrue:
-    arm64.movImm x0, 1
-    arm64.b matchcont#5
-  ternaryfalse:
-    arm64.movImm x0, 2
-    arm64.b matchcont#5
-  matchcont#5:
+    arm64.b matchcont
+  matchcont:
     arm64.b tryblkcont
   tryblkcont:
     arm64.cmp x0, 0
@@ -82,7 +62,7 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at float-divide-by-zero.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -90,4 +70,5 @@ func @main {
   __rc_ok:
     arm64.epilogue 16
     arm64.ret
+  matchdead:
 }

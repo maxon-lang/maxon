@@ -1,5 +1,5 @@
 // Test: back-edge-rotate-five
-function rotate5(p int) returns int
+function rotate5(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
@@ -7,7 +7,7 @@ function rotate5(p int) returns int
 	var e = p + 5
 	var i = 0
 	while i < 3 'loop'
-		var t = a
+		let t = a
 		a = b
 		b = c
 		c = d
@@ -25,6 +25,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
@@ -33,22 +34,22 @@ func @rotate5 {
     arm64.prologue 16
     arm64.add x1, x0, 1
     arm64.add x2, x0, 2
-    arm64.add x6, x0, 3
-    arm64.add x7, x0, 4
+    arm64.add x3, x0, 3
+    arm64.add x4, x0, 4
     arm64.add x0, x0, 5
-    arm64.movImm x8, 0
+    arm64.movImm x5, 0
     arm64.b whilehdr
   whilehdr:
-    arm64.cmp x8, 3
-    arm64.cset x9, lt
-    arm64.cbnz x9, loop
+    arm64.cmp x5, 3
+    arm64.cset x6, lt
+    arm64.cbnz x6, loop
     arm64.b whileexit
   loop:
-    arm64.add x8, x8, 1
+    arm64.add x5, x5, 1
     arm64.xchgRegReg x1, x2
-    arm64.xchgRegReg x2, x6
-    arm64.xchgRegReg x6, x7
-    arm64.xchgRegReg x7, x0
+    arm64.xchgRegReg x2, x3
+    arm64.xchgRegReg x3, x4
+    arm64.xchgRegReg x4, x0
     arm64.b whilehdr
   whileexit:
     arm64.movImm x16, 10000
@@ -57,10 +58,10 @@ func @rotate5 {
     arm64.mul x2, x2, x16
     arm64.add x1, x1, x2
     arm64.movImm x16, 100
-    arm64.mul x2, x6, x16
+    arm64.mul x2, x3, x16
     arm64.add x1, x1, x2
     arm64.movImm x16, 10
-    arm64.mul x2, x7, x16
+    arm64.mul x2, x4, x16
     arm64.add x1, x1, x2
     arm64.add x0, x1, x0
     arm64.epilogue 16
@@ -72,7 +73,8 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.bl rotate5
-    arm64.cmp x0, 45123
+    arm64.movImm x16, 45123
+    arm64.cmp x0, x16
     arm64.cset x0, eq
     arm64.cbnz x0, ok
     arm64.b ifcont

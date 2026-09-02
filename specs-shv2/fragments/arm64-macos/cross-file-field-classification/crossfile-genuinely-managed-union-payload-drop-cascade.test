@@ -1,12 +1,12 @@
 // Test: crossfile-genuinely-managed-union-payload-drop-cascade
 // --- file: bag.maxon
-export union Payloaded
+public union Payloaded
 	some(v String)
 	none
 end 'Payloaded'
 
 export type Bag
-	export var n as int
+	export var n as Integer
 	export var u as Payloaded
 
 	export static function make() returns Bag
@@ -14,6 +14,7 @@ export type Bag
 	end 'make'
 end 'Bag'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let b = Bag.make()
@@ -23,9 +24,39 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Bag.make {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 42
+    arm64.leaRdata x20, __str_rec_1  ; "x"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
 }
 
 func @main {
@@ -40,13 +71,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x19, x0
+    arm64.cmp x19, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
+    arm64.leaRdata x0, __str_blob_2  ; "panic at main.maxon:3: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -56,56 +86,5 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
-}
-
-func @Bag.make {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 42
-    arm64.leaRdata x20, __str_rec_1
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
-    arm64.add x0, x20, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.add x24, x23, 48
-    arm64.movRegReg x0, x24
-    arm64.movRegReg x1, x22
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x0, x24, x20
-    arm64.storeBaseDispReg.word64 [x23 + 0], x24
-    arm64.storeBaseDispReg.word64 [x23 + 8], x20
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x23 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x23 + 24], x0
-    arm64.storeBaseDispReg.word64 [x21 + 8], x23
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
     arm64.ret
 }

@@ -10,7 +10,7 @@ union Outcome
 		end 'p'
 	end 'isPass'
 
-	export function weight() returns float
+	export function weight() returns Real
 		return 2.5
 	end 'weight'
 end 'Outcome'
@@ -25,86 +25,55 @@ function main() returns ExitCode
 	end 'w'
 	return 2
 end 'main'
+typealias Real = float(f64.min to f64.max)
 ---
 ExitCode: 7
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @Outcome.isPass {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
-    arm64.movImm x0, 1
-    arm64.b matchcont
-  matchnext:
-    arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
-  matcharm:
-    arm64.movImm x0, 0
-    arm64.b matchcont
-  matchcont:
-    arm64.epilogue 16
-    arm64.ret
-  matchdead:
-}
-
-func @Outcome.weight {
-  entry:
-    arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_2]
-    arm64.epilogue 16
-    arm64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
+    arm64.leaRdata x19, __str_rec_1  ; "a rather long failure reason to force a heap allocation"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-    arm64.add x0, x19, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x19
-    arm64.bl __str_copy
-    arm64.add x0, x23, x19
-    arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x19
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.b __il_body#6
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm#7
+    arm64.b matchnext
+  matcharm#7:
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x22
-    arm64.movRegReg x0, x20
-    arm64.bl Outcome.isPass
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm#8
+    arm64.b matchdead
+  matcharm#8:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.b __il_cont#5
+  __il_cont#5:
     arm64.cbnz x0, y
-    arm64.b ifcont
+    arm64.b ifcont#2
   y:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -112,19 +81,19 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.movRegReg x0, x20
-    arm64.bl Outcome.weight
-    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+  ifcont#2:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.fpLoadRdata d0, [rdata + __fconst_2.5]
+    arm64.b __il_cont#12
+  __il_cont#12:
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
     arm64.fcmp d0, d1
     arm64.cset x0, gt
     arm64.cbnz x0, w
-    arm64.b ifcont
+    arm64.b ifcont#4
   w:
     arm64.movImm x19, 7
     arm64.movRegReg x0, x20
@@ -132,21 +101,16 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x19, 2
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Outcome
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 32
     arm64.ret
+  matchdead:
 }

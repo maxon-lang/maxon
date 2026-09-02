@@ -14,9 +14,10 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -48,9 +49,59 @@ func @main {
     arm64.ret
   ifcont:
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#12
+  __im_load#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load#13
+  __im_load#13:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#15
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#16
+  critsplit#16:
+    arm64.b __im_cont
+  critsplit#15:
+    arm64.b __im_cont
+  __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
-    arm64.cmp x9, 0
+    arm64.movRegReg x2, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x2, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
     arm64.b tryok

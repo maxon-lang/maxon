@@ -21,161 +21,33 @@ func @main {
     arm64.movImm x1, 56832
     arm64.bl utf16IsValidSurrogatePair
     arm64.cbnz x0, c14
-    arm64.b ifcont
+    arm64.b ifcont#2
   c14:
-    arm64.leaRdata x0, __str_rec_1
-    arm64.bl __print_string
-    arm64.b ifcont
-  ifcont:
+    arm64.leaRdata x0, __str_rec_2  ; "1\x0a"
+    arm64.bl print
+    arm64.b ifcont#2
+  ifcont#2:
     arm64.movImm x0, 56832
     arm64.movImm x1, 55357
     arm64.bl utf16IsValidSurrogatePair
     arm64.cbnz x0, c15
-    arm64.b ifcont
+    arm64.b ifcont#4
   c15:
-    arm64.leaRdata x0, __str_rec_3
-    arm64.bl __print_string
-    arm64.b ifcont
-  ifcont:
+    arm64.leaRdata x0, __str_rec_3  ; "0\x0a"
+    arm64.bl print
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movImm x0, 65
     arm64.movImm x1, 66
     arm64.bl utf16IsValidSurrogatePair
     arm64.cbnz x0, c16
-    arm64.b ifcont
+    arm64.b ifcont#6
   c16:
-    arm64.leaRdata x0, __str_rec_3
-    arm64.bl __print_string
-    arm64.b ifcont
-  ifcont:
+    arm64.leaRdata x0, __str_rec_3  ; "0\x0a"
+    arm64.bl print
+    arm64.b ifcont#6
+  ifcont#6:
     arm64.movImm x0, 0
     arm64.epilogue 16
-    arm64.ret
-}
-
-func @utf16IsLeadSurrogate {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x0, 65535
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.cmp x0, 55296
-    arm64.cset x1, ge
-    arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs
-    arm64.b critsplit
-  andrhs:
-    arm64.cmp x0, 56319
-    arm64.cset x0, le
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x2
-    arm64.b scmerge
-  scmerge:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @utf16IsTrailSurrogate {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x0, 65535
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_5
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.cmp x0, 56320
-    arm64.cset x1, ge
-    arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs
-    arm64.b critsplit
-  andrhs:
-    arm64.cmp x0, 57343
-    arm64.cset x0, le
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x2
-    arm64.b scmerge
-  scmerge:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @utf16IsValidSurrogatePair {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x1
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x0, 65535
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.cmp x19, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x19, 65535
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.bl utf16IsLeadSurrogate
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit
-  andrhs:
-    arm64.movRegReg x0, x19
-    arm64.bl utf16IsTrailSurrogate
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x1
-    arm64.b scmerge
-  scmerge:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
     arm64.ret
 }

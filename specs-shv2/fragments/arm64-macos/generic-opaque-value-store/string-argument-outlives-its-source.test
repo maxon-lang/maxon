@@ -85,7 +85,7 @@ func @Holder.entryAt {
     arm64.cbnz x2, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_5
+    arm64.leaRdata x0, __str_blob_5  ; "panic at string-argument-outlives-its-source.test:20: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -156,7 +156,7 @@ func @Holder.entryAt {
     arm64.cbnz x0, tryerr
     arm64.b tryok
   tryerr:
-    arm64.leaRdata x0, __str_blob_1
+    arm64.leaRdata x0, __str_blob_1  ; "panic at string-argument-outlives-its-source.test:20: Holder.entryAt: out of range\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -196,7 +196,7 @@ func @pluck {
     arm64.leaRdata x0, __layout_Holder_String
     arm64.bl Holder.create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_2
+    arm64.leaRdata x0, __str_rec_2  ; "the source is gone"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.add x0, x21, 57
@@ -244,7 +244,7 @@ func @main {
     arm64.bl pluck
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.leaRdata x1, __str_rec_2
+    arm64.leaRdata x1, __str_rec_2  ; "the source is gone"
     arm64.bl String.equals
     arm64.cbnz x0, kept
     arm64.b ifcont

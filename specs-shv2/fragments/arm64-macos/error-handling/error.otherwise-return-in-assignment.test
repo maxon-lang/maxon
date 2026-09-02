@@ -38,8 +38,7 @@ func @maybeFail {
     arm64.cbnz x0, check
     arm64.b ifcont
   check:
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
@@ -59,7 +58,7 @@ func @runIt {
     arm64.cbnz x1, tryerr
     arm64.b tryok
   tryerr:
-    arm64.movImm x0, -1
+    arm64.movImm x0, 18446744073709551615
     arm64.epilogue 16
     arm64.ret
   tryok:
@@ -75,21 +74,21 @@ func @main {
     arm64.cmp x0, 42
     arm64.cset x0, eq
     arm64.cbnz x0, checkGood
-    arm64.b ifcont
+    arm64.b ifcont#4
   checkGood:
     arm64.movImm x0, 1
     arm64.bl runIt
     arm64.cmp x0, -1
     arm64.cset x0, eq
     arm64.cbnz x0, checkBad
-    arm64.b ifcont
+    arm64.b ifcont#3
   checkBad:
     arm64.movImm x0, 7
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.b ifcont
-  ifcont:
+  ifcont#3:
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

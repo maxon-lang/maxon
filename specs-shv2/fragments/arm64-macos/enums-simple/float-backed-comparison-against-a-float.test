@@ -19,40 +19,19 @@ ExitCode: 1
 func @main {
   entry:
     arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
-    arm64.movImm x0, 4591870180066957722
-    arm64.fmov d1, x0
-    arm64.fcmp d0, d1
-    arm64.cset x0, gt
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit
+    arm64.b andrhs
   andrhs:
-    arm64.movImm x0, 4606281698874543309
-    arm64.fmov d1, x0
-    arm64.fcmp d0, d1
-    arm64.cset x0, mi
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x1
+    arm64.movImm x0, 1
     arm64.b scmerge
   scmerge:
     arm64.cbnz x0, inRange
     arm64.b ifcont
   inRange:
-    arm64.movImm x0, 4606281698874543309
-    arm64.fpLoadRdata d0, [rdata + __fconst_1]
-    arm64.fmov d1, x0
-    arm64.fcmp d1, d0
-    arm64.cset x0, eq
-    arm64.cbnz x0, exact
-    arm64.b ifcont
+    arm64.b exact
   exact:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.b ifcont
   ifcont:
     arm64.movImm x0, 0
     arm64.epilogue 16

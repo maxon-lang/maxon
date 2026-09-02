@@ -65,7 +65,7 @@ func @Cell.measureOnly {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_3
+    arm64.leaRdata x19, __str_rec_3  ; "a fresh allocation of its own, reusing the freed record"
     arm64.b __il_body#3
   __il_body#3:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
@@ -114,7 +114,7 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_4
+    arm64.leaRdata x19, __str_rec_4  ; "the borrowed payload, long enough to be a real heap allocation"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -154,7 +154,7 @@ func @main {
     arm64.movRegReg x21, x20
     arm64.b matchcont
   matchcont:
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_5  ; "measured="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.movImm x0, 21

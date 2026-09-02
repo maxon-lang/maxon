@@ -3,79 +3,25 @@
 export typealias Codepoint = int(0 to 1114111)
 
 // --- file: lib.maxon
-export function widen(c Codepoint) returns int
+export function widen(c Codepoint) returns Integer
 	return c / 1000
 end 'widen'
 
+typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 typealias Codepoint = int(0 to 100)
 
-function narrow(c Codepoint) returns int
+function narrow(c Codepoint) returns Integer
 	return c
 end 'narrow'
 
 function main() returns ExitCode
 	return (widen(70000) - narrow(28)) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 42
 ---
-func @narrow {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x0, 100
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 70000
-    arm64.bl widen
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 28
-    arm64.bl narrow
-    arm64.sub x0, x19, x0
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @widen {
   entry:
     arm64.prologue 16
@@ -84,19 +30,55 @@ func @widen {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.cmp x0, 1114111
+    arm64.movImm x16, 1114111
+    arm64.cmp x0, x16
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
+    arm64.leaRdata x0, __str_blob_0  ; "panic at lib.maxon:1: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
   __rc_ok:
     arm64.movImm x1, 1000
-    arm64.sdiv x0, x0, x1
+    arm64.udiv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 70000
+    arm64.bl widen
+    arm64.movImm x1, 28
+    arm64.b __il_body
+  __il_body:
+    arm64.b __rc_chk#7
+  __rc_chk#7:
+    arm64.b __rc_ok#6
+  __rc_ok#6:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.sub x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk#3
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at main.maxon:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
     arm64.epilogue 16
     arm64.ret
 }

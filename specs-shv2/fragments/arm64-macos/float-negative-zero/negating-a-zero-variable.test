@@ -24,8 +24,7 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot8, d8
+    arm64.prologue 80
     arm64.storeSlotReg slot7, x26
     arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
@@ -34,14 +33,12 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.fpLoadRdata d0, [rdata + __str_blob_21]
-    arm64.fneg d8, d0
-    arm64.movRegReg d0, d8
+    arm64.fpLoadRdata d0, [rdata + __fconst_-0]
     arm64.bl __float_toString
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-    arm64.leaRdata x0, __str_rec_93
+    arm64.leaRdata x0, __str_rec_93  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.add x24, x21, x23
@@ -72,12 +69,12 @@ func @main {
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
-    arm64.fneg d0, d8
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
     arm64.bl __float_toString
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-    arm64.leaRdata x0, __str_rec_93
+    arm64.leaRdata x0, __str_rec_93  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.add x24, x21, x23
@@ -110,9 +107,7 @@ func @main {
     arm64.bl __str_decref
     arm64.b __il_body#6
   __il_body#6:
-    arm64.fmov x0, d8
-    arm64.cmp x0, 0
-    arm64.cset x0, lt
+    arm64.movImm x0, 1
     arm64.b __il_cont#5
   __il_cont#5:
     arm64.eor x0, x0, 1
@@ -128,33 +123,14 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot d8, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   ifcont#2:
-    arm64.fneg d0, d8
     arm64.b __il_body#8
   __il_body#8:
-    arm64.fmov x0, d0
-    arm64.cmp x0, 0
-    arm64.cset x0, lt
     arm64.b __il_cont#7
   __il_cont#7:
-    arm64.cbnz x0, signBitNotCleared
     arm64.b ifcont#4
-  signBitNotCleared:
-    arm64.movImm x0, 2
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot d8, slot8
-    arm64.epilogue 96
-    arm64.ret
   ifcont#4:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -165,7 +141,6 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot d8, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
 }

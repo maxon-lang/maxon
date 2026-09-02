@@ -13,7 +13,7 @@ ExitCode: 1
 func @fail {
   entry:
     arm64.prologue 16
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at panic.in-function.test:3: failure in helper\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 16
     arm64.ret
@@ -23,6 +23,10 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.bl fail
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  afterdiverge:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

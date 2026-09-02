@@ -9,9 +9,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -28,23 +29,23 @@ func @main {
     arm64.movImm x1, 56832
     arm64.bl utf16DecodeSurrogates
     arm64.movRegReg x19, x0
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_1  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x23, x19, x22
-    arm64.add x0, x23, 49
+    arm64.add x0, x23, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.add x25, x24, 48
+    arm64.add x25, x24, 56
     arm64.movRegReg x0, x25
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x19
@@ -57,14 +58,14 @@ func @main {
     arm64.add x0, x19, x22
     arm64.storeBaseDispReg.word64 [x24 + 0], x25
     arm64.storeBaseDispReg.word64 [x24 + 8], x23
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.movImm x0, 0
@@ -76,66 +77,5 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.epilogue 80
-    arm64.ret
-}
-
-func @utf16DecodeSurrogates {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x0, 65535
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x1, 65535
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.sub x0, x0, 55296
-    arm64.sub x1, x1, 56320
-    arm64.movImm x16, 1024
-    arm64.mul x0, x0, x16
-    arm64.add x0, x0, 65536
-    arm64.add x0, x0, x1
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x0, 1114111
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
     arm64.ret
 }

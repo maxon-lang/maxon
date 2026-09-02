@@ -16,11 +16,11 @@ type Container uses Element
 	end 'push'
 
 	export function drainOne()
-		let x = try self.items.pop() otherwise return
+		_ = try self.items.pop() otherwise return
 	end 'drainOne'
 
 	export function peek()
-		let y = try self.items.get(0) otherwise return
+		_ = try self.items.get(0) otherwise return
 	end 'peek'
 end 'Container'
 
@@ -38,9 +38,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Container.create {
@@ -77,7 +78,8 @@ func @Container.drainOne {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __managed_pop
+    arm64.movRegReg x1, x19
+    arm64.bl Array.pop
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -100,8 +102,58 @@ func @Container.peek {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
+    arm64.cmp x2, 8
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_word
+    arm64.b __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.cset x2, ls
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load#9
+  __im_load#9:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x2, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_byte
+    arm64.b __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.cset x2, ls
+    arm64.cbnz x2, __im_slow
+    arm64.b __im_load#10
+  __im_load#10:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.byte x2, [x2 + 0]
+    arm64.b __im_loaded
+  __im_loaded:
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.cset x4, ne
+    arm64.cbnz x4, __im_empty
+    arm64.b critsplit#12
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, __im_slow
+    arm64.b critsplit#13
+  critsplit#13:
+    arm64.b __im_cont
+  critsplit#12:
+    arm64.b __im_cont
+  __im_slow:
     arm64.bl __managed_get
-    arm64.cmp x9, 0
+    arm64.movRegReg x3, x9
+    arm64.b __im_cont
+  __im_cont:
+    arm64.cmp x3, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
     arm64.b tryok
@@ -122,14 +174,17 @@ func @main {
     arm64.bl Container.create
     arm64.movRegReg x19, x0
     arm64.movImm x1, 7
+    arm64.leaRdata x2, __layout_Container_SmallInt
     arm64.movRegReg x0, x19
     arm64.bl Container.push
     arm64.movImm x1, 9
+    arm64.leaRdata x2, __layout_Container_SmallInt
     arm64.movRegReg x0, x19
     arm64.bl Container.push
     arm64.leaRdata x1, __layout_Container_SmallInt
     arm64.movRegReg x0, x19
     arm64.bl Container.drainOne
+    arm64.leaRdata x1, __layout_Container_SmallInt
     arm64.movRegReg x0, x19
     arm64.bl Container.peek
     arm64.movImm x20, 0

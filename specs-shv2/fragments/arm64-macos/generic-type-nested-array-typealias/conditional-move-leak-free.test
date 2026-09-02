@@ -28,9 +28,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Container.create {
@@ -55,7 +56,6 @@ func @Container.create {
 func @Container.pushIf {
   entry:
     arm64.prologue 16
-    arm64.movRegReg x6, x3
     arm64.cbnz x2, maybe
     arm64.b iffalse
   maybe:
@@ -63,7 +63,7 @@ func @Container.pushIf {
     arm64.bl __managed_push
     arm64.b ifcont
   iffalse:
-    arm64.movRegReg x0, x6
+    arm64.movRegReg x0, x3
     arm64.bl __drop_type_param
     arm64.b ifcont
   ifcont:
@@ -83,15 +83,15 @@ func @main {
     arm64.leaRdata x0, __layout_Container_String
     arm64.bl Container.create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_1  ; "hello"
     arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.add x0, x22, 49
+    arm64.add x0, x22, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x23, x0
-    arm64.add x24, x23, 48
+    arm64.add x24, x23, 56
     arm64.movRegReg x0, x24
     arm64.movRegReg x1, x21
     arm64.movRegReg x2, x22
@@ -99,15 +99,14 @@ func @main {
     arm64.add x0, x24, x22
     arm64.storeBaseDispReg.word64 [x23 + 0], x24
     arm64.storeBaseDispReg.word64 [x23 + 8], x22
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
-    arm64.leaRdata x6, __layout_Container_String
+    arm64.leaRdata x3, __layout_Container_String
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x20
-    arm64.movRegReg x3, x6
     arm64.bl Container.pushIf
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19

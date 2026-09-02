@@ -35,22 +35,31 @@ data {
   __gt_timer_count@32 = i64 0
   __gt_timer_heap_base@40 = i64 0
   __gt_timer_capacity@48 = i64 0
-  __gt_trace_counter@56 = i64 0
-  __gt_proc_count@64 = i64 0
-  __gt_proc_handles_base@72 = i64 0
-  __gt_proc_gts_base@80 = i64 0
-  __gt_live_count@88 = i64 0
-  __sched_active_workers@96 = i64 1
-  __sched_max_active_workers@104 = i64 1
-  __sched_tls_index@112 = i64 0
-  __sched_tls_teb_offset@120 = i64 0
-  __sched_procs@128 = i64 0
-  __sched_num_procs@136 = i64 0
-  __sched_shutdown_flag@144 = i64 0
-  __sched_lock@152 = i64 0
-  __slab_arena_list@160 = i64 0
-  __slab_arena_map_l1@168 = i64 0
-  __slab_state@176 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __slab_arena_list@232 = i64 0
+  __slab_arena_map_l1@240 = i64 0
+  __slab_state@248 = i64 0
 }
 
 func @Slow.create {
@@ -70,6 +79,7 @@ func @Slow.create {
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -85,7 +95,7 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __gt_promise_drop
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
@@ -117,6 +127,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __rc_ok#6:
@@ -128,33 +139,34 @@ func @main {
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
-    arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
+    arm64.cmp x1, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, __im_empty
     arm64.b critsplit#15
   __im_empty:
-    arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
+    arm64.cmp x22, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, __im_slow
     arm64.b critsplit#16
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
+    arm64.movRegReg x22, x0
     arm64.b __im_cont
   critsplit#16:
-    arm64.movRegReg x9, x1
+    arm64.movRegReg x9, x0
     arm64.b __im_cont
   critsplit#15:
-    arm64.movRegReg x9, x1
+    arm64.movRegReg x9, x0
     arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#2
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr#2
     arm64.b tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at awaitany-returns-the-completed-index.test:23: awaitAny named a slot that is in range\x0a"
@@ -163,9 +175,14 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_vacate
+    arm64.movRegReg x0, x22
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.cset x1, ne
@@ -194,6 +211,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __rc_ok#8:
@@ -205,6 +223,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

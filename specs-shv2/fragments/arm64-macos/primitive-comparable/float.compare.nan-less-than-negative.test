@@ -17,79 +17,67 @@ ExitCode: 0
 func @main {
   entry:
     arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
-    arm64.fpLoadRdata d1, [rdata + __fconst_1]
-    arm64.fmul d0, d0, d1
+    arm64.fpLoadRdata d0, [rdata + __fconst_0x7ff0000000000000]
     arm64.fsub d0, d0, d0
-    arm64.fpLoadRdata d1, [rdata + __fconst_2]
-    arm64.bl float.compare
+    arm64.fpLoadRdata d1, [rdata + __fconst_-999999]
+    arm64.b __il_body
+  __il_body:
+    arm64.fcmp d0, d0
+    arm64.cset x0, ne
+    arm64.cbnz x0, self_nan
+    arm64.b ifcont#13
+  self_nan:
+    arm64.b ifcont#12
+  ifcont#12:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#13:
+    arm64.b ifcont#15
+  ifcont#15:
+    arm64.fcmp d0, d1
+    arm64.cset x0, mi
+    arm64.cbnz x0, lt
+    arm64.b ifcont#17
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#17:
+    arm64.fcmp d0, d1
+    arm64.cset x0, gt
+    arm64.cbnz x0, gt
+    arm64.b ifcont#19
+  gt:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  ifcont#19:
+    arm64.movImm x0, 1
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 0
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x1, matcharm#1
+    arm64.b matchnext#5
+  matcharm#1:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  matchnext:
+  matchnext#5:
     arm64.cmp x0, 1
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
+    arm64.cbnz x1, matcharm#2
+    arm64.b matchnext#6
+  matcharm#2:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  matchnext:
+  matchnext#6:
     arm64.cmp x0, 2
     arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
+    arm64.cbnz x0, matcharm#3
     arm64.b matchdead
-  matcharm:
+  matcharm#3:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
   matchdead:
-  matchcont:
-}
-
-func @float.compare {
-  entry:
-    arm64.prologue 16
-    arm64.fcmp d0, d0
-    arm64.cset x0, ne
-    arm64.cbnz x0, selfIsNan
-    arm64.b selfNotNan
-  selfIsNan:
-    arm64.fcmp d1, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, equal
-    arm64.b less
-  selfNotNan:
-    arm64.fcmp d1, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, greater
-    arm64.b ordered
-  ordered:
-    arm64.fcmp d0, d1
-    arm64.cset x0, mi
-    arm64.cbnz x0, less
-    arm64.b notLess
-  less:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  notLess:
-    arm64.fcmp d0, d1
-    arm64.cset x0, gt
-    arm64.cbnz x0, greater
-    arm64.b equal
-  greater:
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-  equal:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
 }

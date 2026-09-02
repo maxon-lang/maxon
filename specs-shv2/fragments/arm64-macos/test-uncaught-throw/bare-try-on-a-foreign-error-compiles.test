@@ -1,0 +1,113 @@
+// Test: bare-try-on-a-foreign-error-compiles
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function lookup() throws ApiError
+	throw ApiError.notFound
+end 'lookup'
+
+test 'tolerates a foreign error'
+	try lookup()
+end 'tolerates a foreign error'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_wireWrapper@0 = i64 0
+  __data_wireSeparator@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @lookup {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @__test_tolerates_a_foreign_error {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl lookup
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.sub x0, x9, 1
+    arm64.leaRdata x19, __str_rec_5  ; "ApiError"
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.leaRdata x1, __str_rec_6  ; "notFound"
+    arm64.mul x0, x0, x1
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x2, __str_rec_7  ; "suite.test.maxon"
+    arm64.movImm x3, 10
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl __TestReport.threw
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  afterdiverge:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

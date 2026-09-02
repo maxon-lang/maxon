@@ -1,11 +1,11 @@
 // Test: six-div-results-live-across-the-call
 typealias Positive = int(1 to i64.max)
 
-function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
 	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
 end 'digits6'
 
-function divsAcross(p int) returns int
+function divsAcross(p Integer) returns Integer
 	let n1 = p + 100
 	let n2 = p + 45
 	let n3 = p + 23
@@ -29,142 +29,87 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @digits6 {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x6, x3
-    arm64.movRegReg x7, x4
-    arm64.movRegReg x8, x5
-    arm64.movImm x16, 100000
-    arm64.mul x0, x0, x16
-    arm64.movImm x16, 10000
-    arm64.mul x1, x1, x16
-    arm64.add x0, x0, x1
-    arm64.movImm x16, 1000
-    arm64.mul x1, x2, x16
-    arm64.add x0, x0, x1
-    arm64.movImm x16, 100
-    arm64.mul x1, x6, x16
-    arm64.add x0, x0, x1
-    arm64.movImm x16, 10
-    arm64.mul x1, x7, x16
-    arm64.add x0, x0, x1
-    arm64.add x0, x0, x8
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @divsAcross {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 16
     arm64.add x1, x0, 100
     arm64.add x2, x0, 45
-    arm64.add x6, x0, 23
-    arm64.add x7, x0, 12
-    arm64.cmp x7, 1
-    arm64.cset x8, lt
-    arm64.cbnz x8, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.add x3, x0, 23
+    arm64.add x4, x0, 12
+    arm64.cmp x4, 1
+    arm64.cset x5, lt
+    arm64.cbnz x5, __rc_panic#2
+    arm64.b __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at six-div-results-live-across-the-call.test:12: Range check failed: value outside typealias 'Positive'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 16
     arm64.ret
-  __rc_ok:
-    arm64.add x7, x7, 0
-    arm64.add x8, x0, 7
-    arm64.cmp x8, 1
-    arm64.cset x9, lt
-    arm64.cbnz x9, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1
+  __rc_ok#1:
+    arm64.add x5, x0, 7
+    arm64.cmp x5, 1
+    arm64.cset x6, lt
+    arm64.cbnz x6, __rc_panic#4
+    arm64.b __rc_ok#3
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at six-div-results-live-across-the-call.test:13: Range check failed: value outside typealias 'Positive'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 16
     arm64.ret
-  __rc_ok:
-    arm64.add x8, x8, 0
+  __rc_ok#3:
     arm64.add x0, x0, 9
     arm64.cmp x0, 1
-    arm64.cset x9, lt
-    arm64.cbnz x9, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2
+    arm64.cset x6, lt
+    arm64.cbnz x6, __rc_panic#6
+    arm64.b __rc_ok#5
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at six-div-results-live-across-the-call.test:14: Range check failed: value outside typealias 'Positive'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 16
     arm64.ret
-  __rc_ok:
-    arm64.add x0, x0, 0
-    arm64.sdiv x19, x1, x7
-    arm64.sdiv x16, x1, x7
-    arm64.msub x20, x16, x7, x1
-    arm64.sdiv x21, x2, x8
-    arm64.sdiv x16, x2, x8
-    arm64.msub x22, x16, x8, x2
-    arm64.sdiv x23, x6, x0
-    arm64.sdiv x16, x6, x0
-    arm64.msub x24, x16, x0, x6
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
-    arm64.movRegReg x3, x22
-    arm64.movRegReg x4, x23
-    arm64.movRegReg x5, x24
-    arm64.bl digits6
+  __rc_ok#5:
+    arm64.sdiv x6, x1, x4
+    arm64.sdiv x16, x1, x4
+    arm64.msub x1, x16, x4, x1
+    arm64.sdiv x4, x2, x5
+    arm64.sdiv x16, x2, x5
+    arm64.msub x2, x16, x5, x2
+    arm64.sdiv x5, x3, x0
+    arm64.sdiv x16, x3, x0
+    arm64.msub x0, x16, x0, x3
+    arm64.b __il_body
+  __il_body:
     arm64.movImm x16, 100000
-    arm64.mul x1, x19, x16
-    arm64.add x0, x0, x1
+    arm64.mul x3, x6, x16
     arm64.movImm x16, 10000
-    arm64.mul x1, x20, x16
-    arm64.add x0, x0, x1
+    arm64.mul x1, x1, x16
+    arm64.add x6, x3, x1
     arm64.movImm x16, 1000
-    arm64.mul x1, x21, x16
-    arm64.add x0, x0, x1
+    arm64.mul x4, x4, x16
+    arm64.add x6, x6, x4
     arm64.movImm x16, 100
-    arm64.mul x1, x22, x16
-    arm64.add x0, x0, x1
+    arm64.mul x2, x2, x16
+    arm64.add x6, x6, x2
     arm64.movImm x16, 10
-    arm64.mul x1, x23, x16
-    arm64.add x0, x0, x1
-    arm64.add x0, x0, x24
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.mul x5, x5, x16
+    arm64.add x6, x6, x5
+    arm64.add x6, x6, x0
+    arm64.b __il_cont
+  __il_cont:
+    arm64.add x3, x6, x3
+    arm64.add x1, x3, x1
+    arm64.add x1, x1, x4
+    arm64.add x1, x1, x2
+    arm64.add x1, x1, x5
+    arm64.add x0, x1, x0
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -173,7 +118,8 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.bl divsAcross
-    arm64.cmp x0, 1692650
+    arm64.movImm x16, 1692650
+    arm64.cmp x0, x16
     arm64.cset x0, eq
     arm64.cbnz x0, ok
     arm64.b ifcont

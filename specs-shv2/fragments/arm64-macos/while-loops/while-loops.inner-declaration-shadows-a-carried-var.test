@@ -1,9 +1,11 @@
 // Test: while-loops.inner-declaration-shadows-a-carried-var
 function main() returns ExitCode
-	var t = 100
+	var t = 0
+	t = 100
 	var i = 0
 	while i < 3 'l'
-		var t = i + 1
+		var t = 0
+		t = i + 1
 		i = i + t
 	end 'l'
 	return t
@@ -27,22 +29,9 @@ func @main {
     arm64.add x1, x1, x2
     arm64.b whilehdr
   whileexit:
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x1, 100
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
   __rc_ok:
     arm64.epilogue 16
     arm64.ret

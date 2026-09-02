@@ -22,9 +22,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -51,8 +52,8 @@ func @main {
     arm64.cbnz x0, loop
     arm64.b whileexit
   loop:
-    arm64.leaRdata x19, __str_rec_1
-    arm64.leaRdata x0, __str_rec_3
+    arm64.leaRdata x19, __str_rec_3  ; "a1b"
+    arm64.leaRdata x0, __str_rec_4  ; "a"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.movImm x22, 1
@@ -64,16 +65,16 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __int_to_string
     arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_5  ; "b"
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.add x0, x21, x22
     arm64.add x26, x0, x25
-    arm64.add x0, x26, 49
+    arm64.add x0, x26, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x27, x0
-    arm64.add x28, x27, 48
+    arm64.add x28, x27, 56
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -91,7 +92,7 @@ func @main {
     arm64.add x0, x20, x25
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.storeBaseDispReg.word64 [x27 + 8], x26
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x27 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
@@ -108,12 +109,12 @@ func @main {
   eq:
     arm64.loadRegSlot x0, slot1
     arm64.add x19, x0, 1
-    arm64.b ifcont
+    arm64.b ifcont#5
   critsplit:
     arm64.loadRegSlot x19, slot1
-    arm64.b ifcont
-  ifcont:
-    arm64.leaRdata x0, __str_rec_3
+    arm64.b ifcont#5
+  ifcont#5:
+    arm64.leaRdata x0, __str_rec_4  ; "a"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.movImm x22, 1
@@ -125,16 +126,16 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __int_to_string
     arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_5  ; "b"
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.add x0, x21, x22
     arm64.add x26, x0, x25
-    arm64.add x0, x26, 49
+    arm64.add x0, x26, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x27, x0
-    arm64.add x28, x27, 48
+    arm64.add x28, x27, 56
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -152,7 +153,7 @@ func @main {
     arm64.add x0, x20, x25
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.storeBaseDispReg.word64 [x27 + 8], x26
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x27 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
@@ -160,14 +161,13 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x27
     arm64.bl String.hash
-    arm64.movImm x1, 5863446
-    arm64.add x1, x1, 0
-    arm64.cmp x0, x1
+    arm64.movImm x16, 5863446
+    arm64.cmp x0, x16
     arm64.cset x20, eq
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.cbnz x20, neverTrue
-    arm64.b ifcont
+    arm64.b ifcont#7
   neverTrue:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot2
@@ -182,7 +182,7 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  ifcont:
+  ifcont#7:
     arm64.loadRegSlot x0, slot0
     arm64.add x0, x0, 1
     arm64.movRegReg x1, x19
@@ -192,7 +192,7 @@ func @main {
     arm64.cmp x0, 100
     arm64.cset x0, eq
     arm64.cbnz x0, all
-    arm64.b ifcont
+    arm64.b ifcont#9
   all:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
@@ -207,7 +207,7 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  ifcont:
+  ifcont#9:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -220,76 +220,5 @@ func @main {
     arm64.loadRegSlot x27, slot10
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
-    arm64.ret
-}
-
-func @String.hash {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x2, 5381
-    arm64.movImm x6, 0
-    arm64.b header
-  header:
-    arm64.cmp x6, x0
-    arm64.cset x7, ge
-    arm64.cbnz x7, done
-    arm64.b body
-  done:
-    arm64.movImm x0, 4294967295
-    arm64.and x0, x2, x0
-    arm64.epilogue 16
-    arm64.ret
-  body:
-    arm64.add x7, x1, x6
-    arm64.loadRegBaseDisp.byte x7, [x7 + 0]
-    arm64.movImm x8, 33
-    arm64.mul x2, x2, x8
-    arm64.add x2, x2, x7
-    arm64.movImm x7, 1
-    arm64.add x6, x6, x7
-    arm64.b header
-}
-
-func @String.equals {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x6, [x1 + 8]
-    arm64.cmp x2, x6
-    arm64.cset x6, eq
-    arm64.cbnz x6, lenMatch
-    arm64.b notEqual
-  lenMatch:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.movImm x6, 0
-    arm64.b cmphdr
-  cmphdr:
-    arm64.cmp x6, x2
-    arm64.cset x7, ge
-    arm64.cbnz x7, allMatch
-    arm64.b cmpbody
-  allMatch:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  cmpbody:
-    arm64.add x7, x0, x6
-    arm64.loadRegBaseDisp.byte x7, [x7 + 0]
-    arm64.add x8, x1, x6
-    arm64.loadRegBaseDisp.byte x8, [x8 + 0]
-    arm64.movImm x9, 1
-    arm64.add x6, x6, x9
-    arm64.cmp x7, x8
-    arm64.cset x7, eq
-    arm64.cbnz x7, critsplit
-    arm64.b notEqual
-  critsplit:
-    arm64.b cmphdr
-  notEqual:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
     arm64.ret
 }

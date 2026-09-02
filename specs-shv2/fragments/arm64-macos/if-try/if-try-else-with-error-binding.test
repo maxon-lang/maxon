@@ -7,19 +7,18 @@ enum MyError implements Error
 	second
 end 'MyError'
 
-function mayFail(which Integer) returns Integer throws MyError
+function runStep(which Integer) throws MyError
 	if which == 1 'check1'
 		throw MyError.first
 	end 'check1'
 	if which == 2 'check2'
 		throw MyError.second
 	end 'check2'
-	return 42
-end 'mayFail'
+end 'runStep'
 
 function main() returns ExitCode
 	var result = 0
-	if try mayFail(1) 'check'
+	if try runStep(1) 'check'
 		result = 100
 	end 'check' else (e) 'err'
 		match e 'kind'
@@ -32,32 +31,30 @@ end 'main'
 ---
 ExitCode: 50
 ---
-func @mayFail {
+func @runStep {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 1
     arm64.cset x1, eq
     arm64.cbnz x1, check1
-    arm64.b ifcont
+    arm64.b ifcont#2
   check1:
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, 2
     arm64.cset x0, eq
     arm64.cbnz x0, check2
-    arm64.b ifcont
+    arm64.b ifcont#4
   check2:
-    arm64.movImm x0, 1
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 2
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 42
+  ifcont#4:
+    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
@@ -67,7 +64,7 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 1
-    arm64.bl mayFail
+    arm64.bl runStep
     arm64.cmp x9, 0
     arm64.cset x0, eq
     arm64.cbnz x0, check
@@ -79,17 +76,17 @@ func @main {
     arm64.sub x0, x9, 1
     arm64.cmp x0, 0
     arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
+    arm64.cbnz x1, matcharm#3
     arm64.b matchnext
-  matcharm:
+  matcharm#3:
     arm64.movImm x0, 50
     arm64.b matchcont
   matchnext:
     arm64.cmp x0, 1
     arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
+    arm64.cbnz x0, matcharm#4
     arm64.b matchdead
-  matcharm:
+  matcharm#4:
     arm64.movImm x0, 60
     arm64.b matchcont
   matchcont:
@@ -100,13 +97,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-else-with-error-binding.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

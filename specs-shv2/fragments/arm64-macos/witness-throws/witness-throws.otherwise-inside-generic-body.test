@@ -43,9 +43,10 @@ end 'main'
 ExitCode: 39
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Point.create {
@@ -64,7 +65,7 @@ func @Point.create {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at witness-throws.otherwise-inside-generic-body.test:14: Range check failed: value outside typealias 'Code'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -89,8 +90,7 @@ func @Point.digest {
     arm64.cbnz x1, small
     arm64.b ifcont
   small:
-    arm64.movImm x0, 0
-    arm64.add x9, x0, 1
+    arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
@@ -146,6 +146,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Point.Digest
     arm64.movRegReg x0, x19
     arm64.bl Box.create
     arm64.movRegReg x20, x0
@@ -156,6 +157,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
+    arm64.leaRdata x1, __witness_Point.Digest
     arm64.movRegReg x0, x19
     arm64.bl Box.create
     arm64.movRegReg x21, x0
@@ -174,13 +176,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x19, x0
+    arm64.cmp x19, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1
+    arm64.leaRdata x0, __str_blob_1  ; "panic at witness-throws.otherwise-inside-generic-body.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

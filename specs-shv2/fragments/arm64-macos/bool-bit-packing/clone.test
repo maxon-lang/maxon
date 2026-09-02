@@ -22,9 +22,10 @@ end 'main'
 ExitCode: 1
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -33,7 +34,7 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 1
+    arm64.movImm x0, 18446744073709551615
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
@@ -43,8 +44,9 @@ func @main {
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
+    arm64.leaRdata x1, __layout_Array_bool
     arm64.movRegReg x0, x19
-    arm64.bl __managed_clone
+    arm64.bl Array.clone
     arm64.movRegReg x20, x0
     arm64.movImm x1, 0
     arm64.movImm x2, 0
@@ -52,10 +54,10 @@ func @main {
     arm64.bl __managed_set
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at clone.test:9: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -63,52 +65,52 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#1:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
     arm64.movImm x21, 0
-    arm64.b trycont
-  tryok:
+    arm64.b trycont#5
+  tryok#3:
     arm64.movRegReg x21, x0
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#5
+  trycont#5:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
-  tryerr:
+    arm64.cbnz x1, tryerr#7
+    arm64.b tryok#6
+  tryerr#7:
     arm64.movImm x0, 1
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
-  trycont:
+    arm64.b trycont#8
+  tryok#6:
+    arm64.b trycont#8
+  trycont#8:
     arm64.movImm x1, 0
     arm64.cbnz x21, o
-    arm64.b critsplit
+    arm64.b critsplit#16
   o:
-    arm64.add x1, x1, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.movImm x1, 1
+    arm64.b ifcont#10
+  critsplit#16:
+    arm64.b ifcont#10
+  ifcont#10:
     arm64.cbnz x0, c
-    arm64.b critsplit
+    arm64.b critsplit#17
   c:
     arm64.add x21, x1, 10
-    arm64.b ifcont
-  critsplit:
+    arm64.b ifcont#12
+  critsplit#17:
     arm64.movRegReg x21, x1
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#12
+  ifcont#12:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
@@ -118,13 +120,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x21, x0
+    arm64.cmp x21, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1
+    arm64.leaRdata x0, __str_blob_2  ; "panic at clone.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

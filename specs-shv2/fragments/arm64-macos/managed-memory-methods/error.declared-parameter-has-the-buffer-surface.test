@@ -1,5 +1,5 @@
 // Test: error.declared-parameter-has-the-buffer-surface
-function abuse(m __ManagedMemory) returns int
+function abuse(m __ManagedMemory) returns Integer
 	let n = m.count()
 	let e = m.capacity()
 	return n + e
@@ -9,6 +9,7 @@ function main() returns ExitCode
 	let bytes = "hello".toByteArray()
 	return abuse(bytes) as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 CompilerError:
-error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/grow/append/slice/clear; `elementSize`/`remove`/`swap`/`shiftLeft`/`shiftRight` and the cstring/cursor members (`toCString`, `fromCString`, `createCursor`, `makeCharFromBytes`) are not built — no spec reaches them, and the cstring family needs a `cstring` type shv2 has no producer for
+error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — shv2 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/fill/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here

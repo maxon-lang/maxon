@@ -58,27 +58,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @Pair.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Pair.lt {
@@ -86,9 +69,9 @@ func @Pair.lt {
     arm64.prologue 16
     arm64.movRegReg x2, x1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x6
+    arm64.movRegReg x1, x3
     arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
     arm64.blr x16
     arm64.cmp x0, 0
@@ -102,9 +85,9 @@ func @Pair.le {
     arm64.prologue 16
     arm64.movRegReg x2, x1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x6
+    arm64.movRegReg x1, x3
     arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
     arm64.blr x16
     arm64.cmp x0, 2
@@ -118,9 +101,9 @@ func @Pair.gt {
     arm64.prologue 16
     arm64.movRegReg x2, x1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x6
+    arm64.movRegReg x1, x3
     arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
     arm64.blr x16
     arm64.cmp x0, 2
@@ -134,9 +117,9 @@ func @Pair.ge {
     arm64.prologue 16
     arm64.movRegReg x2, x1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x6
+    arm64.movRegReg x1, x3
     arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
     arm64.blr x16
     arm64.cmp x0, 0
@@ -158,47 +141,47 @@ func @Pair.mask {
     arm64.movRegReg x1, x20
     arm64.bl Pair.lt
     arm64.cbnz x0, a1
-    arm64.b critsplit
+    arm64.b critsplit#12
   a1:
-    arm64.add x21, x21, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.movImm x21, 1
+    arm64.b ifcont#2
+  critsplit#12:
+    arm64.b ifcont#2
+  ifcont#2:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Pair.le
     arm64.cbnz x0, a2
-    arm64.b critsplit
+    arm64.b critsplit#13
   a2:
     arm64.add x21, x21, 2
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#4
+  critsplit#13:
+    arm64.b ifcont#4
+  ifcont#4:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Pair.gt
     arm64.cbnz x0, a3
-    arm64.b critsplit
+    arm64.b critsplit#14
   a3:
     arm64.add x21, x21, 4
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#6
+  critsplit#14:
+    arm64.b ifcont#6
+  ifcont#6:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Pair.ge
     arm64.cbnz x0, a4
-    arm64.b critsplit
+    arm64.b critsplit#15
   a4:
     arm64.add x0, x21, 8
-    arm64.b ifcont
-  critsplit:
+    arm64.b ifcont#8
+  critsplit#15:
     arm64.movRegReg x0, x21
-    arm64.b ifcont
-  ifcont:
+    arm64.b ifcont#8
+  ifcont#8:
     arm64.cmp x0, 0
     arm64.cset x1, lt
     arm64.cbnz x1, __rc_panic
@@ -210,7 +193,7 @@ func @Pair.mask {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_2  ; "panic at comparable.ordering-operators-via-witness.test:36: Range check failed: value outside typealias 'Integer'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -228,124 +211,62 @@ func @Pair.mask {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
     arm64.movImm x0, 3
     arm64.movImm x1, 9
-    arm64.bl Pair.create
-    arm64.movRegReg x19, x0
+    arm64.leaRdata x2, __witness_int.Comparable
+    arm64.leaRegSlot x2, slot0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.storeBaseDispReg.word64 [x2 + 8], x1
     arm64.leaRdata x1, __witness_int.Comparable
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x2
     arm64.bl Pair.mask
     arm64.cmp x0, 3
     arm64.cset x0, ne
     arm64.cbnz x0, p1
-    arm64.b ifcont
+    arm64.b ifcont#2
   p1:
-    arm64.movImm x20, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.movImm x0, 1
+    arm64.epilogue 64
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.movImm x0, 7
     arm64.movImm x1, 7
-    arm64.bl Pair.create
-    arm64.movRegReg x20, x0
+    arm64.leaRdata x2, __witness_int.Comparable
+    arm64.leaRegSlot x2, slot2
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.storeBaseDispReg.word64 [x2 + 8], x1
     arm64.leaRdata x1, __witness_int.Comparable
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x2
     arm64.bl Pair.mask
     arm64.cmp x0, 10
     arm64.cset x0, ne
     arm64.cbnz x0, p2
-    arm64.b ifcont
+    arm64.b ifcont#4
   p2:
-    arm64.movImm x21, 2
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.movImm x0, 2
+    arm64.epilogue 64
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x0, 9
     arm64.movImm x1, 3
-    arm64.bl Pair.create
-    arm64.movRegReg x21, x0
+    arm64.leaRdata x2, __witness_int.Comparable
+    arm64.leaRegSlot x2, slot4
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.storeBaseDispReg.word64 [x2 + 8], x1
     arm64.leaRdata x1, __witness_int.Comparable
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x2
     arm64.bl Pair.mask
     arm64.cmp x0, 12
     arm64.cset x0, ne
     arm64.cbnz x0, p3
-    arm64.b ifcont
+    arm64.b ifcont#6
   p3:
-    arm64.movImm x22, 3
-    arm64.movRegReg x0, x21
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.movImm x0, 3
+    arm64.epilogue 64
     arm64.ret
-  ifcont:
-    arm64.movImm x22, 0
-    arm64.movRegReg x0, x21
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @int.compare {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, less
-    arm64.b notLess
-  less:
+  ifcont#6:
     arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  notLess:
-    arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, greater
-    arm64.b equal
-  greater:
-    arm64.movImm x0, 2
-    arm64.epilogue 16
-    arm64.ret
-  equal:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
+    arm64.epilogue 64
     arm64.ret
 }

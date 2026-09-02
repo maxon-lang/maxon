@@ -13,11 +13,9 @@ ExitCode: 42
 func @main {
   entry:
     arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_1]
     arm64.b __il_body
   __il_body:
-    arm64.fpLoadRdata d1, [rdata + __fconst_2]
-    arm64.fmul d0, d0, d1
+    arm64.fpLoadRdata d0, [rdata + __fconst_42]
     arm64.b __il_cont
   __il_cont:
     arm64.fcvtzs x0, d0
@@ -31,7 +29,7 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-float-leaf.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

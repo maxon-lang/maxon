@@ -7,10 +7,10 @@ function shiftRight(value Num, distance ShiftBits) returns Num
 end 'shiftRight'
 
 function main() returns ExitCode
-	if shiftRight(0 - 8, distance: 60) != 0 - 1 'rangedDistance'
+	if shiftRight(-8, distance: 60) != -1 'rangedDistance'
 		return 1
 	end 'rangedDistance'
-	if shiftRight(0 - 1, distance: 63) != 0 - 1 'allSign'
+	if shiftRight(-1, distance: 63) != -1 'allSign'
 		return 2
 	end 'allSign'
 	if shiftRight(8, distance: 2) != 2 'nonNegative'
@@ -21,80 +21,63 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @shiftRight {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.cmp x1, 63
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.and x2, x1, -64
-    arm64.neg x6, x2
-    arm64.orr x2, x2, x6
-    arm64.asr x2, x2, 63
-    arm64.orr x1, x1, x2
-    arm64.asrv x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 8
-    arm64.movImm x1, 60
-    arm64.bl shiftRight
-    arm64.movImm x1, 0
-    arm64.sub x1, x1, 1
-    arm64.cmp x0, x1
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.b __rc_chk#10
+  __rc_chk#10:
+    arm64.b __rc_ok#9
+  __rc_ok#9:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.cmp x0, -1
     arm64.cset x0, ne
     arm64.cbnz x0, rangedDistance
-    arm64.b ifcont
+    arm64.b ifcont#2
   rangedDistance:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 0
-    arm64.sub x0, x0, 1
-    arm64.movImm x1, 63
-    arm64.bl shiftRight
-    arm64.movImm x1, 0
-    arm64.sub x1, x1, 1
-    arm64.cmp x0, x1
+  ifcont#2:
+    arm64.b __il_body#13
+  __il_body#13:
+    arm64.b __rc_chk#15
+  __rc_chk#15:
+    arm64.b __rc_ok#14
+  __rc_ok#14:
+    arm64.movImm x0, 18446744073709551615
+    arm64.b __il_cont#12
+  __il_cont#12:
+    arm64.cmp x0, -1
     arm64.cset x0, ne
     arm64.cbnz x0, allSign
-    arm64.b ifcont
+    arm64.b ifcont#4
   allSign:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, 8
-    arm64.movImm x1, 2
-    arm64.bl shiftRight
+  ifcont#4:
+    arm64.b __il_body#18
+  __il_body#18:
+    arm64.b __rc_chk#20
+  __rc_chk#20:
+    arm64.b __rc_ok#19
+  __rc_ok#19:
+    arm64.movImm x0, 2
+    arm64.b __il_cont#17
+  __il_cont#17:
     arm64.cmp x0, 2
     arm64.cset x0, ne
     arm64.cbnz x0, nonNegative
-    arm64.b ifcont
+    arm64.b ifcont#6
   nonNegative:
     arm64.movImm x0, 3
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#6:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret

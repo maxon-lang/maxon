@@ -66,7 +66,7 @@ func @Array.compactDown {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_12
+    arm64.leaRdata x0, __str_blob_12  ; "panic at an-element-moved-down-to-a-lower-slot-is-not-a-conflict.test:16: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -148,7 +148,7 @@ func @Array.compactDown {
     arm64.cbnz x0, tryerr#5
     arm64.b tryok#4
   tryerr#5:
-    arm64.leaRdata x0, __str_blob_5
+    arm64.leaRdata x0, __str_blob_5  ; "panic at an-element-moved-down-to-a-lower-slot-is-not-a-conflict.test:20: oob\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -255,7 +255,7 @@ func @Array.compactDown {
     arm64.cbnz x0, tryerr#7
     arm64.b tryok#6
   tryerr#7:
-    arm64.leaRdata x0, __str_blob_6
+    arm64.leaRdata x0, __str_blob_6  ; "panic at an-element-moved-down-to-a-lower-slot-is-not-a-conflict.test:21: oob\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -296,12 +296,12 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_7
+    arm64.leaRdata x0, __str_rec_7  ; "alpha value long enough for a heap record"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaRdata x0, __str_rec_8
+    arm64.leaRdata x0, __str_rec_8  ; "beta value long enough for a heap record"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
@@ -346,14 +346,14 @@ func @main {
     arm64.cbnz x1, tryerr#2
     arm64.b tryok#1
   tryerr#2:
-    arm64.leaRdata x0, __str_rec_9
+    arm64.leaRdata x0, __str_rec_9  ; "?"
     arm64.b trycont#3
   tryok#1:
     arm64.b trycont#3
   trycont#3:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.leaRdata x0, __str_rec_10
+    arm64.leaRdata x0, __str_rec_10  ; " "
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.movImm x1, 1
@@ -393,14 +393,14 @@ func @main {
     arm64.cbnz x1, tryerr#5
     arm64.b tryok#4
   tryerr#5:
-    arm64.leaRdata x0, __str_rec_9
+    arm64.leaRdata x0, __str_rec_9  ; "?"
     arm64.b trycont#6
   tryok#4:
     arm64.b trycont#6
   trycont#6:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
-    arm64.leaRdata x0, __str_rec_11
+    arm64.leaRdata x0, __str_rec_11  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.add x0, x21, x23

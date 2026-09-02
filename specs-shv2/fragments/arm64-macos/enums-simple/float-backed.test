@@ -20,32 +20,9 @@ ExitCode: 1
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 4607632778762754458
-    arm64.movImm x1, 4607632778762754458
-    arm64.cmp x0, x1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
+    arm64.b matcharm
   matcharm:
     arm64.movImm x0, 1
-    arm64.b matchcont
-  matchnext:
-    arm64.movImm x1, 4612136378390124954
-    arm64.cmp x0, x1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm
-    arm64.b matchnext
-  matcharm:
-    arm64.movImm x0, 0
-    arm64.b matchcont
-  matchnext:
-    arm64.movImm x1, 4614613358185178726
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
-  matcharm:
-    arm64.movImm x0, 0
     arm64.b matchcont
   matchcont:
     arm64.cmp x0, 0
@@ -53,13 +30,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at float-backed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -67,5 +43,4 @@ func @main {
   __rc_ok:
     arm64.epilogue 16
     arm64.ret
-  matchdead:
 }

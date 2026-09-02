@@ -32,19 +32,17 @@ func @main {
   spin:
     arm64.cmp x1, 0
     arm64.cset x2, eq
-    arm64.movImm x6, 1
+    arm64.movImm x3, 1
     arm64.cbnz x2, critsplit
     arm64.b orrhs
   critsplit:
     arm64.b scmerge
   orrhs:
     arm64.movImm x2, 1
-    arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.movRegReg x6, x2
+    arm64.movRegReg x3, x2
     arm64.b scmerge
   scmerge:
-    arm64.cbnz x6, ternarytrue
+    arm64.cbnz x3, ternarytrue
     arm64.b ternaryfalse
   ternarytrue:
     arm64.movImm x2, 1
@@ -62,30 +60,12 @@ func @main {
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
-  __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at closer-case-member-before-a-ternary-else.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

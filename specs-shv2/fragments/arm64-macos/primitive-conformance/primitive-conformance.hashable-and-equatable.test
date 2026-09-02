@@ -33,23 +33,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
-}
-
-func @Key.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Key.digest {
@@ -65,9 +52,8 @@ func @Key.digest {
 func @Key.matches {
   entry:
     arm64.prologue 16
-    arm64.movRegReg x6, x3
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x6 + 24]
+    arm64.loadRegBaseDisp.word64 x16, [x3 + 24]
     arm64.blr x16
     arm64.epilogue 16
     arm64.ret
@@ -76,11 +62,12 @@ func @Key.matches {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 7
-    arm64.bl Key.create
-    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x1, __witness_int.Equatable
+    arm64.leaRegSlot x19, slot0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
     arm64.movRegReg x0, x19
@@ -88,86 +75,42 @@ func @main {
     arm64.cmp x0, 7
     arm64.cset x0, ne
     arm64.cbnz x0, h
-    arm64.b ifcont
+    arm64.b ifcont#2
   h:
-    arm64.movImm x20, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.movImm x1, 7
     arm64.leaRdata x2, __witness_int.Hashable
-    arm64.leaRdata x6, __witness_int.Equatable
+    arm64.leaRdata x3, __witness_int.Equatable
     arm64.movRegReg x0, x19
-    arm64.movRegReg x3, x6
     arm64.bl Key.matches
     arm64.eor x0, x0, 1
     arm64.cbnz x0, e1
-    arm64.b ifcont
+    arm64.b ifcont#4
   e1:
-    arm64.movImm x20, 2
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x1, 9
     arm64.leaRdata x2, __witness_int.Hashable
-    arm64.leaRdata x6, __witness_int.Equatable
+    arm64.leaRdata x3, __witness_int.Equatable
     arm64.movRegReg x0, x19
-    arm64.movRegReg x3, x6
     arm64.bl Key.matches
     arm64.cbnz x0, e2
-    arm64.b ifcont
+    arm64.b ifcont#6
   e2:
-    arm64.movImm x20, 3
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.movImm x20, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @int.hash {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x1, 4294967295
-    arm64.and x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @int.equals {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.cbnz x0, equal
-    arm64.b notEqual
-  equal:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-  notEqual:
+  ifcont#6:
     arm64.movImm x0, 0
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot1
+    arm64.epilogue 32
     arm64.ret
 }

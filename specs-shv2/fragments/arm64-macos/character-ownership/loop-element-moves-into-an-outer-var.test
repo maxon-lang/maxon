@@ -1,5 +1,5 @@
 // Test: loop-element-moves-into-an-outer-var
-function reassignInLoop(s String) returns int
+function reassignInLoop(s String) returns Integer
 	var n = 0
 	var found = 'é'
 	for c in s 'each'
@@ -30,13 +30,15 @@ function main() returns ExitCode
 	print("\nt={t}\n")
 	return 0
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @reassignInLoop {
@@ -50,14 +52,14 @@ func @reassignInLoop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_4  ; "\xc3\xa9"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.add x0, x22, 49
+    arm64.add x0, x22, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x23, x0
-    arm64.add x24, x23, 48
+    arm64.add x24, x23, 56
     arm64.movRegReg x0, x24
     arm64.movRegReg x1, x21
     arm64.movRegReg x2, x22
@@ -65,7 +67,7 @@ func @reassignInLoop {
     arm64.add x0, x24, x22
     arm64.storeBaseDispReg.word64 [x23 + 0], x24
     arm64.storeBaseDispReg.word64 [x23 + 8], x22
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
@@ -80,20 +82,25 @@ func @reassignInLoop {
   each:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
-    arm64.bl __gr_end
+    arm64.bl findGraphemeEnd
     arm64.movRegReg x22, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.movRegReg x2, x22
     arm64.bl __char_at
     arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.movRegReg x24, x0
     arm64.movRegReg x0, x23
     arm64.bl __str_decref
     arm64.add x20, x20, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
     arm64.b forstep
   forstep:
-    arm64.movRegReg x23, x21
     arm64.movRegReg x21, x22
+    arm64.movRegReg x23, x24
     arm64.b forhdr
   forexit:
     arm64.movRegReg x0, x23
@@ -130,14 +137,14 @@ func @lastOf {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_4  ; "\xc3\xa9"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.add x0, x21, 49
+    arm64.add x0, x21, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
+    arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -145,12 +152,11 @@ func @lastOf {
     arm64.add x0, x23, x21
     arm64.storeBaseDispReg.word64 [x22 + 0], x23
     arm64.storeBaseDispReg.word64 [x22 + 8], x21
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.movImm x20, 0
-    arm64.movRegReg x21, x22
     arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -161,41 +167,26 @@ func @lastOf {
   each:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
-    arm64.bl __gr_end
-    arm64.movRegReg x22, x0
+    arm64.bl findGraphemeEnd
+    arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x22
+    arm64.movRegReg x2, x21
     arm64.bl __char_at
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.b forstep
   forstep:
-    arm64.movRegReg x21, x20
-    arm64.movRegReg x20, x22
+    arm64.movRegReg x20, x21
+    arm64.movRegReg x22, x23
     arm64.b forhdr
   forexit:
-    arm64.loadRegBaseDisp.word64 x19, [x21 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
-    arm64.add x0, x20, 49
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x0, x23, x20
-    arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x20
-    arm64.movImm x0, -3
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.movRegReg x0, x21
-    arm64.bl __str_decref
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -220,7 +211,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.leaRdata x21, __str_rec_3
+    arm64.leaRdata x21, __str_rec_5  ; "h\xc3\xa9ll\xc3\xb6"
     arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 50
@@ -236,11 +227,11 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x23, [x22 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x22 + 8]
-    arm64.add x0, x24, 49
+    arm64.add x0, x24, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x25, x0
-    arm64.add x26, x25, 48
+    arm64.add x26, x25, 56
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x24
@@ -248,12 +239,12 @@ func @main {
     arm64.add x0, x26, x24
     arm64.storeBaseDispReg.word64 [x25 + 0], x26
     arm64.storeBaseDispReg.word64 [x25 + 8], x24
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x25
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movRegReg x0, x22
@@ -261,7 +252,7 @@ func @main {
     arm64.add x19, x19, 1
     arm64.b whilehdr
   whileexit:
-    arm64.leaRdata x0, __str_rec_5
+    arm64.leaRdata x0, __str_rec_6  ; "\x0at="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.movImm x0, 21
@@ -272,16 +263,16 @@ func @main {
     arm64.movRegReg x1, x22
     arm64.bl __int_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_7
+    arm64.leaRdata x0, __str_rec_7  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.add x0, x21, x20
     arm64.add x25, x0, x24
-    arm64.add x0, x25, 49
+    arm64.add x0, x25, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x26, x0
-    arm64.add x27, x26, 48
+    arm64.add x27, x26, 56
     arm64.movRegReg x0, x27
     arm64.movRegReg x1, x19
     arm64.movRegReg x2, x21
@@ -299,14 +290,14 @@ func @main {
     arm64.add x0, x19, x24
     arm64.storeBaseDispReg.word64 [x26 + 0], x27
     arm64.storeBaseDispReg.word64 [x26 + 8], x25
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x26 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x0, 0

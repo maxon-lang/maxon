@@ -13,9 +13,11 @@ ExitCode: 1
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 65
-    arm64.cmp x0, 66
-    arm64.cset x0, lt
+    arm64.leaRdata x0, __str_rec_2  ; "A"
+    arm64.leaRdata x1, __str_rec_3  ; "B"
+    arm64.bl __char_cmp
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
     arm64.cbnz x0, check
     arm64.b ifcont
   check:

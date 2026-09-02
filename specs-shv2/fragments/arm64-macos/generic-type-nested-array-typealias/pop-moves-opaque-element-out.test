@@ -15,7 +15,7 @@ type Container uses Element
 	end 'push'
 
 	export function drainOne()
-		let x = try self.items.pop() otherwise return
+		_ = try self.items.pop() otherwise return
 	end 'drainOne'
 end 'Container'
 
@@ -32,9 +32,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @Container.create {
@@ -71,7 +72,8 @@ func @Container.drainOne {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __managed_pop
+    arm64.movRegReg x1, x19
+    arm64.bl Array.pop
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -100,14 +102,14 @@ func @main {
     arm64.leaRdata x0, __layout_Container_String
     arm64.bl Container.create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_1
+    arm64.leaRdata x0, __str_rec_2  ; "hello string long enough to force a heap allocation"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.add x0, x21, 49
+    arm64.add x0, x21, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
+    arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -115,21 +117,22 @@ func @main {
     arm64.add x0, x23, x21
     arm64.storeBaseDispReg.word64 [x22 + 0], x23
     arm64.storeBaseDispReg.word64 [x22 + 8], x21
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x2, __layout_Container_String
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl Container.push
-    arm64.leaRdata x0, __str_rec_3
+    arm64.leaRdata x0, __str_rec_3  ; "world string long enough to force a heap allocation"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.add x0, x21, 49
+    arm64.add x0, x21, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
-    arm64.add x23, x22, 48
+    arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -137,10 +140,11 @@ func @main {
     arm64.add x0, x23, x21
     arm64.storeBaseDispReg.word64 [x22 + 0], x23
     arm64.storeBaseDispReg.word64 [x22 + 8], x21
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x2, __layout_Container_String
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl Container.push

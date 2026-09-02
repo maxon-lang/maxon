@@ -17,9 +17,10 @@ end 'main'
 ExitCode: 12
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -43,15 +44,16 @@ func @main {
     arm64.bl __managed_push
     arm64.movImm x1, 0
     arm64.movImm x2, 2
+    arm64.leaRdata x3, __layout_Array_Int
     arm64.movRegReg x0, x19
-    arm64.bl __managed_slice
+    arm64.bl Array.slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.cbnz x0, tryerr#2
+    arm64.b tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes.test:10: slice: 0..2 of a length-3 array\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -59,16 +61,16 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#1:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_1
+    arm64.cbnz x0, tryerr#4
+    arm64.b tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes.test:11: setLength: a detached view publishes its live length\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -76,17 +78,17 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#3:
     arm64.movImm x1, 0
     arm64.movImm x2, 99
     arm64.movRegReg x0, x20
     arm64.bl __managed_set_byte
     arm64.cmp x9, 0
     arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_2
+    arm64.cbnz x0, tryerr#6
+    arm64.b tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes.test:12: setByte: offset 0 of a detached 8-byte slot\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -94,17 +96,44 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#5:
     arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, ls
+    arm64.cbnz x0, __im_slow
+    arm64.b __im_load
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.cset x3, ne
+    arm64.cbnz x3, __im_empty
+    arm64.b critsplit#16
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.cset x3, eq
+    arm64.cbnz x3, __im_slow
+    arm64.b critsplit#17
+  __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
-    arm64.movRegReg x21, x0
+    arm64.b __im_cont
+  critsplit#17:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#16:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_3
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr#8
+    arm64.b tryok#7
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes.test:13: get: index 0 of a length-3 array\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -112,22 +141,20 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  tryok:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_count
-    arm64.add x21, x0, x21
+  tryok#7:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
+    arm64.add x21, x1, x0
     arm64.cmp x21, 0
     arm64.cset x0, lt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x21, x0
+    arm64.cmp x21, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4
+    arm64.leaRdata x0, __str_blob_4  ; "panic at buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

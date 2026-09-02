@@ -2,14 +2,14 @@
 // --- file: Point/free.maxon
 typealias Integer = int(0 to 125)
 
-export function make() returns Integer
+public function make() returns Integer
 	return 11
 end 'make'
 
 // --- file: app/main.maxon
 typealias Integer = int(0 to 125)
 
-export type Point
+public type Point
 	export var x as Integer
 
 	export static function make() returns Integer
@@ -23,18 +23,14 @@ end 'main'
 ---
 ExitCode: 22
 ---
-func @Point.make {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 22
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.bl Point.make
+    arm64.b __il_body
+  __il_body:
+    arm64.movImm x0, 22
+    arm64.b __il_cont
+  __il_cont:
     arm64.epilogue 16
     arm64.ret
 }

@@ -1,7 +1,7 @@
 // Test: error.factory-returning-a-boxed-union
 union Shape
-	circle(r int)
-	square(s int)
+	circle(r Integer)
+	square(s Integer)
 end 'Shape'
 
 type Maker
@@ -18,6 +18,7 @@ function main() returns ExitCode
 		square(s) then return s
 	end 'kind'
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 CompilerError:
 error E2015: <fragment>:13:15: Unsupported: `Maker.build` as a top-level initializer — it returns 'Shape', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead

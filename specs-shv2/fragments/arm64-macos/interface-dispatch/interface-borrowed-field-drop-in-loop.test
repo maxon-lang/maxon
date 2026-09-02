@@ -69,9 +69,10 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @ConcreteQuery.create {
@@ -93,14 +94,15 @@ func @ConcreteQuery.score {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
-    arm64.cset x0, ge
+    arm64.cset x0, hs
     arm64.epilogue 16
     arm64.ret
 }
 
 func @Allocator.create {
   entry:
-    arm64.prologue 80
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
     arm64.storeSlotReg slot7, x26
     arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
@@ -138,14 +140,22 @@ func @Allocator.create {
     arm64.movImm x0, 64
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-    arm64.storeBaseDispReg.word64 [x0 + 16], x21
-    arm64.storeBaseDispReg.word64 [x0 + 24], x22
-    arm64.storeBaseDispReg.word64 [x0 + 32], x23
-    arm64.storeBaseDispReg.word64 [x0 + 40], x24
-    arm64.storeBaseDispReg.word64 [x0 + 48], x25
-    arm64.storeBaseDispReg.word64 [x0 + 56], x26
+    arm64.movRegReg x27, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __retain_existential
+    arm64.storeBaseDispReg.word64 [x27 + 0], x0
+    arm64.storeBaseDispReg.word64 [x27 + 8], x20
+    arm64.storeBaseDispReg.word64 [x27 + 16], x21
+    arm64.storeBaseDispReg.word64 [x27 + 24], x22
+    arm64.storeBaseDispReg.word64 [x27 + 32], x23
+    arm64.storeBaseDispReg.word64 [x27 + 40], x24
+    arm64.storeBaseDispReg.word64 [x27 + 48], x25
+    arm64.storeBaseDispReg.word64 [x27 + 56], x26
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x27
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -154,7 +164,8 @@ func @Allocator.create {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
 }
 
@@ -172,7 +183,7 @@ func @Allocator.run {
     arm64.b critsplit
   andrhs:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.bl __managed_count
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
     arm64.cset x0, eq
     arm64.b scmerge
@@ -251,13 +262,12 @@ func @main {
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x0, 4294967295
-    arm64.cmp x20, x0
+    arm64.cmp x20, 255
     arm64.cset x0, gt
     arm64.cbnz x0, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at interface-borrowed-field-drop-in-loop.test:66: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

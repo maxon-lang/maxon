@@ -25,67 +25,56 @@ end 'main'
 ---
 ExitCode: 42
 ---
-func @shlDynamic {
-  entry:
-    arm64.prologue 16
-    arm64.and x2, x1, -64
-    arm64.neg x6, x2
-    arm64.orr x2, x2, x6
-    arm64.asr x2, x2, 63
-    arm64.lslv x0, x0, x1
-    arm64.mvn x1, x2
-    arm64.and x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @shlPastWidth {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, -1
-    arm64.movImm x1, 63
-    arm64.bl shlDynamic
-    arm64.movImm x1, -9223372036854775808
+    arm64.b __il_body#8
+  __il_body#8:
+    arm64.movImm x0, 9223372036854775808
+    arm64.b __il_cont#7
+  __il_cont#7:
+    arm64.movImm x1, 9223372036854775808
     arm64.cmp x0, x1
     arm64.cset x0, ne
     arm64.cbnz x0, topBitOnly
-    arm64.b ifcont
+    arm64.b ifcont#2
   topBitOnly:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, -1
-    arm64.bl shlPastWidth
+  ifcont#2:
+    arm64.b __il_body#10
+  __il_body#10:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#9
+  __il_cont#9:
     arm64.cmp x0, 0
     arm64.cset x0, ne
     arm64.cbnz x0, everyBitOut
-    arm64.b ifcont
+    arm64.b ifcont#4
   everyBitOut:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont:
-    arm64.movImm x0, -1
+  ifcont#4:
+    arm64.movImm x0, 18446744073709551615
     arm64.movImm x1, 100
-    arm64.bl shlDynamic
+    arm64.b __il_body#12
+  __il_body#12:
+    arm64.lslv x0, x0, x1
+    arm64.movImm x16, 0
+    arm64.and x0, x0, x16
+    arm64.b __il_cont#11
+  __il_cont#11:
     arm64.cmp x0, 0
     arm64.cset x0, ne
     arm64.cbnz x0, everyBitOutDynamic
-    arm64.b ifcont
+    arm64.b ifcont#6
   everyBitOutDynamic:
     arm64.movImm x0, 3
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#6:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret

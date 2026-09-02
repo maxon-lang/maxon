@@ -1,10 +1,10 @@
 // Test: divisor-live-across-call
-function bump(x int) returns int
+function bump(x Integer) returns Integer
 	return x + 1
 end 'bump'
 
 function main() returns ExitCode
-	var n = 500
+	let n = 500
 	var d = 6
 	let t = bump(d)
 	let q = n / d
@@ -14,42 +14,31 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @bump {
-  entry:
-    arm64.prologue 16
-    arm64.add x0, x0, 1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 500
-    arm64.movImm x20, 6
-    arm64.movRegReg x0, x20
-    arm64.bl bump
-    arm64.sdiv x1, x19, x20
-    arm64.add x0, x1, x0
+    arm64.prologue 16
+    arm64.movImm x0, 500
+    arm64.movImm x1, 6
+    arm64.b __il_body
+  __il_body:
+    arm64.b __il_cont
+  __il_cont:
+    arm64.sdiv x0, x0, x1
+    arm64.add x0, x0, 7
     arm64.cmp x0, 90
     arm64.cset x0, eq
     arm64.cbnz x0, ok
     arm64.b ifcont
   ok:
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
   ifcont:
     arm64.movImm x0, 99
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }

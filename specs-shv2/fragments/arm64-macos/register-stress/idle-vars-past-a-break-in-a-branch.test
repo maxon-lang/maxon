@@ -1,24 +1,39 @@
 // Test: idle-vars-past-a-break-in-a-branch
-function gate(p int) returns bool
+function gate(p Integer) returns bool
 	return p >= 0
 end 'gate'
 
-function idleVarsPastABreak(p int) returns int
-	var k1 = p + 1
-	var k2 = p + 2
-	var k3 = p + 3
-	var k4 = p + 4
-	var k5 = p + 5
-	var k6 = p + 6
-	var k7 = p + 7
-	var k8 = p + 8
-	var k9 = p + 9
-	var k10 = p + 10
-	var k11 = p + 11
-	var k12 = p + 12
-	var k13 = p + 13
-	var k14 = p + 14
-	var k15 = p + 15
+function idleVarsPastABreak(p Integer) returns Integer
+	var k1 = 0
+	k1 = p + 1
+	var k2 = 0
+	k2 = p + 2
+	var k3 = 0
+	k3 = p + 3
+	var k4 = 0
+	k4 = p + 4
+	var k5 = 0
+	k5 = p + 5
+	var k6 = 0
+	k6 = p + 6
+	var k7 = 0
+	k7 = p + 7
+	var k8 = 0
+	k8 = p + 8
+	var k9 = 0
+	k9 = p + 9
+	var k10 = 0
+	k10 = p + 10
+	var k11 = 0
+	k11 = p + 11
+	var k12 = 0
+	k12 = p + 12
+	var k13 = 0
+	k13 = p + 13
+	var k14 = 0
+	k14 = p + 14
+	var k15 = 0
+	k15 = p + 15
 	var sum = 0
 	var i = 0
 	if gate(p) 'guard'
@@ -40,117 +55,85 @@ function main() returns ExitCode
 	end 'ok'
 	return 99
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @gate {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.cset x0, ge
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @idleVarsPastABreak {
   entry:
-    arm64.prologue 160
-    arm64.storeSlotReg slot16, x28
-    arm64.storeSlotReg slot15, x27
-    arm64.storeSlotReg slot14, x26
-    arm64.storeSlotReg slot13, x25
-    arm64.storeSlotReg slot12, x24
-    arm64.storeSlotReg slot11, x23
-    arm64.storeSlotReg slot10, x22
-    arm64.storeSlotReg slot9, x21
-    arm64.storeSlotReg slot8, x20
-    arm64.storeSlotReg slot7, x19
-    arm64.add x19, x0, 1
-    arm64.add x20, x0, 2
-    arm64.add x21, x0, 3
-    arm64.add x22, x0, 4
-    arm64.add x23, x0, 5
-    arm64.add x24, x0, 6
-    arm64.add x25, x0, 7
-    arm64.add x26, x0, 8
-    arm64.add x27, x0, 9
-    arm64.add x28, x0, 10
-    arm64.add x1, x0, 11
-    arm64.storeSlotReg slot6, x1
-    arm64.add x1, x0, 12
-    arm64.storeSlotReg slot5, x1
-    arm64.add x1, x0, 13
-    arm64.storeSlotReg slot4, x1
-    arm64.add x1, x0, 14
-    arm64.storeSlotReg slot3, x1
-    arm64.add x1, x0, 15
-    arm64.storeSlotReg slot2, x1
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot0, x1
-    arm64.movImm x1, 0
-    arm64.storeSlotReg slot1, x1
-    arm64.bl gate
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.add x1, x0, 1
+    arm64.add x2, x0, 2
+    arm64.add x3, x0, 3
+    arm64.add x4, x0, 4
+    arm64.add x5, x0, 5
+    arm64.add x6, x0, 6
+    arm64.add x7, x0, 7
+    arm64.add x8, x0, 8
+    arm64.add x9, x0, 9
+    arm64.add x10, x0, 10
+    arm64.add x11, x0, 11
+    arm64.add x12, x0, 12
+    arm64.add x13, x0, 13
+    arm64.add x14, x0, 14
+    arm64.add x15, x0, 15
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b __il_body
+  __il_body:
+    arm64.cmp x0, 0
+    arm64.cset x0, ge
+    arm64.b __il_cont
+  __il_cont:
     arm64.cbnz x0, guard
-    arm64.b critsplit
+    arm64.b critsplit#11
   guard:
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
+    arm64.movRegReg x0, x19
     arm64.b whilehdr
   whilehdr:
-    arm64.cmp x1, 100
-    arm64.cset x2, lt
-    arm64.cbnz x2, loop
-    arm64.b critsplit
+    arm64.cmp x20, 100
+    arm64.cset x19, lt
+    arm64.cbnz x19, loop
+    arm64.b critsplit#10
   loop:
-    arm64.add x0, x0, x1
-    arm64.add x1, x1, 1
-    arm64.cmp x1, 3
-    arm64.cset x2, gt
-    arm64.cbnz x2, done
-    arm64.b ifcont
+    arm64.add x0, x0, x20
+    arm64.add x20, x20, 1
+    arm64.cmp x20, 3
+    arm64.cset x19, gt
+    arm64.cbnz x19, done
+    arm64.b ifcont#6
   done:
     arm64.b whileexit
-  ifcont:
+  ifcont#6:
     arm64.b whilehdr
-  critsplit:
+  critsplit#10:
     arm64.b whileexit
   whileexit:
-    arm64.b ifcont
-  critsplit:
-    arm64.loadRegSlot x0, slot0
-    arm64.b ifcont
-  ifcont:
-    arm64.add x0, x0, x19
-    arm64.add x0, x0, x20
-    arm64.add x0, x0, x21
-    arm64.add x0, x0, x22
-    arm64.add x0, x0, x23
-    arm64.add x0, x0, x24
-    arm64.add x0, x0, x25
-    arm64.add x0, x0, x26
-    arm64.add x0, x0, x27
-    arm64.add x0, x0, x28
-    arm64.loadRegSlot x1, slot6
+    arm64.b ifcont#7
+  critsplit#11:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont#7
+  ifcont#7:
     arm64.add x0, x0, x1
-    arm64.loadRegSlot x1, slot5
-    arm64.add x0, x0, x1
-    arm64.loadRegSlot x1, slot4
-    arm64.add x0, x0, x1
-    arm64.loadRegSlot x1, slot3
-    arm64.add x0, x0, x1
-    arm64.loadRegSlot x1, slot2
-    arm64.add x0, x0, x1
-    arm64.loadRegSlot x19, slot7
-    arm64.loadRegSlot x20, slot8
-    arm64.loadRegSlot x21, slot9
-    arm64.loadRegSlot x22, slot10
-    arm64.loadRegSlot x23, slot11
-    arm64.loadRegSlot x24, slot12
-    arm64.loadRegSlot x25, slot13
-    arm64.loadRegSlot x26, slot14
-    arm64.loadRegSlot x27, slot15
-    arm64.loadRegSlot x28, slot16
-    arm64.epilogue 160
+    arm64.add x0, x0, x2
+    arm64.add x0, x0, x3
+    arm64.add x0, x0, x4
+    arm64.add x0, x0, x5
+    arm64.add x0, x0, x6
+    arm64.add x0, x0, x7
+    arm64.add x0, x0, x8
+    arm64.add x0, x0, x9
+    arm64.add x0, x0, x10
+    arm64.add x0, x0, x11
+    arm64.add x0, x0, x12
+    arm64.add x0, x0, x13
+    arm64.add x0, x0, x14
+    arm64.add x0, x0, x15
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
 }
 

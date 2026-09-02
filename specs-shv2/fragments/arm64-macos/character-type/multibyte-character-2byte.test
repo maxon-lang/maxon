@@ -8,9 +8,10 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_cursor@0 = i64 0
-  __slab_end@8 = i64 0
-  __mm_alloc_count@16 = i64 0
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
 }
 
 func @main {
@@ -24,7 +25,7 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_1
+    arm64.leaRdata x19, __str_rec_2  ; "\xc3\xa9"
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -32,9 +33,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl __str_to_bytes
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_count
-    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -43,15 +42,15 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __int_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_3
+    arm64.leaRdata x0, __str_rec_3  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.add x24, x19, x23
-    arm64.add x0, x24, 49
+    arm64.add x0, x24, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x25, x0
-    arm64.add x26, x25, 48
+    arm64.add x26, x25, 56
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x21
     arm64.movRegReg x2, x19
@@ -64,14 +63,14 @@ func @main {
     arm64.add x0, x19, x23
     arm64.storeBaseDispReg.word64 [x25 + 0], x26
     arm64.storeBaseDispReg.word64 [x25 + 8], x24
-    arm64.movImm x0, -3
+    arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movRegReg x0, x25
-    arm64.bl __print_string
+    arm64.bl print
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movRegReg x0, x20

@@ -1,5 +1,5 @@
 // Test: float-phi-through-branch
-function work(a int) returns int
+function work(a Integer) returns Integer
 	var f = a + 0.0
 	if a > 5 'gt'
 		f = f + 1.5
@@ -10,48 +10,34 @@ end 'work'
 function main() returns ExitCode
 	return work(19)
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 20
 ---
-func @work {
-  entry:
-    arm64.prologue 16
-    arm64.fpLoadRdata d0, [rdata + __fconst_1]
-    arm64.scvtf d1, x0
-    arm64.fadd d0, d1, d0
-    arm64.cmp x0, 5
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b critsplit
-  gt:
-    arm64.fpLoadRdata d1, [rdata + __fconst_2]
-    arm64.fadd d0, d0, d1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
-  ifcont:
-    arm64.fcvtzs x0, d0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 19
-    arm64.bl work
+    arm64.b __il_body
+  __il_body:
+    arm64.b gt
+  gt:
+    arm64.fpLoadRdata d0, [rdata + __fconst_20.5]
+    arm64.b ifcont
+  ifcont:
+    arm64.fcvtzs x0, d0
+    arm64.b __il_cont
+  __il_cont:
     arm64.cmp x0, 0
     arm64.cset x1, lt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_chk
   __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
+    arm64.cmp x0, 255
     arm64.cset x1, gt
     arm64.cbnz x1, __rc_panic
     arm64.b __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0
+    arm64.leaRdata x0, __str_blob_0  ; "panic at float-phi-through-branch.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
