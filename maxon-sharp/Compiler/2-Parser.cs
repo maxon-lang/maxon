@@ -400,6 +400,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private const int MaxErrorsPerFile = 20;
   public IReadOnlyList<CompileError> Errors => _errors;
 
+  /// Record a diagnostic the parser recovers from instead of throwing. `CompileSources` harvests
+  /// `Errors` verbatim — it re-attributes the file only on a THROWN error — so a recorded one that
+  /// omits its `FilePath` reports with no file at all. Stamping it here is the only way that fact
+  /// cannot be forgotten at a new recording site.
+  private void RecordError(ErrorCode code, string message, int line, int column) {
+    _errors.Add(new CompileError(code, message, line, column) { FilePath = _sourceFilePath });
+  }
+
   /// The name `Self` carries in a type position — always "the enclosing/receiving type". It is a
   /// keyword (TokenType.SelfType), so no user type can collide with it. Named here because the
   /// parser tests for it in four unrelated places and each spelling is the same one fact.
@@ -505,6 +513,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private readonly HashSet<string> _seededStdlibTypeAliases = [];
   private readonly HashSet<string> _usedTypeAliases = [];
   private readonly Dictionary<string, (int Line, int Column)> _typeAliasLocations = [];
+  // Set by any recovery that SKIPS source tokens. Alias uses are recorded as the walk passes them,
+  // so tokens never read cannot be counted — "no use seen" then means "not read", not "unused", and
+  // E3062 would be a false positive on the skipped remainder.
+  private bool _recoverySkippedTokens;
   // Inner ranged typealiases collected during type body parsing, keyed by owning type name.
   // Applied to the completed struct after the type body is fully parsed.
   private readonly Dictionary<string, Dictionary<string, IrRangedPrimitiveType>> _pendingInnerRangedAliases = [];
@@ -1269,15 +1281,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       } catch (CompileError ex) {
         ex.FilePath ??= _sourceFilePath;
         _errors.Add(ex);
+        // Set before the cap check: breaking out leaves the remainder of the file unread, which is
+        // the same incomplete walk as synchronizing past it.
+        _recoverySkippedTokens = true;
         if (_errors.Count >= MaxErrorsPerFile) break;
         SynchronizeToNextTopLevel();
       }
       SkipNewlines();
     }
 
-    CheckUnusedTypeAliases();
-
     EmitLazyStaticInitFunctions(module);
+
+    // Ordered after the lazy-static emission because that is where a lazy field's initializer tokens
+    // are first read: an alias named only inside one is not marked used until it has run.
+    CheckUnusedTypeAliases();
 
     CopyStateToModule(module);
 
@@ -8694,6 +8711,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _pendingFieldInitChecks.Clear();
     _nascentSelfAssignedFields = null;
     _parsingReturnExpression = false;
+    _recoverySkippedTokens = true;
     _pos = bodyStartPos;
     SkipToMatchingEnd();
     // SkipToMatchingEnd may stop at the wrong 'end' if the error introduced
@@ -8708,6 +8726,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private void CheckUnusedTypeAliases() {
+    if (_recoverySkippedTokens) return;
+
     foreach (var aliasName in _localTypeAliases) {
       // "Nobody outside this file could be using it" is exactly AliasReach.File, and this asked it
       // for itself — a fifth reading of the two visibility sets, with its own comment about `module`
@@ -8716,7 +8736,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (ReachOfLocalAlias(aliasName) != AliasReach.File) continue;
       if (_usedTypeAliases.Contains(aliasName)) continue;
       if (!_typeAliasLocations.TryGetValue(aliasName, out var loc)) continue;
-      throw new CompileError(ErrorCode.SemanticUnusedTypeAlias,
+
+      // Recorded, not thrown: Parse() calls this AFTER its own recovery loop, so a throw would
+      // escape into CompileSources past the `foreach (var err in parser.Errors)` harvest and
+      // destroy every recovered diagnostic this file had already collected.
+      RecordError(ErrorCode.SemanticUnusedTypeAlias,
         $"unused typealias: '{aliasName}'", loc.Line, loc.Column);
     }
   }
@@ -18400,11 +18424,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // function and report every unneeded cast in the file in one compile.
       if (sourceRanged != null && rangedTarget != null
           && TargetCoversSource(rangedTarget, sourceRanged)) {
-        _errors.Add(new CompileError(ErrorCode.SemanticUnneededCast,
+        RecordError(ErrorCode.SemanticUnneededCast,
           $"unneeded cast: '{sourceRanged.Name}' already fits in '{rangedTarget.Name}'",
-          asToken.Line, asToken.Column) {
-          FilePath = _sourceFilePath
-        });
+          asToken.Line, asToken.Column);
         // Propagate the target's ranged-name (the cast's nominal effect)
         // so chained `as` and downstream type-sensitive code keep working.
         _lastRangedTypeName = rangedTarget.Name;
@@ -18486,9 +18508,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne) {
         var accessor = EnumAccessorOperandKind(lhsVal) ?? EnumAccessorOperandKind(rhsVal);
         if (accessor != null) {
-          _errors.Add(new CompileError(ErrorCode.SemanticEnumAccessorComparison,
+          RecordError(ErrorCode.SemanticEnumAccessorComparison,
             $"cannot compare an enum's '.{accessor}' with '{(entry.Op == MaxonBinOperator.Eq ? "==" : "!=")}' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant",
-            opToken.Line, opToken.Column) { FilePath = _sourceFilePath });
+            opToken.Line, opToken.Column);
         }
       }
 

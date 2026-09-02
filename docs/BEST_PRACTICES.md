@@ -25,20 +25,20 @@ A practical guide to writing robust, idiomatic, and maintainable Maxon code. Thi
 Every numeric type must go through a `typealias` with range constraints. Use this as a design tool, not just a requirement to satisfy the compiler. Choose ranges that reflect the actual domain of your values.
 
 ```maxon
-' Good: ranges communicate intent and catch bugs at compile time
+// Good: ranges communicate intent and catch bugs at compile time
 typealias Port = int(0 to 65535)
 typealias Percentage = float(0.0 to 100.0)
 typealias Pixel = int(0 to 255)
 
-' Wide ranges are fine when no concrete upper bound exists
-typealias LineNumber = int(0 to u64.max)   ' no inherent max
+// Wide ranges are fine when no concrete upper bound exists
+typealias LineNumber = int(0 to u64.max)   // no inherent max
 ```
 
 When a value genuinely has no meaningful range constraint (like a general-purpose counter), declare a typealias whose name describes the *purpose* and use a wide range:
 
 ```maxon
-typealias VisitCount = int(0 to u64.max)        ' non-negative
-typealias FrameDelta = int(i64.min to i64.max)  ' signed
+typealias VisitCount = int(0 to u64.max)        // non-negative
+typealias FrameDelta = int(i64.min to i64.max)  // signed
 ```
 
 Avoid generic names like `Count` or `Index` — they tell a reader nothing the field name doesn't already say. Pick names that carry domain information.
@@ -64,12 +64,12 @@ typealias TaskList = List with Task
 Maxon only allows widening casts. For narrowing conversions, use explicit functions that make your intent clear.
 
 ```maxon
-' Good: intent is obvious
-var rounded = round(3.7)    ' 4
-var truncated = trunc(3.7)  ' 3
+// Good: intent is obvious
+var rounded = round(3.7)    // 4
+var truncated = trunc(3.7)  // 3
 
-' The compiler also rejects bare primitive cast targets — cast through a
-' named ranged typealias instead (e.g. `var x = 3.7 as Tally`).
+// The compiler also rejects bare primitive cast targets — cast through a
+// named ranged typealias instead (e.g. `var x = 3.7 as Tally`).
 ```
 
 ---
@@ -83,19 +83,19 @@ Maxon's error-handling vocabulary is expressive: single-statement `otherwise` (v
 Use a block handler only when the recovery genuinely needs multiple statements, needs the error value, or needs to inspect its variants. A handler whose body is a single `return`, `continue`, `break`, `throw`, `panic`, or literal default should be a single-statement `otherwise`.
 
 ```maxon
-' Good: single-statement forms
+// Good: single-statement forms
 let value = try config.get("timeout") otherwise 30
 let ch = try bytes.get(i) otherwise panic("bounds proven above")
 try stack.pop() otherwise break
 try project.types.insert(name, value: t) otherwise continue
 let content = try readFile(path) otherwise throw ConfigError.readError(path)
 
-' Bad: wrapping a single statement in a block
+// Bad: wrapping a single statement in a block
 try readFile(path) otherwise 'fail'
 	return 1
 end 'fail'
 
-' Good: block form earns its weight when it branches on the error
+// Good: block form earns its weight when it branches on the error
 try readFile(path) otherwise (e) 'fail'
 	match e 'report'
 		notFound(p) then printError("missing: {p}")
@@ -110,7 +110,7 @@ end 'fail'
 A literal default (`otherwise 0`, `otherwise ""`, `otherwise false`) is appropriate only when the default value is semantically meaningful in its own right — for example, a lookup table that legitimately returns 0 for "no entry" to end a parse loop. Add a one-line comment naming *why* the default is correct, so future readers don't mistake the sentinel for a silent fallback.
 
 ```maxon
-' Sentinel: infixBindingPower throws for non-operator tokens; 0 signals "stop the Pratt loop".
+// Sentinel: infixBindingPower throws for non-operator tokens; 0 signals "stop the Pratt loop".
 let bp = try infixBindingPower(opToken.kind) otherwise 0
 ```
 
@@ -119,13 +119,13 @@ let bp = try infixBindingPower(opToken.kind) otherwise 0
 If the `otherwise` path is provably unreachable because of a bounds check, loop guard, or just-executed push, use `otherwise panic("...")` — not a literal default. A silent default turns a latent bug into data corruption; a panic surfaces it immediately with a stack trace. The panic message should name the invariant that must have broken.
 
 ```maxon
-' Just-proven bounds check — panic makes the invariant explicit.
+// Just-proven bounds check — panic makes the invariant explicit.
 while i < len 'scan'
 	let b = try bytes.get(i) otherwise panic("scan: i < len just succeeded but get({i}) failed")
-	' ...
+	// ...
 end 'scan'
 
-' Just-grown array — the entry is known to exist.
+// Just-grown array — the entry is known to exist.
 while table.count() <= valueId 'grow'
 	table.push(0)
 end 'grow'
@@ -137,11 +137,11 @@ let current = try table.get(valueId) otherwise panic("incrementUse: table grown 
 Only ignore errors when failure genuinely doesn't matter — cleanup after the real work is done, idempotent registrations, best-effort logging.
 
 ```maxon
-' Acceptable: cleanup that may fail harmlessly
+// Acceptable: cleanup that may fail harmlessly
 try deleteTempFile(path) otherwise ignore
-try registry.insert(name, value: info) otherwise ignore   ' idempotent
+try registry.insert(name, value: info) otherwise ignore   // idempotent
 
-' Bad: silently swallowing a real failure
+// Bad: silently swallowing a real failure
 try saveUserData(data) otherwise ignore
 ```
 
@@ -151,8 +151,8 @@ When a throwing function cannot meaningfully recover from an inner error, propag
 
 ```maxon
 function loadConfig(path FilePath) returns Config throws ConfigError
-	let contents = try readFile(path)    ' propagates
-	return try parseContents(contents)   ' propagates
+	let contents = try readFile(path)    // propagates
+	return try parseContents(contents)   // propagates
 end 'loadConfig'
 ```
 
@@ -161,15 +161,15 @@ end 'loadConfig'
 `panic` terminates the program with a stack trace. Use it for invariant violations — cases that cannot legitimately occur and which a caller cannot reasonably handle. Use `throw` for failures the caller might want to recover from.
 
 ```maxon
-' panic: invariant; this is a bug if it fires.
+// panic: invariant; this is a bug if it fires.
 function getCurrentDef(stack ValueIdArray) returns ValueId
 	if stack.count() == 0 'empty'
-		return 0   ' undefined use — a separate case, not an invariant violation
+		return 0   // undefined use — a separate case, not an invariant violation
 	end 'empty'
 	return try stack.get(stack.count() - 1) otherwise panic("getCurrentDef: non-empty stack check just succeeded but get(count-1) failed")
 end 'getCurrentDef'
 
-' throw: the caller can decide what to do.
+// throw: the caller can decide what to do.
 function findUser(name String) returns User throws LookupError
 	let info = try users.get(name) otherwise throw LookupError.notFound(name)
 	return info
@@ -181,7 +181,7 @@ end 'findUser'
 Define error types as unions that carry the context callers need. If every throw site has a path, token, or position in scope, the error type should carry it. Reserve bare enums for error types whose variants genuinely have no useful payload.
 
 ```maxon
-' Good: throw sites have paths in scope, so the error carries them.
+// Good: throw sites have paths in scope, so the error carries them.
 union CompileError implements Error
 	fileNotFound(path FilePath)
 	directoryNotFound(path FilePath)
@@ -189,12 +189,12 @@ union CompileError implements Error
 	compileError
 end 'CompileError'
 
-' Good: argument parsing failure carries the offending argument.
+// Good: argument parsing failure carries the offending argument.
 union ArgError implements Error
 	invalidOption(arg String)
 end 'ArgError'
 
-' OK: signal-only error type with no useful payload.
+// OK: signal-only error type with no useful payload.
 enum BlockRefLookupError implements Error
 	notInFunction
 end 'BlockRefLookupError'
@@ -205,20 +205,20 @@ end 'BlockRefLookupError'
 A function that returns `-1`, `""`, or another magic value on "not found"/"error" forces every caller to pattern-check before using the result. Prefer `throws` (with a descriptive union error type) unless the sentinel is part of the normal data model (e.g. `parseBuildName` returning `""` for "no build name configured" is meaningful data, not an error).
 
 ```maxon
-' Good: caller uses if-let and branches structurally.
+// Good: caller uses if-let and branches structurally.
 function lookup(name String) returns VarSlot throws VarRegistryLookupError
 	let info = try vars.get(name) otherwise throw VarRegistryLookupError.notFound(name)
 	return info.slot
 end 'lookup'
 
-' Caller:
+// Caller:
 if let slot = try vars.lookup(name) 'found'
 	useSlot(slot)
 end 'found'
 
-' Avoid: sentinel return forces every caller to branch on >= 0 or similar.
+// Avoid: sentinel return forces every caller to branch on >= 0 or similar.
 function lookup(name String) returns VarSlot
-	let info = try vars.get(name) otherwise return -1   ' sentinel
+	let info = try vars.get(name) otherwise return -1   // sentinel
 	return info.slot
 end 'lookup'
 ```
@@ -228,14 +228,14 @@ end 'lookup'
 A `match` on a closed set of variants should cover every case explicitly. When you want a catch-all, use `default panic("...")` for unreachable cases or `default throws ...` to turn unmatched variants into an error — never `default` with a placeholder value that silently propagates.
 
 ```maxon
-' Good: explicit, exhaustive.
+// Good: explicit, exhaustive.
 match status 'check'
 	ok gives 0
 	notFound gives 1
 	serverError gives 2
 end 'check'
 
-' Good: catch-all that crashes with context if a new variant is added.
+// Good: catch-all that crashes with context if a new variant is added.
 match tokenKind 'classify'
 	intLiteral then handleInt()
 	stringLiteral then handleString()
@@ -252,11 +252,11 @@ end 'classify'
 Use `let` unless you need to reassign the variable. This communicates intent and prevents accidental mutation.
 
 ```maxon
-let maxRetries = 3               ' constant, never changes
-let userName = getUserName()     ' assigned once from a function
+let maxRetries = 3               // constant, never changes
+let userName = getUserName()     // assigned once from a function
 
-var retryCount = 0               ' needs to be incremented
-var buffer = ByteArray.create()         ' needs push/set operations
+var retryCount = 0               // needs to be incremented
+var buffer = ByteArray.create()         // needs push/set operations
 ```
 
 ### Keep Variable Scope Narrow
@@ -264,7 +264,7 @@ var buffer = ByteArray.create()         ' needs push/set operations
 Declare variables as close to their first use as possible. This improves readability and ensures borrow lifetimes are short.
 
 ```maxon
-' Good: variable declared where it is needed
+// Good: variable declared where it is needed
 for item in items 'process'
 	let score = computeScore(item)
 	if score > threshold 'above'
@@ -272,11 +272,11 @@ for item in items 'process'
 	end 'above'
 end 'process'
 
-' Avoid: declaring everything at the top of the function
+// Avoid: declaring everything at the top of the function
 var score = 0
 var temp = ""
 var found = false
-' ... 30 lines later ...
+// ... 30 lines later ...
 score = computeScore(item)
 ```
 
@@ -285,15 +285,15 @@ score = computeScore(item)
 When you do not need a value (loop variable, tuple element), use `_` to signal this clearly. In match arms, omit the parentheses entirely when you don't care about the associated value — using `caseName(_)` when all bindings are discarded is an error (E3081).
 
 ```maxon
-' Iterate directly when only the element matters (don't use withIterator())
+// Iterate directly when only the element matters (don't use withIterator())
 for name in entries 'loop'
 	print("{name}\n")
 end 'loop'
 
-' Discard an impure function's result
+// Discard an impure function's result
 _ = incrementCounter()
 
-' In matches, omit the binding entirely if you don't need the associated value
+// In matches, omit the binding entirely if you don't need the associated value
 match result 'check'
 	success then return true
 	failure then return false
@@ -309,13 +309,13 @@ end 'check'
 Struct assignment creates a reference (alias), not a copy. Mutating through one variable affects all aliases.
 
 ```maxon
-var a = Point{x: 1, y: 2}
-var b = a          ' b is an alias for a
-b.x = 99          ' a.x is now 99 too
+var a = Point.create(1, y: 2)
+var b = a          // b is an alias for a
+b.x = 99          // a.x is now 99 too
 
-' Use clone for an independent copy
+// Use clone for an independent copy
 var c = a.clone()
-c.x = 50          ' a.x is still 99
+c.x = 50          // a.x is still 99
 ```
 
 ### Clone Explicitly When You Need Independence
@@ -335,14 +335,14 @@ end 'sortedCopy'
 When you take a reference from a collection (via `get`), do not mutate the collection until you are done with the reference. Use the reference first, then mutate.
 
 ```maxon
-' Good: use the reference before mutating
+// Good: use the reference before mutating
 var first = try list.get(0) otherwise ""
-print("{first}\n")        ' last use of first, borrow expires
-list.push("new item")     ' OK: borrow has expired
+print("{first}\n")        // last use of first, borrow expires
+list.push("new item")     // OK: borrow has expired
 
-' Bad: mutation while borrow is live
+// Bad: mutation while borrow is live
 var first = try list.get(0) otherwise ""
-list.push("new item")     ' ERROR E3070: list borrowed by first
+list.push("new item")     // ERROR E3070: list borrowed by first
 print("{first}\n")
 ```
 
@@ -357,7 +357,7 @@ The first argument is always positional. Subsequent arguments use `name: value` 
 ```maxon
 print("hello")
 connect("localhost", port: 8080)
-array.set(0, value: 42)
+try array.set(0, value: 42) otherwise ignore
 createUser("alice", role: "admin", active: true)
 ```
 
@@ -367,11 +367,11 @@ Default parameters avoid the need for multiple overloads and make the common cas
 
 ```maxon
 function connect(host String, port Port = 8080, timeout Milliseconds = 5000)
-	' ...
+	// ...
 end 'connect'
 
-connect("localhost")                               ' uses defaults
-connect("example.com", port: 443, timeout: 10000)  ' override both
+connect("localhost")                               // uses defaults
+connect("example.com", port: 443, timeout: 10000)  // override both
 ```
 
 ### Use Closures for Short Callbacks
@@ -388,13 +388,13 @@ let names = users.map(function(u) gives u.name)
 The compiler tracks purity. Pure function results must always be used. Impure function results must be explicitly discarded with `_ =` if unused.
 
 ```maxon
-' Pure: result must be used
+// Pure: result must be used
 let doubled = double(5)
 
-' Impure: explicitly discard if unused
+// Impure: explicitly discard if unused
 _ = incrementAndLog()
 
-' Chainable methods: result can be discarded freely
+// Chainable methods: result can be discarded freely
 builder.addField("name")
 ```
 
@@ -407,7 +407,7 @@ builder.addField("name")
 `match` guarantees exhaustiveness. If a new case is added to an enum or union, the compiler forces you to handle it. For unions, `match` is the only way to inspect values since `==`/`!=` are not available.
 
 ```maxon
-' Good: exhaustive, compiler-checked
+// Good: exhaustive, compiler-checked
 match direction 'navigate'
 	north then moveUp()
 	south then moveDown()
@@ -415,14 +415,14 @@ match direction 'navigate'
 	west then moveLeft()
 end 'navigate'
 
-' Avoid: error-prone, not exhaustive
+// Avoid: error-prone, not exhaustive
 if dirString == "north" 'n'
 	moveUp()
 end 'n' else 'other'
 	if dirString == "south" 's'
 		moveDown()
 	end 's'
-	' easy to forget cases...
+	// easy to forget cases...
 end 'other'
 ```
 
@@ -431,7 +431,7 @@ end 'other'
 When you intentionally handle only a subset of enum or union cases, use `default throws` (for recoverable situations) or `default panic` (for bugs).
 
 ```maxon
-' Recoverable: caller decides what to do (Shape is a union with associated values)
+// Recoverable: caller decides what to do (Shape is a union with associated values)
 function areaOf(shape Shape) returns Real throws ShapeError
 	return match shape 'calc'
 		circle(r) gives 3.14159 * r * r
@@ -440,7 +440,7 @@ function areaOf(shape Shape) returns Real throws ShapeError
 	end 'calc'
 end 'areaOf'
 
-' Unrecoverable: should never happen
+// Unrecoverable: should never happen
 match token 'lex'
 	plus then emitAdd()
 	minus then emitSub()
@@ -466,11 +466,10 @@ Range patterns keep numeric classification concise and correct.
 
 ```maxon
 let category = match codepoint 'classify'
-	0..=127 gives "ASCII"
-	128..=2047 gives "2-byte UTF-8"
-	2048..=65535 gives "3-byte UTF-8"
-	65536.. gives "4-byte UTF-8"
-	default gives "invalid"
+	0 to 127 gives "ASCII"
+	128 to 2047 gives "2-byte UTF-8"
+	2048 to 65535 gives "3-byte UTF-8"
+	default gives "4-byte UTF-8"
 end 'classify'
 ```
 
@@ -488,7 +487,7 @@ union Instruction
 	halt
 end 'Instruction'
 
-' Only optimize add instructions, skip everything else
+// Only optimize add instructions, skip everything else
 match instruction 'optimize'
 	add(dst, src) then optimizeAdd(dst, src: src)
 	sub to halt then break
@@ -509,7 +508,7 @@ enum LogLevel
 	fatal
 end 'LogLevel'
 
-' Only act on serious levels
+// Only act on serious levels
 match level 'filter'
 	LogLevel.error then handleError()
 	LogLevel.fatal then handleFatal()
@@ -563,16 +562,16 @@ let first = try list.first() otherwise emptyItem
 - **Set**: Unique elements. Elements must implement `Hashable`.
 
 ```maxon
-' Array: ordered data with index access
+// Array: ordered data with index access
 var scores = ScoreArray.create()
 
-' Map: fast lookup by key
+// Map: fast lookup by key
 var userCache = UserMap.create()
 
-' Set: track unique items
+// Set: track unique items
 var visited = CitySet.create()
 
-' List: queue with O(1) push/pop at both ends
+// List: queue with O(1) push/pop at both ends
 var taskQueue = TaskList.create()
 ```
 
@@ -581,12 +580,12 @@ var taskQueue = TaskList.create()
 Use `for...in` loops. Use `.withIterator()` when you need the index (via `iter.index()`) or navigation alongside the element.
 
 ```maxon
-' Direct iteration
+// Direct iteration
 for name in names 'greet'
 	print("Hello, {name}\n")
 end 'greet'
 
-' With index
+// With index
 for (iter, name) in names.withIterator() 'list'
 	print("{iter.index() + 1}. {name}\n")
 end 'list'
@@ -602,15 +601,15 @@ Export only the public API. Keep internal helpers, fields, and utility methods p
 
 ```maxon
 export type Parser
-	var source String              ' private field
-	export var position BytePos    ' public field
+	var source as String              // private field
+	export var position as BytePos    // public field
 
 	export function parse() returns AST
-		' public API
+		// public API
 	end 'parse'
 
 	function skipWhitespace()
-		' internal helper, not exported
+		// internal helper, not exported
 	end 'skipWhitespace'
 end 'Parser'
 ```
@@ -634,7 +633,7 @@ type Connection
 	end 'createSecure'
 end 'Connection'
 
-' Clear at the call site
+// Clear at the call site
 var conn = Connection.createSecure("example.com")
 ```
 
@@ -680,10 +679,12 @@ Constrain type parameters to document requirements and catch misuse at compile t
 
 ```maxon
 type SortedList uses T where T is Comparable and Equatable
-	var items Array with T
+	typealias Items = Array with T
+
+	var items as Items
 
 	function insert(item T)
-		' T is guaranteed to support comparison
+		// T is guaranteed to support comparison
 	end 'insert'
 end 'SortedList'
 ```

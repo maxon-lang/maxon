@@ -533,7 +533,7 @@ s.append(" World")       // s is now "Hello World"
 
 **Creating a List**
 
-Create a concrete List type with `typealias`, then initialize with `{}`:
+Create a concrete List type with `typealias`, then instantiate it with `create()`:
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
@@ -559,7 +559,7 @@ var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayErro
 ```maxon
 var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
 var popped = try list.removeLast() otherwise 0    // Remove back — O(1)
-var at2 = try list.remove(at: 2) otherwise 0      // Remove at index — O(n)
+var at2 = try list.remove(2) otherwise 0          // Remove at index — O(n)
 list.clear()                                       // Remove all elements
 ```
 
@@ -586,7 +586,7 @@ end 'loop'
 | `removeFirst` | O(1) |
 | `append` | O(1) |
 | `removeLast` | O(1) |
-| `get`, `insert`, `remove(at:)` | O(n) |
+| `get`, `insert`, `remove` | O(n) |
 | `first`, `last`, `count`, `isEmpty` | O(1) |
 | iteration (for-in) | O(n) total |
 
@@ -1147,8 +1147,6 @@ var c = try arr.cursor() otherwise panic("empty array")
 ### Example
 
 ```maxon
-typealias IntIter = ArrayIterator with Integer
-
 var arr = [1, 2, 3, 4, 5]
 var c = try arr.cursor() otherwise panic("empty")
 print("{c.current()}\n")        // 1

@@ -248,6 +248,13 @@ s.append(" {name}!")    // interpolation written directly into buffer
 // This is a comment
 ```
 
+Comments are **concise and minimal**: the default is no comment, and one earns its place only where
+the code cannot carry the point by itself. Comment the **why** — the constraint, the invariant, the
+reason a bound or an order is the correct one — never the **how**, which is the code. **Describe the
+code as it is now:** no "used to", no "changed from", no reference to a previous name or shape; git
+holds the history. **A comment you edit gets rewritten to conform**, not patched. See the Comments
+entry of the Code Quality checklist in `.claude/CLAUDE.md` and `docs/STYLE_GUIDE.md#comments`.
+
 ### 16. Blocks MUST NOT be empty (E3082)
 
 Every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at least one statement. Comment-only blocks are also empty since comments are not statements.
@@ -273,30 +280,42 @@ end 'check'
 A struct literal must supply a value for every field, unless the field:
 1. has a default on its declaration — two forms:
    - shorthand: `var count = 0` (literal only: int/float/bool/enum case), OR
-   - full form: `var items IntArray = IntArray.create()` (type annotation + arbitrary expression, re-evaluated at every literal that omits the field)
+   - full form: `var items as IntArray = IntArray.create()` (type annotation + arbitrary expression, re-evaluated at every literal that omits the field)
 2. is assigned via `self.field = expr` on every control-flow path of a
    `static` factory whose return type is the enclosing type, and the literal
    is the direct `return` expression.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
 // WRONG — missing field
 type P
 	export var x as Integer
 	export var y as Integer
+
+	export static function create(x Integer) returns Self
+		return Self{x: x}       // E3086: 'y' not initialized
+	end 'create'
 end 'P'
-var p = P{x: 1}        // E3086: 'y' not initialized
 
 // CORRECT — declaration default (shorthand)
 type Counter
 	export var value = 0
+
+	export static function create() returns Self
+		return Self{}           // OK — value defaults to 0
+	end 'create'
 end 'Counter'
-var c = Counter{}      // OK — value defaults to 0
 
 // CORRECT — declaration default (full form with expression)
 type Bag
 	export var items as IntArray = IntArray.create()
+
+	export static function create() returns Self
+		return Self{}           // OK — items gets a fresh empty array per construction
+	end 'create'
 end 'Bag'
-var b = Bag{}          // OK — items gets a fresh empty array per construction
 
 // CORRECT — self-assignment in static factory
 type Thing
@@ -337,10 +356,14 @@ function connect(host String, port Port = 8080) returns Connection
 	// ...
 end 'connect'
 
-// Static method:
-export static function create() returns MyType
-	return MyType{field: 0}
-end 'create'
+// Static method — a struct literal is legal only inside its own type:
+type MyType
+	export var field as FieldValue
+
+	export static function create() returns Self
+		return Self{field: 0}
+	end 'create'
+end 'MyType'
 ```
 
 ### Variables
@@ -353,9 +376,12 @@ _ = sideEffect()     // discard (RHS MUST be a function call)
 
 Use `var` for any variable you call mutating methods on (`push`, `set`, `remove`, `clear`, `append`, etc.):
 ```maxon
-var items = Array with Integer{}   // var because we call push
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+var items = IntArray.create()   // var because we call push
 items.push(1)
 ```
+`Array with Integer{}` at a use site is E3003 — a generic container needs a typealias before use.
 
 ### Struct types
 
@@ -364,12 +390,16 @@ typealias Coord = float(f64.min to f64.max)
 typealias VisitCount = int(0 to u64.max)
 
 export type Point
-	export var x as Coord       // public mutable
-	export let name as String   // public immutable
-	var internal as VisitCount  // private
+	export var x as Coord           // public mutable
+	export var y as Coord
+	var visits as VisitCount = 0    // private, declaration default
+
+	export static function create(x Coord, y Coord) returns Point
+		return Point{x: x, y: y}
+	end 'create'
 
 	function magnitude() returns Coord
-		return sqrt((self.x * self.x + self.y * self.y) as Coord)
+		return sqrt(self.x * self.x + self.y * self.y)
 	end 'magnitude'
 
 	function magnitudeSquared() returns Coord
@@ -381,11 +411,16 @@ export type Point
 	end 'origin'
 end 'Point'
 
-var p = Point{x: 1.5, y: 2.5}
+var p = Point.create(1.5, y: 2.5)
 var o = Point.origin()
 ```
 
 Instance methods can call sibling instance methods by bare name — the compiler implicitly prepends `self` as the receiver.
+
+**A struct literal is legal only inside the type's own methods (E3076).** `Point{x: 1.5, y: 2.5}` written
+anywhere else is an error, however public the fields are — external callers go through a static factory, so
+invariants have a single construction point. The same restriction covers ranged typealiases: `Port{8080}` at
+a call site is E3076; write the bare literal at a `Port`-typed destination, or `8080 as Port`.
 
 ### Enums
 
@@ -414,6 +449,8 @@ Methods: `fromRawValue()`, `fromName()` (throw -- use with `try`).
 Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=`, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` (an `Array with String` of case names). Unions do not support `.allCases`.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 union Result
 	success(value Integer)
 	failure(code Integer, message String)
@@ -450,7 +487,7 @@ end 'Container'
 Interface types can be used directly as function parameter types. The compiler monomorphizes the function for each concrete type:
 
 ```maxon
-function render(item Drawable) returns Integer
+function render(item Describable) returns String
 	return item.describe()
 end 'render'
 ```
@@ -675,14 +712,14 @@ var arr = [1, 2, 3]
 var empty = IntArray.create()
 
 arr.push(42)                              // append
-arr.count()                               // length
+let n = arr.count()                       // length
 let val = try arr.get(0) otherwise 0      // access (ALWAYS use try)
-arr.set(0, value: 100)                    // modify
+try arr.set(0, value: 100) otherwise ignore  // modify (throws)
 arr.reserve(100)                          // pre-allocate
 arr.resize(50)                            // set length
-arr.pop()                                 // remove last (throws)
+let last = try arr.pop() otherwise 0      // remove last (throws)
 arr.insert(0, value: 99)                  // insert at index
-arr.remove(at: 0)                         // remove at index (throws)
+let gone = try arr.remove(0) otherwise 0  // remove at index (throws)
 arr.clear()                               // remove all
 arr.sort()                                // in-place stable sort (Element is Comparable)
 arr.sortUnstable()                        // in-place unstable sort (Element is Comparable)
@@ -693,14 +730,18 @@ arr.sortUnstable(cmp)                     // unstable sort with comparator
 ### Maps
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 typealias StringIntMap = Map with (String, Integer)
 
 var m = ["hello": 42]
-let val = try m.get("hello") otherwise 0  // ALWAYS use try
-m.set("world", value: 99)
-m.containsKey("hello")
-m.remove("hello")
-m.count()
+var empty = StringIntMap.create()
+
+let val = try m.get("hello") otherwise 0  // access (ALWAYS use try)
+m.upsert("world", value: 99)              // insert or replace
+try m.insert("fresh", value: 7) otherwise ignore   // insert; throws if the key exists
+let has = m.contains("hello")             // membership
+let dropped = m.remove("hello")           // returns bool; does not throw
+let n = m.count()
 ```
 
 ### Strings
@@ -834,6 +875,8 @@ literal has no source alias to compare against.
 Closure literals start with the `function` keyword:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 let double = function(n Integer) gives n * 2
 items.sort(function(a, b) gives a.priority - b.priority)
 let always42 = function(_ Integer) gives 42

@@ -850,16 +850,21 @@ public class Compiler {
     sw?.Restart();
     foreach (var source in sources) {
       if (failedFiles.Contains(source.Path)) continue;
+      Parser? parser = null;
       try {
         var tokens = TokensFor(source);
-        var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch, foreignPerspectiveCache);
+        parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch, foreignPerspectiveCache);
         var parsed = parser.Parse();
         module.Merge(parsed);
-        // Collect declaration-level errors from parser recovery
-        foreach (var err in parser.Errors) errors.Add(err);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
         errors.Add(ex);
+      }
+
+      // Declaration-level errors the parser recovered from. Harvested outside the try so a throw
+      // that escapes Parse() reports alongside them instead of destroying them.
+      if (parser != null) {
+        foreach (var err in parser.Errors) errors.Add(err);
       }
     }
     if (sw != null) StageTimer.Record(timings!, "fullParse", sw.ElapsedMilliseconds);

@@ -1064,6 +1064,65 @@ end 'main'
 error E3062: specs/fragments/ranged-typealias/unused-typealias-with-used.test:3:11: unused typealias: 'Age'
 ```
 
+### A use that follows a recovered error still counts as a use
+
+<!-- test: unused-typealias-after-recovered-error -->
+```maxon
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	var arr = [1, 2, 3]
+	arr.set(0, value: 100)
+	let t = 5 as Tally
+	print("{t}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/ranged-typealias/unused-typealias-after-recovered-error.test:6:6: throwing function requires try: 'stdlib.Array.set'
+```
+
+### An unused typealias does not suppress the other diagnostics
+
+<!-- test: unused-typealias-does-not-suppress-other-errors -->
+```maxon
+typealias Tally = int(0 to 100)
+typealias Spare = int(0 to 50)
+
+function main() returns ExitCode
+	let t = 5 as Tally
+	let u = t as Tally
+	print("{u}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/ranged-typealias/unused-typealias-does-not-suppress-other-errors.test:7:12: unneeded cast: 'Tally' already fits in 'Tally'
+error E3062: specs/fragments/ranged-typealias/unused-typealias-does-not-suppress-other-errors.test:3:11: unused typealias: 'Spare'
+```
+
+### A use inside a lazy static initializer counts as a use
+
+<!-- test: unused-typealias-in-lazy-static-initializer -->
+```maxon
+typealias Tally = int(0 to 100)
+
+type Box
+	static var v = [5 as Tally, 6 as Tally]
+
+	export static function ready() returns ExitCode
+		return 0
+	end 'ready'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.ready()
+end 'main'
+```
+```exitcode
+0
+```
+
 ### Error: unrepresentable range
 
 <!-- test: error.unrepresentable-range -->

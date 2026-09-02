@@ -6,9 +6,9 @@ This document describes how Maxon's memory manager allocates, tracks, and frees 
 
 ```
 User code
-  var p = Point{x: 1, y: 2}   // mm_alloc -> rc=0, mm_incref -> rc=1
-  let q = p                    // mm_incref -> rc=2
-  p = Point{x: 3, y: 4}       // decref old (rc->1), alloc new (rc=0), incref (rc=1)
+  var p = Point.create(1, y: 2)   // mm_alloc -> rc=0, mm_incref -> rc=1
+  let q = p                       // mm_incref -> rc=2
+  p = Point.create(3, y: 4)       // decref old (rc->1), alloc new (rc=0), incref (rc=1)
 end of scope                   // decref q -> rc=0
                                // -> destructor -> free
 ```
@@ -236,15 +236,25 @@ described above.
 ### Construction
 
 ```maxon
-var p = Point{x: 1, y: 2}   // mm_alloc -> rc=0, then mm_incref -> rc=1
+typealias Coord = int(i64.min to i64.max)
+
+type Point
+	export var x as Coord
+	export var y as Coord
+
+	export static function create(x Coord, y Coord) returns Self
+		return Self{x: x, y: y}   // mm_alloc -> rc=0, then mm_incref -> rc=1
+	end 'create'
+end 'Point'
 ```
 
-The compiler emits `mm_alloc` (rc=0), stores field values, then calls `mm_incref` when the pointer is assigned to the variable (rc=1).
+The compiler emits `mm_alloc` (rc=0), stores field values, then calls `mm_incref` when the pointer is assigned to the variable (rc=1). A struct literal is legal only inside its own type (E3076), so the examples below construct through `Point.create`.
 
 ### Aliasing
 
 ```maxon
-var q = p                    // mm_incref -> rc=2
+let p = Point.create(1, y: 2)
+let q = p                    // mm_incref -> rc=2
 ```
 
 Assigning a struct to another variable copies the pointer and increments the refcount. Both variables point to the same heap object.
@@ -252,7 +262,8 @@ Assigning a struct to another variable copies the pointer and increments the ref
 ### Reassignment
 
 ```maxon
-p = Point{x: 3, y: 4}       // mm_decref old (destructor handles fields), alloc new (rc=1)
+var p = Point.create(1, y: 2)
+p = Point.create(3, y: 4)    // mm_decref old (destructor handles fields), alloc new (rc=1)
 ```
 
 The old value is decremented via `mm_decref`. If its refcount reaches zero, the destructor is called (which decrefs all managed fields), then the object is freed. The new value is allocated with rc=1.
@@ -263,9 +274,9 @@ When a variable goes out of scope, its refcount is decremented:
 
 ```maxon
 function test()
-	var p = Point{x: 1, y: 2}   // rc=1
-	// ... use p ...
-end 'test'                     // mm_decref p -> rc=0 -> destructor -> free
+	let p = Point.create(1, y: 2)   // rc=1
+	print("{p.x}\n")
+end 'test'                         // mm_decref p -> rc=0 -> destructor -> free
 ```
 
 All managed variables in scope are decremented. The order is: user variables first, then temp variables.
@@ -276,13 +287,14 @@ Returning a struct **passes lifetime responsibility** to the caller. The returne
 
 ```maxon
 function makePoint() returns Point
-	var p = Point{x: 1, y: 2}   // rc=1
-	return p                     // p is NOT decref'd; caller is responsible
+	let p = Point.create(1, y: 2)   // rc=1
+	return p                        // p is NOT decref'd; caller is responsible
 end 'makePoint'
 
 function main() returns ExitCode
-	var p = makePoint()          // caller now owns it, rc=1
-	return 0                     // mm_decref p -> rc=0 -> freed
+	let p = makePoint()             // caller now owns it, rc=1
+	print("{p.x}\n")
+	return 0                        // mm_decref p -> rc=0 -> freed
 end 'main'
 ```
 
@@ -293,6 +305,8 @@ The compiler marks call-return temps with `OwnershipFlags.CallReturn`. When the 
 Function parameters are **not owned** by the callee. The caller retains ownership and is responsible for the parameter's lifetime. Parameters are marked with `OwnershipFlags.IsParam` and skipped during scope-end cleanup:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function readLevel(c Config) returns Integer
 	// c is not owned (IsParam flag); no incref on entry, no decref on exit
 	return c.level
@@ -414,8 +428,9 @@ type B
 end 'B'
 
 // ERROR: indirect via container
+typealias FolderArray = Array with Folder
 type Folder
-	export var children Array with Folder
+	export var children as FolderArray
 end 'Folder'
 ```
 

@@ -96,23 +96,22 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function dangerous(value Integer) returns Byte
-	return Byte{value}
+	return value as Byte
 end
 
 function main() returns ExitCode
-	let result = dangerous(Integer{300})
-	return 0 as ExitCode
+	return dangerous(300)
 end
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at example.test:6: Range check failed for type 'Byte': value outside int(0 to 255)
+panic at example.test:6: Range check failed: value outside typealias 'Byte'
 Stack trace:
-  in example.dangerous
-  in example.main
-  in _start
+  in dangerous
+  in main
+  in mrt_start
 ```
 
 ### IR Verification

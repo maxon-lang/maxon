@@ -125,15 +125,15 @@ let MAX_SIZE = 1024     // immutable constant
 // Lazy static fields (inside types)
 // Complex initializers (function calls, struct/array literals) run on first access
 static var ws = CharacterSet.whitespacesAndNewlines()   // lazy, cached after first use
-static var origin = Point{x: 0, y: 0}       // lazy struct literal
+static var origin = Point.create(0, y: 0)   // lazy struct value
 static var data = [10, 20, 30]              // lazy array literal
 static let MAX = 100                         // constant, evaluated at compile time
 
 // Reference-by-default for structs
-var a = Point{x: 1, y: 2}
+var a = Point.create(1, y: 2)
 var b = a               // reference -- b is an alias for a (same object)
 b.x = 99               // a.x is now 99
-b = Point{x: 5, y: 6}  // rebinds b -- a is unaffected
+b = Point.create(5, y: 6)  // rebinds b -- a is unaffected
 
 // Explicit clone for independent copy (requires Cloneable)
 var c = a.clone()       // deep copy -- c is independent
@@ -142,11 +142,11 @@ c.x = 42               // a.x is still 99
 
 All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `_ =` requires a function call on the right-hand side (`_ = 42` is an error).
 
-**Assignment semantics:** For struct types, `var b = a` creates a reference (alias to the same heap object). Field mutation through the alias affects the original. Reassignment (`b = Point{...}`) rebinds without affecting the original. Use `var b = a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
+**Assignment semantics:** For struct types, `var b = a` creates a reference (alias to the same heap object). Field mutation through the alias affects the original. Reassignment (`b = Point.create(...)`) rebinds without affecting the original. Use `var b = a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
 
 **Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
-**Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs are not freed at scope exit — the caller takes responsibility for their lifetime. Structs with all-primitive fields that don't escape scope are automatically stack-promoted (no heap allocation or refcounting). Use `@heap var p = Point{...}` to force heap allocation.
+**Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs are not freed at scope exit — the caller takes responsibility for their lifetime. Structs with all-primitive fields that don't escape scope are automatically stack-promoted (no heap allocation or refcounting). Use `@heap var p = Point.create(...)` to force heap allocation.
 
 **Borrow checking:** You cannot mutate a collection while a variable borrows from it (e.g., a reference obtained via `.get()`). Borrows expire at the last use of the borrowing variable (non-lexical lifetimes). Error E3070.
 
@@ -157,6 +157,8 @@ Function return values must be used. Pure functions (no side effects) cannot hav
 ## Tuples
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 // Tuple literal
 var t = (10, 20)
 t.0   // 10
@@ -168,15 +170,15 @@ function minMax(a Integer, b Integer) returns (Integer, Integer)
 end 'minMax'
 
 // Destructuring declaration (creates new variables)
-var (lo, hi) = minMax(3, 7)
+var (lo, hi) = minMax(3, b: 7)
 
 // Tuple assignment (assigns to existing variables)
 var x = 0
 var y = 0
-(x, y) = minMax(3, 7)    // x = 3, y = 7
+(x, y) = minMax(3, b: 7)    // x = 3, y = 7
 
 // Discard individual elements with _
-(x, _) = minMax(3, 7)    // x = 3, second element discarded
+(x, _) = minMax(3, b: 7)    // x = 3, second element discarded
 ```
 
 **Tuple assignment rules:**
@@ -188,6 +190,9 @@ var y = 0
 ## Functions
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
 function add(a Integer, b Integer) returns Integer
 		return a + b
 end 'add'
@@ -233,6 +238,8 @@ greet("Smith", title: "Dr.")
 ## Closures
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 let addX = function(n Integer) gives n + x   // single expression body
 let double = function(n Integer) gives n * 2
 ```
@@ -427,15 +434,22 @@ In a match *expression*, individual arms may also use `pattern panic("message")`
 ## Types 
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Describable
+		function describe() returns String
+end 'Describable'
+
 type Point implements Hashable, Describable   // interface conformance
 		export var x as Integer               // public mutable field
-		export let name = "point"   // public immutable with default
-		var internal as Integer               // private field
+		export var y as Integer
+		export let name as String = "point"   // public immutable with default
+		var internal as Integer = 0           // private field
 
 		static var count = 0               // static mutable field
 		static let MAX = 100               // static immutable constant
 
-		function hash() returns Integer   // interface method
+		function hash() returns HashValue   // interface method
 				return x * 31 + y
 		end 'hash'
 
@@ -443,13 +457,21 @@ type Point implements Hashable, Describable   // interface conformance
 				return sqrt((x * x + y * y) as Real)
 		end 'magnitude'
 
+		function describe() returns String      // Describable conformance
+				return "{name}({x}, {y})"
+		end 'describe'
+
+		export static function create(x Integer, y Integer) returns Point  // factory
+				return Point{x: x, y: y}
+		end 'create'
+
 		static function origin() returns Point  // static method
 				return Point{x: 0, y: 0}
 		end 'origin'
 end 'Point'
 
 // Instantiation
-var p = Point{x: 10, y: 20}
+var p = Point.create(10, y: 20)
 var o = Point.origin()
 
 // Static field access
@@ -462,6 +484,8 @@ default, the literal, or `self.field = expr` on every path of a static factory.
 `Self{}` with any non-default field is **E3086**.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Counter
 	export var value as Integer      // no default
 	export var version = 0         // default
@@ -476,19 +500,19 @@ end 'Counter'
 Literals can only construct from within the type's own methods; external code
 calls a factory. Field declarations accept three forms:
 
-- `var x Type` — no default; the field must be provided in the literal or
+- `var x as Type` — no default; the field must be provided in the literal or
   via `self.field = expr` in a factory.
 - `var x = literal` — shorthand; type inferred from the literal (integer,
   float, `true`/`false`, or enum case).
-- `var x Type = expression` — type annotation plus arbitrary default
-  expression (e.g. `var items IntArray = IntArray.create()`). The expression
+- `var x as Type = expression` — type annotation plus arbitrary default
+  expression (e.g. `var items as IntArray = IntArray.create()`). The expression
   is re-evaluated at every struct literal that omits the field.
 
 ## Interfaces
 
 ```maxon
 interface Hashable
-		function hash() returns Integer
+		function hash() returns HashValue
 end 'Hashable'
 
 interface Container uses Element       // associated type
@@ -688,6 +712,8 @@ Unions define a fixed set of named cases with optional associated values. Unions
 Unions can also have a per-variant struct backing — see [Struct-Backed Unions](#struct-backed-unions) below.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 // Associated values
 union Result
 		success(value Integer)
@@ -860,6 +886,7 @@ var p = async longRunning()
 p.cancel()
 
 // Typed promises in collections
+typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 var arr = IntPromiseArray.create()
@@ -882,21 +909,24 @@ end 'each'
 ## Arrays
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
 var arr = [1, 2, 3]                    // array literal
 var empty = IntArray.create()                 // typed empty array
 
-arr.count()                            // length
+let n = arr.count()                    // length
 try arr.get(0) otherwise 0             // access (throws ArrayError)
-arr.set(0, value: 100)                 // modify
+try arr.set(0, value: 100) otherwise ignore   // modify (throws)
 arr.push(42)                           // append
-arr.pop()                              // remove last (throws)
+try arr.pop() otherwise 0              // remove last (throws)
 arr.insert(0, value: 99)               // insert at index
-arr.remove(at: 0)                      // remove at index (throws)
+try arr.remove(0) otherwise 0          // remove at index (throws)
 arr.reserve(100)                       // allocate capacity
 arr.resize(50)                         // set length
 arr.clear()                            // remove all
-arr.first()                            // first element (throws)
-arr.last()                             // last element (throws)
+try arr.first() otherwise 0            // first element (throws)
+try arr.last() otherwise 0             // last element (throws)
 arr.sort()                             // in-place stable sort (Element is Comparable)
 arr.sortUnstable()                     // in-place unstable sort (Element is Comparable)
 arr.sort(cmp)                          // sort with comparator: function(Element, Element) returns Ordering
@@ -1021,7 +1051,7 @@ ceil(x)    // up
 
 | Interface | Methods |
 |-----------|---------|
-| `Hashable` | `hash() -> int` |
+| `Hashable` | `hash() -> HashValue` |
 | `Equatable` | `equals(other) -> bool` |
 | `Comparable` | `compare(other) -> Ordering` |
 | `Cloneable` | `clone() -> Self` |

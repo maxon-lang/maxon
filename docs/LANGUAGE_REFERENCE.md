@@ -591,7 +591,7 @@ Assigning one ranged integer variable to another initially creates an alias — 
 
 ```maxon
 typealias Pos = int(0 to i64.max)
-var startPos = Pos{10}
+var startPos = 10 as Pos
 var pos = startPos      // pos and startPos initially share the same value
 
 pos = pos + 1           // rebinds pos to a new value (11) -- startPos is unaffected
@@ -624,6 +624,8 @@ This is in contrast to struct assignment, where field mutations through an alias
 Types are user-defined composite types containing named fields. Use `var` for mutable fields and `let` for immutable fields:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Point
 		var x as Integer
 		var y as Integer
@@ -631,11 +633,22 @@ end 'Point'
 ```
 
 ### Type Literals
-Create type instances using field initializers:
+Create type instances using field initializers. A type literal is legal only inside the type's own methods, so code elsewhere constructs through a `static` factory that holds the literal:
 
 ```maxon
-var p = Point{x: 10, y: 20}
-var origin = Point{x: 0, y: 0}
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+		var x as Integer
+		var y as Integer
+
+		export static function create(x Integer, y Integer) returns Point
+				return Point{x: x, y: y}
+		end 'create'
+end 'Point'
+
+var p = Point.create(10, y: 20)
+var origin = Point.create(0, y: 0)
 ```
 
 ### Required Field Initialization
@@ -651,6 +664,8 @@ Every field of a type must be initialized when the type is constructed. A field 
 A `Self{}` literal is only legal when every field has a default or is supplied via rule 3. Otherwise the compiler emits **E3086 `SemanticFieldNotInitialized`** listing the uninitialized fields.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Counter
 	export var value as Integer
 	export var version = 0           // default
@@ -668,7 +683,7 @@ The self-assignment form requires **definite assignment**: the write must reach 
 Access fields using dot notation:
 
 ```maxon
-var p = Point{x: 10, y: 20}
+var p = Point.create(10, y: 20)
 var xVal = p.x           // Read field
 p.x = 15                 // Write field (if var, not let)
 ```
@@ -678,6 +693,8 @@ p.x = 15                 // Write field (if var, not let)
 Methods are defined **inside the type body** and can access fields directly (implicit `self`):
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Point
 		var x as Integer
 		var y as Integer
@@ -705,8 +722,8 @@ end 'Point'
 Methods are called using dot notation on instances. The receiver (`self`) is implicit:
 
 ```maxon
-var p1 = Point{x: 10, y: 20}
-var p2 = Point{x: 5, y: 10}
+var p1 = Point.create(10, y: 20)
+var p2 = Point.create(5, y: 10)
 var p3 = p1.add(p2)
 var mag = p1.magnitude()
 ```
@@ -716,6 +733,8 @@ var mag = p1.magnitude()
 Inside a type body, instance methods can call other instance methods on `self` using a bare name (no explicit receiver):
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Calculator
 	var base as Integer
 
@@ -736,6 +755,8 @@ The compiler detects that `double` is an instance method of the current type and
 Static methods belong to a type but don't have access to instance data. They are declared with the `static` keyword and called using `TypeName.method()` syntax:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Point
 		var x as Integer
 		var y as Integer
@@ -782,6 +803,8 @@ var mag = p2.magnitude()          // Instance method call
 Static fields are shared across all instances of a type. They are declared using `static var` (mutable) or `static let` (immutable):
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Counter
 		static var count = 0
 		static let MAX_COUNT = 1000
@@ -871,10 +894,14 @@ typealias Coord = int(0 to u64.max)
 type Point
 		export var x as Coord
 		export var y as Coord
+
+		export static function create(x Coord, y Coord) returns Point
+				return Point{x: x, y: y}
+		end 'create'
 end 'Point'
 
 type Defaults
-		static var origin = Point{x: 0, y: 0}
+		static var origin = Point.create(0, y: 0)
 
 		export static function getOrigin() returns Point
 				return Defaults.origin
@@ -919,6 +946,8 @@ end 'Cache'
 Interfaces define a set of method signatures that types can implement:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 interface Hashable
 		function hash() returns Integer
 end 'Hashable'
@@ -927,6 +956,8 @@ end 'Hashable'
 Structs declare conformance using the `implements` keyword:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Point implements Hashable
 		var x as Integer
 		var y as Integer
@@ -953,6 +984,8 @@ Interfaces can declare static methods using the `static` keyword. Static interfa
 Functions can use interface types directly as parameter types. Any concrete type that implements the interface can be passed as an argument:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 interface Drawable
 	function draw() returns Integer
 end 'Drawable'
@@ -969,19 +1002,26 @@ The compiler monomorphizes the function at compile time, creating specialized co
 Functions can declare an interface as their return type. When every `return` in the body yields the same concrete implementing type, the compiler statically infers that type at the call site so chained method dispatch on the result resolves without runtime overhead:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 interface Producer
 	function produce() returns Integer
 end 'Producer'
 
 type Widget implements Producer
 	let value as Integer
+
+	export static function create(value Integer) returns Widget
+		return Widget{value: value}
+	end 'create'
+
 	function produce() returns Integer
 		return value
 	end 'produce'
 end 'Widget'
 
 function makeProducer() returns Producer
-	return Widget{value: 42}
+	return Widget.create(42)
 end 'makeProducer'
 ```
 
@@ -990,6 +1030,8 @@ end 'makeProducer'
 Struct fields can declare an interface as their type. The field stores any value of a type that conforms to the interface, and methods invoked on the field dispatch to the implementing type. When the compiler can trace the concrete type stored into the field at construction, dispatch is resolved statically with no runtime overhead:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 interface Tagged
 	function tag() returns Integer
 end 'Tagged'
@@ -1073,6 +1115,8 @@ Extensions add methods to interfaces that are automatically available on all typ
 **Declaration:**
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 extension Iterable
 	function count() returns Integer
 		var n = 0
@@ -1095,6 +1139,8 @@ end 'Iterable'
 Extensions can use the interface's associated types. These are automatically substituted with the concrete type's associated type bindings:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 interface Container uses Element
 	function get(index Integer) returns Element
 end 'Container'
@@ -1162,6 +1208,8 @@ end 'Container'
 An interface can have both unconditional extensions and conditional extensions. Types that don't satisfy the `where` clause still receive the unconditional extension methods:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 extension Seq
 	function countItems() returns Integer
 		var n = 0
@@ -1518,6 +1566,8 @@ Unions can additionally have a per-variant struct backing — see [Struct-Backed
 The simplest form of union defines named cases with no additional data:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 union Option
 		some(value Integer)
 		none
@@ -1529,6 +1579,8 @@ end 'Option'
 Cases can carry additional data called associated values:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 union Result
 		success(value Integer)
 		failure(code Integer, message String)
@@ -1626,6 +1678,8 @@ The `fromName` static method creates a union value from a string name. It throws
 For unions with associated values, pass the values as additional arguments when the name is a compile-time literal:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 union Container
 		empty
 		value(n Integer)
@@ -1739,6 +1793,8 @@ Because `U.unionCases` is a regular enum it inherits all of the standard enum ma
 The intended use is symmetric (de)serialization: write the variant's `rawValue` to a buffer alongside its payload; on read, lift the raw integer back to a `U.unionCases` via `fromRawValue` and match on it to dispatch the payload reader. Match arms are single-statement, so multi-step writers and readers extract per-variant helpers:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function writeShapeCircle(buf ByteArray, radius Integer)
 	writeDword(buf, value: Shape.unionCases.circle.rawValue)
 	writeQword(buf, value: radius)
@@ -1805,9 +1861,12 @@ let name = "Maxon"
 Calling a mutating method on a `let` variable is a compile error. Mutating methods include `push`, `pop`, `set`, `remove`, `clear`, `append`, `insert`, `resize`, `reserve`, `setLength`, `grow`, `upsert`, and similar methods that modify the receiver's state. Use `var` for variables that need mutation:
 
 ```maxon
-let items = Array with Integer{}
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+let items = IntArray.create()
 // items.push(1)        // ERROR: cannot call mutating method 'push' on immutable variable
-var items2 = Array with Integer{}
+var items2 = IntArray.create()
 items2.push(1)           // OK — items2 is var
 ```
 
@@ -2228,6 +2287,8 @@ Maxon uses a **first-positional, rest-named** rule for function and method calls
 **Examples:**
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function add(a Integer, b Integer) returns Integer
 		return a + b
 end 'add'
@@ -2253,6 +2314,8 @@ greet("Alice")    // Single param is positional
 Parameters can have default values. Parameters with defaults can be omitted at the call site. Any literal expression is supported as a default value, including integers, floats, booleans, strings, arrays, enum cases, struct construction, character literals, and byte string literals.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function greet(name String, title String = "Mr.")
 		print("Hello, {title} {name}")
 end 'greet'
@@ -2291,7 +2354,7 @@ function setLevel(level Priority = Priority.medium) returns ExitCode
 end 'setLevel'
 
 // Struct default
-function draw(origin Point = Point{x: 0, y: 0}) returns ExitCode
+function draw(origin Point = Point.create(0, y: 0)) returns ExitCode
 		// ...
 end 'draw'
 
@@ -2366,6 +2429,8 @@ Maxon supports function overloading — multiple functions with the same name bu
 When overloads differ in their parameter types, the compiler automatically selects the correct overload based on the argument types at the call site:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function process(value Integer) returns Integer
 		return value * 2
 end 'process'
@@ -2404,8 +2469,14 @@ If the compiler cannot determine which overload to call based on argument types 
 A type may define both a `static` method and an instance method with the same name. They are disambiguated by call syntax, not by parameter signature, so the two may even share identical parameters:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Box
 		export var value as Integer
+
+		export static function create(value Integer) returns Box
+				return Box{value: value}
+		end 'create'
 
 		static function getValue() returns Integer
 				return 9
@@ -2427,6 +2498,8 @@ Box.getValue()    // static   — returns 9
 
 **No Parameters**
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function getAnswer() returns Integer
 		return 42
 end 'getAnswer'
@@ -2441,6 +2514,8 @@ end 'greet'
 
 **Multiple Parameters**
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function add(a Integer, b Integer) returns Integer
 		return a + b
 end 'add'
@@ -2493,6 +2568,8 @@ Maxon uses **automatic pass-by-reference** for parameters that are assigned to i
 **By-reference (mutated parameters):** If a function assigns to a parameter (directly or through a field or element), the compiler passes a pointer to the caller's storage. This allows the called function to mutate the caller's variable.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function increment(n Integer)
 		n = n + 1       // assigns to n — passed by reference
 end 'increment'
@@ -2511,6 +2588,8 @@ end 'main'
 - If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function double(n Integer)
 		n = n * 2
 end 'double'
@@ -2567,19 +2646,21 @@ A bare function name (no parens) evaluates to a function reference. Closures (se
 Closures are anonymous functions expressed inline using `gives` syntax:
 
 ```maxon
-(param) gives expression
-(param1, param2) gives expression
-() gives expression
+function(param) gives expression
+function(param1, param2) gives expression
+function() gives expression
 ```
 
 **Capture by reference:** Closures capture variables from the enclosing scope by reference, not by value. This means changes to a captured variable after the closure is created are visible inside the closure when it executes.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function main() returns ExitCode
 		var x = 10
-		let addX = (n Integer) gives n + x   // captures x by reference
+		let addX = function(n Integer) gives n + x   // captures x by reference
 		x = 20
-		var result = addX(5)             // evaluates with x == 20, result is 25
+		let result = addX(5)             // evaluates with x == 20, result is 25
 		return result
 end 'main'
 ```
@@ -2598,6 +2679,9 @@ to a callee that only **calls** it is fine — the defining frame is alive for t
 call.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
 function makeAdder(bump Integer) returns UnaryOp
 		let f = function(n Integer) gives n + bump
 		return f          // E3099: cannot return a closure that captures
@@ -2608,7 +2692,7 @@ end 'makeAdder'
 - Closure parameters may optionally omit the type annotation when the type can be inferred from context.
 - Closures can only appear where a function-type value is expected.
 - Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
-- Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `(_ Integer) gives 42`
+- Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `function(_ Integer) gives 42`
 - A closure declared inside an instance method may reference `self` (and therefore `self.field` and `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
 
 ### Function Purity and Discarded Results
@@ -2633,6 +2717,8 @@ Functions with no return type are always considered impure (their result cannot 
 Pure function results **must** be used -- they cannot be discarded, even with `_ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function double(x Integer) returns Integer
 		return x * 2
 end 'double'
@@ -2647,6 +2733,8 @@ let result = double(5)  // OK: result is used
 Impure function results **must** be explicitly acknowledged. A bare statement-level call that ignores the result is an error. To intentionally discard the result, use `_ =`:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 var counter = 0
 function incrementAndGet() returns Integer
 		counter = counter + 1
@@ -2663,8 +2751,14 @@ let count = incrementAndGet()   // OK: result is used
 Methods that take `self` as their first parameter and return the same type are **chainable**. Their results can be freely discarded without `_ =`, since the common pattern is to call them for their side effect on the receiver:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Counter
 		var value as Integer
+
+		export static function create(value Integer) returns Counter
+				return Counter{value: value}
+		end 'create'
 
 		function increment() returns Counter
 				value = value + 1
@@ -2672,7 +2766,7 @@ type Counter
 		end 'increment'
 end 'Counter'
 
-var c = Counter{value: 0}
+var c = Counter.create(0)
 c.increment()  // OK: chainable method, result can be discarded
 ```
 
@@ -2696,6 +2790,8 @@ var (result, _) = pureFunc()   // OK: one element used
 
 Declare external functions (Windows API, C libraries):
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 extern function GetStdHandle(nStdHandle Integer) returns Integer
 extern function ExitProcess(uExitCode Integer) returns Integer
 ```
@@ -2821,6 +2917,7 @@ end 'tryDivide'
 Or give the divisor a type that excludes 0, so the divide is provably safe:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 typealias NonZeroInt = int(1 to i64.max)
 
 function ratio(a Integer, b NonZeroInt) returns Integer
@@ -2988,7 +3085,7 @@ var last = try arr.get(arr.count() - 1) otherwise 0
 Array elements are modified using the `.set()` method:
 ```maxon
 var arr = [1, 2, 3]
-arr.set(0, value: 100)  // First positional, second named
+try arr.set(0, value: 100) otherwise panic("index out of range")  // First positional, second named
 ```
 
 ### Creating Empty Arrays
@@ -3009,7 +3106,7 @@ typealias IntArray = Array with Integer
 
 var buffer = IntArray.create()
 buffer.resize(100)               // Length is now 100
-buffer.set(0, value: 42)         // Can set any index 0-99
+try buffer.set(0, value: 42) otherwise panic("index out of range")   // Can set any index 0-99
 ```
 
 The zero-initialization holds for slots the array has used *before*, not just for
@@ -3280,12 +3377,14 @@ end 'loop'
 
 `break` is not allowed in match expressions (with `gives`), since every arm must produce a value.
 
-**Enum Case Pattern Matching (Associated Values):**
+**Union Case Pattern Matching (Associated Values):**
 
-For enums with associated values, use `CaseName(bindings)` syntax to extract values:
+For unions with associated values, use `CaseName(bindings)` syntax to extract values:
 
 ```maxon
-enum Result
+typealias Integer = int(i64.min to i64.max)
+
+union Result
 		success(value Integer)
 		failure(code Integer)
 end 'Result'
@@ -3305,21 +3404,21 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, use range patterns with `break` (see [Enum Match Range Patterns](#enum-match-range-patterns) below), or use `default throws` / `default panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Enums use bare case names in match arms — qualified `Type.case` syntax is a compile error (E3075). Range patterns use bare case names as bounds (`case1 to case2`).
+- For enums, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, use range patterns with `break` (see [Enum and Union Match Range Patterns](#enum-and-union-match-range-patterns) below), or use `default throws` / `default panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Enums use bare case names in match arms — qualified `Type.case` syntax is a compile error (E3075). Range patterns use bare case names as bounds (`case1 to case2`).
 - Overlapping patterns are reported as errors (error E2027).
 - All matches must be exhaustive. For non-enum matches (int, float, string, char), a `default` arm is required.
 - `default` matches any non-enum value not matched by previous patterns
 - `default` must be the last case if present
-- Enum case patterns: `CaseName(binding1, binding2)` extracts associated values
+- Union case patterns: `CaseName(binding1, binding2)` extracts associated values
 - Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `pair(_, second)`
 - To discard all associated values, omit the parentheses entirely: `success then ...` — using `success(_)` when all bindings are discarded is an error (E3081)
 
-**Enum Match Range Patterns:**
+**Enum and Union Match Range Patterns:**
 
-Enums with associated values support range patterns on bare case names using `to` (inclusive) and `upto` (exclusive upper bound). This allows matching a contiguous range of cases by their ordinal (declaration order) without listing each one individually.
+Enums and unions both support range patterns on bare case names using `to` (inclusive) and `upto` (exclusive upper bound). This allows matching a contiguous range of cases by their ordinal (declaration order) without listing each one individually.
 
 ```maxon
-enum IrOp
+union IrOp
 		maxon(op MaxonOp)
 		arith(op ArithOp)
 		cf(op CfOp)
@@ -3344,24 +3443,24 @@ In this example, `arith to func` matches `arith`, `cf`, and `func` (inclusive). 
 
 **Range Patterns:**
 
-Range patterns match numeric values within a range using Rust-style syntax:
+Range patterns match values within a bounded range:
 
 | Syntax | Meaning | Example |
 |--------|---------|---------|
-| `a..=b` | Inclusive range (a ≤ x ≤ b) | `1..=5` matches 1, 2, 3, 4, 5 |
-| `a..<b` | Exclusive upper (a ≤ x < b) | `1..<5` matches 1, 2, 3, 4 |
-| `a..` | Open upper bound (x ≥ a) | `100..` matches 100 and above |
-| `..=b` | Open lower, inclusive (x ≤ b) | `..=0` matches 0 and below |
-| `..<b` | Open lower, exclusive (x < b) | `..<0` matches negative numbers |
-| `..` | Wildcard (matches any value) | `..` equivalent to `default` |
+| `a to b` | Inclusive range (a ≤ x ≤ b) | `1 to 5` matches 1, 2, 3, 4, 5 |
+| `a upto b` | Exclusive upper (a ≤ x < b) | `1 upto 5` matches 1, 2, 3, 4 |
+
+Both endpoints are required and each must be a literal: there is no open-ended form and no
+wildcard range. A `default` arm covers everything the ranges leave out.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function classify(n Integer) returns Integer
 		match n 'check'
-				1..=5 then return 1      // 1 to 5 inclusive
-				6..<10 then return 2     // 6 to 9 (exclusive of 10)
-				10.. then return 3       // 10 and above
-				default then return 0    // negative numbers
+				1 to 5 then return 1     // 1 to 5 inclusive
+				6 upto 10 then return 2  // 6 to 9 (exclusive of 10)
+				default then return 0    // everything else
 		end 'check'
 end 'classify'
 ```
@@ -3369,12 +3468,14 @@ end 'classify'
 Range patterns work with integers, floats, and any type implementing the `Comparable` interface (like `Character`):
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function charType(c Character) returns Integer
 		match c 'classify'
-				'a'..='z' then return 1  // lowercase letters
-				'A'..='Z' then return 2  // uppercase letters
-				'0'..='9' then return 3  // digits
-				default then return 0    // other
+				'a' to 'z' then return 1  // lowercase letters
+				'A' to 'Z' then return 2  // uppercase letters
+				'0' to '9' then return 3  // digits
+				default then return 0     // other
 		end 'classify'
 end 'charType'
 ```
@@ -3385,8 +3486,8 @@ Range patterns can be combined with `or`:
 
 ```maxon
 match score 'grade'
-		90..=100 or 85..=89 then return "A"
-		70..=84 then return "B"
+		90 to 100 or 85 to 89 then return "A"
+		70 to 84 then return "B"
 		default then return "C"
 end 'grade'
 ```
@@ -3415,9 +3516,11 @@ let points = match grade 'convert'
 end 'convert'
 ```
 
-**Enum Case Extraction:**
+**Union Case Extraction:**
 ```maxon
-enum Container
+typealias Integer = int(i64.min to i64.max)
+
+union Container
 		empty
 		value(n Integer)
 end 'Container'
@@ -3433,7 +3536,7 @@ end 'get'
 - All cases must return the same type
 - `and fallthrough` is NOT allowed in match expressions
 - Block identifier required
-- Enum bindings work the same as in match statements
+- Union bindings work the same as in match statements
 
 #### Per-Arm `panic` and `throws`
 
@@ -3520,7 +3623,7 @@ end 'describeShape'
 **Example:**
 
 ```maxon
-enum Shape
+union Shape
 		circle(radius Real)
 		square(side Real)
 		triangle(base Real, height Real)
@@ -3547,11 +3650,11 @@ end 'main'
 ```
 
 **Notes:**
-- `default throws` and `default panic("message")` are the only forms of `default` allowed in enum matches -- `default` with arbitrary code on enums is forbidden (error E2046)
+- `default throws` and `default panic("message")` are the only forms of `default` allowed in enum and union matches -- `default` with arbitrary code on enums and unions is forbidden (error E2046)
 - For `default throws`: the error value must be a valid enum case of an `Error`-conforming type, the enclosing function must declare `throws` with a matching error type, and callers must handle the thrown error using `try ... otherwise` or `try` propagation
 - For `default panic("message")`: the program terminates immediately with the given message. No `throws` declaration is required.
 - Supports all the same features as regular match: associated value extraction, `and fallthrough`, `break`, etc.
-- For non-enum matches (int, float, string, char), `default` with arbitrary code remains valid as before
+- For matches on other types (int, float, string, char), `default` with arbitrary code remains valid as before
 
 ### Break Statement
 ```maxon
@@ -3670,6 +3773,8 @@ panic("something went wrong")
 The argument can be a plain string literal or an interpolated string. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function processValue(x Integer) returns Integer
 		if x < 0 'negative'
 				panic("processValue: negative input, got {x}")
@@ -3763,6 +3868,8 @@ let value = try mayFail() otherwise return -1
 Each of these statements terminates the error path, so the success value still flows out of the `try` expression normally. Use single-statement form when the error handler is a single early exit — for anything more complex, use the block form.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 // Early return on error
 function runIt() returns Integer
 		let value = try mayFail() otherwise return -1
@@ -3804,6 +3911,8 @@ end 'handler'
 The block executes only if an error is thrown.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function loadData() returns Integer
 		var result = 0
 		try parseFile("data.txt") otherwise 'err'
@@ -3828,7 +3937,7 @@ try readFile("config.json") otherwise (e) 'handler'
 end 'handler'
 ```
 
-The error is bound to the variable `e` as a typed enum value, allowing you to match on specific error cases. For error enums with associated values, you can extract the payload in the match arm.
+The error is bound to the variable `e` as a typed enum value, allowing you to match on specific error cases. For error unions with associated values, you can extract the payload in the match arm.
 
 ```maxon
 function processFile(path String)
@@ -3901,6 +4010,8 @@ end 'handler'
 #### Terminal Form Examples
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 // Panic when the body throws — useful for unreachable error paths.
 try 'reading'
 		parseFile("data.json")
@@ -4052,6 +4163,8 @@ function readFile(path String) returns String throws FileError
 ### Complete Example
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 enum ParseError implements Error
 		invalidSyntax
 		unexpectedEnd
@@ -4062,7 +4175,7 @@ function parseNumber(s String) returns Integer throws ParseError
 				throw ParseError.unexpectedEnd
 		end 'empty'
 		// parsing logic...
-		return result
+		return 42
 end 'parseNumber'
 
 function main() returns ExitCode
@@ -4179,6 +4292,8 @@ end 'Calculator'
 `module` is a third visibility tier between file-scoped (the default) and `export`. A `module`-marked declaration is visible to every file in the **same directory** as the declaring file AND every file in **any subdirectory** of that directory — but not to files outside that subtree.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 // project/feature/internal.maxon
 module function helper() returns Integer
 	return 42
@@ -4392,6 +4507,7 @@ Preemptive cancellation is not yet implemented: in the current cooperative sched
 Promises can be stored in collections and struct fields by declaring an explicit `Promise with T` type. The compiler boxes the green-thread handle into a `Promise<T>` struct at the storage site and unboxes it at the matching `await`. This pattern lets you fan out N tasks and join them in a second loop:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
@@ -4764,7 +4880,7 @@ are efficient without requiring explicit `append` calls.
 
 **Creating a List**
 
-Create a concrete List type with `typealias`, then initialize with `{}`:
+Create a concrete List type with `typealias`, then instantiate it with `create()`:
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
@@ -4776,7 +4892,7 @@ var list = IntList.create()             // Empty list
 ```maxon
 list.prepend(1)                  // Add to front — O(1)
 list.append(2)                   // Add to back — O(1)
-list.insert(1, value: 99)       // Insert at index — O(n)
+try list.insert(1, value: 99) otherwise panic("index out of range")  // Insert at index — O(n)
 ```
 
 **Accessing Elements**
@@ -4790,7 +4906,7 @@ var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayErro
 ```maxon
 var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
 var popped = try list.removeLast() otherwise 0    // Remove back — O(1)
-var at2 = try list.remove(at: 2) otherwise 0      // Remove at index — O(n)
+var at2 = try list.remove(2) otherwise 0          // Remove at index — O(n)
 list.clear()                                       // Remove all elements
 ```
 
@@ -4817,7 +4933,7 @@ end 'loop'
 | `removeFirst` | O(1) |
 | `append` | O(1) |
 | `removeLast` | O(1) |
-| `get`, `insert`, `remove(at:)` | O(n) |
+| `get`, `insert`, `remove` | O(n) |
 | `first`, `last`, `count`, `isEmpty` | O(1) |
 | iteration (for-in) | O(n) total |
 
@@ -5088,12 +5204,18 @@ The LSP automatically detects project boundaries and provides:
 Assigning a struct-typed variable to another variable copies the **heap pointer**, creating a reference (alias) to the same object:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Point
 	export var x as Integer
 	export var y as Integer
+
+	export static function create(x Integer, y Integer) returns Point
+		return Point{x: x, y: y}
+	end 'create'
 end 'Point'
 
-var a = Point{x: 1, y: 2}
+var a = Point.create(1, y: 2)
 var b = a               // b is an alias for a -- both point to the same object
 b.x = 99
 print("{a.x}")          // 99 -- a and b share the same object
@@ -5102,9 +5224,9 @@ print("{a.x}")          // 99 -- a and b share the same object
 Field mutation through an alias affects the original, because both variables point to the same heap-allocated object. Reassignment, however, rebinds the variable to a new object without affecting the original:
 
 ```maxon
-var a = Point{x: 1, y: 2}
+var a = Point.create(1, y: 2)
 var b = a               // alias
-b = Point{x: 5, y: 6}  // rebinds b to a new object -- a is unaffected
+b = Point.create(5, y: 6)  // rebinds b to a new object -- a is unaffected
 print("{a.x}")          // 1 -- a still points to the original
 ```
 
@@ -5123,17 +5245,17 @@ Stack-promoted structs are freed automatically when the stack frame is reclaimed
 The `@heap` annotation forces a struct to be heap-allocated, bypassing stack promotion:
 
 ```maxon
-@heap var p = Point{x: 1, y: 2}  // always heap-allocated
+@heap var p = Point.create(1, y: 2)  // always heap-allocated
 ```
 
-`@heap` is only valid on `var` or `let` declarations with struct literal initializers.
+`@heap` is only valid on `var` or `let` declarations whose initializer produces a struct.
 
 ### Explicit Cloning
 
 To create an independent deep copy of a struct, use the `.clone()` method:
 
 ```maxon
-var a = Point{x: 1, y: 2}
+var a = Point.create(1, y: 2)
 var b = a.clone()       // deep copy -- b is independent of a
 b.x = 99
 print("{a.x}")          // 1 -- a is unchanged
@@ -5158,21 +5280,27 @@ end 'Cloneable'
 - `String`
 - `Array` (when the element type is Cloneable)
 
-**When auto-conformance fails:** If a struct contains a field whose type is not Cloneable (such as an enum with associated values), the compiler will not auto-generate conformance. You must implement `clone()` manually or restructure the type.
+**When auto-conformance fails:** If a struct contains a field whose type is not Cloneable, the compiler will not auto-generate conformance. You must implement `clone()` manually or restructure the type.
 
 ### Auto-Equatable
 
 The compiler also auto-generates `Equatable` conformance for structs whose fields all implement `Equatable`. The synthesized `equals()` method compares each field using `==` (for primitives) or `.equals()` (for nested structs).
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Point
 	export var x as Integer
 	export var y as Integer
+
+	export static function create(x Integer, y Integer) returns Point
+		return Point{x: x, y: y}
+	end 'create'
 end 'Point'
 
 // Point auto-conforms to Equatable (all fields are primitive)
-var a = Point{x: 1, y: 2}
-var b = Point{x: 1, y: 2}
+var a = Point.create(1, y: 2)
+var b = Point.create(1, y: 2)
 if a == b 'equal'           // true -- content equality
 	print("equal")
 end 'equal'
@@ -5192,7 +5320,7 @@ a is b                      // false -- different heap objects
 To compare reference identity (whether two variables point to the same heap object), use the `is` operator:
 
 ```maxon
-var a = Point{x: 1, y: 2}
+var a = Point.create(1, y: 2)
 var b = a.clone()           // deep copy
 var c = a                   // alias (reference to same object)
 a is b                      // false -- different objects
@@ -5204,9 +5332,11 @@ a is c                      // true -- same object
 When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via assignment), the refcount is incremented. When a variable goes out of scope, the runtime decrements the refcount and frees the memory if it reaches zero.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function compute() returns Integer
-	var a = Point{x: 10, y: 20}  // allocated on heap, refcount = 1
-	var b = Point{x: 30, y: 40}  // allocated on heap, refcount = 1
+	var a = Point.create(10, y: 20)  // allocated on heap, refcount = 1
+	var b = Point.create(30, y: 40)  // allocated on heap, refcount = 1
 	return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
 end 'compute'
 ```
@@ -5215,7 +5345,7 @@ end 'compute'
 
 ```maxon
 function makePoint() returns Point
-	var p = Point{x: 1, y: 2}
+	var p = Point.create(1, y: 2)
 	return p                      // p is NOT freed; caller is responsible
 end 'makePoint'
 ```
@@ -5223,12 +5353,13 @@ end 'makePoint'
 **Container cleanup:** Containers with heap-allocated elements (e.g., `List with MyStruct`) perform deep cleanup when freed. Each element's refcount is decremented, and elements whose refcount reaches zero are freed recursively. For `List`, the compiler walks all managed list nodes and decrefs their stored values before freeing the managed list itself.
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 typealias TokenList = List with Token
 
 function example() returns Integer
 	var list = TokenList.create()
-	list.append(Token{id: 1})   // Token incref'd by the managed list node
-	list.append(Token{id: 2})   // Token incref'd by the managed list node
+	list.append(Token.create(1))   // Token incref'd by the managed list node
+	list.append(Token.create(2))   // Token incref'd by the managed list node
 	return 0                     // list freed: each Token decref'd (rc→0→freed),
 															 // then managed list nodes freed, then managed list freed
 end 'example'
@@ -5340,6 +5471,8 @@ end 'iter'
 
 ### Factorial Example
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function factorial(n Integer) returns Integer
 		if n <= 1 'base'
 				return 1
@@ -5348,7 +5481,7 @@ function factorial(n Integer) returns Integer
 end 'factorial'
 
 function main() returns ExitCode
-		var result = factorial(5)
+		let result = factorial(5)
 		print("{result}")  // 120
 		return 0
 end 'main'
@@ -5403,6 +5536,8 @@ var x = 5 + "string"    // ERROR: Type mismatch
 
 **Missing Return**
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function test() returns Integer
 		var x = 5
 		// ERROR: Missing return statement

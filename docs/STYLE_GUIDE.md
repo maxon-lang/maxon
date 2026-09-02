@@ -196,44 +196,51 @@ end 'processLoop'
 
 ## Comments
 
-### Line Comments
+The binding rules are the **Comments** entry of the Code Quality checklist in `.claude/CLAUDE.md`:
+**concise and minimal, "why" never "how", present state only (no history), and a comment you edit is
+rewritten to conform.** This section is the Maxon-specific form of them.
 
-Use comments to explain **why**, not **what**. The code should be clear about what it does.
+### The default is no comment
+
+Most lines need none. A comment earns its place only where the code cannot carry the point by itself.
 
 ```maxon
-function processItems(count int) returns int
-	var result = 0
+// Bad: restates the code
+var i = 0  // set i to zero
 
-	// Sum first N items (skipping zeros for optimization)
-	while count > 0 'loop'
-		var item = getItem(count)
-		if item != 0 'notZero'
-			result = result + item
-		end 'notZero'
-		count = count - 1
-	end 'loop'
-
-	return result
-end 'processItems'
+// Bad: narrates the block below
+// Loop over the items and add them up
+while count > 0 'loop'
 ```
 
-### Comment Style
-
-Use `//` for comments.
+### Comment the constraint, not the mechanism
 
 ```maxon
-// This is a comment
-var x = 5  // Inline comment
+// Good: the reason this bound is correct, which the code cannot say
+// Callers pass unsorted ids, so the scan cannot early-exit.
+while index < count 'scan'
 ```
 
-### Avoid Obvious Comments
+### No history
+
+A comment describes the code as it is now. What it used to be is in git.
 
 ```maxon
-// Bad: obvious what the code does
-var i = 0  // Set i to 0
+// Bad: history
+// We used to hash the name here; switched to the interned id in the parser rewrite.
 
-// Good: explains the purpose
-var i = 0  // Initialize counter for loop iterations
+// Good: the invariant that still binds
+// Keyed by interned id — two spellings of one name must land on the same entry.
+```
+
+### Comment style
+
+Use `//`, or `/* ... */` for a block comment. A comment-only block is still an empty block (E3082) —
+give the block a statement or delete it.
+
+```maxon
+// Line comment
+var x = 5  // Trailing comment
 ```
 
 ---
@@ -409,7 +416,7 @@ Key takeaways:
 - **Line Endings:** LF only
 - **Names:** camelCase for variables and functions
 - **Functions:** Single responsibility, clear names
-- **Comments:** Explain why, not what
+- **Comments:** Concise and minimal, why not how, present state only — no history
 - **Whitespace:** Blank lines separate logical sections
 - **Formatting:** Use the VSCode formatter automatically
 - **Block Identifiers:** Always use descriptive identifiers with `end`
