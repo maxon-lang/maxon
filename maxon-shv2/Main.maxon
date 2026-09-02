@@ -150,6 +150,7 @@ function main() returns ExitCode
 		build gives runBuild(args)
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
 		verifyRecheck gives runVerifyRecheck(args)
+		lspSelfTest gives runLspSelfTest()
 		specTest gives runSpecTest(args)
 		scaleTest gives runScaleTest(args)
 		unknown gives unknownCommand()
@@ -417,6 +418,17 @@ function runVerifyRecheck(args MaxonArgs) returns ExitCode
 
 	return 1
 end 'runVerifyRecheck'
+
+// The `lsp-selftest` command: run the LSP-internal assertion tables. Compiler-internal code that no
+// `specs-shv2` case can reach — a spec case is a program shv2 compiles, and it can call `stdlib/` and
+// nothing else — so it is gated the way the bootstrap gates its own such code, with a selftest.
+function runLspSelfTest() returns ExitCode
+	if runLspPositionSelfTest() 'passed'
+		return 0
+	end 'passed'
+
+	return 1
+end 'runLspSelfTest'
 
 // The `spec-test [dir]` command: run every active test in `dir` (default `specs-shv2`) on a pool of
 // persistent worker subprocesses, print per-test PASS/FAIL + an `N passed, M failed` summary, and
@@ -880,6 +892,10 @@ function printUsage()
 	print("                                gates the query spine without ever running the pipeline;\n")
 	print("                                this gates the pipeline over it, which is what an editor\n")
 	print("                                holding one project open for hours actually does.\n")
+	print("  lsp-selftest                  Assert the LSP position conversion: the line index, and byte offset\n")
+	print("                                <-> LSP Position where `character` counts UTF-16 CODE UNITS. Covers\n")
+	print("                                2-, 3- and 4-byte characters, CRLF and the buffer edges. Compiler-\n")
+	print("                                internal, so no specs-shv2 case can reach it.\n")
 	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
 	print("  scale-test                    Compile a ladder of generated programs, each rung double the\n")
 	print("                                last, and report the per-phase MEMORY — allocations, frees and\n")
@@ -954,6 +970,7 @@ enum MaxonCommand
 	build
 	verifyWarmRebuild
 	verifyRecheck
+	lspSelfTest
 	specTest
 	scaleTest
 	unknown
@@ -1115,7 +1132,9 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.verifyWarmRebuild
 			end 'verifyCmd' else if arg == "verify-recheck" 'recheckCmd'
 				parsed.command = MaxonCommand.verifyRecheck
-			end 'recheckCmd' else if arg == SpecTestCommandName 'specTestCmd'
+			end 'recheckCmd' else if arg == "lsp-selftest" 'lspSelfTestCmd'
+				parsed.command = MaxonCommand.lspSelfTest
+			end 'lspSelfTestCmd' else if arg == SpecTestCommandName 'specTestCmd'
 				parsed.command = MaxonCommand.specTest
 			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
 				parsed.command = MaxonCommand.scaleTest
