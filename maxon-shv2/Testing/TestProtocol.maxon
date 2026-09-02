@@ -1,0 +1,120 @@
+// TestProtocol — the wire format a generated test binary reports to `maxon test` through, written down
+// HERE and nowhere else.
+//
+// ⭐⭐ **BOTH ENDS ARE IN THIS FILE'S REACH, WHICH IS THE WHOLE REASON IT IS ONE FILE.** `TestDispatcher`
+// bakes these constants into the Maxon source it synthesizes, and the runner reads back what that source
+// printed. A marker spelled a second time — in `stdlib/Testing.maxon`, or in the reader — would be the
+// protocol written down twice, and the two would drift the first time either side moved. That is exactly
+// why `__TestReport.useWireFormat` takes the wrapper and separator as ARGUMENTS rather than declaring
+// them: the stdlib holds the mechanism, this holds the format.
+//
+// ⭐ **EVERYTHING TRAVELS ON STDERR, alongside `__TestReport.threw`**, so protocol and error reports stay
+// in one stream and their ORDER is meaningful — a `threw` between a begin and an end belongs to that test.
+// A test's own `print` goes to stdout and can never be mistaken for protocol.
+//
+// Three line shapes, each bracketed by the wrapper at BOTH ends and separated by the field separator:
+//
+//   <wrapper>><sep><index><wrapper>                                   a test is about to run
+//   <wrapper><<sep><index><sep><pass|fail><sep><nanos><wrapper>       a test finished under its own power
+//   <wrapper><errorType><sep><errorCase><sep><file><sep><line><wrapper>   `__TestReport.threw`
+
+// Brackets both ends of a protocol line so the runner can find it among whatever the test itself wrote to
+// stderr. Distinctive rather than short: this is the string a chatty test must not accidentally emit at
+// both ends of one line.
+export let TestProtocolWrapper = "@@maxon-test@@"
+
+// ⭐⭐ **THE FIELD SEPARATOR AS IT MUST BE SPELLED INSIDE A MAXON STRING LITERAL — ASCII Unit Separator
+// (U+001F), and the lexer wants exactly four hex digits (it rejects `\u{1f}` by name).**
+//
+// A control character rather than a printable delimiter because ONE field is not ours: `threw`'s
+// `errorCase` is the thrown value rendered by the language's own interpolation rule, and an enum may
+// declare a STRING raw value containing any punctuation a printable delimiter could have used. A control
+// character is the one class of byte such a value does not contain.
+//
+// ⚠ **THIS IS THE SPELLING, NOT THE CHARACTER**, and the two are different things at different moments:
+// generated SOURCE carries these six bytes and the running binary prints one. The reader half of the
+// protocol needs the character and will declare it beside this constant, with a comment tying the pair —
+// which is the shape the bootstrap already has (`MaxonTestProtocol.FieldSeparator` +
+// `FieldSeparatorInMaxonSource`). It is not declared yet because nothing reads it yet, and an unread
+// export is a claim rather than a fact.
+export let TestProtocolSeparatorInMaxonSource = "\\u001f"
+
+// First field of a line the DISPATCHER wrote, marking a test about to run.
+//
+// ⚠ **`>` AND `<` DISAMBIGUATE STRUCTURALLY RATHER THAN BY HOPE.** The first field of a `threw` line is
+// the callee's declared `throws` TYPE NAME, which is always a Maxon identifier, and no identifier begins
+// with an angle bracket. So the tag alone decides which of the three shapes a line is, whatever a test
+// printed.
+export let TestProtocolBeganTag = ">"
+
+// Marks a test that finished — see `TestProtocolBeganTag` for why the tag is a bracket.
+export let TestProtocolEndedTag = "<"
+
+// The ended-line outcome for a test whose body returned normally.
+export let TestProtocolOutcomePass = "pass"
+
+// The ended-line outcome for a test that threw. A test throws exactly `TestFailure` — a foreign error is
+// converted by the handler the compiler substitutes, which reports it first — so this covers both a failed
+// assertion and an uncaught foreign error, and the preceding `threw` line is what tells them apart.
+export let TestProtocolOutcomeFail = "fail"
+
+// ⭐ **THE OPTION THE BINARY READS ITS SELECTION FROM. SELECTION IS A RUNTIME ARGUMENT, NEVER A
+// COMPILE-TIME ONE:** every discovered test is compiled in every time, which is what lets a `--filter`
+// change leave the build cache warm and keeps the thing being tested identical to the thing that was
+// compiled.
+export let TestSelectOptionName = "select"
+
+// The selection meaning "every test", used when the option is ABSENT — which is what a human running the
+// binary by hand gets.
+//
+// ⚠ **IT IS A DISTINCT TOKEN RATHER THAN THE EMPTY STRING BECAUSE THE RUNNER MUST BE ABLE TO SELECT
+// NOTHING.** With absence and emptiness collapsed, a shard whose filter matched none of its tests would
+// run all of them.
+export let TestSelectAll = "*"
+
+// Delimiter around each index in a selection, so a membership test is a plain substring search: `"|3|"`
+// matches 3 and never 13 or 31. The generated dispatcher composes its needle from this constant directly,
+// so the brackets it searches with are the brackets the runner writes.
+export let TestSelectIndexBracket = "|"
+
+// ⭐⭐ **THE FIELD SEPARATOR AS THE ONE BYTE A RUNNING BINARY PRINTS** — the pair to
+// `TestProtocolSeparatorInMaxonSource` above, and the obligation that constant's own note recorded
+// ("the reader half of the protocol needs the character and will declare it beside this constant").
+//
+// ⚠ **THE TWO ARE ONE FACT AT TWO MOMENTS AND MUST NEVER BE DERIVED FROM EACH OTHER.** Generated
+// SOURCE carries the six-byte escape above, because it is text a compiler will lex; this is the
+// single U+001F the compiled binary emits and the reader splits on. Deriving either from the other
+// would mean un-escaping or re-escaping at run time — a third spelling of one byte, in the one place
+// a mismatch is silent (every protocol line would simply parse as ordinary test output).
+export let TestProtocolSeparator = "\u001f"
+
+// ⭐ **THE SELECTION OPTION AS IT APPEARS IN argv.** Composed from `TestSelectOptionName` — the very
+// name the generated binary passes to `CommandLine.getOptionValue` — so the flag the runner writes and
+// the name the binary reads can never become two strings.
+//
+// A FUNCTION rather than a module `let`, because it INTERPOLATES: a top-level constant that allocates
+// a String would run its initializer outside any test's ownership, which is why every other constant in
+// this file is a literal (the shape `SpecTestRunner.wslProbeScript` already has).
+export function testSelectFlag() returns String
+	return "--{TestSelectOptionName}="
+end 'testSelectFlag'
+
+// ⭐⭐ **RENDER A SET OF RUN INDICES AS THE VALUE OF `--select=`** — the WRITER of the needle the
+// generated dispatcher searches for, composed from the same `TestSelectIndexBracket` it brackets its
+// search with. A selection that named test 3 and matched 13 would be exactly those two disagreeing.
+//
+// ⚠ **AN EMPTY LIST PRODUCES AN EMPTY VALUE, WHICH SELECTS NOTHING** — deliberately distinct from
+// `TestSelectAll`. See that constant: with absence and emptiness collapsed, a shard whose filter
+// matched none of its tests would run all of them.
+export function formatTestSelection(indices TestRunIndexArray) returns String
+	var value = ""
+	for index in indices 'eachIndex'
+		if value.isEmpty() 'openTheFirstBracket'
+			value.append(TestSelectIndexBracket)
+		end 'openTheFirstBracket'
+
+		value.append("{index}{TestSelectIndexBracket}")
+	end 'eachIndex'
+
+	return value
+end 'formatTestSelection'

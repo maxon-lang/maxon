@@ -197,11 +197,29 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// passing the string to a `__Builtins.*` runtime intrinsic whose parameter
 	/// is declared `cstring` (the runtime sizes the buffer via `strlen`).
 	///
-	/// The conversion checks `buffer[length] == 0` and copies if not, so the
-	/// returned pointer is always safely NUL-terminated even when the underlying
-	/// `__ManagedMemory` happens to be packed tight against its allocated
-	/// capacity (where `strlen` would otherwise walk past the end into adjacent
-	/// heap).
+	/// The conversion inspects `buffer[length]` and returns the buffer as-is when
+	/// it already holds a 0, growing the record by one byte otherwise.
+	///
+	/// ⚠ THAT PROBE READS ONE BYTE PAST THE CONTENT, AND NOT EVERY RECORD OWNS
+	/// IT. A packed-tight record (capacity == length — what a first `append`
+	/// leaves behind) and a view do not: the byte belongs to whatever the
+	/// allocator hands out next, so a zero found there is not a terminator
+	/// anything keeps zero. BOTH COMPILERS NOW GUARD IT, each in its own IR and
+	/// each naming the other: the C# bootstrap in
+	/// `MaxonToStandardConversion.LowerManagedToCString`, shv2 in
+	/// `BufferOwnership.emitRouteOnVouchedTerminatorSlot`. The probe is taken only
+	/// for a record that can vouch for the byte — spare capacity, or bytes in the
+	/// immutable image, or (shv2) a fused String whose payload holds the slot —
+	/// and every other receiver is grown and terminated in place instead.
+	/// `specs/directory.md`'s `directory-exists-at-every-path-length` is the pin
+	/// for the bootstrap's half, and `specs-shv2/string-cstr.md` for shv2's.
+	///
+	/// ⚠ A RECEIVER THAT CANNOT VOUCH IS GROWN BY ONE BYTE AND TERMINATED IN
+	/// PLACE, so the pointer is ALWAYS the receiver's own buffer and is owned by
+	/// the receiver. Nothing is allocated for you to free — and nothing is left
+	/// unowned either. ⇒ The pointer is valid only while the receiver is ALIVE
+	/// and UNMUTATED: a later `append` may reallocate the buffer out from under
+	/// it.
 	public function cstr() returns cstring
 		return managed.toCString()
 	end 'cstr'

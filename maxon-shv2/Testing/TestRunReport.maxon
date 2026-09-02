@@ -1,0 +1,239 @@
+// TestRunReport — everything ONE `maxon test` run produced, and the single model BOTH of its faces
+// read.
+//
+// ⭐⭐ **THE AGGREGATES ARE COMPUTED FROM THE RESULTS, NEVER STORED BESIDE THEM.** A stored count is a
+// second copy of a fact the list already holds, and the two can disagree — so the text face and the
+// JSON face cannot report different totals for one run, because there is exactly one place a total
+// comes from (`tallyTestRun`).
+//
+// ⚠ **NOTHING HERE RENDERS.** `TestRender` owns both faces and reads this; the executor owns filling
+// it. The split is what lets the `--json` and text reports be proven to describe the same run.
+
+// How many TESTS — a count in a report, which is a different quantity from `SpecTestRunner.TestTally`
+// (the spec suite's) and must not borrow its name.
+export typealias ReportedTestCount = int(0 to u64.max)
+
+// ⭐⭐ **HOW ONE TEST FINISHED. The five failing shapes are NOT collapsed into "failed"**, because they
+// are found by different evidence and a reader has to act on them differently: an assertion is the
+// test's own report, a crash is the ABSENCE of one, a deadline is the harness's own verdict, and a
+// leak is a fact about the process that had to be attributed by re-running.
+export enum UnitTestOutcome
+	// The body returned. Reported by the binary itself.
+	passed
+	// The body threw. A test throws exactly `TestFailure`, so this is a failed assertion or a foreign
+	// error the compiler's substituted handler converted — the attached `ThrownReport`, if any, is
+	// what tells those apart.
+	failed
+	// The test began and never ended: it took the process down with it. `panic` is uncatchable, so
+	// nothing inside the binary can report this — only the missing end marker can.
+	crashed
+	// The test was selected for a process that died before reaching it. NOT a pass: nothing observed
+	// it, and calling that green is the exact lie this whole command exists to prevent.
+	didNotRun
+	// The process outlived `--timeout` while this test was running, and was killed.
+	timedOut
+	// The test held an allocation at exit. Detected process-globally (exit code 101), so it is only
+	// ever attributed to a test by re-running that test alone.
+	leaked
+end 'UnitTestOutcome'
+
+// ⭐⭐ **BOTH SPELLINGS OF ONE OUTCOME: the word a human reads and the token a machine reads.**
+//
+// ONE record from ONE match, rather than two matches side by side. Two matches is what the reference
+// had (under a comment claiming it was one), and there each ended in a throw — so a seventh outcome
+// compiled clean and was discovered at RUNTIME, in whichever face somebody happened not to extend.
+// Here a new `UnitTestOutcome` case fails to compile at exactly one site, and both faces gain their
+// spelling together or neither does.
+export type UnitTestOutcomeSpelling
+	// What the text report prints for an outcome that did not finish under its own power, and what
+	// heads a failure's detail block.
+	export let label as String
+	// What `--json` writes as the result's `state`.
+	export let jsonState as String
+
+	export static function create(label String, jsonState String) returns UnitTestOutcomeSpelling
+		return Self{label: label, jsonState: jsonState}
+	end 'create'
+end 'UnitTestOutcomeSpelling'
+
+// An outcome's two spellings. The `match` is EXHAUSTIVE, which is the whole mechanism: there is no
+// default arm to absorb a case nobody taught this.
+export function outcomeSpelling(outcome UnitTestOutcome) returns UnitTestOutcomeSpelling
+	return match outcome 'spelling'
+		passed gives UnitTestOutcomeSpelling.create("PASS", jsonState: "passed")
+		failed gives UnitTestOutcomeSpelling.create("FAIL", jsonState: "failed")
+		crashed gives UnitTestOutcomeSpelling.create("CRASHED", jsonState: "crashed")
+		didNotRun gives UnitTestOutcomeSpelling.create("DID NOT RUN", jsonState: "didNotRun")
+		timedOut gives UnitTestOutcomeSpelling.create("TIMED OUT", jsonState: "timedOut")
+		leaked gives UnitTestOutcomeSpelling.create("LEAKED", jsonState: "leaked")
+	end 'spelling'
+end 'outcomeSpelling'
+
+// The line a `threw` report names, AS THE WIRE CARRIED IT.
+//
+// ⚠ **DELIBERATELY WIDER THAN `SourceLineNumber`.** This number was printed by ANOTHER PROCESS and is
+// not this compiler's to vouch for; a reader that refused to render a line outside `stdlib`'s range
+// would drop the one fact needed to open the file, and would do it silently — the line would simply
+// stop parsing as protocol and reappear as ordinary test output.
+export typealias ReportedSourceLine = int(0 to i64.max)
+
+// ⭐ **THE ERROR A TEST REPORTED THROUGH `__TestReport.threw`** — one that reached the end of a test
+// body unhandled. Absent when a test failed its own assertion, which throws `TestFailure` and is not
+// foreign.
+export type ThrownTestError
+	// The callee's declared `throws` TYPE name.
+	export let errorType as String
+	// The thrown value rendered by the language's own interpolation rule — the live case for a union
+	// and a plain enum, the raw value for an enum that declared one.
+	export let errorCase as String
+	// The `try` that threw, NOT the reporting function: `file`/`line` locate the author's line.
+	export let file as String
+	export let line as ReportedSourceLine
+
+	export static function create(errorType String, errorCase String, file String, line ReportedSourceLine) returns ThrownTestError
+		return Self{errorType: errorType, errorCase: errorCase, file: file, line: line}
+	end 'create'
+end 'ThrownTestError'
+
+// Whether a result carries a `threw` report. A UNION rather than an empty `ThrownTestError`, because
+// "this test reported no unhandled error" and "it reported one with empty fields" are different facts
+// and a reader acts on them differently — the failure block prints a `threw` section for the first
+// and its no-assertion sentence for the second.
+export union ThrownReport
+	reported(error ThrownTestError)
+	absent
+end 'ThrownReport'
+
+// ⭐ ONE TEST'S RESULT.
+export type UnitTestResult
+	// Position in DISCOVERY order — the number that crossed the wire, and what a selection names.
+	export let index as TestRunIndex
+	// What was discovered, carrying both of the test's names plus its file and line.
+	export let test as DiscoveredTest
+	export let outcome as UnitTestOutcome
+	// Wall time the BINARY measured around the body, or 0 for an outcome that never produced an end
+	// marker. Measured inside the process rather than around it, so it is the test's own cost and not
+	// the harness's.
+	export let nanos as DurationNanos
+	export let thrown as ThrownReport
+	// The stderr this test wrote, attributed by its position between the begin and end markers. For a
+	// crash it is the process's dying output, which is where the panic message is.
+	export let output as String
+
+	export static function create(index TestRunIndex, test DiscoveredTest, outcome UnitTestOutcome, nanos DurationNanos, thrown ThrownReport, output String) returns UnitTestResult
+		return Self{index: index, test: test, outcome: outcome, nanos: nanos, thrown: thrown, output: output}
+	end 'create'
+
+	// Whether this result should redden the run. EVERYTHING that is not a pass does — see
+	// `UnitTestOutcome`: nothing observed is never green.
+	export function isFailure() returns bool
+		return outcome != UnitTestOutcome.passed
+	end 'isFailure'
+end 'UnitTestResult'
+
+export typealias UnitTestResultArray = Array with UnitTestResult
+
+// One test file's results, in the order the file DECLARES them.
+export type TestFileResults
+	// The `*.test.maxon` file as the COMPILER recorded it — the user's own path, never the staged
+	// copy's. `reportPathDisplay` is what turns it into the bytes a report prints.
+	export let file as FilePath
+	export let results as UnitTestResultArray
+
+	export static function create(file FilePath, results UnitTestResultArray) returns TestFileResults
+		return Self{file: file, results: results}
+	end 'create'
+end 'TestFileResults'
+
+export typealias TestFileResultsArray = Array with TestFileResults
+
+// The three numbers every face of a report ends with, produced by ONE walk.
+export type TestRunTally
+	export let total as ReportedTestCount
+	export let passed as ReportedTestCount
+	export let failed as ReportedTestCount
+
+	export static function create(total ReportedTestCount, passed ReportedTestCount, failed ReportedTestCount) returns TestRunTally
+		return Self{total: total, passed: passed, failed: failed}
+	end 'create'
+end 'TestRunTally'
+
+// ⭐⭐ **THE ONE PLACE A RUN'S TOTALS COME FROM.** Three numbers off one walk rather than three walks:
+// a report whose "N pass" and "N tests" disagree is worse than one that reports neither, and three
+// separate loops is exactly how they come to.
+export function tallyTestRun(files TestFileResultsArray) returns TestRunTally
+	var total = 0 as ReportedTestCount
+	var passed = 0 as ReportedTestCount
+	var failed = 0 as ReportedTestCount
+
+	for file in files 'eachFile'
+		for result in file.results 'eachResult'
+			total = total + 1
+			if result.isFailure() 'notGreen'
+				failed = failed + 1
+			end 'notGreen' else 'green'
+				passed = passed + 1
+			end 'green'
+		end 'eachResult'
+	end 'eachFile'
+
+	return TestRunTally.create(total, passed: passed, failed: failed)
+end 'tallyTestRun'
+
+// Everything one `maxon test` run produced.
+export type TestRunReport
+	// Results grouped by file, in discovery order.
+	export let files as TestFileResultsArray
+	// Wall time spent producing the test binary.
+	export let compileMs as DurationMs
+	// Wall time spent running it, including every re-run attribution needed.
+	export let runMs as DurationMs
+	// Whether `--bail` stopped the run before every selected test had been claimed. It is reported
+	// because the totals then describe what RAN and not what was SELECTED, and a reader who does not
+	// know that would read a short green list as a complete one.
+	export let bailed as bool
+
+	export static function create(files TestFileResultsArray, compileMs DurationMs, runMs DurationMs, bailed bool) returns TestRunReport
+		return Self{files: files, compileMs: compileMs, runMs: runMs, bailed: bailed}
+	end 'create'
+end 'TestRunReport'
+
+// ⭐⭐ **HOW EVERY PATH THIS COMMAND PRINTS IS SPELLED — one rule, so a transcript of a run is the same
+// bytes on every machine.**
+//
+// Relative to the working directory when the file is under it, and ABSOLUTE when it is not — which is
+// honest, because a file outside the tree has no shorter true name. Separators are normalized to `/`
+// so a Windows run and a POSIX run agree: `Directory.list` answers with the host separator, and a
+// committed expectation that carried a backslash would be right on exactly one platform.
+//
+// This is the bootstrap's `Debug.ReportPath.Display` rule, and it exists here for that file's stated
+// reason: a second copy would not fail to compile, it would make one report machine-specific.
+export function reportPathDisplay(path FilePath) returns String
+	let workingDirectory = Directory.currentPath()
+	let absolute = path.resolve(workingDirectory)
+
+	let relative = try absolute.relativeTo(workingDirectory) otherwise 'outsideTheWorkingDirectory'
+		return forwardSlashed(absolute)
+	end 'outsideTheWorkingDirectory'
+
+	// A path that IS the working directory relativizes to the empty string, which names nothing at all
+	// in a sentence like "not a directory: ". `.` is what a relative path to itself is called, and it
+	// is what the reference prints for the same input.
+	if relative.isEmpty() 'theWorkingDirectoryItself'
+		return WorkingDirectoryDisplay
+	end 'theWorkingDirectoryItself'
+
+	return forwardSlashed(relative)
+end 'reportPathDisplay'
+
+let WorkingDirectoryDisplay = "."
+
+// The Windows separator, as the one byte a report must never carry. Named because it appears only in
+// the substitution below, where a bare literal would read as decoration rather than as the whole point.
+let HostAlienSeparator = "\\"
+let ReportSeparator = "/"
+
+// A path as a report spells it. `replace` is a no-op on POSIX, where the two separators already agree.
+function forwardSlashed(path FilePath) returns String
+	return path.toString().replace(HostAlienSeparator, with: ReportSeparator)
+end 'forwardSlashed'

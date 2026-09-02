@@ -5219,6 +5219,30 @@ let SchedMaxActiveWorkersArity = 0 as ParamCount
 // POSIX NICE value, running in opposite directions). `StdOp.osEnterBackgroundPriority` owns that fact.
 let BuiltinsEnterBackgroundPriorityName = b"__Builtins.enterBackgroundPriority"
 
+// ⭐⭐ **`__Builtins.stdoutWantsAnsiColor()` — MAY THIS PROGRAM'S REPORT CARRY ESCAPE SEQUENCES?** It
+// lowers to `__tty_stdout_wants_color`, and this file only routes the name.
+//
+// ⚠ **UNLIKE ITS NEIGHBOURS IT IS REFUSED ON NO LANE AT ALL.** `__tty_stdout_wants_color` is emitted for
+// every target: `TerminalRuntime.installTerminalRuntime` reads `HostFacility.terminalDetection` and gives
+// a lane that cannot ask the host a body answering "not a terminal". The absence of the facility is an
+// ANSWER here where the absence of a file surface is not, which is the whole argument — written out at
+// that enum case, and paid for by a day in which the E3104 form made shv2 unbuildable for arm64-macOS.
+//
+// ⚠ **IT ANSWERS A `bool`, WHICH IS WHAT SPLITS IT FROM THE ARGUMENTLESS-INTEGER BAND ABOVE.** A pid, a
+// core count and a priority class are numbers a caller reads; this is a PREDICATE, and tagged `integer`
+// it would need `!= 0` at every call site — the sentinel-shaped spelling the house rules refuse.
+// `__ManagedDirectory.exists` has the same arrangement for the same reason: the runtime answers 0/1
+// because this tier has no `setcc`, and the PARSER is what tags the result `boolean`.
+//
+// ⚠ **IT HAS NO `stdlib/` WRAPPER, exactly as `enterBackgroundPriority` has none**: a declaration whose
+// whole body is one intrinsic call is the thin wrapper the house rules forbid. The intrinsic IS the
+// surface, and `TestRender.reportColorEnabled` is its one caller in this tree.
+let BuiltinsStdoutWantsAnsiColorName = b"__Builtins.stdoutWantsAnsiColor"
+
+// It takes NOTHING. Its own constant rather than sharing one, for `CurrentProcessIdArity`'s rule: the
+// number is a fact about THIS intrinsic's contract, not about its neighbours'.
+let StdoutWantsAnsiColorArity = 0 as ParamCount
+
 // It takes NOTHING. Its own constant rather than sharing one, for `CurrentProcessIdArity`'s rule: the
 // number is a fact about THIS intrinsic's contract, not about its neighbours'.
 let EnterBackgroundPriorityArity = 0 as ParamCount
@@ -6143,7 +6167,7 @@ end 'requireAbiParamCount'
 // `dispatchCharacterMethod`'s arm, which reads `length@8` off the fused record inline.
 //
 // ⚠ **IT WAS `StringByteLengthMethod` UNTIL THE MEMBER IT WAS NAMED FOR RETIRED, AND THE NAME WAS THE LAST
-// THING SAYING OTHERWISE.** `String.byteLength` is `stdlib/String.maxon:253`'s now, so a constant carrying
+// THING SAYING OTHERWISE.** `String.byteLength` is `stdlib/String.maxon:271`'s now, so a constant carrying
 // `String` in its name and served on `Character` alone pointed a reader at the one surface that no longer
 // uses it. Renamed to match its surface-neutral siblings `ByteAtMethod` / `ClearMethod` /
 // `CloneMethodName`, each of which is one spelling shared by whichever surfaces still serve it — the same
@@ -6151,7 +6175,7 @@ end 'requireAbiParamCount'
 let ByteLengthMethod = b"byteLength"
 
 // ⭐ **THE P1.8 SLICE B METHOD NAME.** `bytes` was String's and Character's, dispatched from both receivers
-// to one emitter; **W49 wave 6 retired the `String` half onto `stdlib/String.maxon:481`**, so it is now
+// to one emitter; **W49 wave 6 retired the `String` half onto `stdlib/String.maxon:499`**, so it is now
 // `characterSurfaceMemberNames`' alone. The spelling stays one constant for the reason it always was: a
 // String's bytes and a Character's are the same question about the same record, and the day `Character.bytes`
 // retires too, one line goes.
@@ -6164,7 +6188,7 @@ let ByteViewMethod = b"bytes"
 // ⭐⭐⭐ **FOUR `String` MEMBER CONSTANTS STOOD HERE AND WAVE 7 TOOK ALL OF THEM (BATCH2 slices 1 and 6).**
 // `StringAddressableBytesMethod`, `StringByteAtOrPanicMethod` and `StringHasSingleByteGraphemesMethod` each
 // named an arm of `dispatchStringMethod` guarded by a location gate, and all three arms retired onto
-// `stdlib/String.maxon:181`, `:281` and `:107` — the `module function` declarations they had been
+// `stdlib/String.maxon:181`, `:299` and `:107` — the `module function` declarations they had been
 // transcribed from. `StringToByteArrayMethod` was not an arm at all after wave 6: it survived only because
 // the stdlib-only REFUSAL rendered it, as the public door it pointed an author at. Wave 7 retired the four
 // READ doors onto declarations that carry their own `module` visibility, so those refusals are
@@ -6291,7 +6315,7 @@ export let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 
 // ⚠ **`CodepointViewMethod` AND `Utf16ViewMethod` STOOD HERE AND WENT WITH THEIR ARMS (W49 wave 6)**, as
 // `StringToByteArrayMethod` went with the refusal that rendered it one wave later: nothing left in this
-// compiler names any of the three spellings, and `stdlib/String.maxon:156,485,489` is now the only
+// compiler names any of the three spellings, and `stdlib/String.maxon:156,503,507` is now the only
 // statement of what those members are called.
 
 // The `Character` BUILTIN's type name is `CharacterConformerName` — the `String` twin
@@ -6383,7 +6407,7 @@ end 'corpusFindGraphemeEndLabels'
 // the open question was whether the ordinary generic-instance path decides them the same way. MEASURED at
 // wave 5, on the emitted x64 of the same program before and after, and it is the same three instructions
 // in the same order: `movRegImm32 rcx, 8` / `leaRegFunc rdx, [rip + __str_decref]` / `callDirect
-// __managed_create`. The corpus's `typealias StringArray = Array with String` (`stdlib/String.maxon:604`) and
+// __managed_create`. The corpus's `typealias StringArray = Array with String` (`stdlib/String.maxon:622`) and
 // a caller's own `Array with String` INTERN TO ONE `GenericInstanceId` — interning is keyed on
 // `(typeNameId, args)` over the whole program, so the two spellings cannot be two instances — which is why
 // a `["…"]` literal and a `split` result are assignable in both directions.
@@ -6394,7 +6418,7 @@ end 'corpusFindGraphemeEndLabels'
 let ContainsMethod = b"contains"
 
 // ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY: THE INDEX'S OWN TWO ACCESSORS.**
-// `charIndex`/`bytePos` are the reference's own names (`stdlib/String.maxon:925-931`), and they are
+// `charIndex`/`bytePos` are the reference's own names (`stdlib/String.maxon:943-949`), and they are
 // METHODS rather than field reads there and here alike — the two fields are non-exported.
 //
 // ⚠ **ALL FIVE PRODUCERS RETIRED ONTO THE CORPUS AT W49 WAVE 3** — `startIndex`, `endIndex`, `findFirst`,
@@ -6408,7 +6432,7 @@ let StringIndexBytePosMethod = b"bytePos"
 
 // ⚠ **`SliceLengthArgLabel` WAS HERE AND WENT WITH `String.slice`** (W49 wave 4). It existed because a
 // SYNTHESIZED arm had to tell `endIndex:` from `length:` by reading the label off a token. The corpus
-// declares the pair outright (`stdlib/String.maxon:470,474`), so the two are told apart by
+// declares the pair outright (`stdlib/String.maxon:488,492`), so the two are told apart by
 // `SemanticCheck.resolveOverloadedCalls` from real parameter types — which is the mechanism, rather than a
 // label spelled a second time in the parser. The ARRAY's `endIndex:` label survives as `EndIndexArgLabel`.
 
@@ -6955,7 +6979,7 @@ end 'cursorSurfaceMemberNames'
 //
 // ⚠ **THE COUNTS MOVED SINCE ARR2/ARR3c, AND WHICH LANDED RUNG MOVED EACH ONE IS PART OF THE READING.**
 // `appendMemory` went 21-with-1-real to 26-with-NONE because ARR2's module-scoped resolution cured the
-// `stdlib/String.maxon:823` case it was held by; `set` went 38-panics to ZERO panics because ARRG drew the
+// `stdlib/String.maxon:841` case it was held by; `set` went 38-panics to ZERO panics because ARRG drew the
 // cross-type descriptor edge; `count` and `push` grew because ARR5b added `Bag` cases, not because anything
 // regressed.
 //
@@ -7146,7 +7170,7 @@ end 'cursorSurfaceMemberNames'
 //     and `append-reads-the-value-set-never-the-alias-name` (two aliases over one range) are the programs.
 //   • **`appendMemory`** — the CLEANEST of the eight (struck alone: 19 of its 21 failures were this list
 //     rendering itself) and blocked by the SECOND bullet rather than by anything of its own:
-//     `stdlib/String.maxon:823` calls it, and a program that declares its OWN `type Array`
+//     `stdlib/String.maxon:841` calls it, and a program that declares its OWN `type Array`
 //     (`array-declared-record.md`) replaces the corpus's for stdlib too, so that call has no provider but
 //     this roster. **That single question — what a declared-own `Array` is owed — now gates `ARR4`, because
 //     the roster cannot go away while it is unanswered.** ⭐ **RE-MEASURED AT ARR3c: 21 failures, holding
@@ -7180,7 +7204,7 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	// ⭐⭐⭐ **`reserve` LEFT AT ARR2, AND THE CLAIM IT WAS HELD BY WAS TRUE AND HAS BEEN CLOSED.**
 	// X-array-retire recorded: *"a program may declare its OWN `type Array`, and that declaration REPLACES the
 	// corpus's for the whole compile INCLUDING stdlib — so a stdlib body calling `arr.reserve(…)` has no
-	// provider but this roster"*, MEASURED as three cases dying INSIDE `stdlib/String.maxon:807`. Reproduced
+	// provider but this roster"*, MEASURED as three cases dying INSIDE `stdlib/String.maxon:825`. Reproduced
 	// exactly, then cured: the corpus declaration was never replaced, only RENAMED
 	// (`contestStdlibTypeName`), and `memberBelongsToTheCorpus` was asking for it under the six bytes
 	// `Array` — which under a contest name the USER's container. It now asks the RECEIVER which declaration
@@ -7217,7 +7241,7 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	//
 	// ⭐⭐⭐ **ARR4 RE-MEASURED IT AT 26 FAILURES AND **ZERO** REAL ONES — AND IT STILL DOES NOT GO, BECAUSE
 	// THE SUITE'S SILENCE WAS THE CORPUS'S BLIND SPOT AND NOT AN ANSWER.** ARR2 cured the one case that used
-	// to hold it (`stdlib/String.maxon:823` under a declared-own `Array`), so every one of the 26 is now this
+	// to hold it (`stdlib/String.maxon:841` under a declared-own `Array`), so every one of the 26 is now this
 	// refusal rendering its own list, plus the `Function 'appendMemory'` → `Function 'Array.appendMemory'`
 	// qualification `insert` and `reserve` already set the precedent for. On the suite alone it is a clean
 	// retirement.
@@ -7322,10 +7346,10 @@ end 'arrayWhereClause'
 //
 // ⚠⚠ **AND THAT IS THE THIRD TIME THIS SENTENCE WAS WRONG — the first two are recorded above, and this one
 // was WRONG ABOUT WHY RATHER THAN ABOUT WHAT.** It named `charAt`/`indexAfter`/`indexBefore` as one group
-// waiting on a BACKWARD segmenter. Read the reference: `indexAfter` (`stdlib/String.maxon:387-392`) and
-// `charAt` (`:380-384`) both call `findGraphemeEnd`, which is FORWARD and which shv2 has had since P1.8
+// waiting on a BACKWARD segmenter. Read the reference: `indexAfter` (`stdlib/String.maxon:405-410`) and
+// `charAt` (`:398-402`) both call `findGraphemeEnd`, which is FORWARD and which shv2 has had since P1.8
 // slice B (`GraphemeRuntime.__gr_end`, and `__strix_advance` is already `graphemeOffsetToBytePos` over it).
-// Only `indexBefore` (`:398-403`) calls `findGraphemeStart`. So `indexAfter` was never blocked on anything —
+// Only `indexBefore` (`:416-421`) calls `findGraphemeStart`. So `indexAfter` was never blocked on anything —
 // it shipped as a fifteen-line reuse of `__strix_advance` the moment somebody checked — and `charAt` is
 // blocked on `makeCharFromBytes` (`:301-303`, a `__ManagedMemory` member the BUFFER surface's own clause
 // already names unbuilt), not on a segmenter at all. **A reason nobody checks is a reason that decides what
@@ -7352,9 +7376,9 @@ end 'arrayWhereClause'
 // single deletion is the whole of what moved each onto `stdlib/String.maxon`:
 // `memberBelongsToTheCorpus` is asked ahead of `dispatchStringMethod` and consults the corpus
 // for exactly the names this roster does NOT carry, so each is now an ordinary qualified
-// call to the ordinary declared function the corpus already had (`stdlib/String.maxon:422`, `:430`,
-// `:347`, `:665`, `:670`, `:494`, `:565`, `:460`, `:464`, `:371`, `:374`, `:387`, `:439`, `:470`, `:714`,
-// `:730`, `:745`, `:606`, `:253`, `:340`, `:226`, `:181`, `:266`, `:281` and `:107`). Their arms, their
+// call to the ordinary declared function the corpus already had (`stdlib/String.maxon:440`, `:448`,
+// `:365`, `:683`, `:688`, `:512`, `:583`, `:478`, `:482`, `:389`, `:392`, `:405`, `:457`, `:488`, `:732`,
+// `:748`, `:763`, `:624`, `:271`, `:358`, `:244`, `:181`, `:284`, `:299` and `:107`). Their arms, their
 // runtime builders and their usage bits went with them.
 //
 // ⭐⭐⭐ **THE TWO RECEIVER-WRITING MEMBERS WERE HELD FOR A MISSING MASK, AND WAVE 8 BUILT IT.** This block
@@ -7372,7 +7396,7 @@ end 'arrayWhereClause'
 // line, off `StructLayout.conformsToBuiltinManagedWrapper` — see its header.
 //
 // ⇒ `append` retired at wave 8 on that mask. **`setByte` did NOT, and its blocker was never the mask** —
-// it is `stdlib/String.maxon:658`, a corpus call site that violates `specs/parameter-labels.md`. Its arm
+// it is `stdlib/String.maxon:676`, a corpus call site that violates `specs/parameter-labels.md`. Its arm
 // carries the measurement.
 //
 // ⚠⚠ **WAVE 3 IS THE ONE THAT EDITED SOMETHING ELSE, AND IT HAD TO.** The eleven members retired around it
@@ -7392,7 +7416,7 @@ end 'arrayWhereClause'
 //   * **The stamp is identical.** The emitted x64 for `__managed_create` is the same three instructions in the
 //     same order on both sides — element size 8, `element_destroy@40` = `__str_decref`.
 //   * **The instance is ONE, not two.** The corpus's inner `typealias StringArray = Array with String`
-//     (`stdlib/String.maxon:604`) and a caller's own `Array with String` intern to one `GenericInstanceId`,
+//     (`stdlib/String.maxon:622`) and a caller's own `Array with String` intern to one `GenericInstanceId`,
 //     because `genericInstances.intern` is keyed on `(typeNameId, args)` over the WHOLE program and cannot
 //     be two things for one key. A `["…"]` literal and a `split` result are assignable in both directions.
 //   * **An owned `Array with String` survives being returned out of a corpus function**, through a user
@@ -7403,7 +7427,7 @@ end 'arrayWhereClause'
 // — the same shape wave 3's `atStringIndexProducer` retired in.
 //
 // ⚠⚠ **A RETIREMENT MOVES THE COST AS WELL AS THE BODY, AND WAVE 2 IS WHERE THAT FIRST BIT.** The corpus
-// `replace`/`replaceFirst` reach `findIn` (`stdlib/String.maxon:980`), which asks `byteAt` — a THROWING,
+// `replace`/`replaceFirst` reach `findIn` (`stdlib/String.maxon:998`), which asks `byteAt` — a THROWING,
 // bounds-checked accessor — once per candidate position, where the retired `__str_replace` walked the
 // bytes with a raw load. The cost is in the byte-read LOWERING and no corpus source can reach it: the two
 // candidate stdlib cures were MEASURED and both are regressions (an `addressableBytes` walk allocated a
@@ -7416,7 +7440,7 @@ end 'arrayWhereClause'
 // ITS OWN SUBJECT.** Every accepted cost in this family was *"the corpus body asks `byteAt` where the
 // synthesized one loaded a byte inline"* — and `byteAt` was the thing still being lowered inline. It is the
 // corpus's now, so a byte read is TWO real calls (`String.byteAt` -> `__ManagedMemory.byteAt`) where it was
-// an inline bounds test and a load. `mapAsciiCase` (`stdlib/String.maxon:647-662`) still ALLOCATES nothing
+// an inline bounds test and a load. `mapAsciiCase` (`stdlib/String.maxon:665-680`) still ALLOCATES nothing
 // per byte — `setByte` keeps its arm, so no mutable buffer is materialized and SSO survives — but its read
 // half now pays the call. The measurement belongs to the wave that made it, and this file does not carry a
 // number that the next edit would falsify.
@@ -7443,14 +7467,14 @@ end 'arrayWhereClause'
 // "once its corpus declaration is unambiguous".** A future overload pair is refused, not miscompiled.
 // ⭐⭐ **W49 WAVE 9 EMPTIED THE HAND-WRITTEN HALF OF THIS ROSTER, AND WHAT IS LEFT IS ENTIRELY DERIVED.**
 // `setByte` was the last name pushed here by hand — the last member of `String` shv2 SYNTHESIZED — and it
-// retired onto `stdlib/String.maxon:316` once its one blocker was discharged: `mapAsciiCase` passed its
-// second argument POSITIONALLY (`stdlib/String.maxon:658`), which `specs/parameter-labels.md` forbids and
+// retired onto `stdlib/String.maxon:334` once its one blocker was discharged: `mapAsciiCase` passed its
+// second argument POSITIONALLY (`stdlib/String.maxon:676`), which `specs/parameter-labels.md` forbids and
 // shv2 enforces (E2053), so the declared member could not have served its own corpus caller. One token
 // (`value:`) in the corpus closed it.
 //
 // ⇒ **The whole roster is now `builtinConformerMethodNameList(String)` — `hash`/`equals` — which are NOT
 // methods this dispatch synthesizes either.** They are the builtin CONFORMANCES, whose impls the corpus
-// already defines (`stdlib/String.maxon:351,355`); the arm below is a direct-call door onto those same
+// already defines (`stdlib/String.maxon:369,373`); the arm below is a direct-call door onto those same
 // symbols, not a second body. So `dispatchStringMethod` no longer serves a single member of its own, and
 // every `String` member a program can write is the corpus's, reached through `memberBelongsToTheCorpus`.
 //
@@ -8171,7 +8195,7 @@ end 'referenceIdentityOpSpelling'
 // ⚠ **TWO BITS HAVE GONE, AND NEITHER MOVED — EACH TIME THE QUESTION WAS DELETED.**
 // `StringIndexProducerBit` asked "does this file name `startIndex`/`endIndex`/`findFirst`/`findLast`?",
 // purely so the sweep could decide whether to register a `StringIndex` layout the compiler itself wrote;
-// the corpus declares that type (`stdlib/String.maxon:917`), so the ordinary declaration fold registers it
+// the corpus declares that type (`stdlib/String.maxon:935`), so the ordinary declaration fold registers it
 // in every program (W49 wave 3). `CharacterSetProducerBit` asked the identical question about
 // `CharacterSet`/`CharSet` and went the identical way once `stdlib/CharacterSet.maxon` was listed (W115) and
 // its compiler-owned layout deleted (W129). The remaining LAYOUT bits name types the compiler still owns
@@ -13402,6 +13426,23 @@ export type Parser
 	// compiling one stdlib module on its own — refuse the very module the loader is about to load.
 	// Being the compiler's internal bridge is a property of the FILE, not of how a command line spelled it.
 	let declaresCompilerInternalNames as bool
+	// ⭐⭐ **THE RESERVED NAMES THIS COMPILE MINTED INTO THIS FILE — the THIRD provenance the reserved-name
+	// doors read (`Queries.compilerMintedNamesIn`).** Non-empty only for the generated Maxon source a
+	// `maxon test` build stages; empty for every file of every other compile, which is what says the author
+	// wrote every byte of it.
+	//
+	// ⚠ **THE TWO DOORS READ IT AT DIFFERENT GRAIN, AND THAT IS THE WHOLE POINT.** The CALL door asks only
+	// whether the list is non-empty (`fileMayUseReservedNames`), because a generated fragment has to reach
+	// names OTHER files declare and that door already conjoins `declaresCallee`. The DECLARATION door asks
+	// whether the name being declared is IN the list (`requireUnreservedName`), because a staged
+	// `*.test.maxon` is the author's own bytes with a dispatcher appended — so a per-file answer there
+	// hands the author the reserved space, which is exactly what it did until this list existed.
+	//
+	// ⚠ **IT IS SEPARATE FROM `declaresCompilerInternalNames` EVEN THOUGH THE CALL DOOR TAKES THEIR
+	// DISJUNCTION.** The two are different FACTS — "this is one of the two stdlib modules that declare the
+	// reserved space" and "this compile wrote these names" — and folding them into one slot would be a
+	// semantic slot shared by two claims, which is the shape this project's defect log keeps naming.
+	let compilerMintedNames as ByteArrayArray
 	// ⭐ **IS THIS FILE PHYSICALLY INSIDE `stdlib/` (BATCH2 slice 1)?** True for every module the loader
 	// takes AND for a module named directly on the command line (`maxon-shv2 build stdlib/URL.maxon`),
 	// because being under `stdlib/` is a property of the FILE. Read by the two remaining stdlib-only doors —
@@ -13565,7 +13606,7 @@ export type Parser
 		return renamed
 	end 'shadowRenamedTokens'
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, livesUnderStdlibDirectory bool, buildsBodies bool) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool) returns Parser
 		return Self{
 			tokens: shadowRenamedTokens(tokens, signatures: signatures, isStdlibSource: isStdlibSource),
 			pos: 0,
@@ -13709,6 +13750,7 @@ export type Parser
 			isStdlibSource: isStdlibSource,
 			buildsBodies: buildsBodies,
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
+			compilerMintedNames: compilerMintedNames,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
 			usedTypeNames: sharedEmptyUsedTypeNames,
 			memberAccessedTypeNames: sharedEmptyUsedTypeNames,
@@ -13839,6 +13881,10 @@ export type Parser
 	// cursor, so it is invisible to everything downstream.
 	export function foldDeclaredSignaturesInto(index ProgramSignatures, producers ProducerMask)
 		var entries = FuncReturnTypeEntryArray.create()
+		// ⭐ Every `test` this file declares, for the ROSTER rather than for the type system — see
+		// `recordScannedTest`. EMPTY for every file that is not a `*.test.maxon`, which is every file of
+		// every program that does not run `maxon test`.
+		var testDecls = DiscoveredTestArray.create()
 		// ⭐ A FILE-SCOPE declaration is never a service MESSAGE, and this array PROVES it rather than asserting
 		// it: `recordScannedSignature` pushes only for a declaration that TAKES A RECEIVER, and
 		// `declarationTakesReceiver` answers `false` for every declaration outside a `type` body. One per file, and
@@ -14064,7 +14110,7 @@ export type Parser
 			// `function` arm counts one; the body is then walked by this same loop.
 			if depth == 0 and self.testDeclarationAt(self.pos) 'isTestDecl'
 				depth = depth + 1
-				self.recordScannedTest(entries, throwsEntries: throwsEntries)
+				self.recordScannedTest(entries, throwsEntries: throwsEntries, testDecls: testDecls)
 				continue
 			end 'isTestDecl'
 
@@ -14123,7 +14169,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED (ARRO).**
 		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
@@ -14263,7 +14309,7 @@ export type Parser
 	// ⚠ **`atStringSplitCall` WAS HERE AND WENT WITH `String.split`** (W49 wave 5). It existed because a
 	// SYNTHESIZED `split` arm materialized an `Array with String` that no `typealias` in the program had to
 	// mention, so the sweep interned that instance off a token shape. The corpus declares one
-	// (`stdlib/String.maxon:604`), and `String.maxon` is listed in every compile, so the instance now arrives
+	// (`stdlib/String.maxon:622`), and `String.maxon` is listed in every compile, so the instance now arrives
 	// through the ordinary declaration fold exactly as `atStringIndexProducer`'s type did at wave 3 — and it
 	// is the SAME instance, because interning is keyed on `(typeNameId, args)` across the whole program.
 	// VERIFIED by deleting this probe rather than assumed: `string-split` and `string-methods-ascii` both
@@ -14548,7 +14594,7 @@ export type Parser
 	// name declared in two directories (N1c). Nothing calls a test: it is reached as a ROOT and by no edge,
 	// so entering it in that contest could only make two directories' identically-named tests refuse each
 	// other over a spelling no source can write.
-	function recordScannedTest(entries FuncReturnTypeEntryArray, throwsEntries ThrowsClauseEntryArray)
+	function recordScannedTest(entries FuncReturnTypeEntryArray, throwsEntries ThrowsClauseEntryArray, testDecls DiscoveredTestArray)
 		// Cursor is ON the `test` keyword — `testDeclarationAt` established both tokens — so this lands on
 		// the prose name, which is where `declaredFunctionVisibility` expects to be asked from.
 		self.advance()
@@ -14559,6 +14605,11 @@ export type Parser
 		let name = testFunctionRegistrationName(nameTok.value)
 		entries.push(FuncReturnTypeEntry.create(name, returnType: MaxonReturnType.void, declaredSurface: sharedEmptyDeclaredSurface, visibility: visibility))
 		throwsEntries.push(ThrowsClauseEntry.create(name, clause: ThrowsClause.throwing(TestImpliedThrowsTypeName), takesReceiver: false))
+		// ⭐⭐ **THE ROSTER `maxon test` PRINTS IS MINTED HERE, BESIDE THE SIGNATURE, AND FROM THE SAME
+		// TOKEN.** `DiscoveredTest` needs the mangled name, the prose, the file and the line, and this is
+		// the one place all four are in hand at once — the mint is `name` above rather than a second call,
+		// so the roster can never name a symbol the registries were never given. See `TestDiscovery`.
+		testDecls.push(DiscoveredTest.create(name.clone(), displayName: String.from(nameTok.value), file: self.filePath, line: nameTok.line))
 	end 'recordScannedTest'
 
 	function declaredFunctionVisibility(hasStaticModifier bool) returns Visibility
@@ -19673,7 +19724,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(), moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -31103,6 +31154,49 @@ export type Parser
 	// names out of `funcSignatures`, which is the fact `MmRuntime.isSignaturelessCompilerCallee` reads to
 	// license the "skip the user-function checks" shortcut — a registry answer, not a naming convention,
 	// because the exemption below means the prefix alone no longer decides it.
+	// ⭐⭐ **MAY THIS FILE *CALL* A RESERVED `__` NAME AT ALL — the call door's half of the question**
+	// (`requireCalleeIsNotReservedName`, whose `fileDeclaresReservedNames` argument this is).
+	//
+	// Two provenances answer yes, and neither is a spelling:
+	//   • `declaresCompilerInternalNames` — the file IS one of the two stdlib modules that declare the
+	//     reserved space (`Queries.declaresCompilerInternalNames`).
+	//   • a non-empty `compilerMintedNames` — this compile WROTE part of the file
+	//     (`Queries.compilerMintedNamesIn`).
+	//
+	// ⚠ Both are only ever HALF an exemption here: the door conjoins `declaresCallee`, so what is granted
+	// is "a `__` name some file in this program actually declares" and never "any `__` name". That
+	// conjunction is why the SECOND provenance may be read per-FILE on this side — a generated dispatcher
+	// calls names its own file does not declare (`__TestReport.useWireFormat`, the entry's helper type,
+	// the per-file runner one file over), so a per-name answer here would refuse the very calls the
+	// generator exists to make.
+	//
+	// ⛔⛔ **AND THAT IS WHY THIS IS *NOT* THE DECLARATION DOOR'S PREDICATE, THOUGH IT WAS.** A1r's lesson
+	// is that a rule stated on one side of a name lapses on the other — but the rules are not the same
+	// rule, and reading one predicate at both doors was how the wider one won. A staged `*.test.maxon` is
+	// the AUTHOR's bytes with a dispatcher appended: file-grained here is bounded by `declaresCallee`,
+	// while file-grained at the declaration door simply handed the author the reserved space. MEASURED:
+	// an author's `function __sneaky()` compiled clean under `maxon test` while `maxon build` refused the
+	// identical file with E2051. `requireUnreservedName` therefore asks about the NAME
+	// (`mintedThisReservedName`), and only this door asks about the file.
+	function fileMayUseReservedNames() returns bool
+		return self.declaresCompilerInternalNames or not self.compilerMintedNames.isEmpty()
+	end 'fileMayUseReservedNames'
+
+	// ⭐ **IS THIS EXACT NAME ONE THIS COMPILE MINTED INTO THIS FILE — the declaration door's half.** A
+	// linear scan, and the bound is the reason: a generated fragment mints one name (a per-file runner) or
+	// three (the whole entry file), so the list a contested declaration is compared against is that long.
+	// It is only ever reached by a declaration that already failed the `__` prefix test, which no ordinary
+	// file has any of.
+	function mintedThisReservedName(declaredName ByteArray) returns bool
+		for minted in self.compilerMintedNames 'eachMintedName'
+			if minted.equals(declaredName) 'thisName'
+				return true
+			end 'thisName'
+		end 'eachMintedName'
+
+		return false
+	end 'mintedThisReservedName'
+
 	function requireUnreservedName(nameTok Token, declaredName ByteArray, bindsInto DeclaredNameNamespace = DeclaredNameNamespace.shadowsTheReceiver) throws ParseError
 		// ⭐ **THE ONE FILE THAT DECLARES THE RESERVED SPACE IS EXEMPT (D6)** — `stdlib/Builtins.maxon`,
 		// whose whole content is the type-system bridge to compiler intrinsics: the error enums a builtin
@@ -31115,7 +31209,13 @@ export type Parser
 		// files by basename). A name list would have to be kept in lockstep with a file it does not live
 		// in — and the compiler already learns each of these names by parsing the declaration, so a second
 		// copy could only ever be the stale one.
-		if self.declaresCompilerInternalNames 'theReservedSpacesOwnFile'
+		//
+		// ⛔⛔ **AND IT IS THIS ONE FILE-GRAINED PROVENANCE, NOT `fileMayUseReservedNames`.** That predicate
+		// is the CALL door's, and reading it here was a hole: it also answers yes for a file this compile
+		// merely wrote PART of, and every `maxon test` build stages exactly such a file — the author's own
+		// `*.test.maxon` with a generated dispatcher appended. See `mintedThisReservedName`, whose arm below
+		// is what a staged file's own generated declarations now pass through.
+		if self.declaresCompilerInternalNames 'aFileWhoseEveryByteIsTheCompilersBridge'
 			// ⛔ **THE ONE THING AN EXEMPT MODULE STILL MAY NOT DECLARE (W72).** `__line__` and `__file__` are
 			// reserved WORDS, not merely reserved-prefix names — `specs/source-location-defaults.md`: "no
 			// program can declare or shadow them" — and the file exemption above is precisely the hole that
@@ -31124,7 +31224,7 @@ export type Parser
 			// above it: every other file already refuses both names on the prefix rule below.
 			try requireNotACallerLocationDefault(declaredName, at: nameTok)
 			return
-		end 'theReservedSpacesOwnFile'
+		end 'aFileWhoseEveryByteIsTheCompilersBridge'
 
 		// ⭐⭐ **THE SECOND RESERVATION AT THIS DOOR: THE IMPLICIT RECEIVER'S OWN NAME (`reserved-self.md`).**
 		// `self` is not a `__` name, so it cannot ride the prefix test below and would be waved through by its
@@ -31203,6 +31303,30 @@ export type Parser
 		if self.isStdlibSource and self.signatures.isMintedStdlibShadowName(declaredName) 'theCompilersOwnMint'
 			return
 		end 'theCompilersOwnMint'
+
+		// ⭐⭐ **A NAME THIS COMPILE GENERATED INTO THIS FILE IS NOT A NAME THE AUTHOR WROTE EITHER.** The arm
+		// above is the stdlib shadow contest's; this one is `maxon test`'s, whose stager appends a dispatcher
+		// declaring `__maxon_test_file_<N>` to a copy of each test file and writes a whole entry file
+		// declaring `__MaxonTestRun`, `__MaxonTestIndex` and `__maxon_test_main`
+		// (`TestDispatcher.mintedNamesForDispatcher` / `mintedNamesForEntry`).
+		//
+		// ⛔⛔ **PER-NAME, AND THE FILE-GRAINED VERSION OF IT WAS A HOLE.** A staged `*.test.maxon` is the
+		// AUTHOR's bytes with generated bytes appended, so "this compiler wrote this file" licenses the
+		// author's own lines too: MEASURED, an author's `function __sneaky()` compiled clean under
+		// `maxon test` while `maxon build` refused the identical file with E2051. Keyed on the names the
+		// stager actually minted, the author's spelling is refused in both commands and the generator's is
+		// accepted in the one that produced it. Pinned by
+		// `maxon-shv2/Testing/test-fixtures/reserved-name-refused`.
+		//
+		// ⛔ **NOT A LINE THRESHOLD.** "Below the author's last line" is true only because the dispatcher is
+		// APPENDED, and it would invert silently the day anything is prepended — a property of the generator,
+		// not of the door that would be trusting it.
+		//
+		// ⚠ It sits BELOW the prefix test for that test's own stated reason: this is a linear scan, and asked
+		// above it, it would run once per declared name in a staged file rather than once per `__` name.
+		if self.mintedThisReservedName(declaredName) 'thisCompilesOwnGeneratedDeclaration'
+			return
+		end 'thisCompilesOwnGeneratedDeclaration'
 
 		throw ParseError.reservedIdentifier(String.from(declaredName), line: nameTok.line, column: nameTok.column)
 	end 'requireUnreservedName'
@@ -50062,7 +50186,7 @@ export type Parser
 		end 'byteRecordCompare'
 
 		// ⭐⭐ **A `StringIndex` COMPARES BY ITS GRAPHEME INDEX, AND ONLY BY THAT** — the reference's own
-		// `equals`/`compare` (`stdlib/String.maxon:933-946`) read `charIdx` and never `bytePosition`, so this
+		// `equals`/`compare` (`stdlib/String.maxon:951-964`) read `charIdx` and never `bytePosition`, so this
 		// is a PORT of a stated rule and not a shortcut. Handled at the TOP, beside the byte-record arm and
 		// before every rule below, because those rules would answer WRONGLY rather than not at all: two
 		// `structRef`s reach `comparableOperands`, which refuses them ("cannot compare struct with struct") —
@@ -58303,7 +58427,7 @@ export type Parser
 		// runtime call — which is exactly why they were the last to go and why this wave is where the
 		// accepted cost is largest per call: there is no work here for a corpus body to be *as fast as*, only
 		// a call frame to add. The corpus bodies are the normative definitions these arms were transcribed
-		// FROM (`stdlib/String.maxon:248-252` says so outright of the byte primitives), so the answers are
+		// FROM (`stdlib/String.maxon:266-270` says so outright of the byte primitives), so the answers are
 		// unchanged and only the frame is new.
 		//
 		// ⚠ **THE FOUR `module` MEMBERS AMONG THEM NO LONGER TAKE A LOCATION GATE, AND THAT IS A STRICT
@@ -58324,12 +58448,12 @@ export type Parser
 		// corpus's own parameter. ⚠ **VERIFIED RED**: with the roster line struck and the mask arm absent, all
 		// four committed `immutable-method-call` String cases compiled clean.
 		// ⭐⭐⭐ **AND WAVE 9 TOOK `setByte`, THE LAST MEMBER THIS DISPATCH SYNTHESIZED — SO THERE IS NO ARM
-		// BELOW THIS LINE, ONLY THE CONFORMANCE DOOR.** It was `stdlib/String.maxon:316`, the one byte
+		// BELOW THIS LINE, ONLY THE CONFORMANCE DOOR.** It was `stdlib/String.maxon:334`, the one byte
 		// primitive that WRITES and the last `module` member still refused by a LOCATION gate rather than by
 		// its own declaration.
 		//
 		// ⛔ **ITS BLOCKER WAS NEVER OWNERSHIP AND NEVER LOWERING — IT WAS ONE POSITIONAL ARGUMENT IN THE
-		// CORPUS.** `mapAsciiCase` wrote `try work.setByte(i, b + delta)` (`stdlib/String.maxon:658`), where
+		// CORPUS.** `mapAsciiCase` wrote `try work.setByte(i, b + delta)` (`stdlib/String.maxon:676`), where
 		// `specs/parameter-labels.md` rules that every argument after the first must be NAMED. shv2 enforces
 		// that (E2053) and the bootstrap does not, so the declared member could not have served its own only
 		// caller: routed to the corpus, `stdlib/` refused itself. One token — `value:` — closed it, and the
@@ -58367,7 +58491,7 @@ export type Parser
 		// ⛔⛔ **AND THE BODY BEHIND THOSE SYMBOLS IS THE CORPUS'S, NOT A SYNTHESIZED ONE — THIS COMMENT SAID
 		// THE OPPOSITE UNTIL W49 WAVE 7 MEASURED IT.** It read *"`BuiltinConformanceRuntime` synthesizes
 		// `String.hash` (djb2) and `String.equals` (`__str_eq`'s content compare)"*. That installer builds an
-		// impl only for a candidate the module NAMES and does not DEFINE, and `stdlib/String.maxon:351,355`
+		// impl only for a candidate the module NAMES and does not DEFINE, and `stdlib/String.maxon:369,373`
 		// declare both — so the synthesized pair has not been installed since the module was listed. Measured
 		// on the emitted IR: `s.hash()` is `call String.hash`, whose body is `call hashString`
 		// (`stdlib/helpers/string/hash.maxon:22`).
@@ -58410,7 +58534,7 @@ export type Parser
 	// ⭐⭐ **THE BUFFER'S TWO STDLIB-ONLY MEMBERS — the `setByte` arm's twin, one surface over, and it exists
 	// because the two of them shipped UNGATED and each was a memory-safety hole reachable from an
 	// ordinary user program.** Both are `module function`s in the corpus (`stdlib/String.maxon:195`'s `cstr()`
-	// forwards to `toCString`, `:301` IS `makeCharFromBytes`), so the visibility is the corpus's own and is
+	// forwards to `toCString`, `:319` IS `makeCharFromBytes`), so the visibility is the corpus's own and is
 	// enforced on the file's PHYSICAL LOCATION for the reason its String twin states — shv2 has no `module`
 	// keyword, and `livesUnderStdlibDirectory` is emphatically not `isStdlibSource`.
 	//
@@ -58421,9 +58545,15 @@ export type Parser
 	//
 	// **What the gate is worth, measured on this tree before it existed:**
 	//   * `sub.managed.toCString()` on a zero-copy view — **exit 101**, the leak gate. A `cstring` is a raw
-	//     address with no length, no capacity, no refcount and no drop, so the copy `__mm_to_cstring` makes when
-	//     `buffer[length]` is not already 0 belongs to nobody. A view's next byte is its PARENT's, so the copy
-	//     path is what an ordinary slice takes, not an exotic one.
+	//     address with no length, no capacity, no refcount and no drop, so the fresh block `__mm_to_cstring`
+	//     THEN allocated when `buffer[length]` was not already 0 belonged to nobody. A view's next byte is its
+	//     PARENT's, so that path is what an ordinary slice takes, not an exotic one.
+	//     ⚠ **THAT MEASUREMENT IS HISTORY: `__mm_to_cstring` NO LONGER ALLOCATES ON EITHER PATH.** It grows
+	//     the RECEIVER by one byte and terminates it in place (`StringRuntime.buildMmToCString`), so the same
+	//     program leaks nothing today — which does NOT retire this gate. What it kept was the other half, and
+	//     the half that outlives any allocation strategy: `toCString` hands out a raw pointer into a live
+	//     record's buffer, and the caller's obligation to keep that record alive and unmutated is one only
+	//     `stdlib/` code is in a position to honour. The bullet below never depended on the copy at all.
 	//   * `mm.makeCharFromBytes(0, len: 1000000000)` — **0xC0000005**. The corpus's contract is a PRECONDITION
 	//     (*"callers must guarantee `pos + len <= byteLength()`"*), so `__char_at` copies the window without
 	//     checking it — correctly, since its other caller is the `for c in s` segmenter, whose window is in
@@ -58483,7 +58613,7 @@ export type Parser
 	// ⚠ **`parseStringSplit` WAS HERE AND WENT WITH `String.split`** (W49 wave 5). It was the one builtin
 	// method that CONSTRUCTED an `Array with String`, creating the array here through `emitArrayCreateOp` and
 	// handing it to `__str_split` to fill. The corpus builds the same array through `StringArray.create()`
-	// (`stdlib/String.maxon:604-607`), which reaches the SAME door by the ordinary generic-instance path and
+	// (`stdlib/String.maxon:622-625`), which reaches the SAME door by the ordinary generic-instance path and
 	// stamps the same element size and the same `element_destroy@40` — measured on the emitted code, see
 	// `ContainsMethod`'s header. `.bytes()` below is now the only member here that fills a caller-created
 	// array, and it keeps this shape for its own element's sake (`requireRawByteFillFitsItsElement`).
@@ -58499,7 +58629,7 @@ export type Parser
 	// are in fact the SAME interned instance (`internArrayByteInstance`).
 	//
 	// ⚠⚠ **IT MATERIALIZES, AND SINCE W49 WAVE 6 THAT IS A `Character` DECISION AND NOT A `String` ONE.**
-	// `String.bytes()` reached this emitter until wave 6 and now falls through to `stdlib/String.maxon:481`,
+	// `String.bytes()` reached this emitter until wave 6 and now falls through to `stdlib/String.maxon:499`,
 	// whose `ByteView` is LAZY. The reason this emitter carried — *"shv2 has no `Iterable`, no associated
 	// types and no cursor protocol"* — was measured FALSE before the retirement: `for b in ByteView.create(s)`
 	// already walked the corpus's `createIterator`/`current`/`advance` and printed `97,98,99`.
@@ -59544,7 +59674,7 @@ export type Parser
 	end 'parseCharacterMemberSetLiteral'
 
 	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the corpus's
-	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher rather than the struct path, for
+	// own two accessors (`stdlib/String.maxon:943-949`). Its own dispatcher rather than the struct path, for
 	// the ROSTER-WINS reason `s.byteLength()` keeps its arm: `dispatchMethodOnBase` would resolve both names
 	// against `funcSignatures` and find the corpus's real bodies, so this is not about reachability — it is
 	// that each would then be a CALL, and `bytePos()` is read twice per `slice`, once per `charAt`, once per
@@ -59765,7 +59895,7 @@ export type Parser
 
 	// ⚠⚠ **`parseStringAppend` STOOD HERE AND WENT WITH `String.append` (W49 wave 8), AND IT WAS THE LAST
 	// `String` CALLER OF `noteReceiverWrite`.** Its whole job was the receiver-write refusal — the corpus body
-	// (`stdlib/String.maxon:414-419`) has always carried the append itself — so retiring the member meant
+	// (`stdlib/String.maxon:432-437`) has always carried the append itself — so retiring the member meant
 	// moving that refusal rather than deleting it: `receiverOwnerMask` derives the bit from the envelope
 	// collapse and `SemanticCheck.checkImmutableArgToMutatingParam` raises the same E3019 at the same token.
 	// `__str_append` and its usage bit went with it; the corpus reaches `__managed_append` through
@@ -64377,7 +64507,7 @@ export type Parser
 	// ⭐⭐ **AND IT IS ASKED FOR TWO RECEIVER KINDS, NOT ONE (W49 wave 3).** `StringIndex` joined the moment
 	// its type stopped being the compiler's own: while the layout was `__StringIndex`, a name no source
 	// could spell, the type had exactly the two members shv2 gave it and the roster WAS the surface. The
-	// corpus's `type StringIndex` (`stdlib/String.maxon:917`) declares `equals` and `compare` as well — it
+	// corpus's `type StringIndex` (`stdlib/String.maxon:935`) declares `equals` and `compare` as well — it
 	// `implements Equatable, Comparable` — so the roster refusal became the very sentence this door exists
 	// to retire: **MEASURED on this tree before the arm was added, `d.equals(e)` on two indices reported
 	// `E2015 … 'equals' — shv2 provides charIndex/bytePos; that list IS the surface`** about a method the
@@ -65100,7 +65230,7 @@ export type Parser
 		//
 		// ⚖ **THE BUFFER USED TO HAVE ITS OWN CALLEE (`__managed_mem_append`), ON THE CLAIM THAT ITS `append`
 		// THROWS. USER RULING, 2026-08-07: IT DOES NOT** — both references make it non-throwing, and
-		// `stdlib/String.maxon:414` declares a non-throwing `append` over a bare `managed.append(other.managed)`
+		// `stdlib/String.maxon:432` declares a non-throwing `append` over a bare `managed.append(other.managed)`
 		// that cannot compile otherwise. The whole argument is at `ManagedMemoryRuntime.ManagedAppendName`.
 		//
 		// ⭐ **AND THE SPLIT WAS NOT MERELY REDUNDANT, IT WAS A WRONG ANSWER**: the buffer callee byte-blitted
@@ -74286,7 +74416,7 @@ export type Parser
 		// `String.replace` writes `let selfBytes = addressableBytes()` and then `selfBytes.slice(pos, matchPos)`;
 		// unmarked, `dispatchArrayMethod` read `selfBytes` as an `Array`, and the `Array`-surface `slice` — which
 		// DEMANDED the `endIndex:` label the buffer surface makes optional — refused the corpus inside its own
-		// file: `E2010 Expected ':' but got ')'` at `String.maxon:542`, 1002 of the 1158 failures listing the
+		// file: `E2010 Expected ':' but got ')'` at `String.maxon:560`, 1002 of the 1158 failures listing the
 		// module produced. ⚠ The mark still decides the SURFACE (ARR3a made `slice` buffer-only, so an unmarked
 		// value is now refused outright rather than mis-labelled); what it decides is unchanged.
 		//
@@ -74627,7 +74757,7 @@ export type Parser
 			end 'awaitAny'
 
 			if callee.equals(BuiltinsCommandLineCountName) 'commandLineCount'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsCommandLineCountName, runtimeName: CommandLineCountName, arity: CommandLineCountArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsCommandLineCountName, runtimeName: CommandLineCountName, arity: CommandLineCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'commandLineCount'
 
 			// ⭐ The result is an OWNED `__ManagedMemory` — the `Array with Byte` instance `String.init` reads,
@@ -74693,7 +74823,7 @@ export type Parser
 			// caller reads and drops. `emitOwnedManagedMemoryResult` here would enrol a `__ManagedMemory` drop
 			// against an integer and free the pid.
 			if callee.equals(BuiltinsCurrentProcessIdName) 'currentProcessId'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsCurrentProcessIdName, runtimeName: ProcessCurrentPidName, arity: CurrentProcessIdArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsCurrentProcessIdName, runtimeName: ProcessCurrentPidName, arity: CurrentProcessIdArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'currentProcessId'
 
 			// ⭐ **THE TWO CPU-PARALLEL QUERIES**, beside the checkpoint they share a family with. Both answer
@@ -74702,19 +74832,27 @@ export type Parser
 			// is not this file's: one lowers to an OS call gated to x64-windows and the other to a constant
 			// return that lowers everywhere. See `CpuParallelRuntime`'s header.
 			if callee.equals(BuiltinsCpuCountName) 'cpuCount'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsCpuCountName, runtimeName: CpuCountName, arity: CpuCountArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsCpuCountName, runtimeName: CpuCountName, arity: CpuCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'cpuCount'
 
 			if callee.equals(BuiltinsSchedMaxActiveWorkersName) 'schedMaxActiveWorkers'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedMaxActiveWorkersName, runtimeName: SchedMaxActiveWorkersName, arity: SchedMaxActiveWorkersArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedMaxActiveWorkersName, runtimeName: SchedMaxActiveWorkersName, arity: SchedMaxActiveWorkersArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedMaxActiveWorkers'
 
 			// ⭐ **THE PRIORITY DOOR**, through the same argumentless-integer emit as the queries above even
 			// though it is not a query: its answer is an `int` and it takes nothing, and what differs — that
 			// it CHANGES this process before reporting on it — is not visible at this tier and is not this
 			// file's. See `ProcessRuntime.ProcessBackgroundPriorityName`.
+			// ⭐ **THE TERMINAL QUESTION**, through the same argumentless door and tagged `boolean` rather than
+			// `integer` — see `BuiltinsStdoutWantsAnsiColorName` for why a predicate must not arrive as a
+			// number. What differs from its neighbours below the tag is not visible at this tier: it lowers
+			// to `__tty_stdout_wants_color`, whose own prefix is what gates it per target.
+			if callee.equals(BuiltinsStdoutWantsAnsiColorName) 'stdoutWantsAnsiColor'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsStdoutWantsAnsiColorName, runtimeName: TerminalStdoutWantsColorName, arity: StdoutWantsAnsiColorArity, resultTag: ValueTypeTag.boolean, calleeTok: anchor)
+			end 'stdoutWantsAnsiColor'
+
 			if callee.equals(BuiltinsEnterBackgroundPriorityName) 'enterBackgroundPriority'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsEnterBackgroundPriorityName, runtimeName: ProcessBackgroundPriorityName, arity: EnterBackgroundPriorityArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsEnterBackgroundPriorityName, runtimeName: ProcessBackgroundPriorityName, arity: EnterBackgroundPriorityArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'enterBackgroundPriority'
 
 			// ⭐ **THE THIRD SCHEDULER QUERY (W212)**, beside the one it is the counterpart of: that one says how
@@ -74723,7 +74861,7 @@ export type Parser
 			// not this file's: it sets `usesGt`, because a steal count has no meaning without a scheduler to
 			// have done the stealing. See `SchedRuntime.SchedStealCountName`.
 			if callee.equals(BuiltinsSchedStealCountName) 'schedStealCount'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedStealCountName, runtimeName: SchedStealCountName, arity: SchedStealCountArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedStealCountName, runtimeName: SchedStealCountName, arity: SchedStealCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedStealCount'
 
 			// ⭐ **THE FIFTH SCHEDULER QUERY (W213-C3)**, beside the one whose shape it shares exactly: that one
@@ -74732,7 +74870,7 @@ export type Parser
 			// nothing to own — and, like the steal count, it sets `usesGt`, because a retake count has no
 			// meaning without a scheduler to have done the retaking. See `SchedRuntime.SchedRetakeCountName`.
 			if callee.equals(BuiltinsSchedRetakeCountName) 'schedRetakeCount'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedRetakeCountName, runtimeName: SchedRetakeCountName, arity: SchedRetakeCountArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedRetakeCountName, runtimeName: SchedRetakeCountName, arity: SchedRetakeCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedRetakeCount'
 
 			// ⭐ **THE FOURTH SCHEDULER QUERY**, and the only one that asks about the SETTING rather than about
@@ -74741,7 +74879,7 @@ export type Parser
 			// steal count it does NOT set `usesGt`, because one `.data` word is all it reads. See
 			// `CpuParallelRuntime.SchedProcessorCountName`.
 			if callee.equals(BuiltinsSchedProcessorCountName) 'schedProcessorCount'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsSchedProcessorCountName, runtimeName: SchedProcessorCountName, arity: SchedProcessorCountArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedProcessorCountName, runtimeName: SchedProcessorCountName, arity: SchedProcessorCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedProcessorCount'
 
 			// ⭐ **THE SIX MEMORY-TRAFFIC COUNTERS.** Every one answers an `int` and takes nothing, so every one
@@ -74750,27 +74888,27 @@ export type Parser
 			// builtin name and the runtime entry it lowers to are the only things that differ, and a table
 			// keyed on one of them would be a second place for the pairing to be got wrong.
 			if callee.equals(BuiltinsMmAllocTotalName) 'mmAllocTotal'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocTotalName, runtimeName: MmCounterAllocTotalName, arity: MmCounterArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocTotalName, runtimeName: MmCounterAllocTotalName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmAllocTotal'
 
 			if callee.equals(BuiltinsMmAllocLiveName) 'mmAllocLive'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocLiveName, runtimeName: MmCounterAllocLiveName, arity: MmCounterArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocLiveName, runtimeName: MmCounterAllocLiveName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmAllocLive'
 
 			if callee.equals(BuiltinsMmAllocBytesName) 'mmAllocBytes'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocBytesName, runtimeName: MmCounterAllocBytesName, arity: MmCounterArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmAllocBytesName, runtimeName: MmCounterAllocBytesName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmAllocBytes'
 
 			if callee.equals(BuiltinsMmRawAllocTotalName) 'mmRawAllocTotal'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocTotalName, runtimeName: MmCounterRawAllocTotalName, arity: MmCounterArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocTotalName, runtimeName: MmCounterRawAllocTotalName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmRawAllocTotal'
 
 			if callee.equals(BuiltinsMmRawAllocLiveName) 'mmRawAllocLive'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocLiveName, runtimeName: MmCounterRawAllocLiveName, arity: MmCounterArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocLiveName, runtimeName: MmCounterRawAllocLiveName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmRawAllocLive'
 
 			if callee.equals(BuiltinsMmRawAllocBytesName) 'mmRawAllocBytes'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocBytesName, runtimeName: MmCounterRawAllocBytesName, arity: MmCounterArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocBytesName, runtimeName: MmCounterRawAllocBytesName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmRawAllocBytes'
 
 			// ⭐ **THE SCAVENGER**, beside the counters because it reads the same surface from the other end:
@@ -74779,7 +74917,7 @@ export type Parser
 			// not this file's: they lower to `.data` loads and this to a walk of every mcentral list and every
 			// arena bitmap. See `SlabRuntime`'s header.
 			if callee.equals(BuiltinsScavengeMemoryName) 'scavengeMemory'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsScavengeMemoryName, runtimeName: SlabScavengeName, arity: ScavengeMemoryArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsScavengeMemoryName, runtimeName: SlabScavengeName, arity: ScavengeMemoryArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'scavengeMemory'
 
 			// ⭐ **THE THREAD-COST CLOCK**, beside the counters `PhaseProbe` reads it with. Same door again — an
@@ -74787,7 +74925,7 @@ export type Parser
 			// and is not this file's: they lower to `.data` loads that run everywhere, this to a Win32 import
 			// gated to x64-windows. See `ClockRuntime`'s header.
 			if callee.equals(BuiltinsThreadCpuTicksName) 'threadCpuTicks'
-				return try self.emitIntegerZeroArgIntrinsic(args, builtinName: BuiltinsThreadCpuTicksName, runtimeName: ThreadCpuTicksName, arity: ThreadCpuTicksArity, calleeTok: anchor)
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsThreadCpuTicksName, runtimeName: ThreadCpuTicksName, arity: ThreadCpuTicksArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'threadCpuTicks'
 
 			// ⭐ W35. The two stream writers — one emit, parameterized by the stream's runtime entry point,
@@ -75574,13 +75712,18 @@ export type Parser
 	// ⚠ **THE ARITY IS A PARAMETER THOUGH ALL FOUR CALLERS PASS 0**, exactly as `emitVoidZeroArgIntrinsic`'s
 	// is: the constant is what says what a given intrinsic IS, and collapsing four documented constants into
 	// a literal here would put that fact in the wrong file.
-	function emitIntegerZeroArgIntrinsic(args ValueIdArray, builtinName ByteArray, runtimeName ByteArray, arity ParamCount, calleeTok Token) returns ValueId throws ParseError
+	// ⚠ **THE RESULT TAG IS A PARAMETER THOUGH FOUR OF THE FIVE CALLERS PASS `integer`.** What an intrinsic
+	// ANSWERS is a fact about its own contract, and `stdoutWantsAnsiColor` answers a PREDICATE: a second
+	// copy of this door differing only in that tag would be the duplication this file's other shared doors
+	// exist to prevent, and a `boolean` intrinsic forced through an `integer` one would reach its caller
+	// needing `!= 0`.
+	function emitZeroArgIntrinsic(args ValueIdArray, builtinName ByteArray, runtimeName ByteArray, arity ParamCount, resultTag ValueTypeTag, calleeTok Token) returns ValueId throws ParseError
 		if args.count() != arity 'arity'
 			throw ParseError.builtinArity(String.from(builtinName), expected: arity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
-		return self.emitRuntimeCall(runtimeName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-	end 'emitIntegerZeroArgIntrinsic'
+		return self.emitRuntimeCall(runtimeName, args: ValueIdArray.create(), resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitZeroArgIntrinsic'
 
 	// ⭐⭐ **THE ARGUMENT RULE EVERY COMMAND-LINE BUILTIN IS CHECKED AGAINST, IN ONE PLACE** — the
 	// `requireHandleArg`/`requireIntrinsicArgs` shape, one family over. Three doors spawn a child from a
@@ -76353,7 +76496,7 @@ export type Parser
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
 		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
 		// ALL** (`specs-shv2/constant-string-slice.md`). Asked FIRST, ahead of the mint, the default fill and
 		// the consume, for the discipline the argument refusal above states: a call that is not going to be
@@ -77407,7 +77550,7 @@ export type Parser
 		// `written` is not a default here, it is the shape of the door: `parseAsyncCall` is the sole caller and
 		// it consumes a bare `identifier` callee, so an `async` spawn's name is always the author's own bytes.
 		// `async int.fromString(s)` does not parse at all — the `async` target grammar admits a free call only.
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.declaresCompilerInternalNames, isStdlibSource: self.isStdlibSource, mint: CalleeMint.notMinted, signatures: self.signatures)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, mint: CalleeMint.notMinted, signatures: self.signatures)
 		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED AT THIS DOOR TOO** (BATCH2 slice 4) — the SECOND of the two
 		// source call doors, so `async f()` against `function f(n Integer = 1)` is the same legal call
 		// `f()` is. It sits BEFORE the scalar check on purpose: the helper's result is an ordinary value and

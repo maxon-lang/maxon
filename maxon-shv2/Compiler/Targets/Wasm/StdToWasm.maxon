@@ -172,10 +172,6 @@ end 'wasmMemoryMinPages'
 // i32 is unreachable, but the validator requires the `(result i32)` on the stack at the end.
 let RunOkResult = 0 as Imm32
 
-// The entry function the synthesized `$run` calls. `main` returns `ExitCode`; `$run` wraps it
-// to i32 and hands it to `exit-with-code`.
-let WasmMainFunctionName = b"main"
-
 // The Preview2 import and the component export names — the exact interface identifiers the
 // golden component skeleton was built and run against (CONTRACT §5).
 let WasiExitModuleName = b"wasi:cli/exit@0.2.6"
@@ -225,7 +221,7 @@ let WasmRdataAlignment = 8 as ByteCount
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, funcNames FunctionNameIndex) returns ByteArray
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, funcNames FunctionNameIndex, entryFunction ByteArray) returns ByteArray
 	let calleeParamTypes = buildCalleeParamTypesMap(funcNames)
 
 	var builder = WasmModuleBuilder.create()
@@ -285,7 +281,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// The two SYNTHETIC functions, appended in the order `wasmPanicFuncIdx` fixes: `mrt_panic` first
 	// (its index is read by every panic site, which was emitted above), then the entry stub.
 	appendPanicRuntime(builder, funcNames: funcNames)
-	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, checkLeaks: checkLeaks, initGlobals: initGlobals)
+	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, checkLeaks: checkLeaks, initGlobals: initGlobals, entryFunction: entryFunction)
 
 	// The memory must cover BOTH images; `.rdata` sits above `.data`, so `rdataBase + rdataSize`
 	// is the high-water mark (and `rdataBase >= WasmDataBaseOffset` even with no globals, so the
@@ -479,12 +475,17 @@ let WasmPanicCursorLocal = 1 as Wasm32Index
 let WasmPanicScanContinueDepth = 0 as Wasm32Index
 let WasmPanicScanBreakDepth = 1 as Wasm32Index
 
-// Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run `main`, hand its
+// Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run the entry function, hand its
 // exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
 // entry's wasm function index (for the export).
-function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames FunctionNameIndex, checkLeaks bool, initGlobals bool) returns Wasm32Index
-	let mainFuncIdx = try wasmFuncIdxOf(funcNames, callee: WasmMainFunctionName) otherwise panic("buildWasmCoreModule: no `main` function in the module — the wasm `run` entry has nothing to call")
-	let mainReturnValType = mainReturnValueType(module)
+//
+// `entryFunction` is `Project.entryFunctionName` — `main` for every ordinary build, and this lane's only
+// reader of it. It is threaded rather than respelled here for that field's reason: a wasm lane naming its
+// own `main` would be a fourth copy of the entry, free to disagree with the three walks that seed from it.
+function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames FunctionNameIndex, checkLeaks bool, initGlobals bool, entryFunction ByteArray) returns Wasm32Index
+	let entryName = String.from(entryFunction)
+	let mainFuncIdx = try wasmFuncIdxOf(funcNames, callee: entryFunction) otherwise panic("buildWasmCoreModule: no `{entryName}` function in the module — the wasm `run` entry has nothing to call")
+	let mainReturnValType = mainReturnValueType(module, entryFunction: entryFunction)
 
 	var runBody = WasmBody.create()
 
@@ -597,18 +598,19 @@ function appendLeakGate(runBody WasmBody, exitCodeValType WasmValType, funcNames
 	return WasmValType.i64
 end 'appendLeakGate'
 
-// The valtype of `main`'s return value. `main` must return a value (`ExitCode`) — a void
-// `main` would leave the run entry nothing to pass to `exit-with-code`.
-function mainReturnValueType(module StdModule) returns WasmValType
+// The valtype of the ENTRY function's return value. It must return a value (`ExitCode`) — a void entry
+// would leave the run entry nothing to pass to `exit-with-code`.
+function mainReturnValueType(module StdModule, entryFunction ByteArray) returns WasmValType
+	let entryName = String.from(entryFunction)
 	for func in module.functions 'eachFunc'
-		if func.name == WasmMainFunctionName 'isMain'
+		if func.name == entryFunction 'isEntry'
 			match func.returnType 'rt'
-				void then panic("buildWasmCoreModule: `main` returns void, but the wasm `run` entry needs an ExitCode to pass to exit-with-code")
+				void then panic("buildWasmCoreModule: `{entryName}` returns void, but the wasm `run` entry needs an ExitCode to pass to exit-with-code")
 				value(inner) then return wasmMachineValTypeOf(inner)
 			end 'rt'
-		end 'isMain'
+		end 'isEntry'
 	end 'eachFunc'
-	panic("buildWasmCoreModule: no `main` function in the module")
+	panic("buildWasmCoreModule: no `{entryName}` function in the module")
 end 'mainReturnValueType'
 
 // ==========================================================================
@@ -722,6 +724,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osFileOpenWriteExecutable then break 'k'
 		osEnvBlock to osEnvBlockFree then break 'k'
 		loadAcquire or storeRelease then break 'k'
+		osHandleFileType then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1348,6 +1351,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osFileOpenWriteExecutable then break 'def'
 		osEnvBlock to osEnvBlockFree then break 'def'
+		osHandleFileType then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1577,6 +1581,7 @@ type WasmFuncEmitter
 			osFileOpenWriteExecutable then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 			osEnvBlock to osEnvBlockFree then panic("emitStraightLineTerminator: an environment-block read or release is a body op, never a terminator")
 			loadAcquire or storeRelease then panic("emitStraightLineTerminator: an ordered load or store is a body op, never a terminator")
+			osHandleFileType then panic("emitStraightLineTerminator: `osHandleFileType` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1670,6 +1675,7 @@ type WasmFuncEmitter
 			osFileOpenWriteExecutable then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 			osEnvBlock to osEnvBlockFree then panic("emitDispatcherTerminator: an environment-block read or release is a body op, never a terminator")
 			loadAcquire or storeRelease then panic("emitDispatcherTerminator: an ordered load or store is a body op, never a terminator")
+			osHandleFileType then panic("emitDispatcherTerminator: `osHandleFileType` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1853,6 +1859,10 @@ type WasmFuncEmitter
 			osEnterBackgroundPriority then panic("emitBodyOp: `osEnterBackgroundPriority` is x64-windows only — a WASI component has no process and no scheduler priority, so there is nothing here to lower it to")
 			osFileOpenWriteExecutable then panic("emitBodyOp: the file-IO ops are x64-windows only — file IO is x64-windows-gated at R4.1/R4.2, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			osEnvBlock to osEnvBlockFree then panic("emitBodyOp: the environment-block ops are x64-windows only — their one producer is the attached-subprocess substrate, which a WASI component has no primitive for at all, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			// ⚠ REFUSED NOWHERE, unlike every other absent-op arm here: `installTerminalRuntime` reads
+			// `HostFacility.terminalDetection` and gives this lane a `__tty_stdout_wants_color` body that answers
+			// `false` without asking, so the op is never emitted on it and there is nothing for a gate to reject.
+			osHandleFileType then panic("emitBodyOp: `osHandleFileType` has no WASI spelling and is never emitted on this lane — `installTerminalRuntime` reads `HostFacility.terminalDetection` and builds the fallback `__tty_stdout_wants_color` body (answering `false`) instead of asking. Reaching here is a compiler bug, not a program this lane should have rejected")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3223,6 +3233,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osFileOpenWriteExecutable then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 		osEnvBlock to osEnvBlockFree then panic("decideDispatcher: an environment-block read or release is a body op, never a terminator")
 		loadAcquire or storeRelease then panic("decideDispatcher: an ordered load or store is a body op, never a terminator")
+		osHandleFileType then panic("decideDispatcher: `osHandleFileType` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

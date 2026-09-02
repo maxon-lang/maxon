@@ -9,8 +9,15 @@
 // check set (unused bindings, type mismatches, exhaustiveness, ...) grows here
 // per milestone.
 
-// The entrypoint function's unqualified name — a contract shared with the parser
-// (which keeps `main` unqualified) and the backend (whose entry stub calls it).
+// The DEFAULT entry function's unqualified name — a contract shared with the parser
+// (which keeps `main` unqualified) and `Project.entryFunctionName`, which every tier that needs to know
+// where this build enters now reads instead of respelling `main`.
+//
+// ⚠ **IT IS "THE NAME `main`", NOT "THE ENTRY", AND THE TWO PARTED COMPANY WHEN THE ENTRY BECAME A
+// PER-BUILD FACT.** The unqualified-registration rule below is about the name: `main` keeps its bare
+// spelling whatever this build enters at, because a program's `main` stays callable as `main` even when
+// something else is the entry. Every question about where execution BEGINS goes to
+// `Project.entryFunctionName`, which this constant merely seeds.
 //
 // ⚠ **EXPORTED SINCE N1c, because the parser now has to STATE the contract rather than merely keep it.**
 // A free function whose bare name is declared in two directories is registered under its namespace-qualified
@@ -19,10 +26,13 @@
 // from the name `checkMainFunction` looks the entry point up by.
 export let MainFunctionName = b"main"
 
-// The exact spec-gated diagnostic text (`specs-shv2/basics.md`). Named constants
-// so the wire format lives in one place.
-let NoMainMessage = "No 'main' function found"
-let MainWrongReturnMessage = "Function 'main' must return ExitCode"
+// ⚠ **E3001's AND E3002's TEXT USED TO BE TWO `let`s HERE AND IS NOW BUILT AT ITS ONE SITE
+// (`checkMainFunction`), BECAUSE THE SENTENCES NAME THE ENTRY AND THE ENTRY IS A PER-BUILD FACT.** They
+// are still spec-gated text (`specs-shv2/basics.md`) and still byte-identical to what they always said for
+// every build that enters at `main` — which is every build a person types. A generated-entry build
+// (`maxon test`) would otherwise report a missing `main` for a project whose entry is
+// `__maxon_test_main`, naming the one function it was never going to look for. A constant cannot say that,
+// so there is no constant: one producer, at the one place the name is in hand.
 
 // Run the semantic checks over the resolved project + module. M1 checks `main`; M5
 // adds per-call-site validation (the callee exists, the argument count matches, every
@@ -983,13 +993,20 @@ function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
 	end 'op'
 end 'overloadCallArgs'
 
-// E3054 — `main` cannot declare `throws`: there is no caller left to handle the error. Scans the merged
-// module for `main`'s function (whose `throwsTypeName` the parser stamped), positioned at its name token.
+// E3054 — the ENTRY function cannot declare `throws`: there is no caller left to handle the error. Scans
+// the merged module for it (whose `throwsTypeName` the parser stamped), positioned at its name token.
+//
+// ⚠ **IT IS ASKED OF `project.entryFunctionName`, NOT OF `main`, AND THE TWO ARE THE SAME ANSWER FOR EVERY
+// ORDINARY BUILD.** The rule is about the function nothing calls, which is whatever this build enters at —
+// a `main` some other entry has displaced is an ordinary function with an ordinary caller and is no longer
+// the subject. The message names it for the same reason, so its text is byte-identical whenever the entry
+// is `main`.
 function checkMainCannotThrow(project Project, module MaxonModule)
+	let entryName = String.from(project.entryFunctionName)
 	for func in module.functions 'eachFunc'
-		if func.name == MainFunctionName and throwsClauseIsThrowing(func.throwsTypeName) 'mainThrows'
-			reportPositioned(project, code: ErrorCode.mainCannotThrow, message: "main cannot throw: 'main'", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
-		end 'mainThrows'
+		if func.name == project.entryFunctionName and throwsClauseIsThrowing(func.throwsTypeName) 'entryThrows'
+			reportPositioned(project, code: ErrorCode.mainCannotThrow, message: "{entryName} cannot throw: '{entryName}'", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+		end 'entryThrows'
 	end 'eachFunc'
 end 'checkMainCannotThrow'
 
@@ -6124,16 +6141,17 @@ function reportArgError(project Project, code ErrorCode, message String, argRang
 	reportPositioned(project, code: code, message: message, line: range.line, column: range.column, filePath: filePath)
 end 'reportArgError'
 
-// E3001 / E3002: `main` must exist and return ExitCode.
+// E3001 / E3002: the ENTRY function must exist and return ExitCode.
 function checkMainFunction(project Project)
-	if not project.funcReturnTypes.contains(MainFunctionName) 'noMain'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.noMainFunction, message: NoMainMessage))
+	let entryName = String.from(project.entryFunctionName)
+	if not project.funcReturnTypes.contains(project.entryFunctionName) 'noEntry'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.noMainFunction, message: "No '{entryName}' function found"))
 		return
-	end 'noMain'
+	end 'noEntry'
 
-	let returnType = try project.funcReturnTypes.get(MainFunctionName) otherwise panic("checkMainFunction: contains(main) true but get(main) failed")
+	let returnType = try project.funcReturnTypes.get(project.entryFunctionName) otherwise panic("checkMainFunction: contains({entryName}) true but get({entryName}) failed")
 	if not returnsExitCode(returnType) 'wrongReturn'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.mainWrongReturnType, message: MainWrongReturnMessage))
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.mainWrongReturnType, message: "Function '{entryName}' must return ExitCode"))
 	end 'wrongReturn'
 end 'checkMainFunction'
 

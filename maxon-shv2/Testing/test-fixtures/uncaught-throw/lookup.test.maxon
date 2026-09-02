@@ -1,0 +1,25 @@
+// ⚠ **EDITING THIS FILE MOVES A LINE NUMBER THE EXPECTATION PINS.** The report names the
+// ASSERTION'S OWN line — `Expect`'s `file`/`line` default to `__file__`/`__line__`, which expand at
+// the CALL SITE — so that number is part of the contract and not incidental. Insert a line above one
+// and `expected.txt` is owed a regeneration; the gate's report will say which line differs.
+// A test body that lets a FOREIGN error out — one it does not declare and cannot declare. The
+// compiler substitutes the handler the author would otherwise have written, reports the error's
+// type, its case and the `try`'s own file and line, and fails the test. That report is the subject.
+typealias Amount = int(0 to i64.max)
+
+enum LookupError implements Error
+	missing
+end 'LookupError'
+
+function lookup(key String) returns Amount throws LookupError
+	if key != "known" 'unknown'
+		throw LookupError.missing
+	end 'unknown'
+
+	return 7
+end 'lookup'
+
+test 'an unknown key throws out of the test body'
+	let value = try lookup("nobody")
+	try Expect.equal(value, expected: 7)
+end 'an unknown key throws out of the test body'

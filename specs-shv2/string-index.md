@@ -389,7 +389,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at String.maxon:347: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+panic at String.maxon:365: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
 Stack trace:
   in String.sliceBytes
   in String.slice
@@ -417,7 +417,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at String.maxon:347: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+panic at String.maxon:365: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
 Stack trace:
   in String.sliceBytes
   in String.slice
@@ -477,7 +477,7 @@ aé 6 aéb
 ### `charAt` and `indexAfter` walk a string one CLUSTER at a time
 ⭐ **`charAt` IS THE CORPUS'S AND SO IS EVERY PRODUCER IT IS FED FROM (W49 wave 3).** shv2 never had a
 `charAt` arm — it needs `makeCharFromBytes`, which the `__ManagedMemory` surface does not serve — and the
-one it could not have was the one the corpus already declares (`stdlib/String.maxon:380-384`). What kept
+one it could not have was the one the corpus already declares (`stdlib/String.maxon:398-402`). What kept
 it out of reach was not the missing arm: `startIndex()` minted a box of the compiler's OWN
 `__StringIndex` type while the corpus's `charAt` declares its parameter `StringIndex`, so the call was
 `E3005 argument type mismatch for 'idx': expected 'StringIndex', got '__StringIndex'` — two declarations
@@ -573,7 +573,7 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'String
 ### `slice`'s start must be a `StringIndex`
 ⚠ **THE SENTENCE IS THE ORACLE'S SINCE W49 WAVE 4.** It was `'slice' requires a StringIndex, but its
 argument is int` — the SYNTHESIZED arm's bespoke wording, from a hand-written type test. The member is
-`stdlib/String.maxon:470`'s now, so the refusal is the ordinary declared-parameter check, which is the
+`stdlib/String.maxon:488`'s now, so the refusal is the ordinary declared-parameter check, which is the
 sentence the bootstrap prints for this program verbatim.
 ```maxon
 function main() returns ExitCode
@@ -632,7 +632,7 @@ error E2015: <fragment>:5:12: Unsupported: `StringIndex` member 'offset' — shv
 ⚠ **THE SENTENCE SAID `'findFirst'` UNTIL W49 WAVE 3 AND SAYS `'String.findFirst'` NOW, WHICH IS THE SAME
 FIX ARRIVING FOR FREE.** D12 had to build a map (`stringIndexSourceMethodName`) translating the runtime
 callee `__strix_first` back into the spelling the author wrote — without it this read *"throwing function
-requires try: 'throwing array accessor'"*. `findFirst` is `stdlib/String.maxon:460`'s ordinary declared
+requires try: 'throwing array accessor'"*. `findFirst` is `stdlib/String.maxon:478`'s ordinary declared
 method now, so the diagnostic reads the callee's REAL name and the map is gone: one fewer list to drift,
 and the qualified form matches `int.fromString`'s in `parsable-interface.md`.
 ```maxon

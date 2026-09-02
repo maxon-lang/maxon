@@ -2890,7 +2890,11 @@ typealias OverlaidNameSet = Set with String
 // files. Three callers, one rule — a multi-file test's staged sources, a `stdlib-overlay` case's
 // private checkout, and the batch's spent capture files — because "whatever this run did not write,
 // this run removes" is one sentence, not three.
-function purgeFilesIn(dir FilePath)
+// ⚠ **EXPORTED FOR ITS SECOND CALLER (`TestDispatcher.stageTestBuild`) RATHER THAN COPIED THERE.** Both
+// stage a generated tree into a directory that may hold the last run's leftovers, and both need the same
+// answer — "whatever this run did not write, this run removes". A second spelling of a recursive delete is
+// the last thing this tree needs two of.
+export function purgeFilesIn(dir FilePath)
 	let entries = try Directory.list(dir) otherwise return
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'isSubdir'

@@ -390,7 +390,7 @@ end 'main'
 <!-- test: string-contains-char -->
 <!-- W49 wave 4 UNLOCKED THIS. It was disabled because `String.contains` was a SYNTHESIZED arm that served
 the `String` form only, so `text.contains('e')` was `E3005: 'contains' requires a String`. Retiring the
-member onto `stdlib/String.maxon:439,446` makes it an ordinary DECLARED overload set, which is exactly what
+member onto `stdlib/String.maxon:457,464` makes it an ordinary DECLARED overload set, which is exactly what
 `resolveOverloadedCalls` has always been able to pick from. -->
 ```maxon
 function main() returns ExitCode

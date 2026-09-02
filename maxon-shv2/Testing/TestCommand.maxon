@@ -1,0 +1,375 @@
+// TestCommand — the `maxon-shv2 test` command: discover every `test` declaration in a project, compile
+// them into ONE binary with a generated entry point, run it, and report.
+//
+// ⭐ **THIS FILE SEQUENCES; IT BUILDS NOTHING.** Discovery is `TestDiscovery`, generation and staging
+// are `TestDispatcher`, execution is `TestExecutor`, and both faces of the report are `TestRender`. What
+// lives here is the command line, where the staged tree goes, and the exit code.
+//
+// ⛔⛔ **A TEST RUN TAKES NO TREE LOCK, AND THAT IS A REQUIREMENT RATHER THAN AN OMISSION.** Under
+// `Main.acquireBuildTreeLock`'s rule a project build with no `-o`, inside a checkout with a `stdlib/`
+// above it, locks the whole checkout — and every case under `Testing/test-fixtures/` IS such a build,
+// spawned from a `test` that is ITSELF running inside a build of this kind (`Testing/test-command/`).
+// It would come back as exit 2 with an EMPTY stdout, nine times over. This command never goes through
+// `runBuild`: it calls
+// `Compiler.compileToProduct` directly, which locks nothing, and it names its own output. That is the
+// same exemption `spec-test` buys with `isHarnessFixtureSubRun`, obtained here by not being a
+// lock-taking shape at all.
+
+// The command's own name — the word every message in this file uses for what failed, and the token
+// `MaxonArgs.parse` matches. One spelling, so a renamed command cannot keep announcing the old one.
+//
+// ⚠ **`export`, NEVER `module`, AND THE READER IS THE REASON.** `Main.MaxonArgs.parse` matches this
+// token, and `maxon-shv2/` is this file's PARENT rather than its subtree — a `module let` is readable in
+// its declaring directory and below it and nowhere else (`specs-shv2/module-keyword.md`,
+// `error.module-let-different-directory`). Declared `module`, this compiles under the C# bootstrap and
+// is refused by shv2 with E2004 at the reader's line, so the only gate that sees it is the SELF-COMPILE.
+export let TestCommandName = "test"
+
+// ⭐ **EVERY TEST PASSED.** Nothing to act on.
+let AllTestsPassedExit = 0 as ExitCode
+
+// ⭐⭐ **SOMETHING FAILED, CRASHED, TIMED OUT, LEAKED, DID NOT RUN — OR NO TESTS WERE FOUND.** That last
+// one shares this code with a failure DELIBERATELY: a zero-test run that exits 0 is the classic CI lie,
+// where a renamed directory or a broken filter reads for months as a green suite.
+let TestsFailedExit = 1 as ExitCode
+
+// ============================================================================================
+// WHERE A TEST BUILD LIVES
+// ============================================================================================
+//
+// ⭐⭐ **`<project>/.maxon/test/`, AND EVERY PART OF THAT IS A DECISION.**
+//
+// · **Not `temp/`.** A C# `spec-test` run DELETES every `*.exe` under the checkout's `temp/`,
+//   recursively, on every invocation (`maxon-sharp/Testing/TestRunner.cs`) — so a test binary parked
+//   there can vanish underneath a run that is still spawning it.
+// · **Not the project's source tree.** `Compiler.collectMaxonSources` prunes on `.maxonignore` and on
+//   nothing else, so a generated `.maxon` anywhere under the project would be swept into the user's
+//   very next ordinary build — and, worse, into the NEXT `maxon test` run's own discovery, which would
+//   then report every test twice.
+// · **`.maxon/` because that is where this tree already keeps build products** (it is gitignored by
+//   `**/.maxon/`), and per-PROJECT because two projects sharing a staging root cannot run at once.
+// · **With a `.maxonignore` at its root**, written before anything is staged, which is what makes the
+//   second bullet false by construction rather than by hope.
+let ProjectProductsDirName = ".maxon"
+let TestBuildDirName = "test"
+let StagedTreeDirName = "staged"
+let TestBinaryStem = "maxon-test"
+
+// The usage line a refusal prints under itself.
+function testUsageLine() returns String
+	return "maxon-shv2 {TestCommandName} [<directory>] [-t|--filter=PATTERN] [--list] [--json] [options]"
+end 'testUsageLine'
+
+// ============================================================================================
+// THE COMMAND
+// ============================================================================================
+
+export function runTest(args MaxonArgs) returns ExitCode
+	if refusedPositionalBeyond(args, allowed: 1, usage: testUsageLine()) 'tooManyPaths'
+		return NothingRanExitCode
+	end 'tooManyPaths'
+
+	let projectDir = try testProjectDir(args) otherwise 'badPath'
+		return refuseTestRun("'{args.solePositional()}' is not a valid path")
+	end 'badPath'
+
+	if not Directory.isDirectory(projectDir) 'notADirectory'
+		return refuseTestRun("not a directory: {reportPathDisplay(projectDir)}")
+	end 'notADirectory'
+
+	var target = detectHostTarget()
+	match resolveTargetFlag(args.targetSpec) 'targetSel'
+		resolved(t) then target = t
+		unrecognized(spec) then return reportUnknownTarget(spec)
+	end 'targetSel'
+
+	quietTheBuildChatter(args)
+
+	// ⚠ **THE SAME SPELLING REACHES DISCOVERY AND STAGING**, which is what `TestDispatcher
+	// .stageTestBuild` requires: both walk through `Compiler.collectMaxonSources`, so the paths they
+	// produce are equal spellings and a group's file maps onto its staged copy by `FilePath.equals`
+	// rather than by a second derivation.
+	let tests = try discoverTests(projectDir, target: target) otherwise (e) 'discoveryFailed'
+		reportCompileError(e)
+		return NothingRanExitCode
+	end 'discoveryFailed'
+
+	let groups = try groupTestsByFile(tests) otherwise (e) 'groupingRefused'
+		return refuseTestRun(stagingRefusalReason(e))
+	end 'groupingRefused'
+
+	let color = reportColorEnabled(args.colorMode)
+	let selected = selectionFor(groups, total: tests.count() as ReportedTestCount, filter: args.filter)
+
+	// BEFORE any source is synthesized: `--list` compiles nothing, and generating a dispatcher it would
+	// then throw away is the same claim made quietly.
+	if args.listOnly 'listOnly'
+		return listSelectedTests(args, groups: groups, selected: selected, color: color)
+	end 'listOnly'
+
+	if tests.isEmpty() 'noTestsAtAll'
+		return reportNothingToRun("no `test` declarations found under {reportPathDisplay(projectDir)}", args: args, color: color)
+	end 'noTestsAtAll'
+
+	if selectedCount(selected) == 0 'filterMatchedNothing'
+		return reportNothingToRun("no test matched '{args.filter}'", args: args, color: color)
+	end 'filterMatchedNothing'
+
+	return compileAndRunTests(args, projectDir: projectDir, target: target, groups: groups, selected: selected, color: color)
+end 'runTest'
+
+// The project under test: the positional argument, or the working directory when there was none.
+function testProjectDir(args MaxonArgs) returns FilePath throws FilePathError
+	let spelled = args.solePositional()
+	if spelled.isEmpty() 'theWorkingDirectory'
+		return Directory.currentPath()
+	end 'theWorkingDirectory'
+
+	return try FilePath.from(spelled)
+end 'testProjectDir'
+
+// ⛔ **A TEST RUN'S STDOUT IS A REPORT AND ITS STDERR IS THE TESTS', NOT A BUILD LOG.** The default log
+// level is INFO, at which every compile announces the bytes it wrote — noise on a stream a reader is
+// about to diff against a fixture. Silenced unless the caller asked for logging, which is the one thing
+// that says they want the build's voice back; the reference silences the same chatter at the same point
+// and for the same reason (`TestCommand.Execute`).
+function quietTheBuildChatter(args MaxonArgs)
+	if args.logOverridden 'theCallerAskedForLogging'
+		return
+	end 'theCallerAskedForLogging'
+
+	setLogLevel(LogLevel.ERROR)
+end 'quietTheBuildChatter'
+
+// The reason a staging refusal carries. A `match` rather than a field read because `TestStagingError` is
+// a union, and a second arm added there must be answered here rather than silently rendered as the first.
+function stagingRefusalReason(error TestStagingError) returns String
+	return match error 'reason'
+		refused(text) gives text
+	end 'reason'
+end 'stagingRefusalReason'
+
+// ⭐ **A COMMAND-LINE REFUSAL SPEAKS IN THIS COMMAND'S VOICE AND EXITS 2.** 2 is "the run could not
+// happen", which CI must be able to tell from 1 ("the code is broken") — see `Main.NothingRanExitCode`,
+// where this driver's exit codes are decided.
+function refuseTestRun(problem String) returns ExitCode
+	printError("{TestCommandName}: {problem}\n")
+	printError("Usage: {testUsageLine()}\n")
+	return NothingRanExitCode
+end 'refuseTestRun'
+
+// ============================================================================================
+// SELECTION
+// ============================================================================================
+
+// Separates the parts of a comma-separated filter, each of which is matched on its own.
+let FilterPatternSeparator = ","
+
+// ⭐⭐ **WHICH DISCOVERED TESTS THIS RUN SELECTED. NO FILTER KEEPS EVERYTHING.**
+//
+// A pattern matches a test when it is a substring of the test's NAME or of its FILE's DISPLAYED path,
+// so `-t math` finds both a file called math and a test about maths. Comma-separated patterns UNION,
+// which is what makes `-t a,b` mean "run a and b" rather than "run nothing". Matching is
+// case-insensitive: these are prose names a human is retyping off a report.
+//
+// ⚠ **SELECTION IS A RUNTIME ARGUMENT AND NEVER A COMPILE-TIME ONE.** Every discovered test is compiled
+// in every time and `--select=` picks which of them run, which is what lets a filter change between runs
+// without changing the thing being tested.
+function selectionFor(groups TestFileGroupArray, total ReportedTestCount, filter String) returns TestSelection
+	let patterns = filterPatterns(filter)
+
+	// One slot per DISCOVERED test, indexed by run index — see `TestSelection`.
+	var selected = TestSelection.create()
+	for _ in 0 upto total 'oneSlotPerTest'
+		selected.push(false)
+	end 'oneSlotPerTest'
+
+	for group in groups 'eachFile'
+		// Lowered ONCE per file: it is the same haystack for every test the file declares.
+		let loweredPath = reportPathDisplay(group.file).toLower()
+
+		for member in group.tests 'eachTest'
+			if not patterns.isEmpty() and not matchesAnyPattern(patterns, loweredPath: loweredPath, name: member.test.displayName) 'filteredOut'
+				continue
+			end 'filteredOut'
+
+			try selected.set(member.index, value: true) otherwise panic("selectionFor: run index {member.index} is outside the {total} slots minted for it — the slots are one per discovered test and the groups partition exactly those tests")
+		end 'eachTest'
+	end 'eachFile'
+
+	return selected
+end 'selectionFor'
+
+// The patterns a `--filter` value names — split on the separator, each trimmed and lowered, empties
+// dropped. An empty filter therefore names NO pattern, which is how "keep everything" is spelled.
+function filterPatterns(filter String) returns StringArray
+	var patterns = StringArray.create()
+
+	for part in filter.split(FilterPatternSeparator) 'eachPattern'
+		let trimmed = part.trim()
+		if trimmed.isEmpty() 'namesNothing'
+			continue
+		end 'namesNothing'
+
+		patterns.push(trimmed.toLower())
+	end 'eachPattern'
+
+	return patterns
+end 'filterPatterns'
+
+function matchesAnyPattern(patterns StringArray, loweredPath String, name String) returns bool
+	let loweredName = name.toLower()
+
+	for pattern in patterns 'eachPattern'
+		if loweredName.contains(pattern) or loweredPath.contains(pattern) 'matched'
+			return true
+		end 'matched'
+	end 'eachPattern'
+
+	return false
+end 'matchesAnyPattern'
+
+function selectedCount(selected TestSelection) returns ReportedTestCount
+	var chosen = 0 as ReportedTestCount
+
+	for slot in selected 'eachSlot'
+		if slot 'chosen'
+			chosen = chosen + 1
+		end 'chosen'
+	end 'eachSlot'
+
+	return chosen
+end 'selectedCount'
+
+// ============================================================================================
+// --list
+// ============================================================================================
+
+// ⭐ `--list` prints what WOULD run and compiles nothing. A list that found nothing is the same lie a
+// run that found nothing is, so it fails too.
+function listSelectedTests(args MaxonArgs, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+	if args.jsonReport 'machineReadable'
+		let document = testListJson(groups, selected: selected)
+		print("{document}\n")
+	end 'machineReadable' else 'human'
+		print(testListText(groups, selected: selected, color: color))
+	end 'human'
+
+	if selectedCount(selected) == 0 'listedNothing'
+		return TestsFailedExit
+	end 'listedNothing'
+
+	return AllTestsPassedExit
+end 'listSelectedTests'
+
+// ⭐ A run that found nothing to do. It is a FAILURE, and it says why in the REPORT's own voice rather
+// than as an error, because nothing went wrong with the harness — there is simply nothing green to
+// claim. It therefore goes to STDOUT, where the rest of the report goes.
+function reportNothingToRun(reason String, args MaxonArgs, color bool) returns ExitCode
+	if args.jsonReport 'machineReadable'
+		let empty = TestRunReport.create(TestFileResultsArray.create(), compileMs: 0, runMs: 0, bailed: false)
+		let document = testRunJson(empty, showTiming: args.showTiming, emptyReason: reason)
+		print("{document}\n")
+	end 'machineReadable' else 'human'
+		print(testEmptyRunNote(reason, color: color))
+	end 'human'
+
+	return TestsFailedExit
+end 'reportNothingToRun'
+
+// ============================================================================================
+// COMPILE AND RUN
+// ============================================================================================
+
+function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+	let buildRoot = try prepareTestBuildRoot(projectDir) otherwise (e) 'noBuildRoot'
+		return refuseTestRun(stagingRefusalReason(e))
+	end 'noBuildRoot'
+
+	let compileStarted = Clock.nowMs()
+
+	let staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), projectRoot: projectDir, groups: groups) otherwise (e) 'stagingRefused'
+		return refuseTestRun(stagingRefusalReason(e))
+	end 'stagingRefused'
+
+	// A SIBLING of the staged tree, never inside it: the staged root is purged and rewritten on every
+	// run, and a binary living in the tree that gets walked is a file the next run would have to reason
+	// about.
+	let exePath = buildRoot.join("{TestBinaryStem}{executableExtension(target)}")
+	let product = try compileToProduct(staged.buildTargets, target: target, outputOverride: exePath.toString(), runtimeIrNames: RuntimeFunctionNameArray.create(), entryFunction: MaxonTestEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, sourceSelection: SourceSelection.productionAndTests, stagedSourceOrigins: staged.stagedSourceOrigins) otherwise 'didNotCompile'
+		// SILENT about the cause: the pipeline already emitted every diagnostic through the one sink,
+		// and a sentence of our own here would be a second, vaguer report of the same failure.
+		printError("{TestCommandName}: the tests did not compile — the diagnostics above say why\n")
+		return NothingRanExitCode
+	end 'didNotCompile'
+
+	let compileMs = Clock.elapsedMs(compileStarted)
+	let runStarted = Clock.nowMs()
+
+	let plan = TestLaunchPlan.create(product.outputPath, timeoutMs: args.testTimeoutMs)
+	var progress = TestRunProgress.create()
+	var files = TestFileResultsArray.create()
+
+	for group in staged.groups 'eachFile'
+		let results = runFileTests(plan, group: group, selected: selected, isolate: args.isolate, bail: args.bail, progress: progress)
+		if results.isEmpty() 'nothingSelectedInThisFile'
+			continue
+		end 'nothingSelectedInThisFile'
+
+		let fileResults = TestFileResults.create(group.file, results: results)
+
+		// STREAMED for a text run so results appear as they land; a `--json` run is one document and
+		// cannot be emitted in pieces.
+		if not args.jsonReport 'streamTheBlock'
+			print(testFileBlock(fileResults, color: color, showTiming: args.showTiming))
+		end 'streamTheBlock'
+
+		files.push(fileResults)
+	end 'eachFile'
+
+	let report = TestRunReport.create(files, compileMs: compileMs, runMs: Clock.elapsedMs(runStarted), bailed: progress.bailed)
+
+	if args.jsonReport 'machineReadable'
+		let document = testRunJson(report, showTiming: args.showTiming)
+		print("{document}\n")
+	end 'machineReadable' else 'human'
+		print(testRunSummary(report, color: color, showTiming: args.showTiming))
+	end 'human'
+
+	if tallyTestRun(report.files).failed > 0 'somethingIsNotGreen'
+		return TestsFailedExit
+	end 'somethingIsNotGreen'
+
+	return AllTestsPassedExit
+end 'compileAndRunTests'
+
+// ⭐⭐ **CREATE `<project>/.maxon/test/` AND MARK IT AS NOT PART OF THE PROJECT.**
+//
+// ⛔ **THE MARKER IS WRITTEN BEFORE ANYTHING IS STAGED, AND THAT ORDER IS THE WHOLE POINT.**
+// `stageTestBuild` walks the project for its sources, and the NEXT run's `discoverTests` walks it again;
+// both go through `Compiler.collectMaxonSources`, which prunes a subtree carrying `.maxonignore` and
+// prunes nothing else. Without the marker in place first, a second run would sweep the previous run's
+// staged copies into the project — reporting every test twice — and an ordinary `maxon build` of the
+// project would compile the generated entry point as one of its own units.
+//
+// It is rewritten every run rather than written once: `stageTestBuild` purges the staged tree beneath
+// it, and a marker that only ever existed because some earlier run happened to leave it is a premise,
+// not a fact.
+function prepareTestBuildRoot(projectDir FilePath) returns FilePath throws TestStagingError
+	// Interpolated so each argument is a committed `String`: a bare module-`let` constant is ambiguous
+	// between `join`'s String and FilePath overloads (the reason `SpecTestRunner.specTempRootDir` spells
+	// its own directory name that way).
+	let buildRoot = projectDir.join("{ProjectProductsDirName}").join("{TestBuildDirName}")
+	if not Directory.create(buildRoot) 'couldNotCreateIt'
+		throw TestStagingError.refused("could not create the test build directory {reportPathDisplay(buildRoot)}")
+	end 'couldNotCreateIt'
+
+	let marker = buildRoot.join("{IgnoreMarkerName}")
+	try File.writeText(marker, content: TestBuildIgnoreMarkerText) otherwise throw TestStagingError.refused("could not write {reportPathDisplay(marker)}, which is what keeps this run's generated source out of your own build")
+
+	return buildRoot
+end 'prepareTestBuildRoot'
+
+// ⚠ **THE MARKER IS A FLAG AND ITS CONTENTS ARE NEVER READ** (`Compiler.holdsIgnoreMarker` is a bare
+// `File.exists`), so this text is for the person who finds the directory and wonders what it is.
+let TestBuildIgnoreMarkerText = "Generated by `maxon test`. Everything under here is a COPY of your project with a test dispatcher appended, plus the binary built from it. Nothing here is yours to edit, and this marker is what keeps it out of your own builds.\n"

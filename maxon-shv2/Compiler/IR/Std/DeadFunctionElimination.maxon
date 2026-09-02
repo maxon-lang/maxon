@@ -244,7 +244,7 @@ end 'requireUnreachableStdlibStayedDead'
 // ⚠ Kind 3's names are NOT checked this way and must not be: an `.rdata` witness slot names `Type.method`, a
 // PARSED method, so parsed-ness there is the ordinary case rather than the error.
 function seedRoots(globalData GlobalDataTable, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
-	markLiveFunction(UserEntryName.toByteArray(), byName: index.byName, reached: reached, worklist: worklist)
+	markLiveFunction(project.entryFunctionName, byName: index.byName, reached: reached, worklist: worklist)
 	seedTestRoots(index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
@@ -443,6 +443,7 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		osEnvBlock to osEnvBlockFree then break 'op'
 		// G3: an ordered access is inline machine code on every lane, so it names no Maxon callee.
 		loadAcquire or storeRelease then break 'op'
+		osHandleFileType then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

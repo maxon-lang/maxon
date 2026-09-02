@@ -410,6 +410,7 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 		osFileOpenWriteExecutable gives BlockExit.notAValueReturn
 		osEnvBlock to osEnvBlockFree gives BlockExit.notAValueReturn
 		loadAcquire or storeRelease gives BlockExit.notAValueReturn
+		osHandleFileType gives BlockExit.notAValueReturn
 	end 'term'
 end 'returnedValueOf'
 
@@ -454,6 +455,7 @@ type ConstructorScan
 			// G3: an ordered access to a stack record would be a publication nothing can read — a promoted
 			// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 			loadAcquire or storeRelease gives false
+			osHandleFileType gives false
 		end 'op'
 	end 'admit'
 
@@ -711,6 +713,7 @@ function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction
 			osFileOpenWriteExecutable then break 'op'
 			osEnvBlock to osEnvBlockFree then break 'op'
 			loadAcquire or storeRelease then break 'op'
+			osHandleFileType then break 'op'
 		end 'op'
 	end 'eachOp'
 	return tracked
@@ -808,6 +811,7 @@ function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName Fu
 		osFileOpenWriteExecutable then collectStdOpUses(op, referenced: readByOtherOps)
 		osEnvBlock to osEnvBlockFree then collectStdOpUses(op, referenced: readByOtherOps)
 		loadAcquire or storeRelease then collectStdOpUses(op, referenced: readByOtherOps)
+		osHandleFileType then collectStdOpUses(op, referenced: readByOtherOps)
 	end 'shape'
 end 'scanOneOp'
 
@@ -930,6 +934,7 @@ function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameI
 		osFileOpenWriteExecutable gives ConstructorCallSite.notAConstructorCall
 		osEnvBlock to osEnvBlockFree gives ConstructorCallSite.notAConstructorCall
 		loadAcquire or storeRelease gives ConstructorCallSite.notAConstructorCall
+		osHandleFileType gives ConstructorCallSite.notAConstructorCall
 	end 'op'
 end 'constructorCallAt'
 
@@ -1142,6 +1147,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 		// G3: an ordered access to a stack record would be a publication nothing can read — a promoted
 		// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 		loadAcquire or storeRelease gives false
+		osHandleFileType gives false
 	end 'op'
 end 'opDropsAPromotedRecord'
 

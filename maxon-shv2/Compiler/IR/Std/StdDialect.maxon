@@ -2519,6 +2519,36 @@ export union StdOp
 	// false` is exact on both lanes: `mov`, `STLR` and `LDAR` write no condition flags.
 	loadAcquire(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	storeRelease(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isCmp: false}
+	// --- WHAT KIND OF OBJECT IS THIS STANDARD-STREAM HANDLE? ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `storeRelease`, per the band-append invariant every
+	// entry above states: a mid-band insert is silently swallowed by a `… to X` range arm. It carries
+	// `category: system`, placing it logically in the system band independent of this tail position.
+	//
+	// `osHandleFileType(result, handle)` = `GetFileType(handle)`. One VALUE operand — the handle
+	// `osStdHandle` answers with — and it DEFINES the file-type word. `FILE_TYPE_CHAR` (2) is the answer
+	// that means "a character device", which is what `__tty_stdout_wants_color` tests for.
+	//
+	// ⭐⭐ **IT ANSWERS WIN32'S OWN ENUMERATION AND NOT A BOOL, WHICH IS THIS TIER'S ESTABLISHED
+	// CONVENTION RATHER THAN A CONCESSION.** `osFileAttributes` already hands `GetFileAttributesA`'s DWORD
+	// to a target-neutral runtime builder that masks it and tests `FILE_ATTRIBUTE_DIRECTORY`
+	// (`ManagedDirectoryRuntime.buildManagedDirectoryExists`), and the POSIX lane translates its `stat`
+	// into that vocabulary rather than the Std tier learning a second one
+	// (`Arm64DarwinRuntime`'s errno→Win32 mapping makes the identical trade). A lane with `isatty` answers
+	// `FILE_TYPE_CHAR` when it is true and `FILE_TYPE_DISK` when it is not, which is the same translation
+	// one question over.
+	//
+	// ⛔⛔ **AND THE RAW WORD IS WHY THE CALLER MASKS.** `GetFileType` answers a DWORD, so the upper half of
+	// the register it arrives in is whatever the callee left there — a raw i64 compared against 2 would
+	// answer `false` for a genuine console the moment that half was not zero. `__md_exists` records the
+	// same hazard from the other end (a register holding `0x00000000FFFFFFFF` is not -1), and the cure is
+	// the same one: mask with `DwordMask` in the builder, where it is one Std op and cannot be forgotten
+	// per lane.
+	//
+	// ⚠ **`isStore: false`** — the call writes through no pointer the caller owns, which is `osEnvBlock`'s
+	// position rather than `osEnvRead`'s. Every other call-barrier flag is set: it IS an indirect call once
+	// lowered.
+	osHandleFileType(resultId ValueId, handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2828,6 +2858,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		// The ordered memory band (G3) — memory accesses, so no arithmetic shape, exactly as their plain
 		// twins have none.
 		loadAcquire or storeRelease then operands.recordNeither()
+		osHandleFileType then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -2923,6 +2954,7 @@ module function classifyLoadOperands(op StdOp, load StdLoadOperands)
 		// ever. That is precisely the reordering `loadAcquire` exists to forbid, so it must not be offered
 		// to the pass as a hoistable load at all. `storeRelease` is not a load in the first place.
 		loadAcquire or storeRelease then load.recordNotALoad()
+		osHandleFileType then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3179,6 +3211,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osFileOpenWriteExecutable(_, pathPtr) then referenced.insert(pathPtr)
 		osEnvBlock then break 'u'
 		osEnvBlockFree(blockPtr) then referenced.insert(blockPtr)
+		osHandleFileType(_, handle) then referenced.insert(handle)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
@@ -3408,6 +3441,7 @@ module function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osFileOpenWriteExecutable(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osEnvBlock(resultId) gives DefinedValueLookup.defines(resultId)
 		osEnvBlockFree gives DefinedValueLookup.none
+		osHandleFileType(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osFileSize(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osFileDelete(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
@@ -3657,6 +3691,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osFileOpenWriteExecutable(resultId, pathPtr) gives StdOp.osFileOpenWriteExecutable(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osEnvBlock(resultId) gives StdOp.osEnvBlock(resultId)
 		osEnvBlockFree(blockPtr) gives StdOp.osEnvBlockFree(remappedValue(blockPtr, subst: subst))
+		osHandleFileType(resultId, handle) gives StdOp.osHandleFileType(resultId, handleId: remappedValue(handle, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -3903,6 +3938,7 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		// nothing. Inlining copies the op unchanged, which preserves its ordering with it.
 		loadAcquire(resultId, addrId, offset, valueType) then return StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
 		storeRelease then return op
+		osHandleFileType then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -4148,6 +4184,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osFileOpenWriteExecutable then break 'term'
 		osEnvBlock to osEnvBlockFree then break 'term'
 		loadAcquire or storeRelease then break 'term'
+		osHandleFileType then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 

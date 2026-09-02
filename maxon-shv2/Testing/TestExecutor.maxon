@@ -1,0 +1,638 @@
+// TestExecutor — runs the compiled test binary and turns what it printed into ATTRIBUTED results.
+//
+// Two rules shape everything here:
+//
+// ⭐⭐ **EVERY RE-RUN IS A PROCESS SPAWN, NEVER A RECOMPILE.** All discovered tests are compiled in,
+// always, and which of them run is a RUNTIME argument (`--select=`). So isolating a test, attributing
+// a process-global leak, and re-running what a dead process never reached each cost one spawn.
+//
+// ⭐⭐ **ABSENCE OF EVIDENCE IS REPORTED AS ABSENCE.** A test that was selected and produced no end
+// marker did not pass. `panic` is uncatchable, so the binary CANNOT report its own death — only the
+// gap in the marker stream can, and treating that gap as anything but a failure is the silent green
+// this command exists to prevent.
+//
+// ⚠ **THE RUN IS SERIAL, AND THAT IS A DECISION RATHER THAN A GAP.** The reference runs shards on a
+// thread pool; shv2 has no in-process thread pool to run them on (its only parallelism is the spec
+// suite's WORKER SUBPROCESSES, which speak a job protocol this command has no use for). A serial run
+// reports in discovery order by construction, which is the property a byte-pinned report needs — the
+// reference has to buy it back with a low-water-mark flush. `maxon test` therefore has no `--workers`,
+// and does not accept one as a no-op: a flag that chose nothing would be a command line that reads as
+// though it did.
+
+// ⭐ **THE PROCESS-GLOBAL LEAK SIGNAL.** A leak-gated Maxon program reports its leak by substituting
+// this for whatever it was going to exit with, at exit — so it is a fact about the PROCESS and names
+// nobody. That is the whole reason a leaking shard has to be re-run test by test.
+let MemoryLeakExitCode = 101
+
+// What a test that was still running when its process hit the deadline reports.
+let KilledByDeadlineText = "still running when the process hit its deadline, and was killed"
+
+// What a re-run reports when a process died before reaching any test at all.
+let NothingStartedText = "the process died before this test began, and re-running the remainder made no progress"
+
+// Heads the reason when no process started at all. Its own constant because the reason after it comes
+// from `stdlib/Subprocess`, and this is the half that says whose failure it is.
+let CouldNotLaunchPrefix = "the test binary could not be launched: "
+
+// ⭐ **WHICH RUN INDICES THIS RUN SELECTED, indexed BY run index.** A flag per discovered test rather
+// than a list of the chosen ones: membership is asked once per test per shard build and once more per
+// test by `--list`, and a scan would make that Θ(tests²) in a project's own size for a question that
+// never changes during a run.
+export typealias TestSelection = Array with bool
+
+// Whether this run selected the test at `index`. Out of range answers FALSE, which is the honest
+// answer and not a swallowed error: the selection is built with one entry per DISCOVERED test, so an
+// index outside it names no test at all.
+export function testIsSelected(selected TestSelection, index TestRunIndex) returns bool
+	return try selected.get(index) otherwise false
+end 'testIsSelected'
+
+// Everything a launch needs that does not change between launches.
+export type TestLaunchPlan
+	// The compiled test binary. Spawned many times; compiled once.
+	export let binary as FilePath
+	// How long ONE process may run before it is killed. It bounds the process and therefore the whole
+	// SHARD — which by default is a whole file — so it is a budget a file's tests share, and `--isolate`
+	// is what gives every test the full budget to itself.
+	export let timeoutMs as DurationMs
+
+	export static function create(binary FilePath, timeoutMs DurationMs) returns TestLaunchPlan
+		return Self{binary: binary, timeoutMs: timeoutMs}
+	end 'create'
+end 'TestLaunchPlan'
+
+// How many failures `--bail` allows before the run stops claiming work. A UNION and not a count with
+// zero meaning "no limit": zero is a perfectly good limit to ask for, and collapsing it with absence is
+// the sentinel that makes `--bail=0` mean the opposite of what it says.
+export union BailPolicy
+	never
+	after(failures ReportedTestCount)
+end 'BailPolicy'
+
+// ⭐ **HOW LONG ONE TEST PROCESS MAY RUN WHEN NOBODY SAID.** Stated in milliseconds because a unit test
+// that needs whole seconds is already a problem the number should make visible.
+export let DefaultTestTimeoutMs = 5000 as DurationMs
+
+// A positive whole number a `test` flag named.
+export typealias PositiveFlagNumber = int(1 to i64.max)
+
+// ⭐⭐ **ONE PARSER FOR `--bail=<n>` AND `--timeout=<ms>`.** "A positive whole number, or this is a BAD
+// OPTION" is one rule, and two copies of it are two chances to spell the refusal differently — which is
+// the failure `SpecWorkerPool.parseWorkerCount`'s own note is about: a bad value is a BAD OPTION and
+// never a clamp, because quietly running the default instead answers a question the caller never asked.
+//
+// ⚠ **THERE IS NO UPPER BOUND, AND THAT IS DELIBERATE.** Neither flag has a real ceiling — a bail limit
+// past the number of tests simply never fires, and a deadline past any plausible test simply never
+// expires — so a cap would be a refusal this command invented, with its own untested road behind it.
+// A flag with a genuine ceiling (`--workers`, `--rungs`, `--repeat`) states it at its own parser.
+export union PositiveFlagValue
+	valid(number PositiveFlagNumber)
+	invalid
+end 'PositiveFlagValue'
+
+export function parsePositiveFlagValue(raw String) returns PositiveFlagValue
+	let value = try int.fromString(raw) otherwise return PositiveFlagValue.invalid
+
+	// Zero is refused rather than accepted. `--bail=0` asks a run to stop before claiming ANY work and
+	// `--timeout=0` asks for a process killed before it starts; both are far likelier to be a typo than
+	// an intention, and both would produce a run that proved nothing while exiting like one that had.
+	if value < 1 'notPositive'
+		return PositiveFlagValue.invalid
+	end 'notPositive'
+
+	return PositiveFlagValue.valid(value as PositiveFlagNumber)
+end 'parsePositiveFlagValue'
+
+// The run's running totals, carried ACROSS files because `--bail` is a fact about the whole run rather
+// than about any one file.
+export type TestRunProgress
+	export var failures as ReportedTestCount
+	export var bailed as bool
+
+	export static function create() returns TestRunProgress
+		return Self{failures: 0, bailed: false}
+	end 'create'
+end 'TestRunProgress'
+
+// What one process launch produced.
+union TestLaunchResult
+	// The process ran to completion, whatever it exited with.
+	ran(exitCode ExitCodeValue, stderr String)
+	// The process outlived its deadline and was killed. ⚠ **NO STREAM SURVIVES THIS** — `Subprocess`
+	// reports a deadline by THROWING, so the bytes the child had already written are gone with it,
+	// and there is nothing to attribute from. `executeShard` answers this arm before attribution for
+	// exactly that reason.
+	deadlineExpired
+	// Nothing started: the binary is missing, unreadable, or the spawn itself failed.
+	couldNotStart(reason String)
+end 'TestLaunchResult'
+
+// Run ONE process over `indices`.
+//
+// ⭐⭐ **A TEST BINARY RUNS IN THE WORKING DIRECTORY THE `maxon test` PROCESS WAS INVOKED FROM, AND
+// THAT IS A CONTRACT RATHER THAN AN ACCIDENT.** `inheritedWorkingDir()` is the explicit spelling of it
+// (`SpecTestRunner` requires that argument precisely so no spawn can leave the question unanswered), and
+// nothing anywhere in this command changes directory — not the staging, which writes through absolute
+// and project-relative paths, and not the compile, which is handed paths rather than a cwd.
+//
+// ⛔ **IT IS NOT THE PROJECT DIRECTORY, AND A TEST THAT OPENS A FILE DEPENDS ON WHICH.** The obvious
+// alternative — run each binary in the project it was built from — is the wrong one: `maxon test
+// sub/project` from a checkout root would then run its tests somewhere the author never typed, so a
+// relative path in a test body would mean one thing when they ran it by hand and another under CI. The
+// author's own shell is the one place both agree.
+//
+// ⚠ The tests under `Testing/test-command/` are the live consumer of this rule: they locate the fixture
+// corpus and the compiler under test by paths relative to the CHECKOUT ROOT, and say so in their header.
+// A change here silently breaks them, which is why the rule is written where it is decided.
+function launchTests(plan TestLaunchPlan, indices TestRunIndexArray) returns TestLaunchResult
+	var argv = StringArray.create()
+	argv.push("{testSelectFlag()}{formatTestSelection(indices)}")
+
+	let run = try runProcess(Executable.path(plan.binary), argv: argv, workingDirectory: inheritedWorkingDir(), timeoutMs: plan.timeoutMs) otherwise (e) 'didNotRun'
+		return launchFailureOf(e)
+	end 'didNotRun'
+
+	return TestLaunchResult.ran(run.exitCode, stderr: run.stderr)
+end 'launchTests'
+
+// Which kind of failure a spawn reported. ⚠ **A DEADLINE IS NOT A LAUNCH FAILURE** — the process ran,
+// and one of its tests is the reason it was killed — so it is classified out first and the remaining
+// arms share ONE message site rather than repeating `displayReason()` four times.
+function launchFailureOf(error SubprocessError) returns TestLaunchResult
+	let killedAtTheDeadline = match error 'kind'
+		timeout gives true
+		executableNotFound gives false
+		spawnFailed gives false
+		ioFailed gives false
+		inputTooLarge gives false
+	end 'kind'
+
+	if killedAtTheDeadline 'outlivedItsBudget'
+		return TestLaunchResult.deadlineExpired
+	end 'outlivedItsBudget'
+
+	return TestLaunchResult.couldNotStart(error.displayReason())
+end 'launchFailureOf'
+
+// The two facts attribution reads off a launch that actually produced a stream.
+type AttributableLaunch
+	// The stream to attribute from — EMPTY for a process that never started.
+	export let stderr as String
+	// Whether the PROCESS reported the memory-leak signal. A bool and not the raw exit code, because
+	// this is the only question attribution asks of it; a code carried further would invite a second
+	// reader that decided something else from the same number.
+	export let leaked as bool
+	// What to say when the LAUNCH itself was the failure — empty for a process that ran.
+	export let launchProblem as String
+
+	static function create(stderr String, leaked bool, launchProblem String) returns AttributableLaunch
+		return Self{stderr: stderr, leaked: leaked, launchProblem: launchProblem}
+	end 'create'
+end 'AttributableLaunch'
+
+function attributableLaunch(launch TestLaunchResult) returns AttributableLaunch
+	match launch 'how'
+		ran(exitCode, stderr) then return AttributableLaunch.create(stderr, leaked: exitCode == MemoryLeakExitCode, launchProblem: "")
+		deadlineExpired then panic("attributableLaunch: a launch killed at its deadline never reaches attribution — `executeShard` answers that arm first, because a killed process leaves no stream to attribute from")
+		couldNotStart(reason) then return AttributableLaunch.create("", leaked: false, launchProblem: "{CouldNotLaunchPrefix}{reason}")
+	end 'how'
+end 'attributableLaunch'
+
+function hitTheDeadline(launch TestLaunchResult) returns bool
+	return match launch 'how'
+		ran gives false
+		deadlineExpired gives true
+		couldNotStart gives false
+	end 'how'
+end 'hitTheDeadline'
+
+// ============================================================================================
+// THE MARKER STREAM
+// ============================================================================================
+
+// One test as the stream reported it — finished the moment its successor began or the stream ended, and
+// never mutated afterwards.
+type ObservedTest
+	export let index as TestRunIndex
+	// Whether an END marker closed it. FALSE means the process stopped while this test was running.
+	export let ended as bool
+	export let passed as bool
+	export let nanos as DurationNanos
+	export let thrown as ThrownReport
+	export let output as String
+
+	static function create(index TestRunIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String) returns ObservedTest
+		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output}
+	end 'create'
+end 'ObservedTest'
+
+typealias ObservedTestArray = Array with ObservedTest
+
+// ⭐⭐ **THE WALK OVER ONE LAUNCH'S EVENT STREAM.** A type rather than a loop body, because a `match`
+// arm is ONE statement: the four event shapes each become one call here, and the state they share is
+// this record's rather than seven locals the loop would have to carry.
+type TestStreamWalk
+	// Every test the stream reported, in the order it reported them.
+	var observed as ObservedTestArray
+	// Output and `threw` reports that belonged to NO test. Kept rather than dropped: a discarded
+	// report is the one thing a reader would most want back when trying to explain a run that made no
+	// sense.
+	var stray as String
+
+	// ⚠ **`inFlight` GATES EVERY FIELD BELOW IT**, which are meaningless when it is false. There is
+	// exactly ONE reader of them (`closeInFlight`) and exactly one writer of the set (`began`), so
+	// they cannot be read in a state nobody set them for.
+	var inFlight as bool
+	var inFlightIndex as TestRunIndex
+	var inFlightEnded as bool
+	var inFlightPassed as bool
+	var inFlightNanos as DurationNanos
+	var inFlightThrown as ThrownReport
+	var inFlightOutput as String
+
+	static function create() returns TestStreamWalk
+		return Self{observed: ObservedTestArray.create(), stray: "", inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: ""}
+	end 'create'
+
+	// A begin marker. Whatever was already running is closed first — a begin with no matching end is
+	// exactly how a crash names its victim, and dropping the earlier test here would lose that.
+	function began(index TestRunIndex)
+		closeInFlight()
+
+		inFlight = true
+		inFlightIndex = index
+		inFlightEnded = false
+		inFlightPassed = false
+		inFlightNanos = 0
+		inFlightThrown = ThrownReport.absent
+		inFlightOutput = ""
+	end 'began'
+
+	// An end marker. One for a test that did not begin — or for the wrong one — is IGNORED: the
+	// dispatcher cannot emit that, so the stream is damaged, and leaving the running test open reports
+	// it as crashed, which is the loud outcome that deserves.
+	function ended(index TestRunIndex, passed bool, nanos DurationNanos)
+		if not inFlight or inFlightIndex != index 'notTheTestThatIsRunning'
+			return
+		end 'notTheTestThatIsRunning'
+
+		inFlightEnded = true
+		inFlightPassed = passed
+		inFlightNanos = nanos
+		closeInFlight()
+	end 'ended'
+
+	function threw(errorType String, errorCase String, file String, line ReportedSourceLine)
+		if not inFlight 'belongsToNoTest'
+			appendStray("{errorType}.{errorCase} reported at {file}:{line} outside any test")
+			return
+		end 'belongsToNoTest'
+
+		inFlightThrown = ThrownReport.reported(ThrownTestError.create(errorType, errorCase: errorCase, file: file, line: line))
+	end 'threw'
+
+	function wrote(text String)
+		if not inFlight 'belongsToNoTest'
+			appendStray(text)
+			return
+		end 'belongsToNoTest'
+
+		if not inFlightOutput.isEmpty() 'notTheFirstLine'
+			inFlightOutput.append("\n")
+		end 'notTheFirstLine'
+
+		inFlightOutput.append(text)
+	end 'wrote'
+
+	// The stream ended, and this is the walk's PRODUCT. Whatever was still running is closed
+	// unfinished, which is what makes it a crash.
+	function finish() returns TestStreamResult
+		closeInFlight()
+		return TestStreamResult.create(observed, stray: stray)
+	end 'finish'
+
+	function closeInFlight()
+		if not inFlight 'nothingRunning'
+			return
+		end 'nothingRunning'
+
+		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput))
+		inFlight = false
+	end 'closeInFlight'
+
+	function appendStray(text String)
+		if not stray.isEmpty() 'notTheFirstLine'
+			stray.append("\n")
+		end 'notTheFirstLine'
+
+		stray.append(text)
+	end 'appendStray'
+end 'TestStreamWalk'
+
+// What one walk of a launch's stream produced. A record rather than two fields read off the walk, so
+// the walk hands back a finished answer instead of being interrogated for one.
+type TestStreamResult
+	export let observed as ObservedTestArray
+	export let stray as String
+
+	static function create(observed ObservedTestArray, stray String) returns TestStreamResult
+		return Self{observed: observed, stray: stray}
+	end 'create'
+end 'TestStreamResult'
+
+// Which test the stream reported at `index`, if any.
+union ObservedLookup
+	found(observed ObservedTest)
+	absent
+end 'ObservedLookup'
+
+function observedAt(observed ObservedTestArray, index TestRunIndex) returns ObservedLookup
+	for candidate in observed 'eachObserved'
+		if candidate.index == index 'thisOne'
+			return ObservedLookup.found(candidate)
+		end 'thisOne'
+	end 'eachObserved'
+
+	return ObservedLookup.absent
+end 'observedAt'
+
+// ============================================================================================
+// ATTRIBUTION
+// ============================================================================================
+
+// What ONE launch settled, and what it left open.
+type ShardStep
+	export let settled as UnitTestResultArray
+	// Tests this launch did not answer for. Running THEM is the only honest way to learn what they do.
+	export let unobserved as TestRunIndexArray
+	// The stream's non-protocol text that belonged to no test — the fallback report for a test that
+	// died without writing anything of its own.
+	export let stray as String
+
+	static function create(settled UnitTestResultArray, unobserved TestRunIndexArray, stray String) returns ShardStep
+		return Self{settled: settled, unobserved: unobserved, stray: stray}
+	end 'create'
+end 'ShardStep'
+
+function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected TestRunIndexArray, launch TestLaunchResult) returns ShardStep
+	let attributable = attributableLaunch(launch)
+
+	var walk = TestStreamWalk.create()
+	for event in parseTestEvents(attributable.stderr) 'eachEvent'
+		match event 'shape'
+			began(index) then walk.began(index)
+			ended(index, passed, nanos) then walk.ended(index, passed: passed, nanos: nanos)
+			threw(errorType, errorCase, file, line) then walk.threw(errorType, errorCase: errorCase, file: file, line: line)
+			outputLine(text) then walk.wrote(text)
+		end 'shape'
+	end 'eachEvent'
+	let observed = walk.finish()
+
+	// A launch that never started REPLACES the stream's own text rather than adding to it: there is no
+	// stream, and the reason nothing ran is the only thing worth reporting.
+	let stray = attributable.launchProblem if not attributable.launchProblem.isEmpty() else observed.stray
+
+	var settled = UnitTestResultArray.create()
+	var unobserved = TestRunIndexArray.create()
+
+	for index in expected 'eachExpectedTest'
+		match observedAt(observed.observed, index: index) 'wasItSeen'
+			absent then unobserved.push(index)
+			found(observation) then settled.push(resultFor(group, observation: observation, stray: stray))
+		end 'wasItSeen'
+	end 'eachExpectedTest'
+
+	return ShardStep.create(withLeakAttribution(plan, results: settled, leaked: attributable.leaked), unobserved: unobserved, stray: stray)
+end 'attributeLaunch'
+
+// ⭐ **ONE TEST'S VERDICT, FROM ITS MARKERS.** A test that ended reports what it said; one that began
+// and never ended took the process down with it, which nothing inside the binary could have said.
+function resultFor(group TestFileGroup, observation ObservedTest, stray String) returns UnitTestResult
+	let test = testOf(group, index: observation.index)
+
+	if observation.ended 'finishedUnderItsOwnPower'
+		let outcome = UnitTestOutcome.passed if observation.passed else UnitTestOutcome.failed
+		return UnitTestResult.create(observation.index, test: test, outcome: outcome, nanos: observation.nanos, thrown: observation.thrown, output: observation.output)
+	end 'finishedUnderItsOwnPower'
+
+	// ⚠ THE FALLBACK IS THE SHARD'S STRAY TEXT AND NEVER THE RAW STREAM. Falling back to the stream
+	// would put the wire protocol itself into a user's report, so a silently-crashing test would be
+	// reported as its own begin marker.
+	let output = observation.output if not observation.output.isEmpty() else stray
+	return UnitTestResult.create(observation.index, test: test, outcome: UnitTestOutcome.crashed, nanos: 0, thrown: observation.thrown, output: output)
+end 'resultFor'
+
+// ⭐⭐ **A LEAK IS DETECTED PROCESS-GLOBALLY AND NAMES NOBODY**, so with more than one test in the
+// process there is no evidence to reason from and each PASSING test is re-run alone — the only thing
+// that turns a process-global signal into a test-level one. A test that already FAILED keeps its
+// failure: the assertion is the actionable report, and a leak on the way out of a failing test is a
+// consequence of it.
+function withLeakAttribution(plan TestLaunchPlan, results UnitTestResultArray, leaked bool) returns UnitTestResultArray
+	if not leaked 'noLeakSignal'
+		return results
+	end 'noLeakSignal'
+
+	let onlyCandidate = results.count() == 1
+
+	var updated = UnitTestResultArray.create()
+	for result in results 'eachResult'
+		if result.outcome != UnitTestOutcome.passed 'alreadyHasItsOwnVerdict'
+			updated.push(result)
+			continue
+		end 'alreadyHasItsOwnVerdict'
+
+		if onlyCandidate 'theOnlyTestInThatProcess'
+			updated.push(asLeaked(result))
+			continue
+		end 'theOnlyTestInThatProcess'
+
+		if leakedAlone(plan, index: result.index) 'leakedOnItsOwn'
+			updated.push(asLeaked(result))
+			continue
+		end 'leakedOnItsOwn'
+
+		updated.push(result)
+	end 'eachResult'
+
+	return updated
+end 'withLeakAttribution'
+
+function asLeaked(result UnitTestResult) returns UnitTestResult
+	return UnitTestResult.create(result.index, test: result.test, outcome: UnitTestOutcome.leaked, nanos: result.nanos, thrown: result.thrown, output: result.output)
+end 'asLeaked'
+
+function leakedAlone(plan TestLaunchPlan, index TestRunIndex) returns bool
+	return match launchTests(plan, indices: soleIndex(index)) 'how'
+		ran(exitCode, _) gives exitCode == MemoryLeakExitCode
+		// A test that HANGS when run alone did not leak; whatever verdict the shard gave it stands.
+		deadlineExpired gives false
+		couldNotStart gives false
+	end 'how'
+end 'leakedAlone'
+
+// ============================================================================================
+// SHARDS
+// ============================================================================================
+
+// One process launch's worth of work: the run indices it runs, all from ONE file.
+typealias TestShardArray = Array with TestRunIndexArray
+
+function soleIndex(index TestRunIndex) returns TestRunIndexArray
+	var only = TestRunIndexArray.create()
+	only.push(index)
+	return only
+end 'soleIndex'
+
+function shardsOf(group TestFileGroup, selected TestSelection, isolate bool) returns TestShardArray
+	var shards = TestShardArray.create()
+	var wholeFile = TestRunIndexArray.create()
+
+	for member in group.tests 'eachTest'
+		if not testIsSelected(selected, index: member.index) 'notInThisRun'
+			continue
+		end 'notInThisRun'
+
+		if isolate 'itsOwnProcess'
+			shards.push(soleIndex(member.index))
+		end 'itsOwnProcess' else 'theFilesProcess'
+			wholeFile.push(member.index)
+		end 'theFilesProcess'
+	end 'eachTest'
+
+	if not wholeFile.isEmpty() 'theFileRunsAsOne'
+		shards.push(wholeFile)
+	end 'theFileRunsAsOne'
+
+	return shards
+end 'shardsOf'
+
+// ⭐⭐ **RUN ONE SHARD TO COMPLETION, launching as many processes as ATTRIBUTION requires.**
+//
+// The loop exists because one launch cannot always answer for every test it was given: a process that
+// dies mid-shard leaves the tests after the casualty unobserved, and the only honest way to learn what
+// they do is to run them. It terminates because every iteration either produces a result for at least
+// one test or gives up on the rest BY NAME.
+function executeShard(plan TestLaunchPlan, group TestFileGroup, indices TestRunIndexArray) returns UnitTestResultArray
+	var results = UnitTestResultArray.create()
+	var remaining = indices.clone()
+
+	while not remaining.isEmpty() 'untilEveryTestIsAnswered'
+		let launch = launchTests(plan, indices: remaining)
+
+		if hitTheDeadline(launch) 'killedAtItsDeadline'
+			appendResults(results, more: deadlineVerdicts(plan, group: group, indices: remaining))
+			break
+		end 'killedAtItsDeadline'
+
+		let step = attributeLaunch(plan, group: group, expected: remaining, launch: launch)
+		appendResults(results, more: step.settled)
+
+		if step.unobserved.count() == remaining.count() 'thisLaunchAnsweredForNothing'
+			// No progress: running the same set again would loop. Say so against each test by name,
+			// rather than retrying forever or quietly dropping them.
+			appendResults(results, more: unobservedVerdicts(group, indices: step.unobserved, reason: step.stray))
+			break
+		end 'thisLaunchAnsweredForNothing'
+
+		remaining = step.unobserved.clone()
+	end 'untilEveryTestIsAnswered'
+
+	return results
+end 'executeShard'
+
+// ⭐⭐ **A DEADLINE IS A FACT ABOUT THE PROCESS, AND `Subprocess` REPORTS IT BY THROWING — so nothing
+// the child had already written survives to say WHICH test was running.** With one test in the process
+// there is only one candidate and no evidence is needed; with more, each is re-run ALONE, which is the
+// same move a leak needs and for the same reason. The recursion is one level deep: a shard of one takes
+// the branch above.
+function deadlineVerdicts(plan TestLaunchPlan, group TestFileGroup, indices TestRunIndexArray) returns UnitTestResultArray
+	var verdicts = UnitTestResultArray.create()
+
+	if indices.count() == 1 'exactlyOneCandidate'
+		let index = try indices.get(0) otherwise panic("deadlineVerdicts: index 0 exists — the count is exactly 1 one line above")
+		verdicts.push(UnitTestResult.create(index, test: testOf(group, index: index), outcome: UnitTestOutcome.timedOut, nanos: 0, thrown: ThrownReport.absent, output: KilledByDeadlineText))
+		return verdicts
+	end 'exactlyOneCandidate'
+
+	for index in indices 'eachTest'
+		appendResults(verdicts, more: executeShard(plan, group: group, indices: soleIndex(index)))
+	end 'eachTest'
+
+	return verdicts
+end 'deadlineVerdicts'
+
+// Tests nothing observed. NOT a pass and not a failure of their own: they were selected, and the
+// process they were selected for never reached them.
+function unobservedVerdicts(group TestFileGroup, indices TestRunIndexArray, reason String) returns UnitTestResultArray
+	let output = reason if not reason.isEmpty() else NothingStartedText
+
+	var verdicts = UnitTestResultArray.create()
+	for index in indices 'eachTest'
+		verdicts.push(UnitTestResult.create(index, test: testOf(group, index: index), outcome: UnitTestOutcome.didNotRun, nanos: 0, thrown: ThrownReport.absent, output: output))
+	end 'eachTest'
+
+	return verdicts
+end 'unobservedVerdicts'
+
+// The discovered test one run index names. A scan, and the bound is the reason: a shard is built from
+// ONE group's own members, so this walks that file's tests and not the run's.
+function testOf(group TestFileGroup, index TestRunIndex) returns DiscoveredTest
+	for member in group.tests 'eachMember'
+		if member.index == index 'thisOne'
+			return member.test
+		end 'thisOne'
+	end 'eachMember'
+
+	panic("testOf: run index {index} is not one of {group.file.toString()}'s tests — every shard is built from ONE group's own members, so an index that reaches here means a shard and a group came apart")
+end 'testOf'
+
+function appendResults(results UnitTestResultArray, more UnitTestResultArray)
+	for result in more 'eachResult'
+		results.push(result)
+	end 'eachResult'
+end 'appendResults'
+
+// ============================================================================================
+// ONE FILE
+// ============================================================================================
+
+// ⭐ **RUN ONE FILE'S SELECTED TESTS.** The unit is the file because that is what the report groups by
+// and what a dispatcher was generated for; `--isolate` splits it into one process per test without
+// changing anything a reader sees except which output belongs to whom.
+//
+// ⚠ **THE RESULTS COME BACK IN DECLARATION ORDER WITH NOTHING SORTING THEM, and that is a property of
+// the serial run rather than an assumption.** Shards are built in member order, a shard's launches each
+// answer for a PREFIX of what remains, and the deadline path re-runs its indices in order — so every
+// append is in index order already. The reference has to sort here because its shards finish on
+// whichever thread wins; with no pool there is no race to undo.
+export function runFileTests(plan TestLaunchPlan, group TestFileGroup, selected TestSelection, isolate bool, bail BailPolicy, progress TestRunProgress) returns UnitTestResultArray
+	var results = UnitTestResultArray.create()
+
+	for shard in shardsOf(group, selected: selected, isolate: isolate) 'eachShard'
+		// ⚠ **CHECKED BEFORE CLAIMING, NEVER DURING.** A shard already running finishes and reports —
+		// killing it would throw away results that were already paid for — which is why `--bail=N` is
+		// documented as "stop claiming new work after N failures" and not as "stop at N".
+		if bailReached(bail, failures: progress.failures) 'stopClaimingWork'
+			progress.bailed = true
+			break
+		end 'stopClaimingWork'
+
+		let shardResults = executeShard(plan, group: group, indices: shard)
+		for result in shardResults 'eachResult'
+			if result.isFailure() 'notGreen'
+				progress.failures = progress.failures + 1
+			end 'notGreen'
+		end 'eachResult'
+
+		appendResults(results, more: shardResults)
+	end 'eachShard'
+
+	return results
+end 'runFileTests'
+
+function bailReached(bail BailPolicy, failures ReportedTestCount) returns bool
+	return match bail 'policy'
+		never gives false
+		after(limit) gives failures >= limit
+	end 'policy'
+end 'bailReached'

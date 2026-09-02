@@ -644,6 +644,9 @@ type StdToArm64Lowering
 			osEnvBlock to osEnvBlockFree gives 0
 			// G3: an ordered access marshals nothing — one `add` into the IP scratch and one instruction.
 			loadAcquire or storeRelease gives 0
+			// The terminal question is refused below on this lane rather than lowered, so — like the TLS ops
+			// above — no frame is reserved for arguments that will never be marshalled here.
+			osHandleFileType gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -981,6 +984,12 @@ type StdToArm64Lowering
 			// emits no free because the vector is the live table and not a copy. A no-op stub would be the same
 			// claim written where nothing can check it; this panic is the backstop for a producer that starts
 			// emitting one.
+			// ⛔ NO POSIX LANE ANSWERS THIS YET, AND THE REFUSAL IS THE USER-FACING ONE RATHER THAN THIS
+			// PANIC. `isatty(1)` is what would serve it, translated into `FILE_TYPE_CHAR`; until a lane
+			// writes that, `targetProvidesFacility` denies `terminalDetection` here and a source-written
+			// `__Builtins.stdoutWantsAnsiColor()` is refused at its own span with E3104. Reaching this arm
+			// means a producer emitted the op past that gate, which is a compiler bug.
+			osHandleFileType then panic("lowerStdToArm64: `osHandleFileType` asks Win32 what kind of object a handle names, and no POSIX lane has written the `isatty` translation of it yet — `targetProvidesFacility` denies `terminalDetection` on this target, so `installTerminalRuntime` builds the fallback body (`return 0`) here, which emits no such op. Nothing is refused for it: a program that asks is TOLD `false`. Reaching here therefore means an op was emitted on a lane whose facility row says it cannot serve one")
 			osEnvBlockFree then panic("lowerStdToArm64: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
 		end 'lower'
 	end 'lowerBodyOp'
@@ -1052,6 +1061,7 @@ type StdToArm64Lowering
 			osFileOpenWriteExecutable then panic("lowerStdToArm64: an `osFileOpenWriteExecutable` op appeared as a block terminator (lowering bug — an open is a value-producing body op, exactly like its two siblings)")
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToArm64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or storeRelease then panic("lowerStdToArm64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
+			osHandleFileType then panic("lowerStdToArm64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

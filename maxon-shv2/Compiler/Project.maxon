@@ -7539,6 +7539,48 @@ export type Project
 	// is where every later part — the `.data` slots, the producer install, the module flag the runtime
 	// builders read, and through it the entry stub's `__ds_init`/`__ds_shutdown` — takes its one answer from.
 	export var debugStream as bool
+	// ⭐⭐ **THE FUNCTION THIS BUILD ENTERS AT — `main` for every ordinary build, and the ONE place that
+	// name is now written down for a compile to read.** Before this field the answer was spelled three
+	// times in three tiers — `BackendDispatch.UserEntryName`, `SemanticCheck.MainFunctionName` and
+	// `StdToWasm.WasmMainFunctionName` — which is this project's signature bug wearing an entry point's
+	// clothes: the entry stub, the two reachability walks, E3001 and the unused-export audit could each
+	// have come to mean a different function.
+	//
+	// ⭐ **IT IS A PER-BUILD SWITCH, EXACTLY AS `asyncTrace` AND `debugStream` ARE** — set by the driver
+	// right after the project is loaded and never per file, so it lives here beside `target`.
+	//
+	// ⚠ **A NON-`main` ENTRY DOES NOT REMOVE THE PROGRAM'S OWN `main`; IT STOPS REACHING IT.** Both
+	// reachability walks seed from this name alone, so an unnamed `main` is simply pruned — which is what
+	// lets `maxon test` compile a project that HAS a `main` and enter at the generated dispatcher instead.
+	// `main` also keeps its unqualified registration name whatever the entry is
+	// (`Parser.recordScannedSignature`): that exclusion is about the NAME `main`, not about the entry.
+	export var entryFunctionName as ByteArray
+	// ⭐⭐ **THE SOURCE FILES THIS COMPILE ITSELF WROTE, AND THE RESERVED NAMES IT MINTED INTO EACH — the
+	// third provenance the reserved-name doors read.** EMPTY for every ordinary build, and non-empty only
+	// for a caller that STAGED generated Maxon source and named it (`TestDispatcher.stageTestBuild`).
+	//
+	// ⚠ **THE TWO DOORS READ IT DIFFERENTLY, AND THAT ASYMMETRY IS THE POINT** (see
+	// `CompilerWrittenSource`, which carries the measurement). CALLING a `__` name is a per-FILE
+	// exemption — the generated dispatcher has to reach names other files declare, and the call door
+	// conjoins `declaresCallee`, so what it grants is "a `__` name some file in this program declares"
+	// and never "any `__` name". DECLARING one is per-NAME, because a staged `*.test.maxon` is the
+	// author's bytes with a dispatcher appended, and a per-file exemption there would hand the author
+	// the reserved space.
+	//
+	// ⚠ The spellings here are the very ones the caller hands `compileToProduct` as input paths, so
+	// `Queries.compilerMintedNamesIn` compares them against `db.sourcePaths` entries the loader
+	// registered from that same list — one construction, never two derivations of one path.
+	export var compilerWrittenSources as CompilerWrittenSourceArray
+	// ⭐⭐ **WHICH OF THIS COMPILE'S SOURCES ARE COPIES, AND WHOSE FILES THEY ARE COPIES OF.** Empty
+	// for every ordinary build; filled by the one caller that compiles a staged tree
+	// (`TestDispatcher.stageTestBuild`). `reportDiagnostic` rewrites every reported path through it.
+	//
+	// ⚠ **IT IS A DISPLAY MAPPING AND NOTHING ELSE READS IT.** The compile itself works entirely in
+	// staged paths — that is what it was handed and what it registered — so nothing here changes which
+	// bytes are compiled, which names are minted, or where the loader looks. Anything that wanted to
+	// OPEN the file a diagnostic names would want the staged spelling, which is exactly why the rewrite
+	// happens at the sink and not at the load.
+	export var stagedSourceOrigins as StagedSourceOriginArray
 	// ⭐ The SOURCE TEXT of every `async <call>` spawn, keyed by its `asyncCall` op index — what E3073 quotes
 	// back at the author (`'async heavyCompute(5)'`). SPARSE, unlike `opRanges`: only spawn sites have an
 	// entry, so it is a map rather than a parallel array.
@@ -7724,6 +7766,12 @@ export type Project
 			opRanges: SourceRangeTable.create(),
 			asyncTrace: false,
 			debugStream: false,
+			// The DEFAULT entry, read off the one constant that also states which name stays unqualified —
+			// so `checkMainFunction`, the entry stub and the parser's exclusion cannot come to name three
+			// different functions. A caller that enters somewhere else overwrites it after the load.
+			entryFunctionName: MainFunctionName,
+			compilerWrittenSources: CompilerWrittenSourceArray.create(),
+			stagedSourceOrigins: StagedSourceOriginArray.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
@@ -7784,10 +7832,31 @@ end 'rootIsUnderStdlibDirectory'
 
 // Append a diagnostic to the project's sink. The single funnel every reporting
 // pass routes through, so diagnostic bookkeeping lives in one place — which is
-// why the library-blame swap (`Diagnostic.blamedAt`) is applied HERE and not at
-// each of the parse mappers, semantic checks and conformance checks that report.
+// why the library-blame swap (`Diagnostic.blamedAt`) and the staged-source path
+// rewrite (`Diagnostic.reportedUnder`) are both applied HERE and not at each of
+// the parse mappers, semantic checks and conformance checks that report.
+//
+// ⭐ **IT IS THE ONLY DOOR INTO `project.diagnostics`, and the lists that look
+// like a second one are not.** `ParseStaging.commitDiagnostics` folds the
+// parser's own into this function; `Compiler.reportBindingHygieneDiagnostics`
+// drains the hygiene list through it as well; and the deferred name diagnostics
+// reach it via `TypeResolution.reportDeferredNameDiagnostics` calling
+// `reportPositioned`.
+//
+// ⛔ **BUT IT IS NOT EVERY LINE THIS COMPILER PRINTS, AND THE EXCEPTION CARRIES
+// PATHS.** The six `CompileError` arms — `fileNotFound`, `directoryNotFound`,
+// `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound` — never become
+// a `Diagnostic` at all: `Main.reportCompileError` writes them straight to
+// `emitDiagnosticLine`, whose own header owns that argument. They therefore
+// bypass BOTH rules stated here, so a staged path in one of them is still
+// printed as the staged path. Nothing has been measured reaching that state
+// under `maxon test`; it is written down because a rule stated at a funnel
+// invites the assumption that the funnel is total.
 export function reportDiagnostic(project Project, diagnostic Diagnostic)
-	project.diagnostics.push(diagnostic.blamedAt(project.libraryBlame))
+	// AFTER the blame swap, never before: `blamedAt` moves one location into the note and promotes
+	// another into the primary slot, so a rewrite applied first would leave whichever path it moved
+	// still spelled as the staged copy.
+	project.diagnostics.push(diagnostic.blamedAt(project.libraryBlame).reportedUnder(project.stagedSourceOrigins))
 end 'reportDiagnostic'
 
 // True once any diagnostic has been reported. The pipeline's error gate reads

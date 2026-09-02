@@ -50,6 +50,7 @@ public partial class X86CodeEmitter {
     EmitMaxonFindFilename();
     EmitMaxonFindNextFile();
     EmitMaxonDirectoryExists();
+    EmitMaxonStdoutWantsAnsiColor();
     EmitMaxonCreateDirectory();
     EmitMaxonGetCurrentDirectory();
     // === Subprocess runtime (Phase 3.2) ===
@@ -258,6 +259,22 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitRuntimeFunctionEnd();
   }
+
+  // The `--color=auto` question's own constants (see EmitMaxonStdoutWantsAnsiColor).
+  //
+  // ⚠ `STD_OUTPUT_HANDLE` is `(DWORD)-11` written as its unsigned 32-bit spelling, which is what a 32-bit
+  // move into ECX zero-extends exactly — the same form the console-handle selectors take everywhere else.
+  private const long StdOutputHandleSelector = 0xFFFFFFF5;
+  private const long FileTypeCharDevice = 2;
+  // Where the four bytes of the widened file type and both environment probes land. ONE slot: the file
+  // type is spent before the first environment read, and the two reads are sequential.
+  private const int AnsiProbeSlot = -0x18;
+  private const long AnsiProbeBytes = 8;
+  private const long DumbTermLength = 4;
+  // Bit 5 in each of four bytes — the ONE bit ASCII case differs in — and `dumb` as one little-endian
+  // 32-bit word ('d' = 0x64 in the low byte through 'b' = 0x62 in the high one).
+  private const long AsciiCaseFoldMask32 = 0x20202020;
+  private const long DumbTermWordLittleEndian = 0x626D7564;
 
   // Win32 file-creation arguments, named rather than left as bare numbers at the call site.
   private const long GenericWrite = 0x40000000;
@@ -1622,6 +1639,75 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_fnf_real");
     EmitMovRegImm(X86Register.Rax, 1);                   // real entry now in the block
     DefineLabel("rt_fnf_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_stdout_wants_ansi_color() -> 1 when this process's stdout is a terminal that wants ANSI
+  /// colour, 0 otherwise. THREE conditions, all required — the rule <see cref="Ansi.WantsColor"/> states
+  /// for this compiler's own reports, here for a compiled program to ask:
+  ///   1. GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR — a redirected stream is being
+  ///      CAPTURED, and escape sequences in a capture corrupt the thing captured.
+  ///   2. NO_COLOR unset — the user saying no across every tool at once (no-color.org). PRESENCE alone
+  ///      disables, whatever the value, so only the returned COUNT is read and never the text.
+  ///   3. TERM is not a case variant of `dumb` — the terminal saying it cannot render this.
+  ///
+  /// ⚠ THE FILE TYPE IS ROUND-TRIPPED THROUGH FOUR BYTES OF STACK BEFORE IT IS COMPARED, and that is not
+  /// ceremony: GetFileType answers a DWORD, so the upper half of RAX is whatever the callee left there
+  /// and a 64-bit `cmp rax, 2` would call a real console a redirect. The 4-byte store/load is the
+  /// zero-extension, spelled with the two helpers this file already has.
+  ///
+  /// ⭐ THE `dumb` COMPARE IS ONE `or` AND ONE `cmp`, AND IT IS EXACTLY CASE-INSENSITIVE. `b | 0x20 == 'd'`
+  /// holds for `b` in exactly {'D','d'}: the OR can only SET bit 5, so `b` must already carry every other
+  /// bit of 'd' and may differ only in that one. The same holds for 'u','m','b' because all four target
+  /// bytes are LOWERCASE ASCII LETTERS — which is what makes the folded compare exact here, where it
+  /// would not be for a target containing a digit or a symbol. The LENGTH is tested first, so the buffer
+  /// is read only when the API really filled it with four bytes.
+  /// Stack: [rbp-0x18] = 8-byte scratch, shared by the file-type widening and both environment reads.
+  /// </summary>
+  private void EmitMaxonStdoutWantsAnsiColor() {
+    DefineSymdata("__ansi_no_color_env", "NO_COLOR\0"u8.ToArray());
+    DefineSymdata("__ansi_term_env", "TERM\0"u8.ToArray());
+    EmitRuntimeFunctionStart("maxon_stdout_wants_ansi_color", 0, 0x40);
+
+    // 1. Is stdout a character device?
+    EmitMovRegImm(X86Register.Rcx, StdOutputHandleSelector);
+    EmitCallImportOnSystemStack("kernel32.dll", "GetStdHandle");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitCallImportOnSystemStack("kernel32.dll", "GetFileType");
+    EmitMovMemReg(AnsiProbeSlot, X86Register.Rax, 4);
+    EmitMovRegMem(X86Register.Rax, AnsiProbeSlot, 4);
+    EmitCmpRegImm(X86Register.Rax, FileTypeCharDevice);
+    EmitJcc("ne", "rt_ansi_no");
+
+    // 2. Is NO_COLOR set? Only the COUNT is read: 0 means unset, anything else means present.
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__ansi_no_color_env");
+    EmitLeaRegMem(X86Register.Rdx, AnsiProbeSlot);
+    EmitMovRegImm(X86Register.R8, AnsiProbeBytes);
+    EmitCallImportOnSystemStack("kernel32.dll", "GetEnvironmentVariableA");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_ansi_no");
+
+    // 3. Is TERM `dumb`? The buffer is one byte longer than `dumb`, so a value that fits answers its own
+    // length and every longer one answers the size it NEEDS — which is why the count test is exact.
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__ansi_term_env");
+    EmitLeaRegMem(X86Register.Rdx, AnsiProbeSlot);
+    EmitMovRegImm(X86Register.R8, DumbTermLength + 1);
+    EmitCallImportOnSystemStack("kernel32.dll", "GetEnvironmentVariableA");
+    EmitCmpRegImm(X86Register.Rax, DumbTermLength);
+    EmitJcc("ne", "rt_ansi_yes");
+    EmitMovRegMem(X86Register.Rax, AnsiProbeSlot, 4);
+    EmitOrRegImm(X86Register.Rax, AsciiCaseFoldMask32);
+    EmitMovRegImm(X86Register.Rcx, DumbTermWordLittleEndian);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "rt_ansi_no");
+
+    DefineLabel("rt_ansi_yes");
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitJmp("rt_ansi_done");
+    DefineLabel("rt_ansi_no");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    DefineLabel("rt_ansi_done");
     EmitRuntimeFunctionEnd();
   }
 

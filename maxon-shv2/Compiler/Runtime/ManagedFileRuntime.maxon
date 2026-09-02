@@ -422,6 +422,21 @@ end 'emitRawAlloc'
 
 // Release one of this file's raw blocks. A `void` result the caller discards, spelled once so the minted
 // throwaway id is not repeated at a dozen sites.
+// ⭐ **THE NUL-TERMINATED BYTES OF A COMPILE-TIME STRING** — what `GetEnvironmentVariableA` and
+// `OpenFileMappingA` take, and the whole difference from `String.toByteArray()`.
+//
+// ⚠ **IT LIVES HERE, WITH `emitPathToCString`, BECAUSE THIS FILE ALREADY OWNS THE CSTRING QUESTION** —
+// that one terminates a RUNTIME value in a scratch buffer, this one terminates a CONSTANT the compiler
+// embeds in `.rdata`, and both exist for the same OS contract. It was written twice (`DebugStreamRuntime`
+// for `MAXON_DEBUGSTREAM`, `TerminalRuntime` for `NO_COLOR`/`TERM`) before it was written once; two
+// file-private copies COMPILE — the flat-namespace check governs cross-file top-level names and a
+// private declaration is not one — which is exactly why the duplication could sit there unnoticed.
+export function cStringBytes(text String) returns ByteArray
+	var bytes = text.toByteArray()
+	bytes.push(0)
+	return bytes
+end 'cStringBytes'
+
 export function emitRawFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(ptr)))
 end 'emitRawFree'

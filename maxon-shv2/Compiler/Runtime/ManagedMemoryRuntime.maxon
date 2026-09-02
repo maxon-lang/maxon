@@ -1354,7 +1354,7 @@ export function emitManagedByteBuffer(module StdModule, block IrBlock, record Va
 	let elementSize = emitConst(module, block: block, value: ByteStringElementSize, ids: ids)
 	let trivial = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
 	module.appendOp(block, op: StdOp.call(record, callee: ManagedCreateName, args: twoArgs(elementSize, second: trivial)))
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: ManagedReserveName, args: twoArgs(record, second: byteCount)))
+	emitManagedReserve(module, block: block, record: record, elementCount: byteCount, ids: ids)
 	return emitLoadField(module, block: block, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 end 'emitManagedByteBuffer'
 
@@ -1682,6 +1682,18 @@ function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMi
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ManagedCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
+
+// Call `__managed_reserve(arr, n)` — make the buffer hold at least `n` elements, DETACHING a COW/rdata one
+// on the way (that is `__managed_grow`'s first and unconditional act, stated at `buildManagedGrow`). The
+// callee is void, so the minted result is unread; it exists because a `call` op always defines a value.
+//
+// ⚠ **IT IS EXPORTED WHERE `ManagedReserveName` IS NOT, AND THAT IS THE POINT.** Its second caller is
+// `StringRuntime.buildMmToCString`, which reserves one byte of room for a terminator; giving that file the
+// NAME instead would put the callee's spelling in two files, where this puts the OPERATION in one.
+export function emitManagedReserve(module StdModule, block IrBlock, record ValueId, elementCount ValueId, ids ValueMinter)
+	let reserved = ids.mint()
+	module.appendOp(block, op: StdOp.call(reserved, callee: ManagedReserveName, args: twoArgs(record, second: elementCount)))
+end 'emitManagedReserve'
 
 // The element slot ADDRESS `buffer + index·elementSize` — the byte where element `index` starts.
 //
@@ -4868,7 +4880,7 @@ end 'managedMemoryThrows'
 // The keyword was justified here in writing: *"`StringRuntime.buildStrByteAt` raises the very same case —
 // `String.byteAt` is declared `throws __ManagedMemoryError` by the corpus and forwards to `managed.byteAt`,
 // so the two must not be two spellings of one wire format."* That was exactly right, and wave 7 made the
-// forwarding REAL: `String.byteAt` retired onto `stdlib/String.maxon:266`, its synthesized body was deleted,
+// forwarding REAL: `String.byteAt` retired onto `stdlib/String.maxon:284`, its synthesized body was deleted,
 // and every caller of this exit is now in this file. A cross-file keyword with no cross-file caller is a
 // claim nothing checks — and the underlying fact is UNCHANGED, because there is only one raiser now instead
 // of two agreeing ones.

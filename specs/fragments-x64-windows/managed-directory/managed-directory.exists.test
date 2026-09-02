@@ -142,13 +142,24 @@ module {
     x64.mov [rbp-64], rax
     x64.mov [rbp-72], rax
     x64.mov rsi, [rbp-72]
-    x64.mov rdi, [rsi+0]
+    x64.mov rdi, [rsi+8]
     x64.mov r8, [rbp-72]
-    x64.mov r9, [r8+8]
-    x64.add rdi, r9
-    x64.movzx rax, byte ptr [rdi+0]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
+    x64.mov r9, [r8+16]
+    x64.mov rax, -2
+    x64.cmp r9, rax
+    x64.je main.__cstr_probe_0
+    x64.cmp r9, rdi
+    x64.jg main.__cstr_probe_0
+    x64.jmp main.__cstr_fix_0
+  __cstr_probe_0:
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-72]
+    x64.mov rbx, [rdx+8]
+    x64.add rcx, rbx
+    x64.movzx rsi, byte ptr [rcx+0]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
     x64.jne main.__cstr_fix_0
   __cstr_ok_0:
     x64.mov rax, [rbp-72]

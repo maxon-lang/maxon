@@ -414,6 +414,22 @@ export enum IatSlot
 	// pays neither.
 	GetEnvironmentStringsA
 	FreeEnvironmentStringsA
+	// ⭐ **THE TERMINAL-DETECTION IMPORT.** APPENDED AFTER `FreeEnvironmentStringsA` for the reason every
+	// entry above states, and it is the LAST kernel32 slot — the `ws2_32` note below still bounds it.
+	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`).
+	//
+	// ⭐⭐ **`GetFileType`, NOT `GetConsoleMode`, AND THE DIFFERENCE IS WHAT THE QUESTION IS.**
+	// `GetConsoleMode` succeeds only for a CONSOLE handle, so it answers "is this a Windows console" — a
+	// terminal emulator attached through a pty-like device would be refused by it and is exactly the case
+	// `--color=auto` exists to serve. `GetFileType` answers what KIND of object the handle names, and
+	// `FILE_TYPE_CHAR` is the character-device answer a file and a pipe both fail. The reference asks the
+	// same question through `Console.IsOutputRedirected`, which is this call underneath.
+	//
+	// ⚠ It joins the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as its neighbours
+	// do and for the identical reason: an import nothing references still costs its IAT thunk, its
+	// import-lookup entry and its Hint/Name record, and a program that never asks whether it is talking to
+	// a terminal should not pay for one.
+	GetFileType
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -440,7 +456,7 @@ end 'IatSlot'
 // which would point its thunk at another library's Hint/Name entry.
 function slotDll(slot IatSlot) returns ImportDll
 	return match slot 'dll'
-		ExitProcess to FreeEnvironmentStringsA gives ImportDll.kernel32
+		ExitProcess to GetFileType gives ImportDll.kernel32
 		WSAStartup to closesocket gives ImportDll.ws2_32
 	end 'dll'
 end 'slotDll'
@@ -501,7 +517,7 @@ end 'iatSlotIndex'
 // producer added later must extend the range (or fail this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
-		GetEnvironmentVariableA to FreeEnvironmentStringsA gives true
+		GetEnvironmentVariableA to GetFileType gives true
 		ExitProcess to GetModuleFileNameA gives false
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
@@ -1136,7 +1152,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// TLS pair lives in this band too — so a green-thread program needs the whole band, exactly as a traced or
 	// spawning one does. A program with no green threads is unaffected, which is what keeps a non-async
 	// binary byte-identical across this rung.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection
 	let sockets = codeResult.stdModule.usesSockets
 	let idata = buildImportSection(idataRva, optionalImports: optionalImports, sockets: sockets)
 	let idataSize = idata.data.count()

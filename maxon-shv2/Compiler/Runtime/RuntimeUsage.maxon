@@ -376,6 +376,26 @@ export type RuntimeUsage
 	// a prefix answers "may this target run it", a bit answers "must this program carry it", and the three
 	// `__proc_` entries cost nothing alike.
 	export var usesBackgroundPriority as bool
+
+	// The program asks whether its report is going to a terminal that wants colour
+	// (`__Builtins.stdoutWantsAnsiColor` ⇒ `__tty_stdout_wants_color`). Its own bit rather than a corner of
+	// `usesConsoleStdin`, on this file's standing rule: a prefix answers "may this target run it", a bit
+	// answers "must this program carry it", and a program that never reads stdin must not carry that read's
+	// buffer path to link against nothing.
+	//
+	// ⚠ **IT DECLARES `usesHeap`, WHICH IS THE ONE TRANSITIVE COST THE DETECTING BODY HAS.** That body
+	// reserves five bytes of scratch for the two environment reads to land in — `__proc_exe_path`'s position,
+	// one buffer size down. A `.data` slot would avoid the allocator, and it is deliberately NOT used: the
+	// slot would be shared mutable state, and two green threads asking at once could interleave the `TERM`
+	// read with the `NO_COLOR` one.
+	//
+	// ⚠ **ON A LANE THAT TAKES THE FALLBACK BODY THE DECLARATION IS AN OVER-STATEMENT, AND IT IS THE ONE
+	// DIRECTION IT IS SAFE TO BE WRONG IN.** `installTerminalRuntime` picks the body from the TARGET, and the
+	// fallback's whole content is `return 0` — no scratch, no allocator. This bit is settled by
+	// `scanRuntimeUsage`, which walks callees and has no target to consult, so it declares what the entry
+	// point can cost rather than what this build's copy of it will. Over-declaring carries a heap runtime a
+	// program may not touch; under-declaring would leave a call landing on nothing.
+	export var usesTerminalDetection as bool
 	// The program marks a CPU-PARALLEL CHECKPOINT (`__Builtins.parallelBoundary` ⇒ `__parallel_boundary`).
 	// Its own bit, and the CHEAPEST one here to justify: the entry point's whole body is a void return, so it
 	// declares no transitive dependency at all — not the heap, not the scheduler, not the leak gate. Folded
@@ -464,7 +484,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -742,6 +762,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(ProcessBackgroundPriorityName) 'backgroundPriority'
 		usage.usesBackgroundPriority = true
 	end 'backgroundPriority'
+	// The terminal question. A PREFIX test rather than a name, so a second entry point in the band is carried
+	// here by construction rather than remembered — `isTerminalRuntimeCallee` is the one spelling, and since
+	// this family is answered on every target rather than refused on some, this scan is now its ONLY reader
+	// (`TargetFacilities.calleeHostFacility` deliberately does not name the band; see the grave there).
+	if isTerminalRuntimeCallee(callee) 'terminalDetection'
+		usage.usesTerminalDetection = true
+		usage.usesHeap = true
+	end 'terminalDetection'
 	// The CPU-parallel checkpoint. It declares NOTHING beside itself — the entry point's body is a void
 	// return — which makes it the one arm here with no second line, and that is a fact about the code rather
 	// than an omission (`ParallelBoundaryRuntime`).
@@ -1125,10 +1153,22 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	// uninstalled and a call landing on nothing; deleting it only when nothing can set its last term is what
 	// keeps this function from listing conditions no program can meet. What the retired members need instead
 	// is declared where a corpus body's needs always are — by the ordinary reachability of what it calls.
-	if usage.usesStrFromBytes or usage.usesStrOfBuffer or usage.usesMmToCString 'buildsStrings'
+	if usage.usesStrFromBytes or usage.usesStrOfBuffer 'buildsStrings'
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
+	// ⚠ **`usesMmToCString` WAS A TERM IN THE CLAUSE ABOVE AND IS NOW A CLAUSE OF ITS OWN, BECAUSE WHAT IT
+	// NEEDS CHANGED.** `__mm_to_cstring` used to blit into a fresh block through `__str_copy`; it now grows
+	// the RECEIVER by one byte and terminates it in place, which is `__managed_reserve` — and that is the
+	// managed-memory runtime's, not the string runtime's. `usesManagedMemory` is what installs the reserve
+	// and everything under it (`__managed_grow`, `__managed_cow_detach`, and through `installMmRuntime`'s
+	// own `usesManagedMemory` arm, `__mm_cow_detach`), so these two bits are the whole of its transitive
+	// floor. Shedding the term rather than the CLAUSE is this function's stated rule: `usesStrFromBytes` and
+	// `usesStrOfBuffer` still blit, and still need `__str_copy` installed.
+	if usage.usesMmToCString 'terminatesInPlace'
+		usage.usesManagedMemory = true
+		usage.usesHeap = true
+	end 'terminatesInPlace'
 	// `__str_bytes_view` increfs the receiver's own record through `__mm_incref` inside its synthesized body,
 	// which this scan cannot see — and the value it hands back is a buffer the CALLER drops through
 	// `__managed_decref`. `usesManagedMemory` is what installs the managed-memory runtime AND (through

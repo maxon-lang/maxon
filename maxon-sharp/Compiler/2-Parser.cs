@@ -12586,6 +12586,37 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + "against the constant for the platform you are on, never across platforms.\n\n"
       + "`__Builtins.enterBackgroundPriority() returns int`",
       "maxon_enter_background_priority", [], true),
+    // ⭐⭐ WHETHER THIS PROCESS'S REPORT MAY CARRY ANSI ESCAPES — the `--color=auto` question, asked of
+    // the HOST rather than guessed. Three conditions, all required, and each rules out a different way of
+    // being wrong: stdout is a character device (a redirect is being CAPTURED, and escapes in a capture
+    // corrupt the thing captured), NO_COLOR is unset (no-color.org: PRESENCE alone disables), and TERM is
+    // not `dumb` (the terminal itself saying it cannot render this). Ansi.WantsColor is the same rule for
+    // THIS compiler's own reports; this intrinsic is how a compiled program asks it.
+    //
+    // ⚠ IT ANSWERS A bool, WHICH IS WHY IT IS NOT A RuntimeCallIntrinsic. That helper hands back the
+    // runtime call's MaxonInteger, and a predicate arriving as a number needs `!= 0` at every call site —
+    // the sentinel-shaped spelling the house rules refuse. The `!= 0` is emitted HERE instead, exactly as
+    // __ManagedDirectory.exists emits its own.
+    //
+    // ⚠ THE ANSWER IS PLATFORM-DEPENDENT IN A WAY NO OTHER INTRINSIC HERE IS: the arm64 lane has not
+    // implemented detection and answers FALSE unconditionally. See IEmitterBackend and the arm64 emitter's
+    // own note for why that is the conservative half of the answer rather than a wrong one.
+    ["stdoutWantsAnsiColor"] = new(
+      "Answers true when this process's standard output is a terminal that wants ANSI colour: stdout "
+      + "is a character device (not redirected to a file or a pipe), NO_COLOR is unset, and TERM is not "
+      + "`dumb`. All three are required. On targets that have not implemented terminal detection it "
+      + "answers false, which never puts escape sequences into a capture.\n\n"
+      + "`__Builtins.stdoutWantsAnsiColor() returns bool`",
+      p => {
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonCallRuntimeOp("maxon_stdout_wants_ansi_color", [], true);
+        p._currentBlock!.AddOp(op);
+        var zeroOp = new MaxonLiteralOp(0L);
+        p._currentBlock!.AddOp(zeroOp);
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(cmpOp);
+        return cmpOp.Result;
+      }),
     ["schedMaxActiveWorkers"] = RuntimeCallIntrinsic(
       "Returns the high-water mark of concurrently-active green-thread worker Ms "
       + "(OS threads) observed since process start, clamped to at least 1. Grows as "

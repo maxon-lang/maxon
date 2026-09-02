@@ -1,0 +1,44 @@
+// Test: terminal-color-detection.is-stable-across-calls
+function main() returns ExitCode
+	let first = __Builtins.stdoutWantsAnsiColor()
+	let second = __Builtins.stdoutWantsAnsiColor()
+	if first == second 'agree'
+		return 0
+	end 'agree'
+
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __tty_stdout_wants_color
+    x64.movRegReg rbx, r8
+    x64.callDirect __tty_stdout_wants_color
+    x64.cmpRegReg rbx, r8
+    x64.jcc notEqual, ifcont
+  agree:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

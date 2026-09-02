@@ -314,6 +314,11 @@ export enum MmTag
 	StringRecord
 	ArrayRecord
 	ElementBuffer
+	// ⚠ **NO PRODUCER TODAY, AND IT STAYS ANYWAY BECAUSE THIS ROSTER IS APPEND-ONLY.** Its one allocator was
+	// `__mm_to_cstring`'s copy path, which is gone: the conversion now grows the RECEIVER by one byte and
+	// terminates it in place (`StringRuntime.buildMmToCString`), so a `cstring` is never its own box. Deleting
+	// the case would re-point every tag below it in a blob the monitor decodes by INDEX — including in
+	// binaries already built — which is exactly what the note above forbids.
 	CString
 	ListRecord
 	ListNode
@@ -624,7 +629,7 @@ end 'buildCarriesDebugStream'
 // every scalar program's trace runtime, and the backend panics at the relocation rather than at the read.
 // See `emitStoreLogIdentity`.
 export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable, usesGt bool, rawFree ByteArray)
-	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: cString(DsActivationEnvVar), kind: RdataPayloadKind.envName)
+	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: cStringBytes(DsActivationEnvVar), kind: RdataPayloadKind.envName)
 	// ⚠ **BOTH TABLES, END TO END, IN ONE IMAGE.** The monitor scans the section for each magic rather than
 	// indexing to a known offset, so their ORDER carries nothing and neither needs a label of its own. The
 	// interned-name table is written beside the tag table even when the program interned nothing: it is then
@@ -648,14 +653,6 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 	buildDsEmitLogEvent(module, usesGt: usesGt)
 	buildDsEmitLogText(module, usesGt: usesGt)
 end 'installDebugStreamRuntime'
-
-// A NUL-terminated C string's bytes. `GetEnvironmentVariableA` and `OpenFileMappingA` both take one, and
-// the terminator is the whole difference from `String.toByteArray()`.
-function cString(text String) returns ByteArray
-	var bytes = text.toByteArray()
-	bytes.push(0)
-	return bytes
-end 'cString'
 
 // ============================================================================
 // `__ds_init()` — attach, or stay dark.

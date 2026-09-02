@@ -102,7 +102,7 @@ as instructions rather than as a trace.
 
 ⚠ **THIS CASE NAMED A PAIR UNTIL W49 WAVE 7, AND ITS SECOND HALF NO LONGER EXISTS AS A RUNTIME
 BODY.** `__str_byte_at_or_panic` was `String.byteAtOrPanic`'s synthesized body; that member retired
-onto `stdlib/String.maxon:281`, whose own body is `try byteAt(index) otherwise panic(…)` — ordinary
+onto `stdlib/String.maxon:299`, whose own body is `try byteAt(index) otherwise panic(…)` — ordinary
 Maxon, compiled as an ordinary function, with no runtime chunk to render. The surviving name is not
 an accident of the same retirement: `String.addressableBytes()` retired too, but its corpus body is
 `return managed`, and reading a fused wrapper's inline `managed` is exactly what mints this entry
@@ -241,7 +241,7 @@ String.trim
 <!-- test: string-byte-at-body -->
 `__managed_byte_at` — the THROWING, bounds-checked byte read behind `String.byteAt`. It leaves through the
 dual-register `errorReturn` ABI carrying `__ManagedMemoryError.invalidByteRange`, which is exactly what
-`stdlib/String.maxon:266` declares. The corpus's `hashString` is what installs it here, and this block is
+`stdlib/String.maxon:284` declares. The corpus's `hashString` is what installs it here, and this block is
 its only gate.
 
 ⚠ **IT WAS `__str_byte_at` UNTIL W49 WAVE 7, AND THE SUBJECT SURVIVED THE SYMBOL.** `String.byteAt` was a

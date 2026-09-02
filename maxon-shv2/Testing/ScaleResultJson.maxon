@@ -88,7 +88,7 @@ export function writeResultJson(path String, results RungResultArray, trend Logg
 
 	addRepeatSampling(doc, keys: keys, children: children, repeat: repeat)
 
-	pushString(doc, keys: keys, children: children, key: "mintedAt", value: mintedAt)
+	pushJsonString(doc, keys: keys, children: children, key: "mintedAt", value: mintedAt)
 
 	keys.push("rungs")
 	children.push(rungsNode(doc, results: results, trend: trend, bytes: bytes))
@@ -117,7 +117,7 @@ end 'writeResultJson'
 function addRepeatSampling(doc JsonDoc, keys StringArray, children JsonNodeIdArray, repeat RepeatSampling)
 	match repeat 'r'
 		unstated then return
-		stated(count) then pushNumber(doc, keys: keys, children: children, key: "repeat", value: count)
+		stated(count) then pushJsonNumber(doc, keys: keys, children: children, key: "repeat", value: count)
 	end 'r'
 end 'addRepeatSampling'
 
@@ -133,9 +133,9 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 		var keys = StringArray.create()
 		var children = JsonNodeIdArray.create()
 
-		pushNumber(doc, keys: keys, children: children, key: "rung", value: result.rung)
-		pushNumber(doc, keys: keys, children: children, key: "sourceBytes", value: result.sourceBytes)
-		pushNumber(doc, keys: keys, children: children, key: "codeBytes", value: result.codeBytes)
+		pushJsonNumber(doc, keys: keys, children: children, key: "rung", value: result.rung)
+		pushJsonNumber(doc, keys: keys, children: children, key: "sourceBytes", value: result.sourceBytes)
+		pushJsonNumber(doc, keys: keys, children: children, key: "codeBytes", value: result.codeBytes)
 		addMetricFields(doc, keys: keys, children: children, metric: result.total)
 
 		// The deltas the report prints, so a consumer never has to re-derive them from the log. ABSENT
@@ -188,21 +188,21 @@ function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray
 	end 'notLogged'
 	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
 
-	pushNumber(doc, keys: keys, children: children, key: "allocsDelta", value: result.total.allocs - beforeAllocs)
+	pushJsonNumber(doc, keys: keys, children: children, key: "allocsDelta", value: result.total.allocs - beforeAllocs)
 
 	// OMITTED, never zero, when the logged row was minted at another path — the same rule `allocsDelta`
 	// follows one line up when a rung has no past. A consumer that finds no `bytesDelta` knows the
 	// subtraction was refused; one handed a number could not have known it was fiction.
 	match bytes 'b'
 		withheld then return
-		comparable then pushNumber(doc, keys: keys, children: children, key: "bytesDelta", value: result.total.bytes - beforeBytes)
+		comparable then pushJsonNumber(doc, keys: keys, children: children, key: "bytesDelta", value: result.total.bytes - beforeBytes)
 	end 'b'
 end 'addLoggedDeltas'
 
 function metricNode(doc JsonDoc, name String, metric PhaseMetric) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	pushString(doc, keys: keys, children: children, key: "name", value: name)
+	pushJsonString(doc, keys: keys, children: children, key: "name", value: name)
 	addMetricFields(doc, keys: keys, children: children, metric: metric)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'metricNode'
@@ -215,10 +215,10 @@ end 'metricNode'
 // A consumer reading these fields in order reads them in decreasing order of how much a small
 // movement in one is worth — see the header for the band.
 function addMetricFields(doc JsonDoc, keys StringArray, children JsonNodeIdArray, metric PhaseMetric)
-	pushNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs)
-	pushNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees)
-	pushNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes)
-	pushNumber(doc, keys: keys, children: children, key: "cpuTicks", value: metric.cpuTicks)
+	pushJsonNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs)
+	pushJsonNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees)
+	pushJsonNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes)
+	pushJsonNumber(doc, keys: keys, children: children, key: "cpuTicks", value: metric.cpuTicks)
 end 'addMetricFields'
 
 // ===========================================================================================
@@ -237,7 +237,7 @@ end 'addMetricFields'
 function corpusNode(doc JsonDoc, results RungResultArray) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	pushNumber(doc, keys: keys, children: children, key: "floorPermille", value: (MinCodeGrowthRatio * PermillePerHundredth) as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: "floorPermille", value: (MinCodeGrowthRatio * PermillePerHundredth) as JsonFloat)
 
 	match weakestCodeGrowth(results) 'g'
 		noBaseline then addNoGrowthReading(doc, keys: keys, children: children)
@@ -285,13 +285,13 @@ end 'minRatio'
 // claim from "the corpus folded away", and the runner does not fail the run for it either: `--rungs=1`
 // is a legal thing to ask for, and its counts are as exact as any other run's.
 function addNoGrowthReading(doc JsonDoc, keys StringArray, children JsonNodeIdArray)
-	pushBool(doc, keys: keys, children: children, key: "grew", value: false)
-	pushString(doc, keys: keys, children: children, key: "reason", value: "a ladder of one rung has nothing below it to have grown from — a growth reading needs {MinRungsForGrowth} rungs")
+	pushJsonBool(doc, keys: keys, children: children, key: "grew", value: false)
+	pushJsonString(doc, keys: keys, children: children, key: "reason", value: "a ladder of one rung has nothing below it to have grown from — a growth reading needs {MinRungsForGrowth} rungs")
 end 'addNoGrowthReading'
 
 function addCorpusGrowth(doc JsonDoc, keys StringArray, children JsonNodeIdArray, ratio GrowthRatio)
-	pushNumber(doc, keys: keys, children: children, key: "minGrowthPermille", value: (ratio * PermillePerHundredth) as JsonFloat)
-	pushBool(doc, keys: keys, children: children, key: "grew", value: ratio >= MinCodeGrowthRatio)
+	pushJsonNumber(doc, keys: keys, children: children, key: "minGrowthPermille", value: (ratio * PermillePerHundredth) as JsonFloat)
+	pushJsonBool(doc, keys: keys, children: children, key: "grew", value: ratio >= MinCodeGrowthRatio)
 end 'addCorpusGrowth'
 
 // Which recorded run every delta above is a delta FROM. Without it the deltas are unattributed, and a
@@ -309,26 +309,26 @@ end 'previousNode'
 function noPreviousNode(doc JsonDoc) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	pushBool(doc, keys: keys, children: children, key: "present", value: false)
+	pushJsonBool(doc, keys: keys, children: children, key: "present", value: false)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'noPreviousNode'
 
 function previousRunNode(doc JsonDoc, date String, mintedAt MintedAt, note String, bytes ByteDelta) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	pushBool(doc, keys: keys, children: children, key: "present", value: true)
-	pushString(doc, keys: keys, children: children, key: "date", value: date)
+	pushJsonBool(doc, keys: keys, children: children, key: "present", value: true)
+	pushJsonString(doc, keys: keys, children: children, key: "date", value: date)
 
 	// ABSENT when the row predates the column, rather than spelled as a string a consumer might compare
 	// against a real path. `bytesComparable: false` is what says so, and `bytesWithheld` says why.
 	match mintedAt 'p'
 		unrecorded then break 'p'
-		path(text) then pushString(doc, keys: keys, children: children, key: "mintedAt", value: text)
+		path(text) then pushJsonString(doc, keys: keys, children: children, key: "mintedAt", value: text)
 	end 'p'
 
 	addByteComparability(doc, keys: keys, children: children, bytes: bytes)
 
-	pushString(doc, keys: keys, children: children, key: "note", value: note)
+	pushJsonString(doc, keys: keys, children: children, key: "note", value: note)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'previousRunNode'
 
@@ -337,34 +337,13 @@ end 'previousRunNode'
 // absence is exactly how "not measured" gets read as "zero", and the reason is not inferable at all.
 function addByteComparability(doc JsonDoc, keys StringArray, children JsonNodeIdArray, bytes ByteDelta)
 	match bytes 'b'
-		comparable then pushBool(doc, keys: keys, children: children, key: "bytesComparable", value: true)
+		comparable then pushJsonBool(doc, keys: keys, children: children, key: "bytesComparable", value: true)
 		withheld(why) then addWithheldBytes(doc, keys: keys, children: children, why: why)
 	end 'b'
 end 'addByteComparability'
 
 function addWithheldBytes(doc JsonDoc, keys StringArray, children JsonNodeIdArray, why String)
-	pushBool(doc, keys: keys, children: children, key: "bytesComparable", value: false)
-	pushString(doc, keys: keys, children: children, key: "bytesWithheld", value: why)
+	pushJsonBool(doc, keys: keys, children: children, key: "bytesComparable", value: false)
+	pushJsonString(doc, keys: keys, children: children, key: "bytesWithheld", value: why)
 end 'addWithheldBytes'
 
-// ===========================================================================================
-// The one place a key and its value are appended
-// ===========================================================================================
-
-// `keys` and `children` are PARALLEL arrays that `JsonNode.objectNode` zips, so a push to one without
-// the other silently shifts every field after it — a document whose values belong to the wrong names.
-// Every field in this document goes through one of these three, one per JSON scalar it writes.
-function pushNumber(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value JsonFloat)
-	keys.push(key)
-	children.push(doc.add(JsonNode.numberNode(value)))
-end 'pushNumber'
-
-function pushString(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value String)
-	keys.push(key)
-	children.push(doc.add(JsonNode.stringNode(value)))
-end 'pushString'
-
-function pushBool(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value bool)
-	keys.push(key)
-	children.push(doc.add(JsonNode.boolNode(value)))
-end 'pushBool'

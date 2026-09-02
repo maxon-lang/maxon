@@ -1,0 +1,79 @@
+// TestDiscovery — every `test` declaration a project contains, read off the compiler's own
+// DECLARATION SWEEP rather than off the source text.
+//
+// ⭐⭐ **DISCOVERY IS A PARSE, NOT A SEARCH, AND THAT IS THE WHOLE DESIGN.** A regex over `*.test.maxon`
+// would find a `test` inside a comment or a string, would miss the file rule (E2058), and would have to
+// re-derive the `__test_<sanitized>` mangling the compiler already performs — three ways of disagreeing
+// with the binary that is about to be built. `queryProgramSignatures` already walks every file's tokens
+// and already mints each test's registration name (`Project.testFunctionRegistrationName`), so this asks
+// IT, and the roster a run prints is the roster the compile registers, by construction.
+//
+// ⭐ **IT STOPS AT THE SWEEP, WHICH IS WHAT LETS IT ANSWER FOR A PROJECT THAT HAS NO ENTRY POINT YET.**
+// `maxon test --list` is documented as compiling nothing, and a project of pure test files declares no
+// `main` — E3001 lives in `SemanticCheck`, far downstream of here, so nothing on this path can raise it.
+// The bootstrap draws the identical line for the identical reason (`Compiler.DiscoverTests`: *"It runs
+// CompileSources and NOTHING ELSE"*), one pass earlier because shv2's sweep is a token walk where the
+// bootstrap's is a parse.
+
+// ⭐⭐ **ONE `test` DECLARATION, AS THE SWEEP SAW IT.** A test has TWO names and this carries both, for
+// `specs/test-declaration.md`'s reason: the prose name cannot be a symbol, so the compiler mints a
+// sanitized one beside it, and neither is derivable from the other — sanitizing is lossy — so the pair
+// travels together everywhere.
+//
+// ⚠ **`symbol` IS READ OFF THE MINT, NEVER RE-DERIVED FROM `displayName`.** They are produced by one
+// call at one site (`Parser.recordScannedTest`), which is what makes a generated dispatcher's call
+// resolve: a second application of the sanitizing rule here would be a second thing to get wrong, and it
+// would fail as a call to a function that does not exist rather than as a mismatch anybody can see.
+export type DiscoveredTest
+	// The mangled name the test's function actually has — `__test_<sanitized>`. What generated source
+	// calls, and what reaches the executable's symbol table.
+	//
+	// ⚠ **IT IS BARE, WHERE THE BOOTSTRAP'S IS NAMESPACE-QUALIFIED, AND THAT IS shv2's RULE RATHER THAN AN
+	// OMISSION.** The bootstrap qualifies every free function by its directory, so its `DiscoveredTest`
+	// has to carry a `Namespace`/`ShortSymbol` split to recover the callable spelling. shv2 registers a
+	// free function under exactly the bytes it was declared with UNLESS the bare name is declared in two
+	// directories (`ProgramSignatures.contestedFreeFunctions`, N1c) — and a minted `__test_` name cannot
+	// be contested by a name any author can write (E2051 refuses the prefix). So the symbol IS the
+	// callable spelling, from any file, and a split would be a rule shv2 does not have.
+	export let symbol as ByteArray
+	// The prose name, verbatim — what a report shows a human, and what `test '…'` wrote.
+	export let displayName as String
+	// The `*.test.maxon` file holding the declaration, as the compiler recorded it. A report groups and
+	// orders by this, so it is identity and not decoration.
+	export let file as FilePath
+	// The line the declaration's name sits on.
+	export let line as LineNumber
+
+	export static function create(symbol ByteArray, displayName String, file FilePath, line LineNumber) returns DiscoveredTest
+		return Self{symbol: symbol, displayName: displayName, file: file, line: line}
+	end 'create'
+end 'DiscoveredTest'
+
+// Discovered tests IN THE ORDER THE SWEEP REACHED THEM, which is the walk's file order and, within a
+// file, declaration order. The ORDER is the fact this alias carries: it is the run's numbering, the
+// report's reading order, and what makes a redirected run byte-reproducible.
+export typealias DiscoveredTestArray = Array with DiscoveredTest
+
+// ⭐⭐ **EVERY `test` UNDER `projectDir`.** Loads the project WITH its test files (the one selection an
+// ordinary build does not make — see `Compiler.SourceSelection`) and runs the declaration sweep over it.
+//
+// ⚠ **THE TARGET IS A PARAMETER AND IS NOT DEFAULTED TO THE HOST**, which is the bootstrap's measured
+// rule (`Compiler.DiscoverTests`): the sweep resolves `#if os(…)` / `arch(…)`, so a test behind one
+// exists for some targets and not others. Discovering for the host and building for `--target` would
+// drop a test from the report without saying so, and emit a dispatcher call to one the real compile
+// cannot resolve.
+//
+// The tests are COPIED out of the index rather than handed back as a borrow of it: the index is a memo
+// owned by a `Project` this function is the last holder of, and a roster that outlived its project would
+// be a view into freed storage.
+export function discoverTests(projectDir FilePath, target Target) returns DiscoveredTestArray throws CompileError
+	var project = try loadProject([projectDir], target: target, sourceSelection: SourceSelection.productionAndTests)
+	let signatures = try queryProgramSignatures(project)
+
+	var found = DiscoveredTestArray.create()
+	for declared in signatures.declaredTests 'eachDeclaredTest'
+		found.push(DiscoveredTest.create(declared.symbol.clone(), displayName: declared.displayName, file: declared.file, line: declared.line))
+	end 'eachDeclaredTest'
+
+	return found
+end 'discoverTests'

@@ -191,11 +191,29 @@ maxon test [directory] [options]
 | `--isolate` | Run every test in its own process |
 | `--bail[=N]` | Stop claiming new work after N failures (default 1) |
 | `--workers=N` | Run N test processes at once (default `max(1, ProcessorCount - 2)`) |
-| `--timeout=MS` | Kill a test process after MS milliseconds (default 5000) |
+| `--timeout=MS` | Kill a test process after MS milliseconds (default 5000). The deadline is per PROCESS, and one process runs one FILE's tests — so it bounds a file's whole run, not each test, unless `--isolate` is given |
 | `--no-timing` | Omit durations, making stdout byte-reproducible |
-| `--color=auto\|always\|never` | Colour; `auto` colours only when stdout is a terminal |
+| `--color=auto\|always\|never` | Colour; `auto` colours only when stdout is a terminal — not redirected, `NO_COLOR` unset, and `TERM` not `dumb` |
 | `--target=ARCH-OS` | Compile the test binary for a specific target |
 | `--log=CATEGORY:LEVEL` | Enable compiler logging (e.g. `codegen:trace`) |
+
+**Working directory.** A test binary runs in the directory `maxon test` itself was invoked from — not
+the project directory, and not the staging tree the tests were compiled out of. So a relative path in a
+test body means the same thing it means in the shell you typed the command in.
+
+**`--color=auto` degrades to `never` on targets with no terminal detection.** Asking the OS what kind of
+object a handle is needs a host call, and only **x64-windows** makes it today (`GetFileType`). On every
+other target — **arm64-macos**, **arm64-linux**, **x64-linux** and **wasm32-wasi** — the question is
+answered "not a terminal", so `auto` prints no colour there however the report is being viewed.
+`--color=always` is unaffected and is the way to get colour on those lanes.
+
+The build is never refused for it: the answer degrades rather than the compile failing, because "not a
+terminal" is a sound conservative answer where a missing file surface or a missing stdin would leave a
+program with no answer at all. What each lane owes to answer it properly is one call, and the gap is
+recorded per lane in `TargetFacilities.targetProvidesFacility`'s `terminalDetection` row — `isatty(1)`
+on Darwin, `ioctl(1, TCGETS, ...)` on the libc-less Linux lanes, translated into the `FILE_TYPE_CHAR`
+vocabulary `StdOp.osHandleFileType` speaks. wasm32-wasi is the one lane where it is not merely unwritten:
+a WASI component cannot ask what is on the other end of its `output-stream` at all.
 
 **Outcomes.** A test that does not pass is reported as one of five distinct states, because they
 are found by different evidence and call for different action:

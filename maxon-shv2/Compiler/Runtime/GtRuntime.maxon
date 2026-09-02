@@ -1678,7 +1678,7 @@ end 'isThrowingGtRuntimeCallee'
 // predicate exists to stand in for.
 // ⚠ **THE `String` FAMILY WAS A NINTH DISJUNCT AND WENT WITH ITS ONE CALLEE (W49 wave 7).**
 // `isThrowingStringRuntimeCallee`'s only term was `__str_byte_at`, minted only by `dispatchStringMethod`'s
-// `byteAt` arm; that member retired onto `stdlib/String.maxon:266`, so nothing can emit the callee and the
+// `byteAt` arm; that member retired onto `stdlib/String.maxon:284`, so nothing can emit the callee and the
 // predicate could only ever answer `false`. The corpus body's `try managed.byteAt(index)` reaches
 // `isThrowingManagedMemoryRuntimeCallee` — the FIRST disjunct here — which is where a buffer byte read always
 // belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
@@ -1756,7 +1756,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	// ⚠ **THE `String` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 7, AND IT COLLAPSED INTO THE MEMORY ARM ABOVE
 	// RATHER THAN VANISHING.** Its one member was `__str_byte_at`, and it answered `managedMemoryThrows()` —
 	// the SAME clause the memory family answers — because `String.byteAt` is declared
-	// `throws __ManagedMemoryError` by the corpus (`stdlib/String.maxon:266`) for the stated reason that the
+	// `throws __ManagedMemoryError` by the corpus (`stdlib/String.maxon:284`) for the stated reason that the
 	// reference INLINES it to the `managed.byteAt` it forwards to. Retiring the member makes that forwarding
 	// REAL rather than notional: the corpus body's `try managed.byteAt(index)` is a call to
 	// `__ManagedMemory.byteAt`, which the memory arm already types. Two families that shared an error type
@@ -1948,7 +1948,7 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 
 	// ⚠ **THE `String` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 7, AND IT WENT WITH ITS MEMBER** — the same
 	// shape wave 3's `StringIndex` arm retired in, two paragraphs up. It answered `ByteAtMethod` for
-	// `__str_byte_at`, the callee behind `String.byteAt`; that member is `stdlib/String.maxon:266`'s now, so
+	// `__str_byte_at`, the callee behind `String.byteAt`; that member is `stdlib/String.maxon:284`'s now, so
 	// an E3057 against it is raised on an ordinary DECLARED function whose name the diagnostic already has.
 	// What the corpus body calls IS `__ManagedMemory.byteAt`, which the `memoryFamily` arm above already
 	// names correctly — so this was the one family whose removal needed no replacement noun at all.
@@ -4875,6 +4875,9 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 		cmp to globalAddr then break 'k'
 		loadIndirect(resultId, _, offset, _) then pushIfStatusOffset(plainStatusLoads, resultId: resultId, offset: offset)
 		storeIndirect to storeRelease then break 'k'
+		// The terminal question defines a file-type word, never the `completed` constant and never a load
+		// of the status word.
+		osHandleFileType then break 'k'
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4898,6 +4901,9 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 		binOpImm to loadIndirect then break 'k'
 		storeIndirect(_, offset, valueId, _) then requireOrderedPublication(func, offset: offset, valueId: valueId, completedConsts: completedConsts)
 		osAllocPages to storeRelease then break 'k'
+		// The terminal question is neither a compare nor a store, so it can be neither the observation nor
+		// the publication this pass refuses an unordered form of.
+		osHandleFileType then break 'k'
 	end 'k'
 end 'requireOrderedCompletedAccess'
 

@@ -121,7 +121,7 @@ end 'arm64ThreadPointerSource'
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, os Os) returns FunctionCodeChunk
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -154,10 +154,10 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)
 	end 'moduleInit'
 
-	// bl main — filed as a CallFixup; concat resolves it to main's `.text` offset (mirrors x64's
-	// `callDirect(UserEntryName)`). `UserEntryName` is the canonical `String` spelling; the fixup
-	// matches against the function's `ByteArray` name, so it is rendered to bytes here.
-	arm64EmitBranchLink(code, callFixups: callFixups, targetName: UserEntryName.toByteArray())
+	// bl <entry> — filed as a CallFixup; concat resolves it to the entry's `.text` offset (mirrors x64's
+	// `callDirect(entryFunction)`). `entryFunction` is `Project.entryFunctionName`, already the `ByteArray`
+	// spelling the fixup matches a function's name against.
+	arm64EmitBranchLink(code, callFixups: callFixups, targetName: entryFunction)
 
 	// Release every managed global AFTER `main` and BEFORE the leak gate — a global released after the
 	// gate would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands

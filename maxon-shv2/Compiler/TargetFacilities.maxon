@@ -10,12 +10,18 @@
 // THIS CALLEE needs?** Two independent facts — a callee's requirement and a target's capability — which the
 // old shape had fused into one. They are separated here:
 //
-//   • `calleeHostFacility(callee)` — the callee's requirement. One `HostFacility` or `none`. It is the old
-//     predicate's roster, unchanged in membership and re-expressed as *which* facility rather than *whether
-//     one is needed*; the per-family predicates it consults still live with their runtimes, so a band added
-//     to one of them is still gated by construction rather than by memory.
+//   • `calleeHostFacility(callee)` — the callee's requirement, and the door to E3104. One `HostFacility` or
+//     `none`; the per-family predicates it consults still live with their runtimes, so a band added to one
+//     of them is still gated by construction rather than by memory.
 //   • `targetProvidesFacility(target, facility)` — the target's capability. The table a BACKEND writes into
 //     when it lands a family, and the ONE place a lane's progress is recorded.
+//
+// ⚠ **THE TWO ARE NOT IN LOCKSTEP, AND ONE ROW PROVES IT: A FACILITY MAY BE IN THE TABLE AND NOT IN
+// `calleeHostFacility`.** `terminalDetection` is exactly that — its lane row is read by
+// `TerminalRuntime.installTerminalRuntime` to pick a BODY rather than by this file to refuse a CALL, because
+// the absence of terminal detection is an ANSWER ("not a terminal") where the absence of a file surface is
+// not. See that enum case for the whole argument and for what it cost to learn. ⇒ A new facility must
+// decide which of the two shapes it is; being in the enum does not by itself make it a refusal.
 //
 // ⚠ **THE TABLE IS THE BACKEND'S CLAIM AND MUST BE KEPT HONEST BY THE BACKEND.** A `true` here promises that
 // the target's isel lowers every `StdOp` the facility's runtime bodies emit. Write one before the lowering
@@ -27,9 +33,13 @@
 // than `getSystemTimeAsFileTime`: two platforms answer the same question through different calls, and a
 // facility named after one of them cannot be claimed by the other without reading as a lie.
 
-// ⭐ THE HOST FACILITIES A MAXON PROGRAM CAN REACH. One case per family whose absence is a REFUSAL rather
-// than a missing optimization — i.e. per band whose runtime bodies bottom out in `StdOp`s a backend must
-// lower with real OS calls.
+// ⭐ THE HOST FACILITIES A MAXON PROGRAM CAN REACH — one case per band whose runtime bodies bottom out in
+// `StdOp`s a backend must lower with real OS calls, i.e. per family whose absence a program can NOTICE.
+//
+// ⚠ **THIS LINE READ "one case per family whose absence is a REFUSAL", AND `terminalDetection` FALSIFIED
+// IT.** For every other case here the absence leaves a program with no answer at all, and the honest
+// response is E3104 at the call's own span. For that one the absence IS an answer, so its row picks a
+// runtime BODY instead. What every case still shares is the sentence above: a `true` promises a lowering.
 //
 // ⚠ Deliberately NOT a case per runtime ENTRY POINT. `__gt_now_ns` and `__Builtins.currentTimeMs` are one
 // facility asked twice, and a target that lowers the monotonic clock lowers both or neither — so splitting
@@ -93,6 +103,24 @@ export enum HostFacility
 	processPriority
 	// How many processors the machine has (`__cpu_count`).
 	cpuCount
+	// Whether a standard stream is a TERMINAL (`__tty_*`). Its own facility rather than a corner of
+	// `consoleStdin`, on this enum's stated rule that a facility is named for what the HOST provides:
+	// reading standard input and asking the OS what KIND of object a handle is are two different questions
+	// with two different APIs, and a lane can serve either without the other — Win32 answers the second with
+	// `GetFileType` and POSIX with `isatty`, neither of which has anything to do with the read.
+	//
+	// ⭐⭐ **THE ONE ROW HERE THAT DOES NOT PRODUCE AN E3104, AND THE DIFFERENCE IS THE SHAPE OF THE
+	// ABSENCE.** Every other facility's absence leaves a program with NO ANSWER — there is no honest `read
+	// stdin` on a lane with no stdin — so `calleeHostFacility` maps those bands to a refusal at the call's
+	// own span. The absence of terminal detection IS an answer: "this is not a terminal", the conservative
+	// half, and what `--color=auto` resolved to everywhere before any of this existed. So this row is read
+	// by `TerminalRuntime.installTerminalRuntime`, which emits the detecting body where it is `true` and a
+	// `return 0` body where it is `false`, and the callee exists on every lane.
+	//
+	// ⛔ **THAT DISTINCTION WAS PAID FOR.** Mapped into `calleeHostFacility` like its neighbours, it made
+	// shv2 UNBUILDABLE for arm64-macOS in a day: `Testing/TestRender` asks the question unconditionally,
+	// `Testing/` is ordinary user code, and this gate is reachability-blind for user code by design.
+	terminalDetection
 end 'HostFacility'
 
 // The answer `calleeHostFacility` returns. A union rather than a bool-plus-out-param so that "this callee
@@ -328,6 +356,13 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.consoleStdin)
 	end 'stdinBand'
 
+	// ⛔⛔ **THE `__tty_` BAND IS DELIBERATELY ABSENT FROM THIS FUNCTION, AND ITS FACILITY IS NOT.** It stood
+	// here for a day, by the same PREFIX test as its neighbours, and it made this compiler unbuildable for
+	// arm64-macOS — see `HostFacility.terminalDetection`, which carries the whole argument. The short of it:
+	// this function refuses a call whose facility leaves the program with NO ANSWER, and a missing terminal
+	// notion has one. `TerminalRuntime.installTerminalRuntime` reads the facility row instead and picks the
+	// BODY, so the callee is present on every target and no lane can go red.
+
 	// The priority WRITE, named individually ahead of its own `__proc_` band for the four scheduler entries'
 	// reason one screen up: a prefix band must not silently swallow a member that answers a different
 	// facility. It is the one `__proc_` entry that is not a read of an identity.
@@ -473,6 +508,15 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			subprocess gives true
 			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets.
 			managedSocket gives false
+			// ⚠ **NOT YET, AND WHAT IT OWES IS ONE CALL RATHER THAN A DESIGN.** `isatty(1)` answers the
+			// question and libSystem is already linked for it; what is missing is the translation into the
+			// vocabulary `StdOp.osHandleFileType` speaks — `FILE_TYPE_CHAR` when it is true, `FILE_TYPE_DISK`
+			// when it is not — which is the same shape as this lane's existing errno→Win32 mapping. Until it
+			// is written a program that asks still BUILDS and is told "not a terminal", so `--color=auto`
+			// degrades to `never` here (`docs/CLI_REFERENCE.md` says so where a user will read it). ⛔ This is
+			// the ONE row in this table whose `false` is a DEGRADATION rather than a refusal — see
+			// `HostFacility.terminalDetection` for why, and do not reach for E3104 to enforce it.
+			terminalDetection gives false
 		end 'f'
 	end 'darwinArm64'
 
@@ -602,6 +646,10 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			cpuCount gives true
 			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets, exactly as macOS is not.
 			managedSocket gives false
+			// ⚠ Not yet, and for the macOS row's reason with one extra: this lane links no libc, so it owes
+			// `ioctl(1, TCGETS, …)` where Darwin owes a call to `isatty`. Either answers the question; neither
+			// is written, so a program that asks builds and is told "not a terminal", exactly as on Darwin.
+			terminalDetection gives false
 		end 'f'
 	end 'linuxArm64'
 

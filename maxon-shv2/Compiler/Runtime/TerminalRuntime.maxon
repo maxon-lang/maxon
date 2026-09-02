@@ -1,0 +1,234 @@
+// Runtime/TerminalRuntime.maxon — IS THIS PROCESS TALKING TO A TERMINAL THAT WANTS COLOUR?
+//
+// ⭐ **WHAT IT SERVES.** One `__Builtins` intrinsic — `stdoutWantsAnsiColor()` — and nothing else in the
+// language reaches this entry point. It is what `--color=auto` resolves to, and before it existed that
+// flag was a documented lie: `docs/CLI_REFERENCE.md` and the usage text both said *"auto means only when
+// stdout is a terminal"* while `TestRender.reportColorEnabled` answered `false` unconditionally, with a
+// comment saying so.
+//
+// ⭐⭐ **THE THREE CONDITIONS ARE THE REFERENCE'S, AND ALL THREE ARE REQUIRED** (`maxon-sharp/Ansi.cs`,
+// `WantsColor`). Each rules out a different way of being wrong, which is why none of them is dropped:
+//
+//   1. **stdout is not redirected** — a redirected stream is being CAPTURED (a file, a pipe, a golden),
+//      and escape sequences in a capture are corruption of the thing captured.
+//   2. **`NO_COLOR` is unset** — the user saying no across every tool at once (no-color.org). PRESENCE
+//      alone disables, whatever the value, so this reads the variable's EXISTENCE and never its text.
+//   3. **`TERM` is not `dumb`** (case-insensitive) — the terminal itself saying it cannot render this.
+//
+// ⛔⛔ **THE POLICY IS HERE RATHER THAN IN MAXON SOURCE BECAUSE THE ENVIRONMENT IS NOT REACHABLE FROM
+// MAXON.** `osEnvRead` exists at the Std tier and has no `__Builtins` surface, and inventing a general
+// `Process.environmentVariable` for the sake of two names would be a much larger commitment than this
+// flag warrants — one with its own unresolved question (`GetEnvironmentVariableA` answers 0 both for a
+// variable that is unset and for one set to the empty string, which condition 2 must distinguish and a
+// `String`-returning surface could not). The runtime already reads `MAXON_DEBUGSTREAM` and
+// `MAXON_MAX_PROCS` for its own purposes, so a host-convention read here is where its neighbours are.
+//
+// ⚠ **CONDITION 2 IS "THE VARIABLE HAS A NON-EMPTY VALUE" ON THIS LANE, AND THAT IS A WIN32 LIMIT RATHER
+// THAN A CHOICE.** `GetEnvironmentVariableA` answers 0 for an unset name and also for one whose value is
+// empty, and Windows has no third answer to distinguish them — `set NO_COLOR=` DELETES the variable
+// there, so the two states coincide on the platform as well as in the API. A lane whose `getenv` can
+// answer a non-NULL empty string owes the sharper test when it lands.
+//
+// ⭐⭐ **THE ENTRY POINT IS TOTAL: IT IS EMITTED ON EVERY TARGET, AND A LANE WITH NO TERMINAL NOTION
+// ANSWERS "NOT A TERMINAL" RATHER THAN REFUSING TO BUILD.** `HostFacility.terminalDetection` says which
+// lanes can really ask the OS, and `installTerminalRuntime` reads that ONE row to choose between the three
+// conditions below and a body whose whole content is `return 0`.
+//
+// ⛔⛔ **IT WAS A CALL-SITE REFUSAL (E3104) FOR ONE DAY AND THAT MADE shv2 UNBUILDABLE FOR arm64-macOS.**
+// `Testing/TestRender.reportColorEnabled` calls the intrinsic unconditionally, `Testing/` is ordinary user
+// code, and the E3104 gate is reachability-blind for user code by design — so the compiler's own
+// cross-compile went red on a lane that had built the day before. ⇒ **A HOST QUESTION WHOSE HONEST
+// FALLBACK IS A VALUE MUST BE ANSWERED, NOT REFUSED.** E3104 is right for a facility whose absence leaves a
+// program with no answer at all (there is no honest `read stdin` on a lane with no stdin); it is wrong for
+// one whose absence is itself an answer, and "this is not a terminal" is exactly that — it is what
+// `--color=auto` resolved to on EVERY lane before any of this existed, and it is the conservative half.
+//
+// ⛔ **THE FALLBACK MUST NEVER BECOME 1.** The whole point of the question is that a REDIRECTED stream is
+// being captured; a lane that guessed "yes" would put escape sequences into every golden, every log file
+// and every pipe, which is the one failure the detection exists to prevent. The bootstrap's arm64 stub
+// (`ARM64CodeEmitter.EmitMaxonStdoutWantsAnsiColor`) is the same decision in the other compiler, and it is
+// what lets the bootstrap cross-compile this project for the Mac at all.
+//
+// ⚠ **WHAT THE OTHER LANES OWE IS ONE PRIMITIVE AND NOT A DESIGN**, which is why the facility row is a
+// "not yet" rather than a permanent no: `isatty(1)` on the descriptor `osStdHandle` already answers with,
+// translated into `FILE_TYPE_CHAR` the way `Arm64DarwinRuntime` already translates errno into Win32's
+// vocabulary — see `StdOp.osHandleFileType`, which carries why the Std tier speaks Win32 here.
+// `docs/CLI_REFERENCE.md` records the user-visible consequence (`--color=auto` degrades to `never` on
+// those lanes) so the degradation is documented rather than merely true.
+
+// The `__tty_` prefix that identifies EVERY terminal-detection entry point — the one test
+// `scanRuntimeUsage` reads to set `usesTerminalDetection`.
+let TerminalRuntimePrefix = b"__tty_"
+
+// ⭐ **THE ONE ENTRY POINT.**
+export let TerminalStdoutWantsColorName = b"__tty_stdout_wants_color"
+
+// The two environment variables condition 2 and condition 3 read. Stated ONCE each: a drift would not
+// fail to build, it would simply stop honouring a convention the user is entitled to rely on.
+let NoColorEnvVar = "NO_COLOR"
+let TermEnvVar = "TERM"
+let TerminalEnvNameRdataPrefix = "__tty_env_"
+
+// The terminal type condition 3 refuses, and the bytes that recognise it.
+//
+// ⭐⭐ **THE COMPARE IS A PER-BYTE OR AND ONE EQUALITY, AND IT IS EXACTLY CASE-INSENSITIVE RATHER THAN
+// APPROXIMATELY SO.** `b | 0x20 == 'd'` holds for `b` in exactly `{'D', 'd'}` — the OR can only SET bit 5,
+// so `b` must already carry every OTHER bit of `'d'` and may differ only in that one. The same argument
+// holds for `u`, `m` and `b` because all four target bytes are LOWERCASE ASCII LETTERS, which is what
+// makes the folded compare exact here where it would not be for a target containing a digit or a symbol.
+// So no byte outside a case variant of `dumb` can pass, and every case variant does.
+//
+// ⚠ **THE FOUR BYTES ARE READ ONE AT A TIME AND REASSEMBLED, RATHER THAN LOADED AS A WORD**, because
+// `accessWidthFor` serves exactly `i1`, `u8`, `i64` and `f64`: a 4-byte load has no memory-access form at
+// this tier, deliberately (P1.9 defers the signed/unsigned choice a narrow load would have to make). Four
+// `u8` loads carry no such ambiguity — zero-extension is always right — and the reassembly is three shifts
+// that keep the whole test to ONE comparison rather than four branches.
+let DumbTermName = "dumb"
+let DumbTermLength = 4
+// `dumb` as one little-endian 32-bit word: 'd'=0x64 at the low byte through 'b'=0x62 at the high one.
+let DumbTermWordLittleEndian = 0x626D7564 as ParsedInt
+// Bit 5 — the ONE bit ASCII case differs in — applied to each byte as it is read.
+let AsciiCaseFoldMaskByte = 0x20 as ParsedInt
+// How far each successive byte is shifted as the little-endian word is reassembled.
+let BitsPerByte = 8
+
+// `GetFileType`'s "this handle is a character device" answer — a console, a serial port, a terminal. The
+// three it is tested against are `FILE_TYPE_UNKNOWN` (0), `FILE_TYPE_DISK` (1, a redirect to a file) and
+// `FILE_TYPE_PIPE` (3, a redirect into another process); only this one means a person is looking.
+let FileTypeChar = 0x0002 as ParsedInt
+
+// ⭐ **THE PROBE BUFFER: `dumb` plus its terminator, and not one byte more.** `GetEnvironmentVariableA`
+// answers the chars it COPIED when the value fits and the size it NEEDS (including the terminator) when
+// it does not, so a buffer sized exactly to the longest value that could match turns "is `TERM` four
+// characters?" into a single comparison against the returned count — every longer value answers ≥ 6 and
+// every shorter one answers its own length. Sizing it larger would buy a value nothing reads.
+//
+// ⚠ It also serves condition 2's read, whose buffer size is deliberately 1: that read wants the COUNT and
+// never the text, and one byte is the smallest buffer the API accepts.
+let TerminalEnvProbeBytes = DumbTermLength + 1
+let NoColorProbeBytes = 1
+
+// ⭐⭐ **INSTALL, ON ITS OWN USAGE BIT — AND ON THE TARGET, WHICH IS THE OTHER HALF.** The detecting body
+// is one `osStdHandle`, one `osHandleFileType`, two `osEnvRead`s and a handful of compares — plus the five
+// bytes of scratch the two reads land in, which is the one transitive dependency it declares
+// (`RuntimeUsage.usesTerminalDetection` sets `usesHeap` and carries why a `.data` slot is not used
+// instead). No managed memory: nothing here builds a record.
+//
+// ⭐ **THE DECLARATION IS MADE ONCE AND FILLED TWICE**, so the two lanes cannot drift on the callee's SHAPE
+// — no parameters, an i64 answer — while differing on its body. The `.rdata` names are registered only on
+// the detecting side: the fallback reads no environment, and registering blobs nothing can reach would put
+// two dead constants in every non-Windows image.
+export function installTerminalRuntime(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, target Target)
+	if not usage.usesTerminalDetection 'notAsked'
+		return
+	end 'notAsked'
+
+	var func = IrFunction.createFromStd(TerminalStdoutWantsColorName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+	var entry = module.addBlock(func, label: b"entry")
+
+	if targetProvidesFacility(target, facility: HostFacility.terminalDetection) 'canAsk'
+		let noColorLabel = globalData.registerRdataConstant(TerminalEnvNameRdataPrefix, bytes: cStringBytes(NoColorEnvVar), kind: RdataPayloadKind.envName)
+		let termLabel = globalData.registerRdataConstant(TerminalEnvNameRdataPrefix, bytes: cStringBytes(TermEnvVar), kind: RdataPayloadKind.envName)
+		buildTerminalStdoutWantsColor(module, func: func, entry: entry, ids: ids, noColorLabel: noColorLabel.toByteArray(), termLabel: termLabel.toByteArray())
+	end 'canAsk' else 'noSuchNotion'
+		// ⛔ The whole fallback body, and it must stay 0 — see this file's header for why a guess of 1 is worse
+		// than no answer at all.
+		emitConstReturn(module, block: entry, value: 0, ids: ids)
+	end 'noSuchNotion'
+
+	module.functions.push(func)
+end 'installTerminalRuntime'
+
+// ⭐⭐ **`__tty_stdout_wants_color() -> 0 | 1`** — the three conditions, short-circuited in the order that
+// costs least: the handle question is two instructions and no allocation, so a redirected stream (which
+// is EVERY spec-suite run and every captured build log) answers before a byte of scratch is reserved.
+//
+// ⚠ **THE SCRATCH IS RESERVED ONCE AND SERVES BOTH READS**, and it is released on every exit that reached
+// it. `notATerminal` is the one exit that never allocated, which is why it has no release and why it is
+// the block the entry branches to rather than a fallthrough.
+function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry IrBlock, ids ValueMinter, noColorLabel ByteArray, termLabel ByteArray)
+	var notATerminal = module.addBlock(func, label: b"ttynotty")
+	var checkNoColor = module.addBlock(func, label: b"ttynocolor")
+	var checkTerm = module.addBlock(func, label: b"ttyterm")
+	var compareDumb = module.addBlock(func, label: b"ttydumb")
+	var refuse = module.addBlock(func, label: b"ttyno")
+	var allow = module.addBlock(func, label: b"ttyyes")
+
+	// Condition 1 — the handle the report is written to, and whether the OS calls it a character device.
+	let which = emitConst(module, block: entry, value: StdOutputHandleSelector, ids: ids)
+	let handle = ids.mint()
+	module.appendOp(entry, op: StdOp.osStdHandle(handle, whichId: which))
+	let rawFileType = ids.mint()
+	module.appendOp(entry, op: StdOp.osHandleFileType(rawFileType, handleId: handle))
+	// MASKED, for `StdOp.osHandleFileType`'s stated reason: the answer is a DWORD, so the upper half of the
+	// register carries whatever the callee left there and a raw 64-bit compare against 2 would call a real
+	// console a redirect. `__md_exists` records the identical hazard for `GetFileAttributesA`.
+	let dwordMask = emitConst(module, block: entry, value: DwordMask, ids: ids)
+	let fileType = emitBin(module, block: entry, a: rawFileType, b: dwordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let charDevice = emitConst(module, block: entry, value: FileTypeChar, ids: ids)
+	let interactive = emitCmp(module, block: entry, a: fileType, b: charDevice, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(interactive, thenBlockId: checkNoColor.id, elseBlockId: notATerminal.id))
+
+	emitConstReturn(module, block: notATerminal, value: 0, ids: ids)
+
+	// Condition 2 — PRESENCE, which is why the buffer is one byte and the returned COUNT is the whole
+	// answer: a set variable answers its own length or the size it needs, and an unset one answers 0.
+	let probeSize = emitConst(module, block: checkNoColor, value: TerminalEnvProbeBytes, ids: ids)
+	let scratch = emitRawAlloc(module, block: checkNoColor, byteCount: probeSize, ids: ids)
+	let noColorName = ids.mint()
+	module.appendOp(checkNoColor, op: StdOp.rdataAddr(noColorName, label: noColorLabel))
+	let noColorCap = emitConst(module, block: checkNoColor, value: NoColorProbeBytes, ids: ids)
+	let noColorLen = ids.mint()
+	module.appendOp(checkNoColor, op: StdOp.osEnvRead(noColorLen, namePtrId: noColorName, bufPtrId: scratch, bufLenId: noColorCap))
+	let noColorZero = emitConst(module, block: checkNoColor, value: 0, ids: ids)
+	let noColorSet = emitCmp(module, block: checkNoColor, a: noColorLen, b: noColorZero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(checkNoColor, op: StdOp.condBranch(noColorSet, thenBlockId: refuse.id, elseBlockId: checkTerm.id))
+
+	// Condition 3 — the LENGTH first, which disposes of every `TERM` that is not four characters without
+	// touching the bytes at all, and leaves the compare below reading a buffer the read really filled.
+	let termName = ids.mint()
+	module.appendOp(checkTerm, op: StdOp.rdataAddr(termName, label: termLabel))
+	let termCap = emitConst(module, block: checkTerm, value: TerminalEnvProbeBytes, ids: ids)
+	let termLen = ids.mint()
+	module.appendOp(checkTerm, op: StdOp.osEnvRead(termLen, namePtrId: termName, bufPtrId: scratch, bufLenId: termCap))
+	let dumbLen = emitConst(module, block: checkTerm, value: DumbTermLength, ids: ids)
+	let couldBeDumb = emitCmp(module, block: checkTerm, a: termLen, b: dumbLen, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkTerm, op: StdOp.condBranch(couldBeDumb, thenBlockId: compareDumb.id, elseBlockId: allow.id))
+
+	// The case-insensitive compare — see `DumbTermName` for why the fold is EXACT rather than approximate,
+	// and why the bytes are read singly. The read is in bounds by the count test above: the API wrote four
+	// bytes and a terminator into a five-byte buffer.
+	let foldMask = emitConst(module, block: compareDumb, value: AsciiCaseFoldMaskByte, ids: ids)
+	var termWord = 0 as ValueId
+	for position in 0 upto DumbTermLength 'eachTermByte'
+		let raw = ids.mint()
+		module.appendOp(compareDumb, op: StdOp.loadIndirect(raw, addrId: scratch, offset: position as ParsedInt, valueType: StdType.u8))
+		let folded = emitBin(module, block: compareDumb, a: raw, b: foldMask, opcode: StdBinOpcode.bitOr, ids: ids)
+		if position == 0 'theLowByte'
+			termWord = folded
+			continue
+		end 'theLowByte'
+
+		let shiftBy = emitConst(module, block: compareDumb, value: (position * BitsPerByte) as ParsedInt, ids: ids)
+		let placed = emitBin(module, block: compareDumb, a: folded, b: shiftBy, opcode: StdBinOpcode.shl, ids: ids)
+		termWord = emitBin(module, block: compareDumb, a: termWord, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
+	end 'eachTermByte'
+
+	let dumbWord = emitConst(module, block: compareDumb, value: DumbTermWordLittleEndian, ids: ids)
+	let isDumb = emitCmp(module, block: compareDumb, a: termWord, b: dumbWord, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(compareDumb, op: StdOp.condBranch(isDumb, thenBlockId: refuse.id, elseBlockId: allow.id))
+
+	emitRawFree(module, block: refuse, ptr: scratch, ids: ids)
+	emitConstReturn(module, block: refuse, value: 0, ids: ids)
+
+	emitRawFree(module, block: allow, ptr: scratch, ids: ids)
+	emitConstReturn(module, block: allow, value: 1, ids: ids)
+end 'buildTerminalStdoutWantsColor'
+
+// Every callee this file installs. A PREFIX test rather than an `equals` against a roster of names, for
+// `isProcessRuntimeCallee`'s reason: a second entry point here is then carried by the usage scan by
+// construction instead of having to be remembered at two sites.
+export function isTerminalRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: TerminalRuntimePrefix)
+end 'isTerminalRuntimeCallee'

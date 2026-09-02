@@ -314,8 +314,8 @@ export let StrDecrefName = b"__str_decref"
 // underneath three of them. `contains` (wave 4) and `__strix_find` (wave 3) had already gone, which left
 // `__str_split` as `__str_find`'s only producer and `__str_find` as `__str_range_eq`'s only producer — so
 // with `split` retired, nothing in the compiler can emit either callee and no `RuntimeUsage` bit could ever
-// turn true. What replaces them is the corpus's own `findIn`/`bytesEqual` (`stdlib/String.maxon:980`,
-// `:958`), which these two were transcribed from in the first place. **THE ORDER MATTERS AND IS THE TRAP
+// turn true. What replaces them is the corpus's own `findIn`/`bytesEqual` (`stdlib/String.maxon:998`,
+// `:976`), which these two were transcribed from in the first place. **THE ORDER MATTERS AND IS THE TRAP
 // THIS FAMILY KEEPS SETTING**: an entry point is deleted only once EVERY producer of its callee is gone,
 // never when merely its most visible one is (see `closeStringMethodNeeds`, whose clauses shed TERMS one at
 // a time for exactly this reason, and the paragraph `StdlibSource` keeps where its synthesized-runtime seed
@@ -379,23 +379,45 @@ export let StrFromBytesName = b"__str_from_bytes"
 export let StrOfBufferName = b"__str_of_buffer"
 
 // ⭐⭐ **`__mm_to_cstring(bufRecord) -> ptr` — `__ManagedMemory.toCString()`, the corpus's ONE producer of a
-// `cstring`** (`stdlib/String.maxon:195`). It implements the contract that declaration states verbatim:
-// *"The conversion checks `buffer[length] == 0` and copies if not, so the returned pointer is always safely
-// NUL-terminated even when the underlying `__ManagedMemory` happens to be packed tight against its
-// allocated capacity (where `strlen` would otherwise walk past the end into adjacent heap)."*
+// `cstring`** (`stdlib/String.maxon`'s `cstr()`). It implements the contract that declaration states: the
+// answer is always safely NUL-terminated, even when the underlying `__ManagedMemory` is packed tight
+// against its allocated capacity — which is exactly where `strlen` would otherwise walk past the end into
+// adjacent heap.
 //
 // ⭐ **THE CHECK IS NOT AN OPTIMISATION, IT IS WHAT MAKES THE COMMON CASE FREE.** Every String literal's
 // blob is NUL-terminated by `stringBlobBytes`, and every owned inline String's trailing NUL comes from the
 // slab's zeroing contract — so `buffer[length]` is already 0 for both, the test falls through, and the
-// receiver's own bytes are handed back with nothing allocated. Only a buffer that is neither pays a copy.
+// receiver's own bytes are handed back untouched. Only a buffer that is neither pays a grow.
 //
-// ⚠⚠ **THE COPY PATH RETURNS AN ADDRESS NOTHING OWNS, AND THAT IS THE `cstring` CONTRACT RATHER THAN AN
-// OVERSIGHT.** A `cstring` is a raw pointer with no length, no capacity and no refcount — the type exists
-// precisely to hand a `__Builtins.*` intrinsic something to `strlen`. There is no owner to record it
-// against and no drop that could reclaim it, in this compiler or in either reference. ⇒ A program that
-// reaches the copy path leaks that buffer, and the leak is the DECLARATION's to fix (by keeping the
-// receiver alive and NUL-terminated) rather than this graph's. Nothing in the loaded corpus reaches it:
-// `cstr()` has no caller, so dead-function elimination drops both.
+// ⛔⛔ **AND THE CHECK MAY NOT BE ASKED OF EVERY RECORD, WHICH IS A SEPARATE FACT FROM WHICH ONES ANSWER
+// YES.** `buffer[length]` is one byte PAST the content; a VIEW and an exactly-full OWNED buffer do not own
+// it, and a zero found there is one nothing keeps zero. `buildMmToCString` routes on
+// `BufferOwnership.emitRouteOnVouchedTerminatorSlot` before the load, and that emitter's header carries the
+// whole rule — including the C# bootstrap's `LowerManagedToCString`, which states it in the other language
+// and must move with it.
+//
+// ⭐⭐ **NOTHING IS ALLOCATED ON EITHER PATH, AND THAT IS WHY A `cstring` NEEDS NO OWNER.** A `cstring` is a
+// raw pointer with no length, no capacity and no refcount — the type exists precisely to hand a
+// `__Builtins.*` intrinsic something to `strlen` — so there is no owner to record it against and no drop
+// that could reclaim it, in this compiler or in either reference. ⇒ The pointer this answers is always the
+// RECEIVER'S OWN BUFFER: either it already ended in a NUL, or the record was grown by one byte and
+// terminated in place. The record keeps it, the record frees it, and the caller's whole obligation is to
+// keep the receiver ALIVE and UNMUTATED for as long as it holds the pointer.
+//
+// ⛔⛔ **IT USED TO COPY INTO A FRESH `__mm_alloc` BLOCK ON THE SECOND PATH, AND THAT BLOCK WAS OWNED BY
+// NOBODY — exit 101 ON FIVE LINES OF ORDINARY MAXON.** `var s = ""` + `s.append("hello world")` +
+// `s.cstr()` leaves `capacity == length`, which the terminator-slot router (rightly) refuses to probe, so
+// the receiver took the copy and leaked it. The old text argued the leak was the DECLARATION's to fix and
+// that nothing reached it anyway — *"`cstr()` has no caller, so dead-function elimination drops both"* —
+// and BOTH halves were false: `stdlib/String.maxon`'s `cstr()` is `public`, `stdlib/Subprocess.maxon` calls
+// it at seven sites, and an ordinary user program reaches it (`toCString()` is refused outside `stdlib/` by
+// `Parser.requireStdlibOnlyBufferMethod`, but `cstr()` is the corpus's own public forwarder, so that gate
+// is on the SPELLING and never was one on reachability).
+//
+// ⭐ **THE COW-AND-GROW SHAPE IS BOTH REFERENCES' OWN**, which is the strongest evidence available that it
+// is the right one: the C# bootstrap's `MaxonToStandardConversion.LowerManagedToCString` grows through
+// `maxon_string_ensure_cap`, and v1's `stdlib/Internals.maxon:__managed_mem_to_cstring` through
+// `__managed_mem_grow`. shv2 spells the same step `__managed_reserve`.
 export let MmToCStringName = b"__mm_to_cstring"
 
 // ⭐⭐ **THE ONE BYTE DOOR LEFT — what a FUSED WRAPPER's inline `managed` read mints.**
@@ -413,7 +435,7 @@ export let MmToCStringName = b"__mm_to_cstring"
 //
 // ⛔⛔ **`__str_byte_at` AND `__str_byte_at_or_panic` STOOD HERE AND ARE GONE (W49 wave 7).** They were
 // `byteAt(index)` and `byteAtOrPanic(index)` — one bounds-checked read with two failure exits, built by one
-// `buildStrByteRead` — and both members retired onto the corpus (`stdlib/String.maxon:266`, `:281`), whose
+// `buildStrByteRead` — and both members retired onto the corpus (`stdlib/String.maxon:284`, `:299`), whose
 // bodies forward to `__ManagedMemory.byteAt`. With the two arms gone nothing in this compiler can emit
 // either callee, so `usesStrByteAt`/`usesStrByteAtOrPanic` could never turn true, `buildStrByteRead` could
 // never run, and `isThrowingStringRuntimeCallee` — whose ONE term was `__str_byte_at` — could never answer
@@ -507,7 +529,7 @@ export let StrRetainName = b"__str_retain"
 // two spellings of one rule, free to disagree about `` on the day one of them was edited.
 //
 // ⭐ **ONE PASS TESTING BOTH, rather than an ASCII scan followed by a CR scan** — the corpus's
-// `scanSingleByteGraphemes` (`stdlib/String.maxon:1048`) is the same loop for the same stated reason, and
+// `scanSingleByteGraphemes` (`stdlib/String.maxon:1066`) is the same loop for the same stated reason, and
 // this is its compile-time twin over a literal's bytes.
 export function bytesAreSingleByteGraphemes(bytes ByteArray) returns bool
 	for b in bytes 'each'
@@ -1330,7 +1352,7 @@ end 'buildStrRetain'
 //
 // ⚠ **AND THE PER-BYTE COST OF THE MEMBER THIS GRAPH USED TO SERVE MOVED WITH THE BODY — RECORDED, NOT
 // CURED** (W55, and the same ruling the `findIn`/`sliceBytes` note at the head of this file carries). The
-// corpus's `scanSingleByteGraphemes` (`stdlib/String.maxon:1044-1053`) asks `managed.byteAt(i)` — a
+// corpus's `scanSingleByteGraphemes` (`stdlib/String.maxon:1062-1071`) asks `managed.byteAt(i)` — a
 // throwing, bounds-checked accessor lowering to a `__managed_byte_at` CALL — once per byte, where the loop
 // below walks the same bytes with an inline indexed load. shv2 has no inliner, so that is a real call per
 // byte for every `String.from(bytes)` and every `String.init(managed)` in a program. ⛔ **THE LADDER
@@ -1425,39 +1447,71 @@ function buildStrOfBuffer(module StdModule)
 end 'buildStrOfBuffer'
 
 // ⭐ **`__mm_to_cstring(bufRecord) -> ptr`** — see the constant's header for the contract and for why the
-// copy path's result is unowned. Three blocks: read `buffer[length]`, hand the buffer straight back when it
-// is already 0, otherwise allocate `length + 1` (the slab zeroes the terminator, so nothing writes it),
-// blit the payload across and return the fresh address.
+// answer needs no owner. Four blocks: decide whether `buffer[length]` may be READ at all, read it when it
+// may, hand the buffer straight back when it is already 0, and otherwise grow the record by one byte and
+// terminate it IN PLACE.
+//
+// ⛔⛔ **THE PROBE READS ONE BYTE PAST THE CONTENT AND MAY ONLY DO SO FOR A RECORD THAT CAN VOUCH FOR IT —
+// `BufferOwnership.emitRouteOnVouchedTerminatorSlot` IS THAT DECISION, AND IT USED TO BE MISSING.** The
+// four shapes it admits, the two it refuses (a VIEW, and an EXACTLY-FULL owned buffer — which is what a
+// first `String.append` leaves behind, not a corner case), and the bootstrap twin that carries the same
+// rule are all written down there rather than repeated here.
+//
+// ⚠⚠ **THE SECOND PATH MUTATES THE RECEIVER, WHICH IS THE PART TO GET RIGHT.** It is a COW: the bytes,
+// the length and every answer any reader can observe are unchanged, and what moves is `buffer@0` /
+// `capacity@16` / `parent@32` — a view becomes an owner of its own copy, an rdata buffer becomes a heap
+// one, and an exactly-full buffer gains slack. Every record that can arrive here has a WRITABLE record, so
+// the republish cannot fault: the router's `unvouched` set is a view, an exactly-full owner and any future
+// untaught provenance, all of them ordinary `__mm_alloc` boxes; and of the shapes that arrive by FAILING
+// the probe, `RdataBufferCapacity`'s record is a heap box too, while `InlineBufferCapacity`'s and
+// `ImmortalRecordCapacity`'s cannot fail it at all (each is created with its terminator slot already zero
+// — `emitAllocOwnedInlineString`'s `StringInterpOverheadBytes`, and `stringBlobBytes`'s NUL). That last one
+// carries the whole weight for the one record in this language that lives in READ-ONLY `.rdata`, so it is
+// stated rather than assumed: a String LITERAL never reaches the write below because its blob is
+// NUL-terminated by construction.
 function buildMmToCString(module StdModule)
 	var func = IrFunction.createFromStd(MmToCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var probe = module.addBlock(func, label: b"nulprobe")
 	var alreadyTerminated = module.addBlock(func, label: b"nulok")
-	var copyIt = module.addBlock(func, label: b"copy")
+	var terminateInPlace = module.addBlock(func, label: b"nulwrite")
 
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
 	let len = emitLoadField(module, block: entry, record: src, offset: ManagedRecordLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: entry, record: src, offset: ManagedRecordBufferOffset, ids: ids)
-	let terminator = emitLoadByteIndexed(module, block: entry, base: buf, index: len, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isTerminated = emitCmp(module, block: entry, a: terminator, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isTerminated, thenBlockId: alreadyTerminated.id, elseBlockId: copyIt.id))
+	emitRouteOnVouchedTerminatorSlot(module, func: func, cur: entry, record: src, length: len, vouched: probe, unvouched: terminateInPlace, ids: ids)
+
+	// The load lives in `probe` and not in `entry` because the branch above IS its bounds check: emitted
+	// beside the two field reads it would run for every record, which is the out-of-bounds read the router
+	// exists to remove. `entry` dominates this block, so `buf` and `len` need no block argument.
+	let terminator = emitLoadByteIndexed(module, block: probe, base: buf, index: len, ids: ids)
+	let zero = emitConst(module, block: probe, value: 0, ids: ids)
+	let isTerminated = emitCmp(module, block: probe, a: terminator, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(probe, op: StdOp.condBranch(isTerminated, thenBlockId: alreadyTerminated.id, elseBlockId: terminateInPlace.id))
 
 	module.setTerminator(alreadyTerminated, op: StdOp.ret(buf))
 
-	// `len + 1` — the payload plus the terminator the zeroing supplies. `TrivialDestructor` because the
-	// block is raw bytes owning nothing, exactly as `emitAllocOwnedInlineString`'s is.
-	let one = emitConst(module, block: copyIt, value: 1, ids: ids)
-	let withNul = emitBin(module, block: copyIt, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let zeroDtor = emitConst(module, block: copyIt, value: TrivialDestructor, ids: ids)
-	let fresh = ids.mint()
-	emitMmAllocCall(module, block: copyIt, result: fresh, size: withNul, destructor: zeroDtor, tag: mmTagIndex(MmTag.CString), ids: ids)
-	let copied = ids.mint()
-	module.appendOp(copyIt, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(fresh, second: buf, third: len)))
-	module.setTerminator(copyIt, op: StdOp.ret(fresh))
+	// Ask for `len + 1` ELEMENTS, which is `len + 1` BYTES for every record that can reach this door: a
+	// String record's `element_size@24` is 1 and so is a `ByteArray`'s, which are the only two shapes
+	// `toCString()` accepts (`Parser.requireStdlibOnlyBufferMethod` guards the spelling; the `cstring` type
+	// itself is a byte pointer).
+	let one = emitConst(module, block: terminateInPlace, value: 1, ids: ids)
+	let withNul = emitBin(module, block: terminateInPlace, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitManagedReserve(module, block: terminateInPlace, record: src, elementCount: withNul, ids: ids)
+
+	// ⚠ **RE-READ `buffer@0`: THE RESERVE MAY HAVE MOVED IT**, and `buf` above is then the address it just
+	// freed. The terminator is then WRITTEN rather than left to the fresh allocation's zeroing contract, so
+	// that this block is correct on its own terms and not on the early-out of a callee that could return
+	// without reallocating anything.
+	let owned = emitLoadField(module, block: terminateInPlace, record: src, offset: ManagedRecordBufferOffset, ids: ids)
+	let nulAddr = emitBin(module, block: terminateInPlace, a: owned, b: len, opcode: StdBinOpcode.add, ids: ids)
+	let nul = emitConst(module, block: terminateInPlace, value: 0, ids: ids)
+	module.appendOp(terminateInPlace, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: nul, valueType: StdType.u8))
+	module.setTerminator(terminateInPlace, op: StdOp.ret(owned))
 
 	module.functions.push(func)
 end 'buildMmToCString'
@@ -1534,7 +1588,7 @@ end 'buildStrBytesView'
 // stamp that disagrees with the predicate deciding `try`-ness is invisible to a suite** — build the fact
 // once and derive the rest.
 //
-// Both members are `stdlib/String.maxon:266` and `:281` now, and their bodies forward to
+// Both members are `stdlib/String.maxon:284` and `:299` now, and their bodies forward to
 // `__ManagedMemory.byteAt`, whose own `__managed_byte_at` carries the identical bound and the identical
 // `managedMemoryThrows()` clause. So the read did not lose its check; it moved to the one buffer entry point
 // that always had it.

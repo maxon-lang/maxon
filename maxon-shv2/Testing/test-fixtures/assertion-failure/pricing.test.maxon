@@ -1,0 +1,26 @@
+// ⚠ **EDITING THIS FILE MOVES A LINE NUMBER THE EXPECTATION PINS.** The report names the
+// ASSERTION'S OWN line — `Expect`'s `file`/`line` default to `__file__`/`__line__`, which expand at
+// the CALL SITE — so that number is part of the contract and not incidental. Insert a line above one
+// and `expected.txt` is owed a regeneration; the gate's report will say which line differs.
+// The FAILING report: one test green, one red, and the `expected:`/`received:` detail block under
+// it. The same subject as `all-pass`, so the two fixtures differ only in whether the expectation
+// written against it is right — which is what makes their two reports comparable.
+typealias Cents = int(0 to i64.max)
+
+function totalCost(unitPrice Cents, quantity Cents) returns Cents
+	let gross = unitPrice * quantity
+	if quantity < 10 'noDiscount'
+		return gross
+	end 'noDiscount'
+
+	return gross - gross / 10
+end 'totalCost'
+
+test 'a small order pays full price'
+	try Expect.equal(totalCost(250, quantity: 4), expected: 1000)
+end 'a small order pays full price'
+
+// Deliberately wrong — it forgot the discount. This is the fixture's whole subject.
+test 'ten items take the bulk discount'
+	try Expect.equal(totalCost(250, quantity: 10), expected: 2500)
+end 'ten items take the bulk discount'

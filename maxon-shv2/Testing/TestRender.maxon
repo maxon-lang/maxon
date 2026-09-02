@@ -1,0 +1,504 @@
+// TestRender — BOTH faces of a `maxon test` run, over the one `TestRunReport`.
+//
+// ⭐⭐ **THE REPORT A RUN PRINTS IS THE COMMAND'S PRODUCT**, and it is pinned to the byte by
+// the `Testing/test-fixtures/` corpus. Everything here is therefore written against that
+// expectation rather than against taste: a column width, a trailing space and the position of a
+// newline are all part of the contract.
+//
+// Text is emitted in TWO pieces on purpose. `testFileBlock` is printed as each file finishes, so a run
+// shows progress; `testRunSummary` is printed once at the end. The run is serial and reports in
+// discovery order, so the concatenation of the pieces is the same bytes every time — which is the only
+// reason a fixture can pin it at all.
+//
+// JSON is written through `JsonDoc` with no reflection and no DTO: the shape is decided HERE, so
+// renaming a field of `UnitTestResult` cannot silently change a consumer's contract.
+
+// The two marks a per-test line opens with.
+let PassMark = "✓"
+let FailMark = "✗"
+
+// ⭐ Width the test name is padded to before the status column. FIXED rather than measured, because a
+// width computed from the widest name in the run could not be known until the run ENDED, and results
+// are printed while it is still going.
+let TestNameColumnWidth = 44 as ColumnWidth
+
+// Width the status/duration is right-aligned in.
+let TestStatusColumnWidth = 11 as ColumnWidth
+
+// How deep a per-test line, a failure's detail and a listed name sit.
+let ReportIndent = "  "
+
+// Shown for a failure that reported NEITHER a thrown error NOR any output of its own.
+let NoAssertionMessageText = "an assertion failed, and the test wrote nothing to stderr saying which"
+
+// What a bailed run says about its own counts, directly under them.
+let BailedNote = "bailed out early — the counts above describe what RAN, not what was selected"
+
+// ⛔ **ALWAYS TRUE, BECAUSE `maxon test` HAS NO BUILD CACHE.** shv2's compiler takes PATHS and this
+// command stages a fresh tree per run, so there is nothing to key a cached test binary on and every run
+// compiles. It is EMITTED rather than omitted because a consumer reading `compileMs` needs to know
+// whether that number was paid — and it is a literal here rather than a field on `TestRunReport`,
+// because a field that no run can set to `false` is a constant wearing data's clothes. The day a cache
+// lands, this is the one line that stops being a literal.
+let CompiledEveryRun = true
+
+// ============================================================================================
+// COLOUR
+// ============================================================================================
+
+// ⭐ When a report may use colour. Asked ONCE per run; every renderer is handed the resolved boolean
+// rather than deciding for itself.
+export enum ReportColorMode
+	// Colour only when the report is going somewhere that can render it — the default, resolved through
+	// `__Builtins.stdoutWantsAnsiColor()`. See `reportColorEnabled` for the three conditions.
+	auto
+	// Colour regardless — for a caller piping into something that renders escapes.
+	always
+	// Never colour. What every byte-pinned run passes.
+	never
+end 'ReportColorMode'
+
+// What `--color=` accepted, or the refusal. An unknown value is REFUSED by the caller rather than
+// falling back to `auto`: a misspelled `--color=alwyas` that silently means something else is the flag
+// failing at the one job it has.
+export union ReportColorModeArg
+	valid(mode ReportColorMode)
+	invalid
+end 'ReportColorModeArg'
+
+export function parseReportColorMode(value String) returns ReportColorModeArg
+	let mode = try ReportColorMode.fromName(value) otherwise return ReportColorModeArg.invalid
+	return ReportColorModeArg.valid(mode)
+end 'parseReportColorMode'
+
+let ColorChoiceSeparator = "|"
+
+// The accepted `--color=` values, for the usage text — spelled from the ENUM rather than written out a
+// second time, so the help cannot advertise a value the parser has stopped accepting.
+export function reportColorChoices() returns String
+	var choices = ""
+	for name in ReportColorMode.allCaseNames 'eachChoice'
+		if not choices.isEmpty() 'notTheFirst'
+			choices.append(ColorChoiceSeparator)
+		end 'notTheFirst'
+
+		choices.append(name)
+	end 'eachChoice'
+
+	return choices
+end 'reportColorChoices'
+
+// ⭐⭐ **`auto` ASKS THE HOST, AND THIS PARAGRAPH USED TO SAY IT COULD NOT.** It read: *"`auto` ANSWERS
+// `false`, AND IT IS A MEASURED GAP RATHER THAN A CHOICE ABOUT COLOUR … there is no terminal-detection
+// primitive in this compiler or its stdlib"*. That was true and it made the flag a documented LIE —
+// `docs/CLI_REFERENCE.md` and the usage text both said *"auto means only when stdout is a terminal"*
+// while every `auto` run answered `never`. The primitive exists now
+// (`TerminalRuntime.__tty_stdout_wants_color`), and it carries all three of the reference's conditions:
+// stdout is a character device, `NO_COLOR` is unset, and `TERM` is not `dumb`.
+//
+// ⚠ **THE ANSWER IS THE INTRINSIC'S, NOT A SECOND POLICY WRITTEN HERE.** The three conditions live in
+// ONE place because two of them are environment reads Maxon source cannot make — see that runtime's
+// header — and a partial restatement here would be a second answer to a question this file already
+// delegates.
+//
+// ⛔⛔ **AND THE CALL IS UNCONDITIONAL ON PURPOSE — GUARDING IT WITH `#if os(…)` WOULD BE THE FACILITY
+// TABLE WRITTEN DOWN TWICE.** Only x64-windows can ask the host what kind of object a handle is; on every
+// other target the intrinsic answers `false` and `auto` prints no colour, which is the degradation
+// `docs/CLI_REFERENCE.md` records. That is settled at the runtime
+// (`TerminalRuntime.installTerminalRuntime` picks the body from `HostFacility.terminalDetection`), which
+// is the only place that knows.
+//
+// ⛔ **THIS LINE IS ALSO WHY THAT DECISION HAD TO BE MADE AT ALL.** With the intrinsic gated by E3104
+// instead, `maxon-shv2` STOPPED CROSS-COMPILING for arm64-macOS: `Testing/` is ordinary user code, the
+// E3104 gate is reachability-blind for user code by design, and one call in a test REPORTER took the whole
+// compiler down for a lane. Do not reintroduce a refusal here or there.
+export function reportColorEnabled(mode ReportColorMode) returns bool
+	return match mode 'setting'
+		auto gives __Builtins.stdoutWantsAnsiColor()
+		always gives true
+		never gives false
+	end 'setting'
+end 'reportColorEnabled'
+
+// The SGR introducer: ESC (U+001B, spelled with the four hex digits the lexer requires) then `[`.
+let SgrEscape = "\u001b["
+let SgrReset = "0m"
+let SgrBold = "1m"
+let SgrDim = "2m"
+let SgrRed = "31m"
+let SgrGreen = "32m"
+let SgrYellow = "33m"
+
+// Wrap `text` in an SGR code, or hand it back untouched when colour is off. EVERY coloured string in
+// this file funnels through here, so "colour off produces the exact bytes colour on would, minus the
+// escapes" is a property of one function rather than a promise repeated at each call site.
+function painted(text String, code String, color bool) returns String
+	if not color 'noColour'
+		return text
+	end 'noColour'
+
+	return "{SgrEscape}{code}{text}{SgrEscape}{SgrReset}"
+end 'painted'
+
+// ============================================================================================
+// TEXT
+// ============================================================================================
+
+// ⭐ **ONE FILE'S RESULTS: a header naming the file, then a line per test.**
+//
+// `showTiming` is FALSE under `--no-timing`, which is what makes stdout byte-reproducible: a duration is
+// the one thing in this report that differs between two runs of identical code.
+export function testFileBlock(file TestFileResults, color bool, showTiming bool) returns String
+	var block = "{painted(reportPathDisplay(file.file), code: SgrBold, color: color)}:\n"
+
+	for result in file.results 'eachResult'
+		let mark = passMarkFor(result.outcome, color: color)
+		// TRIMMED because the name is padded to a fixed column and the status may be empty (under
+		// `--no-timing` every passing line would otherwise end in a run of spaces). An SGR sequence ends
+		// with the reset, which is not whitespace, so a coloured line trims identically.
+		let line = "{ReportIndent}{mark} {paddedTestName(result.test.displayName)}{statusColumn(result, color: color, showTiming: showTiming)}"
+		block.append("{line.trimEnd()}\n")
+	end 'eachResult'
+
+	return block
+end 'testFileBlock'
+
+function passMarkFor(outcome UnitTestOutcome, color bool) returns String
+	if outcome == UnitTestOutcome.passed 'green'
+		return painted(PassMark, code: SgrGreen, color: color)
+	end 'green'
+
+	return painted(FailMark, code: SgrRed, color: color)
+end 'passMarkFor'
+
+// Pad a name to the status column. Padding is computed on the RAW name — colour is never applied to it
+// — so a coloured run and an uncoloured one align identically.
+//
+// ⚠ **THE MEASURE IS BYTES**, which is `padRight`'s rule and every other table this compiler prints.
+// The reference measures UTF-16 units. The two agree for every ASCII name, and neither is display
+// width; a report is not the place to introduce a third measure.
+function paddedTestName(name String) returns String
+	if name.byteLength() >= TestNameColumnWidth 'overflowsItsColumn'
+		// A name at or past the column pushes its status right rather than being truncated — a clipped
+		// test name is worse than a ragged column — but it still needs one space to stand off it.
+		return "{name} "
+	end 'overflowsItsColumn'
+
+	return padRight(name, width: TestNameColumnWidth)
+end 'paddedTestName'
+
+// The right-hand column: a DURATION for a test that ran, and the OUTCOME'S NAME for one that did not
+// finish under its own power.
+//
+// ⚠ **AN OUTCOME WITH NO DURATION SHOWS ITS LABEL EVEN UNDER `--no-timing`** — the label is a VERDICT,
+// not a measurement, and suppressing it would delete the only thing the line had to say.
+function statusColumn(result UnitTestResult, color bool, showTiming bool) returns String
+	if not measuredItsOwnDuration(result.outcome) 'aVerdictRatherThanAMeasurement'
+		return painted(padLeft(outcomeSpelling(result.outcome).label, width: TestStatusColumnWidth), code: outcomeColorCode(result.outcome), color: color)
+	end 'aVerdictRatherThanAMeasurement'
+
+	if not showTiming 'durationsSuppressed'
+		return ""
+	end 'durationsSuppressed'
+
+	return painted(padLeft(durationText(result.nanos), width: TestStatusColumnWidth), code: SgrDim, color: color)
+end 'statusColumn'
+
+// ⭐ Whether this outcome produced a MEASUREMENT — the two a test reaches under its own power. Asked by
+// BOTH faces, so a duration cannot be reported in one and withheld in the other.
+function measuredItsOwnDuration(outcome UnitTestOutcome) returns bool
+	return outcome == UnitTestOutcome.passed or outcome == UnitTestOutcome.failed
+end 'measuredItsOwnDuration'
+
+// How a non-passing outcome is coloured in the per-test list.
+//
+// `didNotRun` is YELLOW rather than red because it is not a verdict ON the test — nothing observed it,
+// usually because something ELSE killed its process — and colouring it like a failure points a reader
+// at the wrong test.
+function outcomeColorCode(outcome UnitTestOutcome) returns String
+	return SgrYellow if outcome == UnitTestOutcome.didNotRun else SgrRed
+end 'outcomeColorCode'
+
+// Milliseconds with two decimals, which is the unit a unit test is read in. The divisor is a FLOAT, so
+// the nanosecond count is promoted rather than truncated: an integer divide would report every test
+// under a millisecond as `0.00ms`.
+let NanosPerMilli = 1000000.0
+
+function durationText(nanos DurationNanos) returns String
+	let millis = nanos / NanosPerMilli
+	return "{millis:.2}ms"
+end 'durationText'
+
+// ⭐ **THE TAIL OF A RUN: one detail block per failure, then the counts, then the footer.**
+export function testRunSummary(report TestRunReport, color bool, showTiming bool) returns String
+	var summary = ""
+
+	for file in report.files 'eachFile'
+		for result in file.results 'eachResult'
+			if result.isFailure() 'notGreen'
+				summary.append(failureDetail(file.file, result: result, color: color))
+			end 'notGreen'
+		end 'eachResult'
+	end 'eachFile'
+
+	let tally = tallyTestRun(report.files)
+	summary.append("\n")
+	summary.append(" {tally.passed} pass\n")
+	summary.append(" {failCountText(tally.failed, color: color)}\n")
+
+	if report.bailed 'stoppedClaimingWorkEarly'
+		summary.append(" {painted(BailedNote, code: SgrYellow, color: color)}\n")
+	end 'stoppedClaimingWorkEarly'
+
+	summary.append("\n")
+	summary.append(testCountLine(tally.total, files: report.files.count() as ReportedTestCount))
+
+	if showTiming 'withTiming'
+		summary.append("   compile {report.compileMs}ms, run {report.runMs}ms")
+	end 'withTiming'
+
+	summary.append("\n")
+	return summary
+end 'testRunSummary'
+
+// The failure count, reddened only when there IS one: a red `0 fail` would be a warning about nothing.
+function failCountText(failed ReportedTestCount, color bool) returns String
+	if failed == 0 'nothingFailed'
+		return "{failed} fail"
+	end 'nothingFailed'
+
+	return painted("{failed} fail", code: SgrRed, color: color)
+end 'failCountText'
+
+// ⭐ **ONE FAILURE, IN THE SHAPE A READER ACTS ON: what failed, then why, then where.**
+//
+// A reported `threw` is preferred over captured output because it is STRUCTURED — the compiler's
+// substituted handler names the error type, the live case, and the line of the `try` that threw, which
+// is the line to open. Captured output is what remains when the failure was the test's own assertion or
+// a panic, neither of which reports through that channel.
+//
+// ⚠ The label here is always RED, where the per-test line paints `didNotRun` yellow: this section is
+// the failure report, and every heading in it heads a failure.
+function failureDetail(path FilePath, result UnitTestResult, color bool) returns String
+	var detail = "\n{painted(outcomeSpelling(result.outcome).label, code: SgrRed, color: color)}  {reportPathDisplay(path)} > {result.test.displayName}\n"
+
+	match result.thrown 'unhandledError'
+		absent then break 'unhandledError'
+		reported(error) then detail.append("{ReportIndent}threw {error.errorType}.{error.errorCase}\n{ReportIndent}at {error.file}:{error.line}\n")
+	end 'unhandledError'
+
+	if not result.output.isEmpty() 'itWroteSomething'
+		for line in result.output.split("\n") 'eachLine'
+			detail.append("{ReportIndent}{line}\n")
+		end 'eachLine'
+		return detail
+	end 'itWroteSomething'
+
+	// A test throws exactly `TestFailure`, so a failure with no `threw` report is the test's OWN
+	// assertion. With nothing on stderr either, the report would otherwise be a bare headline — say
+	// which of the two it is, rather than leaving a reader to wonder whether output was lost.
+	if not hasThrownReport(result.thrown) and result.outcome == UnitTestOutcome.failed 'saidNothingAtAll'
+		detail.append("{ReportIndent}{NoAssertionMessageText}\n")
+	end 'saidNothingAtAll'
+
+	return detail
+end 'failureDetail'
+
+function hasThrownReport(thrown ThrownReport) returns bool
+	return match thrown 'report'
+		reported gives true
+		absent gives false
+	end 'report'
+end 'hasThrownReport'
+
+// The "N tests across M files." line, WITHOUT its newline. Both faces of a run end with it, and
+// spelling the pluralisation twice is how the two would come to disagree about the singular.
+//
+// ⚠ The period is inside the FILE word, because "file." and "files." are what differ — a period
+// appended afterwards would be a third thing to keep in step.
+function testCountLine(tests ReportedTestCount, files ReportedTestCount) returns String
+	let testWord = "test" if tests == 1 else "tests"
+	let fileWord = "file." if files == 1 else "files."
+	return " {tests} {testWord} across {files} {fileWord}"
+end 'testCountLine'
+
+// ⭐ **`--list`: what WOULD run, compiling nothing.** It reads the same discovery and the same selection
+// a run does, so a listed test and a run test cannot come from different answers to "what is a test".
+//
+// A file with no selected test is skipped ENTIRELY — header included — so the listing shows the run
+// rather than the project.
+export function testListText(groups TestFileGroupArray, selected TestSelection, color bool) returns String
+	var listing = ""
+	var tests = 0 as ReportedTestCount
+	var files = 0 as ReportedTestCount
+
+	for group in groups 'eachFile'
+		var names = ""
+		var here = 0 as ReportedTestCount
+
+		for member in group.tests 'eachTest'
+			if not testIsSelected(selected, index: member.index) 'notInThisRun'
+				continue
+			end 'notInThisRun'
+
+			names.append("{ReportIndent}{member.test.displayName}\n")
+			here = here + 1
+		end 'eachTest'
+
+		if here == 0 'nothingSelectedInThisFile'
+			continue
+		end 'nothingSelectedInThisFile'
+
+		files = files + 1
+		tests = tests + here
+		listing.append("{painted(reportPathDisplay(group.file), code: SgrBold, color: color)}:\n{names}")
+	end 'eachFile'
+
+	listing.append("\n{testCountLine(tests, files: files)}\n")
+	return listing
+end 'testListText'
+
+// ⭐ The line a run that found NOTHING TO DO prints. It is a FAILURE, and it says why in the report's
+// own voice rather than as an error, because nothing went wrong with the harness — there is simply
+// nothing green to claim. Yellow for that reason: it is a warning about the RUN, not a broken tool.
+export function testEmptyRunNote(reason String, color bool) returns String
+	return "{painted(reason, code: SgrYellow, color: color)}\n"
+end 'testEmptyRunNote'
+
+// ============================================================================================
+// JSON
+// ============================================================================================
+
+// ⭐ **THE WHOLE RUN AS JSON, emitted once at the end rather than streamed** — it is one document and
+// cannot be written in pieces.
+//
+// `showTiming` is false under `--no-timing`, which drops every duration here too. The flag is about
+// making stdout REPRODUCIBLE, and a JSON consumer diffing two runs needs that as much as a fixture
+// does; honouring it in one face only would make the flag mean different things by output format.
+//
+// `emptyReason` says WHY a run has no results, when it has none — EMPTY meaning it has some, which is
+// this driver's convention for an absent optional. It is carried because the text face says it and this
+// must not say less: "no tests exist" and "no test matched the filter" are different problems with the
+// same exit code, and a machine reader that cannot tell them apart cannot act.
+export function testRunJson(report TestRunReport, showTiming bool, emptyReason String = "") returns String
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	if not emptyReason.isEmpty() 'nothingRan'
+		pushJsonString(doc, keys: keys, children: children, key: "reason", value: emptyReason)
+	end 'nothingRan'
+
+	let tally = tallyTestRun(report.files)
+	pushJsonNumber(doc, keys: keys, children: children, key: "total", value: tally.total)
+	pushJsonNumber(doc, keys: keys, children: children, key: "passed", value: tally.passed)
+	pushJsonNumber(doc, keys: keys, children: children, key: "failed", value: tally.failed)
+	pushJsonNumber(doc, keys: keys, children: children, key: "files", value: report.files.count())
+
+	// `compiled` belongs INSIDE the timing block, with the durations it is reported beside: it is the
+	// same fact the text face spells as `compile 123ms`, it describes the BUILD rather than the tests,
+	// and emitting it unconditionally would make the JSON face the one place `--no-timing` did not
+	// deliver the byte-reproducible stdout it promises.
+	if showTiming 'withTiming'
+		pushJsonBool(doc, keys: keys, children: children, key: "compiled", value: CompiledEveryRun)
+		pushJsonNumber(doc, keys: keys, children: children, key: "compileMs", value: report.compileMs)
+		pushJsonNumber(doc, keys: keys, children: children, key: "runMs", value: report.runMs)
+	end 'withTiming'
+
+	// Only when TRUE: a flag that is false in almost every run is a column of one value. It is here at
+	// all because the text face prints its note, and a `--json` consumer reading a short green list as
+	// a complete one is exactly the failure that note exists to prevent.
+	if report.bailed 'stoppedClaimingWorkEarly'
+		pushJsonBool(doc, keys: keys, children: children, key: "bailed", value: true)
+	end 'stoppedClaimingWorkEarly'
+
+	var results = JsonNodeIdArray.create()
+	for file in report.files 'eachFile'
+		for result in file.results 'eachResult'
+			results.push(testResultNode(doc, path: file.file, result: result, showTiming: showTiming))
+		end 'eachResult'
+	end 'eachFile'
+
+	keys.push("results")
+	children.push(doc.add(JsonNode.arrayNode(results)))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return Json.stringify(doc)
+end 'testRunJson'
+
+function testResultNode(doc JsonDoc, path FilePath, result UnitTestResult, showTiming bool) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	pushJsonString(doc, keys: keys, children: children, key: "file", value: reportPathDisplay(path))
+	pushJsonString(doc, keys: keys, children: children, key: "name", value: result.test.displayName)
+	pushJsonString(doc, keys: keys, children: children, key: "symbol", value: String.from(result.test.symbol))
+	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: result.test.line)
+	pushJsonString(doc, keys: keys, children: children, key: "state", value: outcomeSpelling(result.outcome).jsonState)
+
+	// ABSENT rather than zero for an outcome that never produced one: a test that crashed did not take
+	// 0.00ms, and a machine reader must be able to tell "fast" from "never measured".
+	if showTiming and measuredItsOwnDuration(result.outcome) 'measured'
+		pushJsonNumber(doc, keys: keys, children: children, key: "nanos", value: result.nanos)
+	end 'measured'
+
+	match result.thrown 'unhandledError'
+		absent then break 'unhandledError'
+		reported(error) then pushThrownNode(doc, keys: keys, children: children, error: error)
+	end 'unhandledError'
+
+	if not result.output.isEmpty() 'itWroteSomething'
+		pushJsonString(doc, keys: keys, children: children, key: "output", value: result.output)
+	end 'itWroteSomething'
+
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'testResultNode'
+
+function pushThrownNode(doc JsonDoc, keys StringArray, children JsonNodeIdArray, error ThrownTestError)
+	var thrownKeys = StringArray.create()
+	var thrownChildren = JsonNodeIdArray.create()
+
+	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "errorType", value: error.errorType)
+	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "errorCase", value: error.errorCase)
+	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "file", value: error.file)
+	pushJsonNumber(doc, keys: thrownKeys, children: thrownChildren, key: "line", value: error.line)
+
+	keys.push("threw")
+	children.push(doc.add(JsonNode.objectNode(thrownKeys, children: thrownChildren)))
+end 'pushThrownNode'
+
+// ⭐ `--list --json`: the roster a machine reads. The same selection the text listing walks.
+export function testListJson(groups TestFileGroupArray, selected TestSelection) returns String
+	var doc = JsonDoc.create()
+	var listed = JsonNodeIdArray.create()
+
+	for group in groups 'eachFile'
+		for member in group.tests 'eachTest'
+			if not testIsSelected(selected, index: member.index) 'notInThisRun'
+				continue
+			end 'notInThisRun'
+
+			listed.push(listedTestNode(doc, path: group.file, test: member.test))
+		end 'eachTest'
+	end 'eachFile'
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("tests")
+	children.push(doc.add(JsonNode.arrayNode(listed)))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return Json.stringify(doc)
+end 'testListJson'
+
+function listedTestNode(doc JsonDoc, path FilePath, test DiscoveredTest) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	pushJsonString(doc, keys: keys, children: children, key: "file", value: reportPathDisplay(path))
+	pushJsonString(doc, keys: keys, children: children, key: "name", value: test.displayName)
+	pushJsonString(doc, keys: keys, children: children, key: "symbol", value: String.from(test.symbol))
+	pushJsonNumber(doc, keys: keys, children: children, key: "line", value: test.line)
+
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'listedTestNode'

@@ -89,6 +89,13 @@ end 'CompileProduct'
 // `stdlibDirOverride` names the `stdlib/` this compile reads instead of the one above the compiler's
 // own executable; empty ⇒ the walk-up, byte-for-byte unchanged (see `loadProject`).
 //
+// ⭐ **THE LAST THREE ARGUMENTS ARE ONE CALLER'S, AND THEIR DEFAULTS ARE EVERY OTHER BUILD'S ANSWER.**
+// `entryFunction` is where this build begins (`Project.entryFunctionName`), `compilerWrittenSources` names the
+// inputs this compiler WROTE, each with the reserved names it minted there (`Project.compilerWrittenSources`), and `sourceSelection` says whether a
+// directory walk yields the `*.test.maxon` files too (`SourceSelection`). All three are what a
+// `maxon test` build states and what nothing else has any reason to; defaulted, this signature means
+// exactly what it meant before them.
+//
 // ⭐ **IT OWNS THE TOTAL: it is the only entry that spans a whole build**, so it is the only one that
 // can measure the denominator every phase's share is taken against (the warm-rebuild gate drives
 // `compileToCodeResult` directly and never reports). Every phase timed below and in the
@@ -101,7 +108,7 @@ end 'CompileProduct'
 // diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
 // `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
 // re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, stdlibDirOverride String = "") returns CompileProduct throws CompileError
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -139,7 +146,7 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// in general: it is reached only from `Main.runVerifyWarmRebuild`, which turns a throw into an exit
 	// code, so a throw really does end the process there with nothing left to mis-nest. An in-process
 	// caller of THAT gate would need this drain too.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, stdlibDirOverride: stdlibDirOverride, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -148,12 +155,12 @@ end 'compileToProduct'
 // The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, stdlibDirOverride String, unit TraceUnit) returns CompileProduct throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, stdlibDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, unit TraceUnit) returns CompileProduct throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride)
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins)
 	project.asyncTrace = asyncTrace
 	project.debugStream = debugStream
 	recordPhase(project, phase: CompilePhase.load, probe: whole)
@@ -346,12 +353,22 @@ end 'writeTargetIr'
 // File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "") returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns Project throws CompileError
 	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it to
 	// the loader below. Nothing after the load asks where `stdlib/` is — a later pass asks about a
 	// FUNCTION (`isStdlibFunction`), which is answered from a set the loader already built.
 	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: try stdlibDirFor(stdlibDirOverride))
-	try loadSourceFiles(project, paths: inputPaths)
+	// ⭐ **BOTH SET BEFORE THE FIRST FILE IS REGISTERED, AND THAT ORDER IS LOAD-BEARING.**
+	// `Queries.compilerMintedNamesIn` is asked while a file is being READ, so a list filled after the
+	// load would classify every synthesized file as ordinary user source — the silent half of the reserved-
+	// name door, which fails by REFUSING a generated call rather than by admitting a written one.
+	project.entryFunctionName = entryFunction
+	project.compilerWrittenSources = compilerWrittenSources
+	// Set WITH them and before the load, for their reason: a diagnostic can be raised while a file is
+	// being READ, and a mapping filled in afterwards would let those — the parse errors, which are
+	// most of them — go on naming the staged copy.
+	project.stagedSourceOrigins = stagedSourceOrigins
+	try loadSourceFiles(project, paths: inputPaths, selection: sourceSelection)
 	// AFTER the user's own sources — so a directory build's output name still derives from a user
 	// file (not from a stdlib module), and an empty user project still fails with `noSourceFiles`
 	// above rather than compiling only stdlib.
@@ -945,6 +962,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// symptom is `iatCall`s past the end of the table actually emitted. `__proc_bg_priority` needs
 	// `SetPriorityClass` and `GetPriorityClass`, both at the end of kernel32's run.
 	pipeline.stdModule.usesBackgroundPriority = usage.usesBackgroundPriority
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
+	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableA`, already in
+	// the band — both at the end of kernel32's run.
+	pipeline.stdModule.usesTerminalDetection = usage.usesTerminalDetection
 	// ⭐ **AND THE FOURTH PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
 	// kernel32's run (see `isOptionalTrailingImport`).
@@ -1097,6 +1118,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// stated there.
 	installConsoleRuntime(pipeline.stdModule, usage: usage)
 	installProcessRuntime(pipeline.stdModule, usage: usage)
+	// The terminal question (`__tty_stdout_wants_color`), on its own bit beside them. It is the one install
+	// in this block that needs `globalData`: its two environment names are `.rdata` constants, registered
+	// the way `installDebugStreamRuntime` registers its own. It also takes the TARGET, as
+	// `installCommandLineRuntime` does and for the same kind of reason — the lane decides which BODY the
+	// entry point gets (the real three-condition read, or the "not a terminal" answer a lane with no such
+	// notion gives) rather than whether the entry point exists at all.
+	installTerminalRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, target: project.target)
 
 	// The managed-memory runtime (`__managed_create`/`__managed_push`/`__managed_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline, see this block's header. Keyed on
@@ -1364,12 +1392,12 @@ end 'reportBindingHygieneDiagnostics'
 // content is a no-op all the way down. It is what makes `build a.maxon b.maxon <theirDirectory>`
 // mean "these two first, then whatever else is under there" — the form the spec runner uses to state
 // a case's declared file order while keeping the project rooted at the case's own directory.
-function loadSourceFiles(project Project, paths MaxonSourcePathArray) throws CompileError
+function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection SourceSelection) throws CompileError
 	for path in paths 'eachNamed'
 		if File.exists(path) 'isFile'
 			try loadOneSourceFile(project, path: path)
 		end 'isFile' else if Directory.exists(path) 'isDir'
-			try loadSourceDirectory(project, dir: path)
+			try loadSourceDirectory(project, dir: path, selection: selection)
 		end 'isDir' else 'notFound'
 			throw CompileError.fileNotFound(path)
 		end 'notFound'
@@ -1455,10 +1483,10 @@ export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath th
 	return first
 end 'commonAncestorOf'
 
-// Load every Maxon source file under `dir`.
-function loadSourceDirectory(project Project, dir FilePath) throws CompileError
+// Load every Maxon source file under `dir`, as `selection` defines "source file".
+function loadSourceDirectory(project Project, dir FilePath, selection SourceSelection) throws CompileError
 	var paths = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(dir, into: paths)
+	_ = try collectMaxonSources(dir, into: paths, selection: selection)
 
 	for path in paths 'each'
 		try loadOneSourceFile(project, path: path)
@@ -1467,7 +1495,9 @@ end 'loadSourceDirectory'
 
 // ⭐ **WHAT COUNTS AS A MAXON SOURCE FILE UNDER A DIRECTORY — asked in ONE place.** Every `.maxon`
 // file beneath `dir`, subdirectories included, minus the build manifest (a project description, not
-// a compilation unit) and minus every subtree a `.maxonignore` marker excludes.
+// a compilation unit), minus every subtree a `.maxonignore` marker excludes, and — for an ordinary
+// build — minus every `*.test.maxon`. That last clause is the ONLY thing `selection` varies; see
+// `SourceSelection` for why it is a parameter rather than a second walk.
 //
 // ⚠ BOTH of a compile's directory walks go through it — the USER's own root (`loadSourceDirectory`)
 // and the checkout's `stdlib/` (`loadStdlibSources`) — because that is ONE question, and two copies
@@ -1510,12 +1540,12 @@ end 'loadSourceDirectory'
 // constant in the trend log (see `printStdlibWalkCensus`), and the count is returned from
 // the recursion rather than re-derived by a second traversal because a second traversal would be free
 // to disagree the moment this one grows an exclusion.
-export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) returns DirectoryWalkCount throws CompileError
+export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly) returns DirectoryWalkCount throws CompileError
 	if isIgnoredDirectory(dir) 'notACompilationUnit'
 		return 0 as DirectoryWalkCount
 	end 'notACompilationUnit'
 
-	return try collectMaxonSourcesUnder(dir, into: into)
+	return try collectMaxonSourcesUnder(dir, into: into, selection: selection)
 end 'collectMaxonSources'
 
 // The recursion, entered only for a directory whose ANCESTRY the entry above has already cleared.
@@ -1527,7 +1557,7 @@ end 'collectMaxonSources'
 // this makes them O(directories), and each probe is a filesystem call on a walk the spec suite runs
 // thousands of times: re-deriving a fact the caller already established is exactly the cost curve this
 // compiler exists to not inherit.
-function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray) returns DirectoryWalkCount throws CompileError
+function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray, selection SourceSelection) returns DirectoryWalkCount throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
 	// `dir` itself was listed, so a leaf directory answers 1.
@@ -1542,11 +1572,11 @@ function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray) retur
 				continue
 			end 'ignoredSubtree'
 
-			let below = try collectMaxonSourcesUnder(entry, into: into)
+			let below = try collectMaxonSourcesUnder(entry, into: into, selection: selection)
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
-			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) and not isTestSourceName(name) 'isSource'
+			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name) 'isSource'
 				into.push(entry)
 			end 'isSource'
 		end 'isFile'
@@ -1650,6 +1680,39 @@ let MaxonSourceExtension = ".maxon"
 // join an ordinary build on this compiler and not on the one that compiles it.
 let TestSourceSuffix = ".test.maxon"
 
+// ⭐⭐ **WHICH KIND OF SOURCE FILE A WALK IS BEING ASKED FOR — the ONE thing that differs between the two
+// questions `collectMaxonSources` answers.**
+//
+// ⛔ **A SECOND WALK WAS THE ALTERNATIVE AND IT IS THE ONE THIS FILE'S HEADER ALREADY REFUSES.** That header
+// says of the `.maxonignore` clause that both of a compile's directory walks go through one function
+// "because that is ONE question, and two copies of the answer are two copies that can come to disagree" —
+// and every clause a test-file walk needs is that same list: the build manifest, the `.maxon` extension,
+// the pruned `.maxonignore` subtrees, the directory count it returns. A `collectTestSources` beside this
+// one would restate all four to vary the fifth, and the day a sixth exclusion lands it goes into whichever
+// copy the author was looking at.
+//
+// ⇒ The selection is a PARAMETER, and it is the only thing the two answers differ by.
+export enum SourceSelection
+	// An ordinary build: `*.test.maxon` is NOT part of the program. This is the default at every existing
+	// call site and the reason the exclusion exists at all — a test file joins a build only when something
+	// asks for it by name or asks for it here.
+	productionOnly
+	// A `maxon test` build: the test files ARE the program, alongside everything an ordinary build compiles.
+	// The tests still have to be compiled WITH their project, because a `test` body calls the very
+	// declarations that project makes.
+	productionAndTests
+end 'SourceSelection'
+
+// Does this walk want a file with this name? Every OTHER clause of "is this a source file" is asked at the
+// walk itself and is the same for both selections; this is the one that varies, so it is the one that is
+// asked here — through `isTestSourceName`, so neither answer restates the rule.
+function selectionAdmits(selection SourceSelection, name String) returns bool
+	return match selection 'selection'
+		productionOnly gives not isTestSourceName(name)
+		productionAndTests gives true
+	end 'selection'
+end 'selectionAdmits'
+
 // ⭐ **THE ONE PLACE THAT ANSWERS "IS THIS FILE A TEST FILE?"** — the WALK asks it to leave such a file out
 // of an ordinary build, and `Parser.readTestDeclarationHead` asks it to refuse a `test` written anywhere
 // else (E2058). Two readers, one rule: a walk and a diagnostic that disagreed about which files may hold a
@@ -1675,7 +1738,11 @@ end 'testSourceNameFor'
 // A directory holding this file is not part of any program, and neither is anything beneath it. The
 // name is the bootstrap's and the repo's — five directories carry one today — and the file's CONTENTS
 // are never read; see `collectMaxonSources` for the measurements.
-let IgnoreMarkerName = ".maxonignore"
+// EXPORTED because `maxon test` WRITES one: its staged tree lives under the project it copied, and
+// this marker is the only thing that keeps the copy out of that project's own walk (see
+// `TestCommand.prepareTestBuildRoot`). Spelled a second time there, a mismatch would be silent —
+// the marker would simply never be found.
+export let IgnoreMarkerName = ".maxonignore"
 
 // Paths of Maxon source files, in the order a walk found them — what `collectMaxonSources`
 // produces and what `Project.stdlibSourcePaths` keeps. The ORDER is the fact this name carries and
@@ -1696,6 +1763,85 @@ let IgnoreMarkerName = ".maxonignore"
 // extracted spec harness. `Parser.publishNestedGenericAlias` gives such a member its bare key; the name
 // here stays for the ordering fact above.
 export typealias MaxonSourcePathArray = Array with FilePath
+
+// ⭐⭐ **ONE STAGED SOURCE THIS COMPILE ITSELF WROTE, AND THE RESERVED NAMES IT MINTED INTO IT.** A
+// caller that GENERATES Maxon source (`TestDispatcher.stageTestBuild` is the only one) hands the
+// compile a row per generated file, and the two reserved-name doors read it — see
+// `Parser.fileMayUseReservedNames` for the call side and `Parser.requireUnreservedName` for the
+// declaration side.
+//
+// ⛔⛔ **THE NAMES ARE HERE BECAUSE A STAGED FILE IS HALF THE AUTHOR'S BYTES.** `maxon test` appends
+// its dispatcher to a COPY of the author's own `*.test.maxon`, so "this compiler wrote this file" is
+// true of the file and false of most of its lines. A per-FILE exemption on the DECLARATION door
+// therefore hands the author the reserved space: MEASURED before this list existed, an author's
+// `function __sneaky()` in a `*.test.maxon` compiled clean under `maxon test` while `maxon build`
+// refused the identical file with E2051. The stager knows exactly which names it minted; nothing
+// else may claim them.
+//
+// ⛔ **IT IS KEYED ON THE NAME AND NOT ON A LINE THRESHOLD.** "Everything below the author's last
+// line" is true only because the dispatcher is APPENDED, and it would invert silently the day
+// anything is prepended — which is a property of the generator, not of the door that trusts it.
+export type CompilerWrittenSource
+	// The staged file, spelled EXACTLY as the caller also puts it in the build's input list — so the
+	// loader registers this very spelling and the lookup is a `FilePath.equals` rather than a second
+	// derivation of one path.
+	export let path as FilePath
+	// The reserved names this compile declared in that file. NEVER EMPTY: a generated fragment always
+	// declares at least the symbol its caller reaches it by, and `stageTestBuild` refuses to stage one
+	// that does not — which is what lets emptiness mean "the author wrote every byte of this file"
+	// rather than needing a second flag to say so.
+	export let mintedNames as ByteArrayArray
+
+	export static function create(path FilePath, mintedNames ByteArrayArray) returns CompilerWrittenSource
+		return Self{path: path, mintedNames: mintedNames}
+	end 'create'
+end 'CompilerWrittenSource'
+
+export typealias CompilerWrittenSourceArray = Array with CompilerWrittenSource
+
+// ⭐⭐ **ONE SOURCE THIS COMPILE READ FROM A COPY, AND THE NAME EVERY DIAGNOSTIC ABOUT IT MUST USE
+// INSTEAD.** A caller that compiles a STAGED TREE rather than the user's own (`TestDispatcher
+// .stageTestBuild` is the only one) hands the compile a row per copied file, and the single diagnostic
+// sink rewrites the path through it — see `Project.reportDiagnostic` and `Diagnostic.reportedUnder`.
+//
+// ⛔⛔ **WITHOUT IT A COMPILE ERROR NAMES A FILE THE AUTHOR NEVER WROTE AND THE NEXT RUN DELETES.**
+// MEASURED 2026-09-02: an author's reserved-name declaration under `maxon test` was reported at
+// `<project>/.maxon/test/staged/sneaky.test.maxon:11:10` — a path that exists only between two runs,
+// under a directory this compiler itself marks as not part of the project. The reference names the
+// author's own file for the identical bytes, and a diagnostic a reader cannot open is not a diagnostic.
+//
+// ⛔ **THE WHOLE FILE MAPS, INCLUDING THE LINES THE STAGER APPENDED, AND THAT IS A DECISION MADE
+// AGAINST A MEASUREMENT.** This row first carried a third field — the author's last line — so that a
+// diagnostic anchored in the appended dispatcher would keep the staged spelling and stay openable. It
+// had to go: the lexer emits its END-OF-INPUT sentinel one line PAST the last line of the file, so an
+// unterminated `function` in an ORDINARY copied source — a file with no appended bytes anywhere — landed
+// above the threshold and kept the staged path. MEASURED 2026-09-02 on a two-line `helper.maxon`:
+// `E2007 …/.maxon/test/staged/helper.maxon:3:1: Unexpected end of input`. A threshold that misfires on
+// the commonest diagnostic in the commonest file is worse than none.
+//
+// ⚠ **WHAT IS GIVEN UP, STATED:** a diagnostic genuinely anchored in the generated dispatcher now names
+// the author's file at a line their file does not reach. That is a bug in what this compiler WROTE, its
+// reader is a compiler developer, and the staged tree is sitting beside the project for them to open —
+// which is the trade the reference makes too: the bootstrap compiles its generated text in memory under
+// the author's own path and has no threshold of any kind.
+export type StagedSourceOrigin
+	// The copy this compile READ, spelled exactly as the caller also puts it in the build's input list
+	// — so the loader registers this very spelling and the lookup is a `FilePath.equals` rather than a
+	// second derivation of one path. `CompilerWrittenSource.path` is the same spelling for the same
+	// reason.
+	export let stagedPath as FilePath
+	// The author's own file, as the project walk produced it. NOT display-formatted: shv2 renders every
+	// diagnostic path with the HOST's separators (a Windows `build temp/x.maxon` says
+	// `temp\x.maxon:3:9`), and a path spelled otherwise here would make `maxon test`'s diagnostics the
+	// one place in this compiler that reads differently from every other command's.
+	export let reportedPath as FilePath
+
+	export static function create(stagedPath FilePath, reportedPath FilePath) returns StagedSourceOrigin
+		return Self{stagedPath: stagedPath, reportedPath: reportedPath}
+	end 'create'
+end 'StagedSourceOrigin'
+
+export typealias StagedSourceOriginArray = Array with StagedSourceOrigin
 
 // How many directories one `collectMaxonSources` call LISTED — itself plus everything it recursed
 // into. Named for that rather than for a tree's shape: it is the walk's own reach, which is what an

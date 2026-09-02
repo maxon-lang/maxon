@@ -4292,11 +4292,33 @@ end '__managed_mem_set_element_size_from_layout'
 // (the byte there belongs to the next element / the next constant), so a bare
 // `loadIndirect(self)` would hand back a pointer that `strlen` walks off the
 // end of — a buffer overrun (and a hard out-of-bounds trap on wasm's
-// bounds-checked memory). Mirror the bootstrap's `MaxonManagedToCStringOp`:
-// when the terminator slot is already `\0`, return the buffer as-is; otherwise
-// COW to an owned buffer, grow capacity to `length + 1`, write the terminator,
-// and return the (possibly reallocated) buffer. Non-throwing — the grow path's
-// `newCap = length + 1 > capacity` can never trip `invalidCapacity`.
+// bounds-checked memory). When the terminator slot is already `\0`, return the
+// buffer as-is; otherwise COW to an owned buffer, grow capacity to `length + 1`,
+// write the terminator, and return the (possibly reallocated) buffer.
+// Non-throwing — `newCap = length + 1 > capacity` can never trip `invalidCapacity`.
+//
+// ⛔⛔ THIS BODY IS THE RULE'S THIRD SPELLING AND IT NO LONGER MIRRORS THE OTHER
+// TWO. It has NO CALLER in this tree — both live compilers lower `toCString` to an
+// intrinsic (`MaxonToStandardConversion.LowerManagedToCString` in the C# bootstrap,
+// `StringRuntime.buildMmToCString` in shv2) and neither routes here — so what
+// follows is v1's implementation, compiled but never run. That is exactly why the
+// line above used to say "Mirror the bootstrap's `MaxonManagedToCStringOp`", and why
+// the claim had to go: on 2026-09-02 both live compilers gained a GUARD this body
+// does not have, and nothing here would have failed if the claim had gone on standing.
+//
+// ⛔ WHAT IS MISSING: the probe below reads `buffer[length]`, one byte PAST the
+// content, and asks it of EVERY record. Two shapes do not own that byte — a VIEW,
+// and an exactly-full OWNED buffer (`capacity == length`, which is what a first
+// append leaves behind) — and a zero found there is one nothing keeps zero. The
+// measured consequence in the bootstrap was `Directory.exists` answering FALSE for a
+// directory plainly present: the next allocation landed on the byte the probe had
+// just accepted as that path's terminator.
+//
+// ⇒ ANYONE REVIVING OR PORTING THIS BODY OWES THE VOUCH TEST FIRST. The rule, its
+// admit-list and the reason each shape is in it are written out once, at
+// `BufferOwnership.emitRouteOnVouchedTerminatorSlot`. It cannot be transcribed from
+// there: this file encodes provenance in `parent@32` where shv2 uses a capacity
+// sentinel, so the same rule has to be re-expressed in this model.
 function __managed_mem_to_cstring(self MachineWord) returns MachineWord
 	let buffer = __Internals.loadIndirect(self)
 	let length = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)

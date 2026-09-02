@@ -183,6 +183,7 @@ function leafOpRole(op StdOp) returns LeafOpRole
 		osFileOpenWriteExecutable then break 'kind'
 		osEnvBlock to osEnvBlockFree then break 'kind'
 		loadAcquire or storeRelease then break 'kind'
+		osHandleFileType then break 'kind'
 	end 'kind'
 
 	return LeafOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else LeafOpRole.body
@@ -805,6 +806,7 @@ type LeafInliner
 				osFileOpenWriteExecutable then break 'kind'
 				osEnvBlock to osEnvBlockFree then break 'kind'
 				loadAcquire or storeRelease then break 'kind'
+				osHandleFileType then break 'kind'
 			end 'kind'
 		end 'eachOp'
 		return self.sitePositions.count()
@@ -858,6 +860,7 @@ type LeafInliner
 			osFileOpenWriteExecutable then self.refuseNotTheSplitCall()
 			osEnvBlock to osEnvBlockFree then self.refuseNotTheSplitCall()
 			loadAcquire or storeRelease then self.refuseNotTheSplitCall()
+			osHandleFileType then self.refuseNotTheSplitCall()
 		end 'site'
 		var pred = self.blockAt(predRef)
 		pred.opRefs.truncate(tail)
@@ -1215,6 +1218,7 @@ type LeafInliner
 			osFileOpenWriteExecutable then refuseNotATerminator(calleeFunc)
 			osEnvBlock to osEnvBlockFree then refuseNotATerminator(calleeFunc)
 			loadAcquire or storeRelease then refuseNotATerminator(calleeFunc)
+			osHandleFileType then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -1330,6 +1334,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 		osFileOpenWriteExecutable then refuseNotAParamOp()
 		osEnvBlock to osEnvBlockFree then refuseNotAParamOp()
 		loadAcquire or storeRelease then refuseNotAParamOp()
+		osHandleFileType then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

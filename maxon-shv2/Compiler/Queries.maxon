@@ -1663,6 +1663,49 @@ function declaresReservedNamesAs(project Project, path FilePath, relative String
 	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{relative}"))
 end 'declaresReservedNamesAs'
 
+// ⭐⭐ **THE RESERVED NAMES THIS COMPILE MINTED INTO THIS FILE (the THIRD provenance the reserved-name
+// doors read).** `Project.compilerWrittenSources` is the list a caller that STAGED generated Maxon source
+// handed in; the row for `path` carries the names, and an EMPTY answer means every byte of the file is the
+// author's. It feeds both doors: the DECLARATION door asks whether the name being declared is one of these,
+// and the CALL door asks only whether the list is non-empty (`Parser.fileMayUseReservedNames`), because a
+// generated fragment has to reach names its own file does not declare.
+//
+// ⛔⛔ **THE ASYMMETRY IS LOAD-BEARING AND IS NOT BELT-AND-BRACES.** A staged `*.test.maxon` is the author's
+// bytes with a dispatcher APPENDED, so "this compiler wrote this file" is true of the file and false of most
+// of its lines. Granting the whole file the reserved space on the declaration side let an author's
+// `function __sneaky()` through under `maxon test` while `maxon build` refused the identical bytes (E2051) —
+// MEASURED, and pinned by `maxon-shv2/Testing/test-fixtures/reserved-name-refused`. The call side keeps the
+// per-file shape because its own `declaresCallee` conjunction already bounds it to names some file in the
+// program really declares, which is the bound the declaration side cannot have.
+//
+// ⚠ **AN EMPTY LIST IS NOT A SENTINEL FOR "AUTHOR-WRITTEN" — IT IS THE SAME FACT.** A generated fragment
+// always declares at least the symbol its caller reaches it by, and `TestDispatcher.stageTestBuild` refuses
+// to stage one that declares none, so "this compile minted nothing here" and "this compile wrote nothing
+// here" cannot come apart. That is why there is no second flag beside this list to say which.
+//
+// ⚠ **THE EMPTY-LIST GUARD IS THE COST STORY, exactly as the basename prefilter is for the sibling above.**
+// This is asked once per file in every compile; the list is empty for every build but a `maxon test`, so the
+// ordinary answer is one `isEmpty` on an array the project already holds and no path work at all.
+//
+// ⚠ **THE COMPARE IS BETWEEN SPELLINGS, AND THAT IS EXACT HERE WHERE IT WOULD NOT BE ELSEWHERE.** Both sides
+// come from ONE construction: `TestDispatcher.stageTestBuild` builds the staged path once and puts the same
+// `FilePath` into the build's input list and into this list, so the loader registers the very spelling this
+// compares against. It is not a general "is this path that file?" question — the sibling above is, and pays
+// a `resolve` for it.
+function compilerMintedNamesIn(project Project, path FilePath) returns ByteArrayArray
+	if project.compilerWrittenSources.isEmpty() 'nothingWasSynthesized'
+		return ByteArrayArray.create()
+	end 'nothingWasSynthesized'
+
+	for written in project.compilerWrittenSources 'eachSynthesized'
+		if written.path.equals(path) 'thisFile'
+			return written.mintedNames
+		end 'thisFile'
+	end 'eachSynthesized'
+
+	return ByteArrayArray.create()
+end 'compilerMintedNamesIn'
+
 // ⭐⭐ **THE ONE CONSTRUCTION OF A FILE'S `Parser` — every pass that reads a file reads it through here.**
 // Four passes build a reader over the same file: the per-file signature sweep (`foldOneFileInto`), the
 // whole-program interface pass, the extension pass, and the real parse. Each needs the same four per-file
@@ -1686,7 +1729,7 @@ end 'declaresReservedNamesAs'
 // fetch them OUTSIDE their phase probe, so that a `signatures` or `parse` phase never absorbs the lexing it
 // depends on. Called with them in hand, this routine cannot re-introduce that.
 function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool) returns Parser
-	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies)
+	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), compilerMintedNames: compilerMintedNamesIn(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies)
 end 'fileReader'
 
 // ⭐ **DOES THIS FILE'S PARSE BUILD FUNCTION BODIES?** A USER file always does — its bodies are the
@@ -1857,7 +1900,7 @@ export let HiddenTypeNameMessage = "Expected type name after 'as'"
 // (`Parser.requireCalleeIsNotReservedName`'s `declaresCallee` conjunction), so what is left here is the
 // method the compiler synthesizes and NO file declares: the operation genuinely has no body a call could
 // be checked against, and the author is sent to the value rather than told to go and define the symbol.
-// The corpus currently declares every `String` conformer method (`stdlib/String.maxon:351,355`) and the
+// The corpus currently declares every `String` conformer method (`stdlib/String.maxon:369,373`) and the
 // three keyword qualifiers never reach this door (`Parser.requirePrimitiveStaticIsResolvable` answers
 // first), so this arm is the standing answer for the next conformer method the ragged table gains ahead of
 // the module — not a case any of today's programs can produce.

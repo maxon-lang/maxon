@@ -282,3 +282,105 @@ end 'main'
 ```exitcode
 42
 ```
+
+### `Directory.exists` answers about the path it was GIVEN, at every length
+
+Every `Directory` entry point hands the runtime a C string, and the conversion behind that
+(`__managed_memory_to_cstring`) is allowed to skip the copy when the buffer is *already*
+NUL-terminated. The byte it inspects to decide that — `buffer[length]` — is one PAST the content,
+so it may only be read when the record can vouch for it. A record whose capacity equals its length
+cannot: the byte belongs to whatever the allocator hands out next, and `maxon_directory_exists`
+reaches `__io_submit_sync`, which allocates *before* the path is read. A conversion that trusted a
+zero found there handed out a pointer whose terminator the very next allocation overwrote, and
+`GetFileAttributesA` read on past the path's own end — answering **false** for a directory plainly
+present.
+
+The ladder below is the whole test. Every rung names the same directory through a different number
+of no-op `./` prefixes, so all five must answer `true` and any `false` is the conversion reading a
+byte it does not own.
+
+**MEASURED 2026-09-02, x64-windows, against the unfixed conversion: a 48-byte path answered `false`
+for a directory that was there. 16, 24, 32, 40, 56, 64, 72 and 80 all answered `true`.** So exactly
+one rung of this ladder has ever fired, and it is 48.
+
+**INFERRED from that, and not read off the allocator:** 48 is where a record comes out exactly full,
+and it is the length that collides with the sync request the lookup itself allocates —
+`__io_submit_sync` asks for a 40-byte `SyncRequest` (`SyncReqSize = 0x28`) *before* the path is read,
+and 40 and 48 plausibly round into one size class, which would put that allocation on the very byte
+the probe had just accepted as a terminator. The multiples of 16 are chosen on that reading. Treat
+it as the working explanation for why 48 and nothing else, not as a fact about the allocator.
+
+⚠ **Which rung fires is therefore a property of the ALLOCATOR rather than of the language, and 48 is
+a dated measurement rather than a constant.** Change the size classes or `SyncReqSize` and a
+different rung may become the live one — which is why five are pinned and not the one, and why a
+green run here is not by itself evidence that the probe is safe. What the case ASSERTS is
+host-independent and cannot go wrong either way: a directory that exists is reported to exist,
+however its path is spelled.
+
+<!-- test: directory-exists-at-every-path-length -->
+```maxon
+typealias PathByteCount = int(0 to 4096)
+
+// The directory every spelling below names. Its length is EVEN, which is what lets a "./"-padded
+// spelling of it land on any even total.
+function probeDirName() returns String
+	return "test_cstring_pin"
+end 'probeDirName'
+
+// A relative spelling of that directory exactly `target` bytes long. The padding is "./" repeated,
+// which changes the path's LENGTH and nothing else about which directory it names.
+function spellingOfLength(target PathByteCount) returns String
+	let name = probeDirName()
+	var pad = ""
+	while pad.byteLength() + name.byteLength() < target 'padToLength'
+		pad.append("./")
+	end 'padToLength'
+
+	// The interpolation is what mints the exactly-full record: `pad` grew by appending and has spare
+	// capacity, while this result is allocated at the size it needs.
+	let spelled = "{pad}{name}"
+	if spelled.byteLength() != target 'wrongLength'
+		panic("spellingOfLength: {target} is not reachable from a {name.byteLength()}-byte name in steps of 2")
+	end 'wrongLength'
+
+	return spelled
+end 'spellingOfLength'
+
+function seesTheDirectory(target PathByteCount) returns bool
+	let path = try FilePath.from(spellingOfLength(target)) otherwise panic("spellingOfLength produced an invalid path")
+	if Directory.exists(path) 'found'
+		return true
+	end 'found'
+
+	print("Directory.exists said false for a {target}-byte spelling of an existing directory\n")
+	return false
+end 'seesTheDirectory'
+
+function main() returns ExitCode
+	if not Directory.create(FilePath from "test_cstring_pin") 'noProbeDir'
+		return 1
+	end 'noProbeDir'
+
+	// Distinct codes, so a red run names the rung from its exit status alone.
+	if not seesTheDirectory(16) 'at16'
+		return 2
+	end 'at16'
+	if not seesTheDirectory(32) 'at32'
+		return 3
+	end 'at32'
+	if not seesTheDirectory(48) 'at48'
+		return 4
+	end 'at48'
+	if not seesTheDirectory(64) 'at64'
+		return 5
+	end 'at64'
+	if not seesTheDirectory(80) 'at80'
+		return 6
+	end 'at80'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```

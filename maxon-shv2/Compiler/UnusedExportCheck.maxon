@@ -209,7 +209,7 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 	end 'tooFewFilesToHaveAnOutside'
 
 	var tracked = TrackedDecls.create(sources.libraryFiles, globalLabels: indexGlobalLabels(signatures))
-	seedFunctions(module, signatures: signatures, tracked: tracked)
+	seedFunctions(project, module: module, signatures: signatures, tracked: tracked)
 	try seedTypes(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	seedBindings(signatures, tracked: tracked)
 
@@ -281,14 +281,19 @@ function isSynthesizedName(name ByteArray) returns bool
 	return text.startsWith("__") or text.contains("$closure_") or text.contains(".unionCases")
 end 'isSynthesizedName'
 
-// `main` is called by the entry stub and every module-init helper by the runtime, so neither has a
+// The ENTRY is called by the entry stub and every module-init helper by the runtime, so neither has a
 // source-level caller to find. v1 seeds the same set plus `project.livenessRoots`, which shv2 has no
 // equivalent of — see `collectReferences` for what stands in its place.
-function isEntrypointName(name ByteArray) returns bool
-	return String.from(name).equals("main")
+//
+// ⚠ **IT IS `Project.entryFunctionName` AND NOT THE LITERAL `main`, for that field's reason.** The
+// exemption is about the function nothing in the source calls, which is whatever this build enters at; a
+// `main` that some other entry has displaced really does need a caller like any other exported function.
+// For every build a person types the two are the same name and no verdict moves.
+function isEntrypointName(project Project, name ByteArray) returns bool
+	return name == project.entryFunctionName
 end 'isEntrypointName'
 
-function seedFunctions(module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls)
+function seedFunctions(project Project, module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls)
 	for func in module.functions 'eachFunc'
 		if not tierIsAudited(func.visibility) 'narrowEnoughAlready'
 			continue
@@ -298,7 +303,7 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, tracked
 			continue
 		end 'synthesizedFunction'
 
-		if isSynthesizedName(func.name) or isEntrypointName(func.name) 'noSourceLevelCaller'
+		if isSynthesizedName(func.name) or isEntrypointName(project, name: func.name) 'noSourceLevelCaller'
 			continue
 		end 'noSourceLevelCaller'
 

@@ -590,6 +590,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonOsEnvironmentEntryPosix();
     EmitMaxonExecutablePath();
     EmitMaxonDirectoryExists();
+    EmitMaxonStdoutWantsAnsiColor();
     EmitMaxonCreateDirectory();
     EmitMaxonGetCurrentDirectory();
     if (Compiler.Coverage) EmitCoverageWriteFile();
@@ -2204,6 +2205,24 @@ public partial class ARM64CodeEmitter {
     DefineLabel(doneLabel);
     // Buffer now contains the null-terminated path. Return it directly — it's already heap-allocated.
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // --- maxon_stdout_wants_ansi_color() -> 0 on this lane ---
+  //
+  // ⛔⛔ THIS LANE HAS NOT IMPLEMENTED TERMINAL DETECTION, AND 0 IS THE CONSERVATIVE HALF OF THE ANSWER
+  // RATHER THAN A WRONG ONE. The x86 emitter asks three questions (GetFileType on the stdout handle,
+  // NO_COLOR, TERM); the POSIX spelling of the first is `isatty(1)` and of the other two `getenv` — the
+  // idiom EmitReadSlabFlagEnv already uses one screen up — so what is owed here is a transcription, not a
+  // design. Until it is written, this answers "not a terminal", which is what `--color=auto` resolved to
+  // on EVERY lane before the x86 half landed: a run on this target simply prints no colour.
+  //
+  // ⚠ It must never be made to answer 1 by default. The whole point of the question is that a REDIRECTED
+  // stream is being captured, and a lane that guessed `yes` would put escape sequences into every golden,
+  // every log file and every pipe — which is the one failure mode the detection exists to prevent.
+  private void EmitMaxonStdoutWantsAnsiColor() {
+    EmitRuntimeFunctionStart("maxon_stdout_wants_ansi_color", 0, 0x20);
+    EmitMovRegImm(ARM64Register.X0, 0);
     EmitRuntimeFunctionEnd();
   }
 

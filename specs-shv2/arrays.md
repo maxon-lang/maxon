@@ -924,14 +924,14 @@ end 'main'
 array half of `other` was never read. Since the envelope collapse an `Array` IS its
 `__ManagedMemory`, so a caller who already HOLDS the memory would otherwise have to wrap it in an
 `Array` record just to hand it over: `StringBuilder.appendBytes` paid one allocation PER APPEND
-(`stdlib/String.maxon:830`, this member's one corpus caller).
+(`stdlib/String.maxon:848`, this member's one corpus caller).
 
 ⇒ The two spellings are ONE operation, ONE argument rule and ONE emission. What is NOT folded is the
 SENTENCE: `append` declares its parameter `other` and `appendMemory` declares it `source`, so a
 refusal names the parameter of the method the author actually wrote.
 
 <!-- test: appendMemory-copies-a-raw-buffers-elements -->
-### An `Array` receiver takes a raw `__ManagedMemory` — `stdlib/String.maxon:830`'s exact shape
+### An `Array` receiver takes a raw `__ManagedMemory` — `stdlib/String.maxon:848`'s exact shape
 The receiver is a genuine `Array` and the argument is a buffer nothing wrapped, which is the whole
 point of the member existing beside `append`.
 ```maxon

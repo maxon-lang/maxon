@@ -524,6 +524,9 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// are shimmed onto the system stack in practice.
 		GetEnvironmentStringsA gives 0  // 0
 		FreeEnvironmentStringsA gives 0  // 1: lpszEnvironmentBlock
+		// The terminal question, register-only. A harness asks it from its own main green thread before it
+		// prints anything, so it really is shimmed onto the system stack in practice.
+		GetFileType gives 0  // 1: hFile
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
@@ -637,6 +640,11 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
 		ExitProcess gives SyscallClass.schedulerBound
 		GetStdHandle gives SyscallClass.schedulerBound
+		// ⚠ A "file" call that is NOT in the blocking family above, and the distinction is the ARGUMENT: the
+		// path-taking `GetFileAttributesA` can reach a cold disk, while this one answers the type of an
+		// ALREADY-OPEN handle out of the file object the kernel is holding — bounded and short, like the
+		// `GetStdHandle` that produced the handle it is asked about.
+		GetFileType gives SyscallClass.schedulerBound
 		AddVectoredExceptionHandler gives SyscallClass.schedulerBound
 		VirtualAlloc gives SyscallClass.schedulerBound
 		VirtualFree gives SyscallClass.schedulerBound

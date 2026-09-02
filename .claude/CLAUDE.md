@@ -119,7 +119,7 @@ It is slow (several minutes) and off by default.
 
 There is **no `maxon clean` command** — it prints usage and exits 1. To force a from-source stdlib rebuild, delete `stdlib/.maxon/cache/*.mxc` yourself; the self-hosted compiler recompiles the stdlib whenever its cache is absent. The C# bootstrap's stdlib cache is in-memory only, so it always builds the stdlib fresh.
 
-**shv2 does less, and the tools say so rather than pretending.** Its runner implements only `--filter`, `--update-required`, and `--log`; `mmTrace`, `target`, and `dumpStages` are REJECTED with an `invalidParams` error naming the gap, never silently dropped. It has no `fmt` and no `--dump-stages`. Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
+**The tools say what a compiler cannot do rather than pretending.** ⚠ **THIS PARAGRAPH USED TO SAY shv2's RUNNER "IMPLEMENTS ONLY `--filter`, `--update-required`, AND `--log`", AND THAT WAS STALE BY FOUR FLAGS — MEASURED 2026-09-01 off `Main.maxon`'s own parse loop.** It also accepts a positional `[dir]`, **`--network`**, **`--workers=<n>`** and **`--target=<cpu>-<os>`**; `--target` is not rejected at all, and `--network` is the BOOTSTRAP's gap (only shv2's runner knows it), which is why `checkSpecTestFlags` now refuses in both directions. What shv2's runner genuinely lacks against the bootstrap's is `--verbose` (it always prints a line per test), `--no-batch` (its batching is `RunStrategy`, chosen by target and host, not a flag) and `--debug-info`; its `--filter` is ONE substring where the bootstrap's unions on commas. `mmTrace` and `dumpStages` are still REJECTED with an `invalidParams` error naming the gap, never silently dropped, and it has no `fmt`. Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
 
 ## Building and Testing
 
@@ -136,6 +136,32 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 
 - **Build:** `./bin/maxon.exe build maxon-shv2` (requires C# compiler already built)
 - **Spec tests:** `./maxon-shv2/.maxon/maxon-shv2.exe spec-test` (the `specs-shv2` suite)
+- **Unit tests (`maxon test`'s own):** `./maxon-shv2/.maxon/maxon-shv2.exe test maxon-shv2/Testing/test-command`
+
+> ### ⚠ `maxon test`'s OWN TESTS ARE NOT IN THE SPEC SUITE, AND THEY ARE NOT SUPPOSED TO BE
+>
+> **`spec-test` is for the LANGUAGE — compiler syntax and emitted code. A DRIVER COMMAND is not that**
+> (user ruling, 2026-09-02), and it could not be gated there anyway: a `specs-shv2` case is a Maxon
+> PROGRAM the harness compiles and runs, so it can reach `stdlib/` and nothing else —
+> `LspPositionSelfTest.maxon:3-6` states it, and **no shv2 command is gated by a spec case, not one**.
+>
+> `maxon test` is gated by **itself**: `maxon-shv2/Testing/test-command/` holds ordinary `test`
+> declarations that spawn the command at the fixture projects in `maxon-shv2/Testing/test-fixtures/`
+> and assert its report with `Expect`. Each fixture carries an `expected.txt` / `expected-exit.txt`
+> **generated from the BOOTSTRAP's working `maxon test`**, so the contract is the reference
+> compiler's real output rather than one we invented.
+>
+> ⭐ **RUN IT UNDER BOTH COMPILERS — that is what closes the circularity.** A runner broken badly
+> enough to report green having run nothing cannot detect itself; the bootstrap's `maxon test` is an
+> independent oracle that still reports honestly. Both must pass and both must report the SAME count:
+> ```
+> ./maxon-shv2/.maxon/maxon-shv2.exe test maxon-shv2/Testing/test-command
+> ./bin/maxon.exe                    test maxon-shv2/Testing/test-command
+> ```
+> ⚠ **Nothing runs these automatically** — `/land`'s battery is where they belong, beside the suite and
+> the self-compile. One test per file is structural, not tidiness: a file is what ONE process runs and
+> that process has a 5 s default deadline, so twelve compiler-spawning tests in one file report a
+> spurious `TIMED OUT`.
 
 The shv2 compiler binary is at `./maxon-shv2/.maxon/maxon-shv2.exe` (Windows) or `./maxon-shv2/.maxon/maxon-shv2` (Linux/macOS).
 

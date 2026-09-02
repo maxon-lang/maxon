@@ -1461,7 +1461,7 @@ error E3117: <fragment>:11:17: 'bytes' stores RAW bytes into an element declared
 WAVE 6, ON THE GROUND THAT `bytes` AND `toByteArray` REACHED ONE EMITTER "precisely so the two spellings
 cannot come to disagree about what a byte view IS". The RENAME is the point rather than tidying:**
 They no longer do, and they no longer are one thing: `stdlib/String.maxon:156` copies into a `ByteArray`
-and `:481` hands back a LAZY `ByteView` holding the String, which is the distinction the reference always
+and `:499` hands back a LAZY `ByteView` holding the String, which is the distinction the reference always
 drew and shv2 could not. So the refusal moved a whole stage earlier and the two halves now differ in
 exactly the way that is worth reading — the message names which one you wrote.
 

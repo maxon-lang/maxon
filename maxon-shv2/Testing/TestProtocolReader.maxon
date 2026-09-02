@@ -1,0 +1,208 @@
+// TestProtocolReader — a test binary's stderr, read back as the ORDERED stream of events that stream
+// is. The reading half of `TestProtocol`, which holds the format itself.
+//
+// ⭐⭐ **ORDER IS THE WHOLE ATTRIBUTION.** Output and `threw` reports belong to whichever test last
+// began, and a begin with no matching end names the test that was running when the process stopped.
+// So the program's own writing is an EVENT in this stream rather than a blob collected to one side:
+// collected separately, the panic that explains a crash would arrive with no way to tell it from a
+// passing test's chatter earlier in the same process.
+//
+// ⚠ **A LINE BRACKETED BY THE WRAPPER THAT DOES NOT PARSE IS PASSED THROUGH AS ORDINARY OUTPUT RATHER
+// THAN REFUSED.** This stream is a CRASHED process's dying words as often as not: it can be truncated
+// mid-line by a write that never completed, and refusing to report anything because the last line was
+// cut in half would lose the panic message that explains the crash. A dispatcher that had genuinely
+// drifted shows up as a test that never ended — reported as a crash, loudly, with this text attached.
+
+// ⭐ ONE LINE THE TEST BINARY REPORTED. Ordering between events is meaningful; see the header.
+export union TestEvent
+	// A test is about to run. Written BEFORE the body, which is what makes a process death
+	// attributable at all.
+	began(index TestRunIndex)
+	// A test finished under its own power, passing or failing.
+	ended(index TestRunIndex, passed bool, nanos DurationNanos)
+	// An error reached the end of a test body unhandled, reported by the handler the compiler
+	// substitutes. It arrives BEFORE the `ended` of the test it belongs to.
+	threw(errorType String, errorCase String, file String, line ReportedSourceLine)
+	// A stderr line that was NOT protocol — the test's own diagnostics, an assertion's report, or the
+	// runtime's panic text.
+	outputLine(text String)
+end 'TestEvent'
+
+export typealias TestEventArray = Array with TestEvent
+
+// How many parts splitting a well-formed protocol line on the wrapper yields: the empty text before
+// the opening wrapper, the body, and the empty text after the closing one.
+let WrappedLineParts = 3
+
+// Field counts per shape, so a malformed line is DETECTED rather than indexed into.
+let BeganFieldCount = 2
+let EndedFieldCount = 4
+let ThrewFieldCount = 4
+
+// The line terminator a redirected stream can carry on Windows. Stripped from the END of a line only —
+// a `\r` the program itself wrote mid-line is its own text and stays.
+let CarriageReturn = "\r"
+
+// ⭐⭐ **READ A TEST BINARY'S STDERR AS ONE ORDERED STREAM** — protocol lines and the program's own
+// output interleaved exactly as it wrote them.
+export function parseTestEvents(stderr String) returns TestEventArray
+	var events = TestEventArray.create()
+
+	for rawLine in stderr.split("\n") 'eachLine'
+		let line = withoutTrailingReturn(rawLine)
+
+		match parseProtocolLine(line) 'shape'
+			event(parsed) then events.push(parsed)
+			notProtocol then pushOutputLine(events, line: line)
+		end 'shape'
+	end 'eachLine'
+
+	return events
+end 'parseTestEvents'
+
+// A non-protocol line, kept as output.
+//
+// ⛔ **AN EMPTY ONE IS DROPPED, AND THAT IS THE REFERENCE'S BEHAVIOUR RATHER THAN A ROUNDING OF IT.**
+// The trailing empty part of splitting on the final newline is an artifact and MUST go — kept, it would
+// append a bare newline to the last test's output, which `--json` pins to the byte. The reference
+// (`MaxonTestProtocol.Parse`) drops every empty line to achieve that, while its own comment claims it
+// keeps interior blanks; the CODE is what the committed expectations were generated from, so the code is
+// the contract and this matches it. ⚠ The cost is real and is stated here rather than discovered: a test
+// that writes a blank line between two stderr lines has that blank dropped from its report.
+function pushOutputLine(events TestEventArray, line String)
+	if line.isEmpty() 'nothingOnThisLine'
+		return
+	end 'nothingOnThisLine'
+
+	events.push(TestEvent.outputLine(line))
+end 'pushOutputLine'
+
+// One line with a trailing `\r` removed, if it had one. A lone `\r` at the end of a line split on `\n`
+// is one grapheme, which is what makes the length arithmetic exact.
+function withoutTrailingReturn(line String) returns String
+	if not line.endsWith(CarriageReturn) 'noReturnToStrip'
+		return line
+	end 'noReturnToStrip'
+
+	return line.slice(line.startIndex(), length: line.count() - 1)
+end 'withoutTrailingReturn'
+
+// Whether one line was protocol, and what it said.
+union ProtocolLineParse
+	event(parsed TestEvent)
+	notProtocol
+end 'ProtocolLineParse'
+
+// ⭐ **A LINE IS PROTOCOL ONLY IF THE WRAPPER BRACKETS IT AND NOTHING ELSE.** Splitting on the wrapper
+// answers both halves at once: exactly three parts means it occurs exactly twice, and both outer parts
+// being empty means the line is nothing but a bracketed body. A line that merely CONTAINS the wrapper —
+// which a chatty test could print — yields a different shape and is passed through as output.
+function parseProtocolLine(line String) returns ProtocolLineParse
+	let parts = line.split(TestProtocolWrapper)
+	if parts.count() != WrappedLineParts 'notWrappedExactlyOnce'
+		return ProtocolLineParse.notProtocol
+	end 'notWrappedExactlyOnce'
+
+	let before = try parts.get(0) otherwise panic("parseProtocolLine: part 0 exists — the count was checked one line above")
+	let after = try parts.get(2) otherwise panic("parseProtocolLine: part 2 exists — the count was checked two lines above")
+	if not before.isEmpty() or not after.isEmpty() 'textOutsideTheWrapper'
+		return ProtocolLineParse.notProtocol
+	end 'textOutsideTheWrapper'
+
+	let body = try parts.get(1) otherwise panic("parseProtocolLine: part 1 exists — the count was checked above")
+	let fields = body.split(TestProtocolSeparator)
+	let tag = try fields.get(0) otherwise panic("parseProtocolLine: String.split always yields at least one part")
+
+	// ⚠ `>` and `<` disambiguate STRUCTURALLY: the first field of a `threw` line is the callee's
+	// declared `throws` TYPE name, which is always a Maxon identifier, and no identifier begins with an
+	// angle bracket. So the tag alone decides which of the three shapes a line is, whatever a test
+	// printed — which is why the third shape needs no tag of its own.
+	if tag == TestProtocolBeganTag 'aBeginMarker'
+		return parseBeganLine(fields)
+	end 'aBeginMarker'
+
+	if tag == TestProtocolEndedTag 'anEndMarker'
+		return parseEndedLine(fields)
+	end 'anEndMarker'
+
+	return parseThrewLine(fields)
+end 'parseProtocolLine'
+
+function parseBeganLine(fields StringArray) returns ProtocolLineParse
+	if fields.count() != BeganFieldCount 'wrongShape'
+		return ProtocolLineParse.notProtocol
+	end 'wrongShape'
+
+	let index = try fields.get(1) otherwise panic("parseBeganLine: field 1 exists — the count was checked one line above")
+	match parseProtocolNumber(index) 'theIndex'
+		invalid then return ProtocolLineParse.notProtocol
+		value(number) then return ProtocolLineParse.event(TestEvent.began(number as TestRunIndex))
+	end 'theIndex'
+end 'parseBeganLine'
+
+function parseEndedLine(fields StringArray) returns ProtocolLineParse
+	if fields.count() != EndedFieldCount 'wrongShape'
+		return ProtocolLineParse.notProtocol
+	end 'wrongShape'
+
+	let indexField = try fields.get(1) otherwise panic("parseEndedLine: field 1 exists — the count was checked above")
+	let outcome = try fields.get(2) otherwise panic("parseEndedLine: field 2 exists — the count was checked above")
+	let nanosField = try fields.get(3) otherwise panic("parseEndedLine: field 3 exists — the count was checked above")
+
+	if outcome != TestProtocolOutcomePass and outcome != TestProtocolOutcomeFail 'notAnOutcomeThisProtocolDefines'
+		return ProtocolLineParse.notProtocol
+	end 'notAnOutcomeThisProtocolDefines'
+
+	match parseProtocolNumber(indexField) 'theIndex'
+		invalid then return ProtocolLineParse.notProtocol
+		value(index) then return endedEventFor(index, outcome: outcome, nanosField: nanosField)
+	end 'theIndex'
+end 'parseEndedLine'
+
+// The rest of an end marker, once its index has parsed. A second function rather than a second `match`
+// nested inside the first, because a `match` arm is one statement — the shape every two-field parse in
+// this file takes.
+function endedEventFor(index ProtocolNumber, outcome String, nanosField String) returns ProtocolLineParse
+	match parseProtocolNumber(nanosField) 'theDuration'
+		invalid then return ProtocolLineParse.notProtocol
+		value(nanos) then return ProtocolLineParse.event(TestEvent.ended(index as TestRunIndex, passed: outcome == TestProtocolOutcomePass, nanos: nanos))
+	end 'theDuration'
+end 'endedEventFor'
+
+function parseThrewLine(fields StringArray) returns ProtocolLineParse
+	if fields.count() != ThrewFieldCount 'wrongShape'
+		return ProtocolLineParse.notProtocol
+	end 'wrongShape'
+
+	let errorType = try fields.get(0) otherwise panic("parseThrewLine: field 0 exists — the count was checked above")
+	let errorCase = try fields.get(1) otherwise panic("parseThrewLine: field 1 exists — the count was checked above")
+	let file = try fields.get(2) otherwise panic("parseThrewLine: field 2 exists — the count was checked above")
+	let lineField = try fields.get(3) otherwise panic("parseThrewLine: field 3 exists — the count was checked above")
+
+	match parseProtocolNumber(lineField) 'theLine'
+		invalid then return ProtocolLineParse.notProtocol
+		value(number) then return ProtocolLineParse.event(TestEvent.threw(errorType, errorCase: errorCase, file: file, line: number))
+	end 'theLine'
+end 'parseThrewLine'
+
+// Every number on this wire is non-negative and i64-wide: an index, a nanosecond count, a source line.
+// ONE parser for all three, because "this field is not a number" has one consequence — the line stops
+// being protocol — and three copies of that decision are three chances to spell it differently.
+typealias ProtocolNumber = int(0 to i64.max)
+
+union ParsedProtocolNumber
+	value(number ProtocolNumber)
+	invalid
+end 'ParsedProtocolNumber'
+
+function parseProtocolNumber(field String) returns ParsedProtocolNumber
+	let parsed = try int.fromString(field) otherwise return ParsedProtocolNumber.invalid
+
+	// A negative field is refused rather than clamped: nothing on this wire can be negative, so one is
+	// a damaged stream and must reach the reader as the output it then is.
+	if parsed < 0 'negative'
+		return ParsedProtocolNumber.invalid
+	end 'negative'
+
+	return ParsedProtocolNumber.value(parsed as ProtocolNumber)
+end 'parseProtocolNumber'

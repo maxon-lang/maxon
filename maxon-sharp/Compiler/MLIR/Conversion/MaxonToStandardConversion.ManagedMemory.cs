@@ -1653,9 +1653,44 @@ public static partial class MaxonToStandardConversion {
 
   /// <summary>
   /// __managed_memory_to_cstring(managed): return a null-terminated C string pointer.
-  /// Calls maxon_to_cstring runtime which checks if buffer[length] is already '\0'.
-  /// If so, returns the buffer directly (no allocation). Otherwise, allocates a copy
-  /// with null terminator appended. This avoids unnecessary copying for non-slice strings.
+  /// Checks whether buffer[length] is already '\0'; if it is, that buffer IS the C string and is
+  /// returned as-is, with no allocation. Otherwise the record is COW'd, grown by one byte and
+  /// terminated in place — so a record that already has the byte to spare never pays for a copy.
+  ///
+  /// ⛔⛔ <b>THE PROBE MAY ONLY READ A BYTE THE RECORD CAN VOUCH FOR, WHICH IS WHAT
+  /// <c>mayProbeTerminator</c> DECIDES — AND ITS ABSENCE WAS A WRONG ANSWER, NOT A THEORETICAL
+  /// HAZARD.</b> <c>buffer[length]</c> sits one PAST the content. Two record shapes do not own it:
+  /// <list type="bullet">
+  ///   <item>a VIEW (capacity == -1), whose bytes are a slice of someone else's buffer — the byte
+  ///     after the slice is not the slice's, and when the slice reaches its parent's end it is not
+  ///     the parent's either;</item>
+  ///   <item>an exactly-full OWNED buffer (capacity == length), which is the ordinary state and not
+  ///     a corner: an append takes exactly what it needs, and a byte-fused inline record is created
+  ///     with capacity == length.</item>
+  /// </list>
+  /// In both, believing a zero found there is worse than the read itself, because nothing keeps it
+  /// zero: the next allocation writes over it, and this conversion's own callers allocate before
+  /// they consume the pointer.
+  ///
+  /// ⭐ MEASURED 2026-09-02 on the VIEW case, and located by SABOTAGE — forcing the grow path for
+  /// every record made the failure go away, which is what proved the probe rather than the grow was
+  /// answering wrongly. <c>Directory.exists</c> answered <b>false</b> for a directory that was
+  /// plainly there: <c>maxon_directory_exists</c> reaches <c>__io_submit_sync</c>, whose
+  /// <c>mm_raw_alloc(SyncReqSize)</c> lands on the byte the probe had just accepted as that path's
+  /// terminator, so <c>GetFileAttributesA</c> read on past the path's own end. It reached the shv2
+  /// binary itself, which this compiler builds: `maxon-shv2 test &lt;dir&gt;/` refused three of its
+  /// own fixtures as "not a directory". shv2's own runtime — whose <c>emitPathToCString</c> always
+  /// copies — answered every one of them correctly, which is the shape of the disagreement.
+  ///
+  /// ⚠ The exactly-full OWNED case is REASONED rather than measured: no corpus program has been
+  /// caught on it. It is excluded because the argument that condemns the view case does not
+  /// distinguish them — the byte is equally not the record's, and a heap allocator is equally free
+  /// to write it.
+  ///
+  /// ⚠ <b>ONLY THE RDATA SENTINEL (-2) KEEPS THE ZERO-COPY FAST PATH AMONG THE NON-OWNED SHAPES</b>,
+  /// and for a property neither of the others has: it points into the IMAGE, which is immutable and
+  /// which no allocator hands out. That is why the admitting test names that sentinel rather than
+  /// asking <c>capacity &lt; 0</c>, which would readmit the view.
   /// </summary>
   private static void LowerManagedToCString(
     MaxonManagedToCStringOp op,
@@ -1666,29 +1701,50 @@ public static partial class MaxonToStandardConversion {
     var managedVarName = ResolveManagedVarName(op.Managed, valueMap);
 
     // Ensure the buffer is null-terminated without leaking a temporary copy.
-    // For zero-copy slices, buffer[length] is often not '\0'.
-    // Strategy: check if already terminated. If not, COW the managed struct to get
-    // an owned buffer, grow it by 1 byte for the null terminator, and write '\0'.
-    // The managed struct then owns the null-terminated buffer — no separate allocation.
-    var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+    // Strategy: check whether it already is; if not, COW the managed struct to get an owned
+    // buffer, grow it by 1 byte for the null terminator, and write '\0'. The managed struct then
+    // owns the null-terminated buffer — no separate allocation.
     var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+    var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
 
-    // Check: buffer[length] == '\0'? Use unsigned byte for consistency with byteAt
-    // semantics (raw byte buffers are conceptually u8).
     var uid = IrContext.Current.NextId();
-    var termAddr2 = new StdAddI64Op(buffer, length);
-    block.AddOp(termAddr2);
-    var termByte = new StdLoadIndirectOp(termAddr2.Result, 0, IrType.U8);
-    block.AddOp(termByte);
-    var zeroConst = new StdConstI64Op(0);
-    block.AddOp(zeroConst);
-    var isTerminated = new StdCmpI64Op("eq", (StdI64)termByte.Result, zeroConst.Result);
-    block.AddOp(isTerminated);
-
+    var probeLabel = $"__cstr_probe_{uid}";
     var alreadyTermLabel = $"__cstr_ok_{uid}";
     var needTermLabel = $"__cstr_fix_{uid}";
     var doneLabel = $"__cstr_done_{uid}";
-    block.AddOp(new StdCondBrOp(isTerminated.Result, alreadyTermLabel, needTermLabel));
+
+    // May the terminator slot be read at all? See this method's doc comment. An OWNED buffer can
+    // vouch for buffer[length] only when it has a spare slot; the ONE non-owned shape that can is
+    // rdata, whose bytes are in the immutable image. A VIEW (capacity == -1) is deliberately not
+    // admitted — it is the shape that was MEASURED answering wrongly. `StdCmpI64Op` is the SIGNED
+    // comparison (`StdCmpU64Op` is its unsigned twin), so a negative sentinel can never satisfy
+    // `capacity > length` and reaches the fast path only through the rdata test beside it.
+    var rdataCapConst = new StdConstI64Op(MmCapacityRdata);
+    block.AddOp(rdataCapConst);
+    var hasSpareSlot = new StdCmpI64Op("gt", capacity, length);
+    block.AddOp(hasSpareSlot);
+    var bufferIsImageBytes = new StdCmpI64Op("eq", capacity, rdataCapConst.Result);
+    block.AddOp(bufferIsImageBytes);
+    var mayProbeTerminator = new StdOrI1Op(hasSpareSlot.Result, bufferIsImageBytes.Result);
+    block.AddOp(mayProbeTerminator);
+    block.AddOp(new StdCondBrOp(mayProbeTerminator.Result, probeLabel, needTermLabel));
+
+    // --- the probe: buffer[length] == '\0'? An unsigned byte, for consistency with byteAt
+    // semantics (raw byte buffers are conceptually u8). It sits in a block of its own so a record
+    // that cannot vouch for that byte never reads it: the branch above IS the bounds check, and a
+    // load lifted above it would be the out-of-bounds read this arrangement exists to remove.
+    var probeBlock = func.Body.AddBlock(probeLabel);
+    var buffer = LoadManagedBuffer(probeBlock, managedVarName, varTypes);
+    var probeLength = (StdI64)EmitStructFieldLoad(probeBlock, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+    var termAddr2 = new StdAddI64Op(buffer, probeLength);
+    probeBlock.AddOp(termAddr2);
+    var termByte = new StdLoadIndirectOp(termAddr2.Result, 0, IrType.U8);
+    probeBlock.AddOp(termByte);
+    var zeroConst = new StdConstI64Op(0);
+    probeBlock.AddOp(zeroConst);
+    var isTerminated = new StdCmpI64Op("eq", (StdI64)termByte.Result, zeroConst.Result);
+    probeBlock.AddOp(isTerminated);
+    probeBlock.AddOp(new StdCondBrOp(isTerminated.Result, alreadyTermLabel, needTermLabel));
 
     // --- already terminated: result = buffer ---
     var okBlock = func.Body.AddBlock(alreadyTermLabel);

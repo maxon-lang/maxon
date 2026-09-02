@@ -1,0 +1,521 @@
+// TestDispatcher — the Maxon source that RUNS a project's tests: one dispatcher per test file, plus the
+// entry point that calls them, plus the staged tree the whole thing is compiled from.
+//
+// ⭐⭐ **THE PER-FILE DISPATCHER IS APPENDED TO ITS FILE'S OWN CONTENT, AND THAT IS NOT A CONVENIENCE — IT
+// IS THE ONLY THING THAT COMPILES.** A `test` declaration is not exported: it takes the file tier unless
+// the source wrote `export`, so `__test_<sanitized>` is reachable only from its own file and source
+// anywhere else cannot call it. The same property is what lets a test use its file's PRIVATE helpers and
+// fixtures without anything being `export`ed to accommodate the harness. Only the ROOT entry — which must
+// reach across files, and so calls the exported per-file runners rather than the tests themselves — is a
+// file of its own.
+//
+// ⛔⛔ **AND THE APPEND HAPPENS IN A STAGED COPY OUTSIDE THE PROJECT, WHICH IS shv2's DEPARTURE FROM THE
+// BOOTSTRAP AND IS FORCED.** The bootstrap's `TestDispatcher.Generate` folds its generated text into the
+// `SourceFile[]` array in memory and hands it to the compiler; shv2 has no in-memory source registration at
+// all — `Compiler.compileToProduct` takes PATHS — so the text has to reach a filesystem. It may NOT reach
+// the user's own tree, and `<project>/.maxon/` is not a hiding place: `Compiler.collectMaxonSourcesUnder`
+// prunes on `.maxonignore` and on nothing else, so a generated `.maxon` left there would be swept into the
+// user's very next ordinary build. So the whole project is COPIED into a staging root, with each test
+// file's copy carrying its dispatcher, and the compile is rooted there.
+//
+// ⚠ **THE COPY PRESERVES EACH FILE'S PATH RELATIVE TO THE PROJECT ROOT, AND THAT IS LOAD-BEARING TWICE
+// OVER.** A file's namespace is its directory relative to the root (`Queries.moduleDirectoryForFile`), and
+// `__file__` — which is what an assertion's report names a failing line by — is that same relative path
+// whole. Flatten the tree and both change; preserve it and a report reads exactly as it would from the
+// user's own directory.
+//
+// ⚠ **THE APPEND IS AN APPEND, NEVER A PREPEND, AND EVERY LINE NUMBER A RUN PRINTS DEPENDS ON IT.**
+// `Expect`'s `file`/`line` default to `__file__`/`__line__`, which expand at the CALL SITE, so a single
+// generated line above a test body would move every one of them.
+
+// ⭐ **THE ENTRY POINT THE TEST BINARY IS COMPILED WITH** — named rather than `main`, which is what lets a
+// project's OWN `main` stay exactly where it is: it simply stops being reachable, and dead-function
+// elimination drops it (`Project.entryFunctionName`). The `__` prefix marks it compiler-owned, as
+// `__TestReport` is, and it is `export`ed because the per-file runners it calls live in other files.
+export let MaxonTestEntrySymbol = "__maxon_test_main"
+
+// The generated type carrying the run's shared helpers. ONE copy, in the entry file, called from every
+// test file.
+let MaxonTestHelperType = "__MaxonTestRun"
+
+// The generated index typealias. `__`-prefixed for `MaxonTestEntrySymbol`'s reason and for one more: the
+// prefix is what keeps the unused-export audit off it (`UnusedExportCheck.isSynthesizedName`), and this
+// alias really is unread outside the file that declares it.
+let MaxonTestIndexAlias = "__MaxonTestIndex"
+
+// Prefix of the per-file dispatcher function. The FILE's ordinal is appended, which is what makes the name
+// unique by construction: a sanitized path would not be, since two files in one directory whose names
+// differ only outside `[A-Za-z0-9_]` share a namespace and sanitize alike.
+let MaxonTestFileRunnerPrefix = "__maxon_test_file_"
+
+// File name given to the synthesized root-entry source. It is deliberately NOT a `*.test.maxon` — it holds
+// no `test` declaration, and E2058 refuses one outside such a file — and it sits at the staged root so its
+// `export`s are visible to every directory below. The name is never opened by a person, but it is what a
+// compile error in generated source is reported against, so it says what it is.
+let MaxonTestEntryFileName = "__maxon_test_entry.maxon"
+
+// ⭐ **THE CEILING ON A RUN'S TEST COUNT, and the upper bound of the GENERATED index typealias.** Stated
+// rather than left at `u64.max` because that alias appears in source a user cannot open, and a project with
+// more tests than this has other problems. Refused by COUNT at the grouping, so the (absurd) overflow is a
+// sentence naming the limit rather than a range violation inside generated text nobody wrote.
+let MaxTestsPerRun = 1000000
+
+// A test's position in the WHOLE run. This — never its prose name — is what the binary reports and what a
+// selection names, so no author-controlled text ever reaches the wire and no test can forge another's
+// report by being called something.
+//
+// ⚠ **WIDE, WITH THE CEILING ENFORCED AT THE ONE PLACE INDICES ARE MINTED (`groupTestsByFile`)** — the
+// arrangement `Parser.ParamCount` and `StdDialect.MaxAbiArgs` already have, and for the same reason: a
+// ranged alias's bounds must be literals, so a narrow alias here would be `MaxTestsPerRun` written down a
+// second time, free to drift from the one the generated source carries.
+export typealias TestRunIndex = int(0 to u64.max)
+
+// A list of run indices — what a `--select=` value is rendered from, and what one process launch is
+// asked to run. Its own alias because the ORDER is the run's declaration order rather than an
+// incidental one: it is what the report reads back, index for index.
+export typealias TestRunIndexArray = Array with TestRunIndex
+
+// How many test FILES one run compiles dispatchers for. Its own alias because it is the ordinal that makes
+// a runner name unique, not a loop counter.
+typealias TestFileOrdinal = int(0 to u64.max)
+
+// A discovered test paired with its position in the whole run. The pair rather than a bare index because
+// the generated call needs the symbol and the generated guard needs the index, and splitting them across
+// two parallel arrays is one fact stored twice.
+export type IndexedTest
+	export let index as TestRunIndex
+	export let test as DiscoveredTest
+
+	export static function create(index TestRunIndex, test DiscoveredTest) returns IndexedTest
+		return Self{index: index, test: test}
+	end 'create'
+end 'IndexedTest'
+
+export typealias IndexedTestArray = Array with IndexedTest
+
+// ⭐ **ONE TEST FILE AND THE TESTS IN IT, IN DISCOVERY ORDER** — the unit both the compile and the run are
+// organized around: a file is what a dispatcher is generated for, and what a report groups by.
+export type TestFileGroup
+	// The `*.test.maxon` file as the COMPILER recorded it — the user's own path, not the staged copy's. It
+	// is what a report names and what the staging maps FROM, so it is identity.
+	export let file as FilePath
+	// The generated runner's own name, as declared inside that file and called from the entry.
+	//
+	// ⚠ **ONE NAME, WHERE THE BOOTSTRAP CARRIES TWO.** Its `TestFileGroup` holds a `RunnerName` and a
+	// namespace-qualified `RunnerSymbol`, because that compiler qualifies every free function by its
+	// directory. shv2 registers a free function under exactly the bytes it was declared with unless the bare
+	// name is declared in two DIRECTORIES (`ProgramSignatures.contestedFreeFunctions`, N1c) — and this name
+	// carries the file's run-wide ordinal, so no two of them are ever equal. The declared spelling is
+	// therefore the callable spelling, from the entry file as from anywhere.
+	export let runnerName as String
+	export let tests as IndexedTestArray
+
+	export static function create(file FilePath, runnerName String, tests IndexedTestArray) returns TestFileGroup
+		return Self{file: file, runnerName: runnerName, tests: tests}
+	end 'create'
+end 'TestFileGroup'
+
+export typealias TestFileGroupArray = Array with TestFileGroup
+
+// Everything a staged test build hands its compile.
+export type StagedTestBuild
+	// ⭐ **EVERY STAGED SOURCE, NAMED, WITH THE STAGED ROOT LAST.** Naming each file is what makes the
+	// `*.test.maxon` copies compile at all — a path the caller named escapes every walk exclusion
+	// (`Compiler.loadSourceFiles`) — and the root rides along at the end to FIX the project root, exactly as
+	// `SpecTestRunner.stageSourceFiles` does and for its reason: with one file named, `commonAncestorOf`
+	// would answer that FILE, and every namespace and every `__file__` would be measured from it.
+	export let buildTargets as MaxonSourcePathArray
+	// The subset of those this compiler WROTE, each with the reserved names it minted there — handed to
+	// `Compiler.compileToProduct` as `compilerWrittenSources`, which is what lets those names be DECLARED
+	// and lets the generated code CALL `__` names at all. A `*.test.maxon` copy that got no dispatcher is
+	// NOT in here: its bytes are the author's, unchanged.
+	export let compilerWrittenSources as CompilerWrittenSourceArray
+	// ⭐⭐ **WHICH OF THOSE ARE COPIES, AND OF WHOSE FILES** — handed to
+	// `Compiler.compileToProduct` as `stagedSourceOrigins`, which is what makes a compile error name the
+	// file the author can open rather than the copy this run is about to delete. EVERY copied source is
+	// in here, not only the test files: an ordinary `helper.maxon` is copied too, and a diagnostic in it
+	// would otherwise name the staging tree just as loudly.
+	//
+	// ⛔ The generated entry file is deliberately ABSENT. It is not a copy of anything, so there is no
+	// author's file to name — a diagnostic there is a bug in what this compiler wrote, and the staged
+	// path is the only spelling that lets a reader open the text that failed.
+	export let stagedSourceOrigins as StagedSourceOriginArray
+	// Where the staged tree is rooted — the test build's project root.
+	export let root as FilePath
+	// The groups, in discovery order. The run's numbering and a report's reading order.
+	export let groups as TestFileGroupArray
+
+	export static function create(buildTargets MaxonSourcePathArray, compilerWrittenSources CompilerWrittenSourceArray, stagedSourceOrigins StagedSourceOriginArray, root FilePath, groups TestFileGroupArray) returns StagedTestBuild
+		return Self{buildTargets: buildTargets, compilerWrittenSources: compilerWrittenSources, stagedSourceOrigins: stagedSourceOrigins, root: root, groups: groups}
+	end 'create'
+end 'StagedTestBuild'
+
+// Why a staging attempt could not produce a tree to compile. Every arm is an IO or path failure the caller
+// reports and exits on: none of them is a fact about the tests, so none is a test result.
+export union TestStagingError implements Error
+	refused(reason String)
+end 'TestStagingError'
+
+// Which group covers a file, if any. A union rather than a throw, because "this file declares no test" is
+// the ordinary answer for most of a project's sources and not a failure of anything.
+union TestFileGroupLookup
+	found(group TestFileGroup)
+	absent
+end 'TestFileGroupLookup'
+
+// ⭐⭐ **PARTITION TESTS INTO FILES, PRESERVING DISCOVERY ORDER BOTH BETWEEN FILES AND WITHIN ONE.**
+//
+// Order is not cosmetic: it is the run's numbering, a report's reading order, and what makes a redirected
+// run byte-reproducible. Sorting by name instead would make the report stable and the numbering depend on a
+// sort nobody asked for.
+//
+// ⚠ **SEPARATE FROM THE STAGING BECAUSE `--list` NEEDS THE GROUPING AND NOTHING ELSE.** That flag is
+// documented as compiling nothing, and synthesizing a dispatcher it will never hand to a compiler is the
+// same kind of quiet untruth as compiling behind its back.
+//
+// ⛔ **IT DOES NOT ASSUME THE ROSTER ARRIVES ALREADY GROUPED, THOUGH IT HAPPENS TO.** The sweep folds one
+// file at a time, so `ProgramSignatures.declaredTests` really does arrive with each file's tests
+// contiguous — but that is a property of a caller two layers away, and a grouping that read it as an
+// invariant would silently drop a file's second run of tests the day anything interleaved. So contiguity
+// buys the COST and never the ANSWER: the fast path in `groupOrdinalFor` is what reads it, and behind that
+// path sits the full scan that is right either way.
+//
+// ⛔⛔ **ONE PASS, AND IT WAS TWO NESTED ONES — Θ(files × tests), MEASURED AT 10.7 SECONDS.** The first
+// version collected the distinct files, then walked EVERY test again for each of them. That is a
+// `FilePath.equals` per (file, test) pair, and on Windows `FilePath.equals` is not a byte compare: it is
+// `s.clone().toLower()` on BOTH sides (`stdlib/FilePath.maxon`), so every one of those pairs cost four
+// String allocations. MEASURED with `maxon test --list` on generated projects, one binary, idle machine:
+//
+//   512 test files × 8 tests (4096 tests)                    —  11,357 ms
+//   511 ordinary files + 1 test file, the same 4096 tests  —     684 ms
+//
+// Same file count, same test count, same token volume; the only thing that differs is how many GROUPS the
+// roster partitions into, which is the one quantity the old shape multiplied by. Holding the test count at
+// 2048 and doubling the file count doubled the time (F=256 ⇒ 3062 ms, F=512 ⇒ 6099 ms) — the product, read
+// straight off a doubling ladder.
+//
+// ⚠ **THE RESIDUAL IS Θ(files²) AND IT IS STATED RATHER THAN HIDDEN.** A file TRANSITION still scans the
+// groups built so far, so a run now pays one scan per test FILE where it paid one per TEST: 512 files cost
+// ~131k comparisons against the old shape's 4.2M. A map keyed on the path would remove even that, and is
+// deliberately not used — the key would have to restate `FilePath.equals`'s own platform rule (exact bytes
+// on POSIX, case-folded on Windows) outside the stdlib that owns it, which is a second spelling of a
+// comparison this file has exactly one of.
+export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGroupArray throws TestStagingError
+	// Refused here, by count, rather than left to fail inside generated source: every index there is typed
+	// by the generated alias, so the overflow would otherwise surface as a range error in text nobody wrote.
+	// `>` and not `>=`: indices run `0..count-1`, so exactly `MaxTestsPerRun` tests is the largest run whose
+	// every index fits.
+	if tests.count() > MaxTestsPerRun 'moreTestsThanTheRunIsNumberedFor'
+		throw TestStagingError.refused("{tests.count()} tests exceeds the {MaxTestsPerRun} a single run is numbered for")
+	end 'moreTestsThanTheRunIsNumberedFor'
+
+	var groups = TestFileGroupArray.create()
+	// The group the PREVIOUS test landed in. 0 before there is one, which names no group and so takes the
+	// scan — see `groupHoldsFile`, which answers FALSE for an ordinal nothing occupies.
+	var recent = 0 as TestFileOrdinal
+
+	for (testCursor, test) in tests.withIterator() 'eachTest'
+		let ordinal = groupOrdinalFor(groups, file: test.file, recent: recent)
+		recent = ordinal
+
+		// MUTATED in place rather than assembled and then pushed, which is what makes this ONE pass: a
+		// member is appended the moment it is read, in the order it was read.
+		var group = try groups.get(ordinal) otherwise panic("groupTestsByFile: ordinal {ordinal} names no group — `groupOrdinalFor` either found one or appended one, so it cannot hand back a position nothing occupies")
+		group.tests.push(IndexedTest.create(testCursor.index() as TestRunIndex, test: test))
+	end 'eachTest'
+
+	return groups
+end 'groupTestsByFile'
+
+// ⭐⭐ **WHICH GROUP `file` BELONGS TO, APPENDING ONE WHEN IT BELONGS TO NONE** — the single place a group
+// is minted, so a group's ORDINAL and its position in the array are one fact rather than two that can
+// disagree.
+//
+// ⚠ **`recent` BUYS THE COST AND NEVER THE ANSWER** (see the caller's header). A run of tests from one file
+// answers here in one comparison; a file transition falls through to the scan, which is right whether or
+// not the roster arrived grouped.
+function groupOrdinalFor(groups TestFileGroupArray, file FilePath, recent TestFileOrdinal) returns TestFileOrdinal
+	if groupHoldsFile(groups, ordinal: recent, file: file) 'theSameFileAsTheTestBefore'
+		return recent
+	end 'theSameFileAsTheTestBefore'
+
+	for (groupCursor, group) in groups.withIterator() 'eachGroup'
+		if group.file.equals(file) 'thisFile'
+			return groupCursor.index() as TestFileOrdinal
+		end 'thisFile'
+	end 'eachGroup'
+
+	// The ORDINAL is the group's position, which is what makes the runner name unique — see
+	// `MaxonTestFileRunnerPrefix`.
+	let ordinal = groups.count() as TestFileOrdinal
+	groups.push(TestFileGroup.create(file, runnerName: "{MaxonTestFileRunnerPrefix}{ordinal}", tests: IndexedTestArray.create()))
+	return ordinal
+end 'groupOrdinalFor'
+
+// Does the group at `ordinal` cover `file`? FALSE for an ordinal naming no group, which is what the FIRST
+// test of a run asks — an absent group is "not this file" rather than an error, because the caller's next
+// move is the scan either way.
+function groupHoldsFile(groups TestFileGroupArray, ordinal TestFileOrdinal, file FilePath) returns bool
+	let group = try groups.get(ordinal) otherwise return false
+	return group.file.equals(file)
+end 'groupHoldsFile'
+
+// The group covering `file`, for the staging — which asks about EVERY source in the project, most of which
+// hold no test at all. Θ(sources × test files), and unlike `groupOrdinalFor` it has no run of same-file
+// questions to exploit: the staging walks the PROJECT's sources rather than the roster, so consecutive
+// questions are about unrelated files. The answers differ from `groupOrdinalFor`'s because the callers need
+// different things, and a shared routine handing back an ordinal would put the `groups.get` (and its
+// unreachable `otherwise`) at the caller instead of here.
+function groupOfFile(groups TestFileGroupArray, file FilePath) returns TestFileGroupLookup
+	for group in groups 'eachGroup'
+		if group.file.equals(file) 'thisFile'
+			return TestFileGroupLookup.found(group)
+		end 'thisFile'
+	end 'eachGroup'
+
+	return TestFileGroupLookup.absent
+end 'groupOfFile'
+
+// ⭐⭐ **STAGE THE WHOLE PROJECT AND ITS GENERATED SOURCE INTO `stagingRoot`, AND HAND BACK WHAT TO COMPILE.**
+//
+// `projectRoot` must be spelled exactly as it was for `TestDiscovery.discoverTests`: this walk and that
+// one both go through `Compiler.collectMaxonSources`, so the paths they produce are equal spellings, and
+// mapping a group's file onto its staged copy is a `FilePath.equals` rather than a re-derivation.
+//
+// The staging root is RECONSTRUCTED, never inherited: a `.maxon` left behind by an earlier run with a
+// different test set would join this build silently and change what it means. That is the failure
+// `SpecTestRunner.stageSourceFiles` records having had twice.
+export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, groups TestFileGroupArray) returns StagedTestBuild throws TestStagingError
+	if groups.isEmpty() 'nothingToDispatch'
+		// A caller-contract violation and not a user error: a run with no tests is reported and exited on
+		// BEFORE anything is staged, because the generated entry would otherwise bind a `selection` no
+		// runner reads — E3012, in source nobody wrote.
+		panic("stageTestBuild: asked to stage a build with no test groups. A zero-test run is the command's to report and exit on; there is no dispatcher to generate for it.")
+	end 'nothingToDispatch'
+
+	if not Directory.create(stagingRoot) 'noStagingRoot'
+		throw TestStagingError.refused("could not create the staging directory {stagingRoot.toString()}")
+	end 'noStagingRoot'
+	purgeFilesIn(stagingRoot)
+
+	var sources = MaxonSourcePathArray.create()
+	// ⭐ **`productionAndTests`, WHICH IS THE ONE THING AN ORDINARY BUILD'S WALK ANSWERS DIFFERENTLY.** A
+	// test body calls the very declarations its project makes, so the tests are compiled WITH the project
+	// and not instead of it.
+	_ = try collectMaxonSources(projectRoot, into: sources, selection: SourceSelection.productionAndTests) otherwise throw TestStagingError.refused("could not walk {projectRoot.toString()} for the project's sources")
+
+	var buildTargets = MaxonSourcePathArray.create()
+	var compilerWrittenSources = CompilerWrittenSourceArray.create()
+	var stagedSourceOrigins = StagedSourceOriginArray.create()
+
+	for source in sources 'eachSource'
+		let staged = try stageOneSource(stagingRoot, projectRoot: projectRoot, source: source, groups: groups)
+		buildTargets.push(staged.path)
+		stagedSourceOrigins.push(staged.origin)
+		if not staged.mintedNames.isEmpty() 'generated'
+			compilerWrittenSources.push(CompilerWrittenSource.create(staged.path, mintedNames: staged.mintedNames))
+		end 'generated'
+	end 'eachSource'
+
+	let entryPath = stagingRoot.join("{MaxonTestEntryFileName}")
+	try writeStagedFile(entryPath, content: entrySource(groups))
+	buildTargets.push(entryPath)
+	compilerWrittenSources.push(CompilerWrittenSource.create(entryPath, mintedNames: mintedNamesForEntry()))
+
+	// LAST, so every file above is registered before the walk reaches it and the walk finds nothing new —
+	// the directory is here to fix the project ROOT, not to contribute a unit. See `buildTargets`.
+	buildTargets.push(stagingRoot)
+
+	return StagedTestBuild.create(buildTargets, compilerWrittenSources: compilerWrittenSources, stagedSourceOrigins: stagedSourceOrigins, root: stagingRoot, groups: groups)
+end 'stageTestBuild'
+
+// One staged file: where it landed, and the reserved names this compiler declared in it.
+//
+// ⚠ **EMPTY IS THE WHOLE ANSWER TO "DID THIS COMPILER WRITE ANY OF IT", AND THERE IS NO SECOND FLAG.**
+// A dispatcher always declares its runner, so a copied-verbatim file and a dispatcher-carrying one can
+// never both answer empty; a bool beside this list would be that same fact written twice, free to drift
+// from it.
+type StagedSource
+	export let path as FilePath
+	export let mintedNames as ByteArrayArray
+	// What this copy is a copy OF, and how much of it the author wrote. Always present, because
+	// `stageOneSource` only ever produces copies — the one staged file that is nobody's copy is the
+	// generated entry, which this function does not write.
+	export let origin as StagedSourceOrigin
+
+	export static function create(path FilePath, mintedNames ByteArrayArray, origin StagedSourceOrigin) returns StagedSource
+		return Self{path: path, mintedNames: mintedNames, origin: origin}
+	end 'create'
+end 'StagedSource'
+
+// Copy ONE of the project's sources into the staging tree, with its dispatcher appended if it holds tests.
+// The relative path is preserved — see this file's header for the two things that depend on it.
+function stageOneSource(stagingRoot FilePath, projectRoot FilePath, source FilePath, groups TestFileGroupArray) returns StagedSource throws TestStagingError
+	let relative = try source.relativeTo(projectRoot) otherwise throw TestStagingError.refused("{source.toString()} is not under the project root {projectRoot.toString()}, so it has no place in the staged tree")
+	let stagedPath = stagingRoot.join(relative)
+	let content = try File.readText(source) otherwise throw TestStagingError.refused("could not read {source.toString()}")
+
+	// Everything with no group — the project's ordinary sources, and any `*.test.maxon` that declares no
+	// `test` — is copied byte for byte. Its bytes stay the AUTHOR's, which is exactly what keeps it out of
+	// `compilerWrittenSources` and so out of the reserved-name exemption.
+	let holder = groupOfFile(groups, file: source)
+	let dispatcher = match holder 'holdsTests'
+		found(group) gives fileDispatcherSource(group)
+		absent gives ""
+	end 'holdsTests'
+
+	try writeStagedFile(stagedPath, content: "{content}{dispatcher}")
+
+	// EMPTY is the `absent` arm's answer and only ever that: a dispatcher DECLARES its runner, so a group
+	// always mints exactly the one name here.
+	let minted = match holder 'mintedHere'
+		found(group) gives mintedNamesForDispatcher(group)
+		absent gives ByteArrayArray.create()
+	end 'mintedHere'
+
+	return StagedSource.create(stagedPath, mintedNames: minted, origin: StagedSourceOrigin.create(stagedPath, reportedPath: source))
+end 'stageOneSource'
+
+// ⭐ **THE RESERVED NAMES THE APPENDED DISPATCHER DECLARES — read off the group rather than written out
+// a second time.** One name: the per-file runner. It is spelled from `TestFileGroup.runnerName`, which is
+// also what `fileDispatcherSource` declares and what `entrySource` calls, so the declaration door cannot
+// come to admit a spelling the generator has stopped producing.
+function mintedNamesForDispatcher(group TestFileGroup) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(group.runnerName.toByteArray())
+	return names
+end 'mintedNamesForDispatcher'
+
+// ⭐ **THE RESERVED NAMES THE GENERATED ENTRY FILE DECLARES.** Three, each spelled from the very
+// constant `entrySource` writes it with — the reference carries the same list in the same shape
+// (`TestDispatcher.EntryOwnedNames`).
+//
+// ⚠ Its non-reserved members (`selection`, `selected`, `began`, `ended`) are deliberately absent: this
+// list answers ONE question — which `__` names the declaration door must admit — and a name no rule refuses
+// has nothing to be admitted from.
+function mintedNamesForEntry() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(MaxonTestIndexAlias.toByteArray())
+	names.push(MaxonTestHelperType.toByteArray())
+	names.push(MaxonTestEntrySymbol.toByteArray())
+	return names
+end 'mintedNamesForEntry'
+
+// Write one staged file, creating the directory it lands in. Both failures are refusals rather than panics:
+// a staging root the process cannot write is an environment problem the caller reports.
+function writeStagedFile(path FilePath, content String) throws TestStagingError
+	let parent = try path.parent() otherwise throw TestStagingError.refused("could not derive a directory for {path.toString()}")
+	if not Directory.create(parent) 'noSubdir'
+		throw TestStagingError.refused("could not create the directory {parent.toString()}")
+	end 'noSubdir'
+
+	try File.writeText(path, content: content) otherwise throw TestStagingError.refused("could not write {path.toString()}")
+end 'writeStagedFile'
+
+// ⭐⭐ **THE DISPATCHER APPENDED TO ONE TEST FILE.** Each test is wrapped in a selection guard, a begin
+// marker, a timer and a handler.
+//
+// ⚠ **THE HANDLER IS THE BLOCK FORM OF `otherwise` SETTING A VARIABLE, RATHER THAN TWO EXITS**, because
+// control CONTINUES past an `otherwise` block — so ONE report site serves both outcomes and there is no
+// second place for pass and fail to be reported differently.
+//
+// ⚠ **A TEST THROWS EXACTLY `TestFailure`**, so this catches everything a test body can raise; a foreign
+// error was already converted, and reported, by the handler the compiler substitutes
+// (`Parser.emitUncaughtTestThrow`). What it cannot catch is a `panic`, which is uncatchable by design —
+// which is precisely why the begin marker is written BEFORE the body, and why a begin with no end is the
+// crash signal.
+//
+// ⚠ **EVERY DISCOVERED TEST IS GENERATED IN, ALWAYS.** Filtering happens at RUN time, through the
+// `--select=` value — which is what lets a filter change between runs without invalidating anything, and
+// what keeps the thing being tested identical to the thing that was compiled.
+function fileDispatcherSource(group TestFileGroup) returns String
+	var source = "\n// Generated by `maxon test` into a staged copy — the file in your tree is untouched. It lives\n"
+	source.append("// in this file because a `test` is not exported, so nowhere else can call one. See TestDispatcher.\n")
+	source.append("export function {group.runnerName}(selection String)\n")
+
+	for member in group.tests 'eachTest'
+		let index = member.index
+		let guard = "maxonTestGuard{index}"
+		let caught = "maxonTestCaught{index}"
+		let symbol = String.from(member.test.symbol)
+
+		source.append("\tif {MaxonTestHelperType}.selected(selection, index: {index}) '{guard}'\n")
+		source.append("\t\t{MaxonTestHelperType}.began({index})\n")
+		source.append("\t\tvar outcome{index} = \"{TestProtocolOutcomePass}\"\n")
+		source.append("\t\tlet started{index} = Clock.nowNanos()\n")
+		source.append("\t\ttry {symbol}() otherwise '{caught}'\n")
+		source.append("\t\t\toutcome{index} = \"{TestProtocolOutcomeFail}\"\n")
+		source.append("\t\tend '{caught}'\n")
+		source.append("\t\t{MaxonTestHelperType}.ended({index}, outcome: outcome{index}, nanos: Clock.elapsedNanos(started{index}))\n")
+		source.append("\tend '{guard}'\n")
+	end 'eachTest'
+
+	source.append("end '{group.runnerName}'\n")
+	return source
+end 'fileDispatcherSource'
+
+// ⭐⭐ **THE ROOT ENTRY: the shared helpers, then a call to every file's dispatcher.**
+//
+// `useWireFormat` is called ONCE, FIRST, before anything can report — that is the contract
+// `stdlib/Testing.maxon` states, and it is why the format is an argument rather than a constant the stdlib
+// holds.
+//
+// ⚠ **IT RETURNS 0 WHATEVER THE TESTS DID.** The runner attributes outcomes from the MARKER STREAM, and a
+// non-zero exit here would be indistinguishable from the crash it must never be confused with. The exit
+// code a test binary owns is therefore only ever "how the process died".
+function entrySource(groups TestFileGroupArray) returns String
+	let beganLine = wrapped("{TestProtocolBeganTag}{TestProtocolSeparatorInMaxonSource}\{index\}")
+	let endedLine = wrapped("{TestProtocolEndedTag}{TestProtocolSeparatorInMaxonSource}\{index\}{TestProtocolSeparatorInMaxonSource}\{outcome\}{TestProtocolSeparatorInMaxonSource}\{nanos\}")
+	// The needle is bracketed with the SAME character the runner brackets its output with, taken from the
+	// one constant — a selection that named test 3 and matched 13 would be exactly those two disagreeing.
+	let selectionNeedle = "{TestSelectIndexBracket}\{index\}{TestSelectIndexBracket}"
+
+	var source = "// Generated by `maxon test` — this file exists only in the staging tree. See TestDispatcher.\n\n"
+	source.append("export typealias {MaxonTestIndexAlias} = int(0 to {MaxTestsPerRun})\n\n")
+
+	source.append("export type {MaxonTestHelperType}\n")
+	source.append("\t// The run's selection, read once. ABSENT means every test — what a human running this\n")
+	source.append("\t// binary by hand gets — and is a DIFFERENT setting from an EMPTY selection, which selects\n")
+	source.append("\t// nothing.\n")
+	source.append("\texport static function selection() returns String\n")
+	source.append("\t\treturn try CommandLine.getOptionValue(\"{TestSelectOptionName}\") otherwise \"{TestSelectAll}\"\n")
+	source.append("\tend 'selection'\n\n")
+
+	source.append("\texport static function selected(selection String, index {MaxonTestIndexAlias}) returns bool\n")
+	source.append("\t\tif selection == \"{TestSelectAll}\" 'all'\n")
+	source.append("\t\t\treturn true\n")
+	source.append("\t\tend 'all'\n\n")
+	source.append("\t\treturn selection.contains(\"{selectionNeedle}\")\n")
+	source.append("\tend 'selected'\n\n")
+
+	source.append("\t// Written BEFORE the body runs, which is what makes a process death attributable: the last\n")
+	source.append("\t// test to begin and never end is the one that killed it. `printError` writes straight to the\n")
+	source.append("\t// handle with no buffer, so the marker has already left the process by the time the body can\n")
+	source.append("\t// panic.\n")
+	source.append("\texport static function began(index {MaxonTestIndexAlias})\n")
+	source.append("\t\tprintError(\"{beganLine}\\n\")\n")
+	source.append("\tend 'began'\n\n")
+
+	source.append("\texport static function ended(index {MaxonTestIndexAlias}, outcome String, nanos DurationNanos)\n")
+	source.append("\t\tprintError(\"{endedLine}\\n\")\n")
+	source.append("\tend 'ended'\n")
+	source.append("end '{MaxonTestHelperType}'\n\n")
+
+	source.append("export function {MaxonTestEntrySymbol}() returns ExitCode\n")
+	source.append("\t__TestReport.useWireFormat(\"{TestProtocolWrapper}\", separator: \"{TestProtocolSeparatorInMaxonSource}\")\n")
+	source.append("\tlet selection = {MaxonTestHelperType}.selection()\n\n")
+
+	for group in groups 'eachGroup'
+		source.append("\t{group.runnerName}(selection)\n")
+	end 'eachGroup'
+
+	source.append("\n\treturn 0\n")
+	source.append("end '{MaxonTestEntrySymbol}'\n")
+	return source
+end 'entrySource'
+
+// Bracket a report body the way the protocol requires. One speller, so a line that opens with the wrapper
+// cannot close with something else.
+function wrapped(body String) returns String
+	return "{TestProtocolWrapper}{body}{TestProtocolWrapper}"
+end 'wrapped'

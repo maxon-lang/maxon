@@ -1635,7 +1635,7 @@ it is not: those five take an INDEX or a CAPACITY the source wrote and must refu
 serve, while `append` is handed another record and asks the growth policy for whatever capacity that implies.
 Both references agree — the bootstrap registers it as the only `__ManagedMemory` mutator with no `throwsType`
 (`maxon-sharp/Compiler/2-Parser.cs:1670`) and v1's `__managed_mem_append` says *"Non-throwing"* in its header
-and swallows the grow's error (`stdlib/Internals.maxon:3743-3766`) — and `stdlib/String.maxon:414` declares a
+and swallows the grow's error (`stdlib/Internals.maxon:3743-3766`) — and `stdlib/String.maxon:432` declares a
 NON-throwing `append` whose whole body is a bare `managed.append(other.managed)`, which is unwritable under
 any other answer.
 
@@ -4468,7 +4468,7 @@ error E2015: <fragment>:5:22: Unsupported: `__ManagedMemory` member 'toCString' 
 ### `makeCharFromBytes(pos, len)` is STDLIB-ONLY
 
 The same gate, and the second member behind it. Its corpus declaration is a `module function`
-(`stdlib/String.maxon:301`) whose stated contract is *"callers must guarantee `pos + len <=
+(`stdlib/String.maxon:319`) whose stated contract is *"callers must guarantee `pos + len <=
 byteLength()`"* — a PRECONDITION, so the graph it forwards to (`__char_at`, the one door a `Character` is
 born through) copies the window without checking it. The reference compiler does check, and refuses with
 `__ManagedMemory: byte index out of bounds`; shv2's `__char_at` is shared with `for c in s`, whose window

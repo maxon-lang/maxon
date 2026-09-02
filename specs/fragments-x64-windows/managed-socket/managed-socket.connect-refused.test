@@ -40,13 +40,24 @@ module {
     x64.mov [rbp-24], rax
     x64.mov [rbp-32], rax
     x64.mov r9, [rbp-32]
-    x64.mov rax, [r9+0]
+    x64.mov rax, [r9+8]
     x64.mov rcx, [rbp-32]
-    x64.mov rdx, [rcx+8]
-    x64.add rax, rdx
-    x64.movzx rcx, byte ptr [rax+0]
-    x64.xor eax, eax
-    x64.cmp rcx, rax
+    x64.mov rdx, [rcx+16]
+    x64.mov rcx, -2
+    x64.cmp rdx, rcx
+    x64.je main.__cstr_probe_0
+    x64.cmp rdx, rax
+    x64.jg main.__cstr_probe_0
+    x64.jmp main.__cstr_fix_0
+  __cstr_probe_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-32]
+    x64.mov rbx, [rdx+8]
+    x64.add rcx, rbx
+    x64.movzx rsi, byte ptr [rcx+0]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
     x64.jne main.__cstr_fix_0
   __cstr_ok_0:
     x64.mov rax, [rbp-32]

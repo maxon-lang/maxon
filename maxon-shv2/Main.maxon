@@ -14,6 +14,10 @@
 //   maxon-shv2 verify-warm-rebuild <file>
 //   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>]
 
+// How wide the flag column of the usage listing below is. Every other line pads to it by hand; the one
+// line that CANNOT (its flag names a derived list of values) reads it. See `printUsage`.
+let UsageFlagColumnWidth = 32 as ColumnWidth
+
 // The default spec directory `spec-test` scans when no directory is given
 // (resolved against the process cwd — the runner is invoked from the repo root).
 let DefaultSpecDir = "specs-shv2"
@@ -77,6 +81,27 @@ let WithdrawnCompilerFlagPrefix = "--compiler"
 module let TargetFlagPrefix = "--target="
 
 let WorkersFlagPrefix = "--workers="
+
+// ⭐ **`test`'S OWN FLAGS.** They are matched here with every other flag rather than parsed by the
+// command, because `MaxonArgs.parse` is the ONE reader of this driver's command line — a second parser
+// would be a second place for a flag to be understood, and a flag understood in one of them is silently
+// swallowed by the other. Each sets a FIELD; see `MaxonArgs.parse`'s note on why never a local.
+let TestListFlag = "--list"
+let TestJsonFlag = "--json"
+let TestNoTimingFlag = "--no-timing"
+let TestIsolateFlag = "--isolate"
+let TestBailFlag = "--bail"
+let TestBailFlagPrefix = "--bail="
+let TestTimeoutFlagPrefix = "--timeout="
+let TestColorFlagPrefix = "--color="
+
+// The short filter, in both spellings a shell user reaches for. `-t=P` carries its value; `-t P` is the
+// separated form, which is what a pattern containing spaces needs.
+let TestFilterShortFlag = "-t"
+let TestFilterShortPrefix = "-t="
+
+// Failures allowed before the run stops CLAIMING work, when `--bail` is given with no count.
+let DefaultBailAfter = 1
 
 // ⭐ **THE TWO IR-SIDECAR SPELLINGS.** ⛔ They used to be EXPORTED *"because the spec runner emits
 // them on the command line it spawns each fragment build with"* — and it does not: since G20 the spec
@@ -143,7 +168,7 @@ function main() returns ExitCode
 	if not args.badOption.isEmpty() 'badOption'
 		printError("error: unknown option: {args.badOption}\n")
 		printUsage()
-		return 1
+		return refusedCommandLineExit(args.command)
 	end 'badOption'
 
 	return match args.command 'cmd'
@@ -153,6 +178,7 @@ function main() returns ExitCode
 		lspSelfTest gives runLspSelfTest()
 		specTest gives runSpecTest(args)
 		scaleTest gives runScaleTest(args)
+		test gives runTest(args)
 		unknown gives unknownCommand()
 	end 'cmd'
 end 'main'
@@ -198,7 +224,7 @@ end 'supportedTargets'
 // (`detectHostTarget`) when the flag is empty, otherwise whatever `parseBuildTarget` makes of the
 // spelling (`unrecognized` when it names no known target). Folding the host default into one place
 // keeps the two commands from drifting on what "no --target" means.
-function resolveTargetFlag(spec String) returns TargetResolution
+module function resolveTargetFlag(spec String) returns TargetResolution
 	if spec.isEmpty() 'host'
 		return TargetResolution.resolved(detectHostTarget())
 	end 'host'
@@ -208,7 +234,7 @@ end 'resolveTargetFlag'
 // Report a `--target` spelling that names no known target, as an exit code the
 // build command returns directly. Separate from the match arm because a match arm
 // is one statement, and this one both prints and yields the code.
-function reportUnknownTarget(spec String) returns ExitCode
+module function reportUnknownTarget(spec String) returns ExitCode
 	printError("error: unknown --target '{spec}' (expected e.g. x64-windows, x64-linux or arm64-macos)\n")
 	return 1
 end 'reportUnknownTarget'
@@ -879,6 +905,26 @@ module function reportCompileError(e CompileError)
 	end 'report'
 end 'reportCompileError'
 
+// ⭐⭐ **WHAT A REFUSED COMMAND LINE EXITS WITH.** For `test` it is 2 — "the run could not happen" —
+// because that command documents 0/1/2 as three different answers and CI branches on the difference
+// between "a test failed" (1) and "the harness never ran" (2). Every other command has only "it ran"
+// and "it did not", and their 1 is load-bearing for callers that already read it.
+//
+// EXHAUSTIVE and with no default arm, so a command added tomorrow has to state which of the two it is
+// rather than inheriting an answer nobody chose for it.
+function refusedCommandLineExit(command MaxonCommand) returns ExitCode
+	return match command 'whichCommand'
+		test gives NothingRanExitCode
+		build gives 1
+		verifyWarmRebuild gives 1
+		verifyRecheck gives 1
+		lspSelfTest gives 1
+		specTest gives 1
+		scaleTest gives 1
+		unknown gives 1
+	end 'whichCommand'
+end 'refusedCommandLineExit'
+
 function unknownCommand() returns ExitCode
 	printUsage()
 	return 1
@@ -902,6 +948,14 @@ function printUsage()
 	print("                                2-, 3- and 4-byte characters, CRLF and the buffer edges. Compiler-\n")
 	print("                                internal, so no specs-shv2 case can reach it.\n")
 	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
+	print("  test [dir]                    Run a PROJECT's own `test` declarations (default dir: the\n")
+	print("                                working directory). Every test found is compiled into ONE\n")
+	print("                                binary with a generated entry point and run; which of them\n")
+	print("                                RUN is a runtime argument, so a --filter change costs no\n")
+	print("                                recompile. NOT specs-shv2 — that is `spec-test`.\n")
+	print("                                Exit 0 every test passed; 1 a test failed, crashed, timed\n")
+	print("                                out, leaked, did not run — or NO TESTS WERE FOUND, which is\n")
+	print("                                never reported as success; 2 the run could not happen.\n")
 	print("  scale-test                    Compile a ladder of generated programs, each rung double the\n")
 	print("                                last, and report the per-phase MEMORY — allocations, frees and\n")
 	print("                                bytes — plus the CPU TICKS the compiling thread spent. It does\n")
@@ -917,10 +971,12 @@ function printUsage()
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
 	print("  --emit-ir-runtime=<a>,<b>     Render these compiler-emitted functions in that IR too (implies --emit-ir)\n")
-	print("  --target=<cpu>-<os>           (build, spec-test) Use this target instead of the host, e.g.\n")
-	print("                                x64-windows, x64-linux, arm64-macos or wasm32-wasi (default: the host\n")
-	print("                                target). For spec-test a cross target cross-compiles each\n")
-	print("                                selected test and runs it under the vendored runtime.\n")
+	print("  --target=<cpu>-<os>           (build, spec-test, test) Use this target instead of the host,\n")
+	print("                                e.g. x64-windows, x64-linux, arm64-macos or wasm32-wasi (default:\n")
+	print("                                the host target). For spec-test a cross target cross-compiles each\n")
+	print("                                selected test and runs it under the vendored runtime. For test it\n")
+	print("                                builds the test binary for that target and then SPAWNS it, so a\n")
+	print("                                target this host cannot execute reports every test as not run.\n")
 	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
 	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
 	print("                                the same numbers as a human-readable table.\n")
@@ -968,6 +1024,30 @@ function printUsage()
 	print("  --result-json=<path>          (scale-test) Write the whole run — per-rung and per-phase memory,\n")
 	print("                                and the deltas from the last recorded run — to <path> as JSON, so\n")
 	print("                                a tool never has to scrape the human report.\n")
+	print("  -t P, -t=P, --filter=P        (test) Run only tests whose NAME or FILE contains P\n")
+	print("                                (case-insensitive; comma-separated patterns are a union)\n")
+	print("  --list                        (test) Print the tests that would run and compile nothing\n")
+	print("  --json                        (test) Emit the report as JSON instead of text\n")
+	print("  --isolate                     (test) Run every test in its own process, rather than one\n")
+	print("                                process per test FILE\n")
+	print("  --bail[=N]                    (test) Stop claiming new work after N failures (default\n")
+	print("                                {DefaultBailAfter}); the shard already running finishes, so the total may\n")
+	print("                                exceed N\n")
+	print("  --timeout=<ms>                (test) Kill a test process after <ms> milliseconds (default\n")
+	print("                                {DefaultTestTimeoutMs}). A whole file shares one process, so --isolate is what\n")
+	print("                                gives each test the full budget to itself.\n")
+	print("  --no-timing                   (test) Omit durations, making stdout byte-reproducible\n")
+	// ⚠ THE ONLY LINE IN THIS BLOCK WHOSE LEFT COLUMN IS DERIVED RATHER THAN TYPED, because its width
+	// depends on `reportColorChoices()` — hand-padded, it would go ragged the day a colour mode is added
+	// and nothing would say so.
+	print("{padRight("  --color={reportColorChoices()}", width: UsageFlagColumnWidth)}(test) Colour the report; `auto` means only when stdout is a\n")
+	print("                                terminal: not redirected, NO_COLOR unset, TERM not `dumb`.\n")
+	// ⚠ The last two lines are not decoration: only x64-windows can ask the host what KIND of object a
+	// handle is, so on every other lane `auto` is answered "not a terminal" and prints nothing. Saying so
+	// here is what keeps this text from being the documented lie it was before the intrinsic existed —
+	// `docs/CLI_REFERENCE.md` carries which lanes those are and what each still owes.
+	print("                                Only x64-windows detects a terminal; on every other target\n")
+	print("                                `auto` degrades to `never` — use `always` to force colour.\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
@@ -978,6 +1058,9 @@ enum MaxonCommand
 	lspSelfTest
 	specTest
 	scaleTest
+	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
+	// runs this compiler's specs, this one runs whatever the directory it is pointed at declares.
+	test
 	unknown
 end 'MaxonCommand'
 
@@ -1073,6 +1156,28 @@ module type MaxonArgs
 	// Whether this spec run may reach a real external host (`--network`). FALSE by default, and the
 	// default is the whole point — see `NetworkFlag`.
 	export var includeNetwork as bool
+	// `--list` (test only): print the tests that WOULD run and compile nothing.
+	export var listOnly as bool
+	// `--json` (test only): emit the report as one JSON document instead of text.
+	export var jsonReport as bool
+	// `--no-timing` (test only): omit durations, which is what makes a run's stdout byte-reproducible.
+	// TRUE by default — the flag turns it off, so the field reads as what it controls rather than as
+	// the flag's own name.
+	export var showTiming as bool
+	// `--color=` (test only): when the report may use colour. See `TestRender.ReportColorMode` — `auto`
+	// is the default and asks the host through `__Builtins.stdoutWantsAnsiColor()`.
+	export var colorMode as ReportColorMode
+	// `--isolate` (test only): run every test in its own process, rather than a process per FILE.
+	export var isolate as bool
+	// `--bail[=N]` (test only): stop claiming new work once N tests have failed.
+	export var bail as BailPolicy
+	// `--timeout=<ms>` (test only): how long ONE test process may run before it is killed.
+	export var testTimeoutMs as DurationMs
+	// ⚠ Whether a `--log=` was accepted on this command line. Read by `test` alone, which SILENCES the
+	// compiler's INFO chatter so its stdout is a report rather than a build log — and must not do that
+	// behind the back of a caller who asked for the chatter. A bool and not the spec string: the spec was
+	// already applied by `parseLogOption`, and keeping it would be that setting stored twice.
+	export var logOverridden as bool
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
 	export var badOption as String
@@ -1091,7 +1196,7 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, badOption: "", withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workerPersistent: false, metricsPath: "", emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, perType: false, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, badOption: "", withdrawnOption: ""}
 	end 'create'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
@@ -1143,7 +1248,9 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.specTest
 			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
 				parsed.command = MaxonCommand.scaleTest
-			end 'scaleTestCmd' else if arg == "-o" 'dashOutput'
+			end 'scaleTestCmd' else if arg == TestCommandName 'testCmd'
+				parsed.command = MaxonCommand.test
+			end 'testCmd' else if arg == "-o" 'dashOutput'
 				i = i + 1
 				parsed.outputOverride = try args.get(i) otherwise ""
 			end 'dashOutput' else if arg.startsWith("--output=") 'longOutput'
@@ -1238,11 +1345,55 @@ module type MaxonArgs
 				parsed.resultJson = try CommandLine.optionValue(arg) otherwise ""
 			end 'resultJsonFlag' else if arg.startsWith(TargetFlagPrefix) 'targetFlag'
 				parsed.targetSpec = try CommandLine.optionValue(arg) otherwise ""
-			end 'targetFlag' else if arg.startsWith("--log=") 'logFlag'
+			end 'targetFlag' else if arg == TestListFlag 'listFlag'
+				parsed.listOnly = true
+			end 'listFlag' else if arg == TestJsonFlag 'jsonFlag'
+				parsed.jsonReport = true
+			end 'jsonFlag' else if arg == TestNoTimingFlag 'noTimingFlag'
+				parsed.showTiming = false
+			end 'noTimingFlag' else if arg == TestIsolateFlag 'isolateFlag'
+				parsed.isolate = true
+			end 'isolateFlag' else if arg == TestBailFlag 'bailFlag'
+				parsed.bail = BailPolicy.after(DefaultBailAfter)
+			end 'bailFlag' else if arg.startsWith(TestBailFlagPrefix) 'bailCountFlag'
+				// A bad value is a BAD OPTION, not a clamp — the door `--workers` and `--rungs` already use.
+				// `--bail=nonsense` asks a question this command cannot answer, and answering a different
+				// one instead is the failure a caller can neither see nor recover from.
+				match parsePositiveFlagValue(try CommandLine.optionValue(arg) otherwise "") 'bailArg'
+					valid(failures) then parsed.bail = BailPolicy.after(failures)
+					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
+				end 'bailArg'
+			end 'bailCountFlag' else if arg.startsWith(TestTimeoutFlagPrefix) 'timeoutFlag'
+				match parsePositiveFlagValue(try CommandLine.optionValue(arg) otherwise "") 'timeoutArg'
+					valid(ms) then parsed.testTimeoutMs = ms
+					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
+				end 'timeoutArg'
+			end 'timeoutFlag' else if arg.startsWith(TestColorFlagPrefix) 'colorFlag'
+				match parseReportColorMode(try CommandLine.optionValue(arg) otherwise "") 'colorArg'
+					valid(mode) then parsed.colorMode = mode
+					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
+				end 'colorArg'
+			end 'colorFlag' else if arg.startsWith(TestFilterShortPrefix) 'shortFilterWithValue'
+				parsed.filter = try CommandLine.optionValue(arg) otherwise ""
+			end 'shortFilterWithValue' else if arg == TestFilterShortFlag 'shortFilterSeparated'
+				// `-t PATTERN` — the separated form, which is what a shell user types when the pattern has
+				// spaces. A `-t` with nothing after it is REFUSED rather than ignored: a filter that named
+				// no pattern would select EVERYTHING, which is the opposite of what was typed.
+				i = i + 1
+				parsed.filter = try args.get(i) otherwise ""
+				if parsed.filter.isEmpty() 'namesNoPattern'
+					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
+				end 'namesNoPattern'
+			end 'shortFilterSeparated' else if arg.startsWith("--log=") 'logFlag'
 				let spec = try CommandLine.optionValue(arg) otherwise ""
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
-				end 'badSpec'
+				end 'badSpec' else 'goodSpec'
+					// ⚠ RECORDED, because `test` SILENCES the compiler's own INFO chatter — and must not do so
+					// behind the back of a caller who explicitly asked for it. See
+					// `TestCommand.quietTheBuildChatter`.
+					parsed.logOverridden = true
+				end 'goodSpec'
 			end 'logFlag' else if arg.startsWith("-") 'unknownFlag'
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'unknownFlag' else 'positional'

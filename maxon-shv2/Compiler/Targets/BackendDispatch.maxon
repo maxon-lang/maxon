@@ -23,10 +23,6 @@
 // Linux/macOS/wasi entry stubs + `writeElf`/`writeMachO` dispatch arrive at their
 // milestones.
 
-// The user program's entry function — `mrt_start` calls it, then bridges its
-// R8 return value to ExitProcess.
-export let UserEntryName = "main"
-
 // `mrt_start`'s frame: 32 bytes of Win64 shadow space for the calls it makes, and
 // NOTHING else. The OS enters the stub with rsp ≡ 8 (mod 16), as if via `call`; the
 // stub's own `push rbp` moves it to ≡ 0, so an exact-multiple-of-16 reservation keeps
@@ -131,7 +127,7 @@ end 'buildBackend'
 // from the module — see `StdToWasm.appendLeakGate`.
 function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, funcNames: funcNames)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, funcNames: funcNames, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
@@ -175,7 +171,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
 	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
 	// never installed does not link.
-	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, debugStream: stdModule.debugStream)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, debugStream: stdModule.debugStream, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -296,13 +292,17 @@ end 'refuseDuplicateChunkName'
 // whether `__gt_drain_at_exit` exists to be called. It rides the INSTALLATION bit rather than a probe of the
 // module for this file's own recorded reason: dead-function elimination takes installed functions back out,
 // so *"does the module still contain X"* is not a question about the runtime X belongs to.
-function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool)
+//
+// `entryFunction` is `Project.entryFunctionName` — the ONE place this build's entry is written down. The
+// stub calls whatever it names, so a build that enters somewhere other than `main` needs no arm of its own
+// here; see that field.
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, entryFunction ByteArray)
 	match target.os 'os'
-		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream)
+		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, entryFunction: entryFunction)
 		// ⛔ The Linux stub takes no `debugStream`: the producer's three host primitives are x64-windows
 		// only and `--debugstream` is REFUSED at the command line on every other target (see
 		// `Main.debugStreamSupports`), so this arm can never be reached with the flag on.
-		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads)
+		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, entryFunction: entryFunction)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
 	end 'os'
@@ -331,7 +331,7 @@ end 'augmentWithRuntime'
 // at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
 // one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
 // saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
-function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool)
+function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -345,7 +345,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	// nothing and has no live value to preserve across it, so it is a bare call — `__module_init`'s shape.
 	appendDebugStreamCall(module, block: block, debugStream: debugStream, callee: DsInitName)
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
-	module.appendOp(block, op: TargetOp.callDirect(UserEntryName.toByteArray()))
+	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 
@@ -477,7 +477,7 @@ end 'appendExitCodePassThroughCall'
 // shadow space to reserve (raw syscalls carry no imports, and shv2 functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
-function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool)
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -487,7 +487,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	// rsp restored, so the following `call main` still lands main at rsp≡8 (mod 16).
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
-	module.appendOp(block, op: TargetOp.callDirect(UserEntryName.toByteArray()))
+	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)

@@ -1083,6 +1083,8 @@ type StdToX64Lowering
 			osEnvBlock to osEnvBlockFree gives 0
 			// G3: an ordered load/store is one instruction with no argument marshalling at all.
 			loadAcquire or storeRelease gives 0
+			// `GetFileType` takes ONE argument, so nothing overflows onto the stack — `osEnvBlockFree`'s case exactly.
+			osHandleFileType gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1274,6 +1276,7 @@ type StdToX64Lowering
 				osFileOpenWriteExecutable then break 'term'
 				osEnvBlock to osEnvBlockFree then break 'term'
 				loadAcquire or storeRelease then break 'term'
+				osHandleFileType then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1380,6 +1383,7 @@ type StdToX64Lowering
 				osEnvBlock to osEnvBlockFree then break 'isTheCompare'
 				// G3: `mov` writes no flags, so neither ordered access can be the last flag-writer.
 				loadAcquire or storeRelease then break 'isTheCompare'
+				osHandleFileType then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1509,6 +1513,7 @@ type StdToX64Lowering
 			osEnvRead(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsEnvRead(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstBlock: dstBlock)
 			osEnvBlock(resultId) then self.lowerOsEnvBlock(resultId, dstBlock: dstBlock)
 			osEnvBlockFree(blockPtrId) then self.lowerOsEnvBlockFree(blockPtrId, dstBlock: dstBlock)
+			osHandleFileType(resultId, handleId) then self.lowerOsHandleFileType(resultId, handleId: handleId, dstBlock: dstBlock)
 			osProcessTerminate(handleId, exitCodeId) then self.lowerOsProcessTerminate(handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1682,6 +1687,7 @@ type StdToX64Lowering
 			osFileOpenWriteExecutable then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osEnvBlock to osEnvBlockFree then panic("lowerStdToX64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or storeRelease then panic("lowerStdToX64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
+			osHandleFileType then panic("lowerStdToX64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2816,6 +2822,15 @@ type StdToX64Lowering
 		self.requireWin64Import("osEnvBlockFree")
 		self.lowerOsWin64Call1(IatSlot.FreeEnvironmentStringsA, arg0: blockPtrId, dstBlock: dstBlock)
 	end 'lowerOsEnvBlockFree'
+
+	// `GetFileType(handle)` — one register argument, the file-type DWORD in RAX. The RAW word is what the
+	// result carries: masking and comparing it is the CALLER's, in the target-neutral builder, for
+	// `StdOp.osHandleFileType`'s stated reason — one lane cannot own a test every lane has to make.
+	function lowerOsHandleFileType(resultId ValueId, handleId ValueId, dstBlock IrBlock)
+		self.requireWin64Import("osHandleFileType")
+		self.lowerOsWin64Call1(IatSlot.GetFileType, arg0: handleId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsHandleFileType'
 
 	// `TerminateProcess(handle, exitCode)` — two register arguments; the BOOL is discarded (a child that has
 	// already exited answers FALSE, which is the same outcome as success for the deadline this serves).
@@ -4266,6 +4281,7 @@ type StdToX64Lowering
 			osFileOpenWriteExecutable gives false
 			osEnvBlock to osEnvBlockFree gives false
 			loadAcquire or storeRelease gives false
+			osHandleFileType gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -4427,6 +4443,7 @@ type StdToX64Lowering
 			osFileOpenWriteExecutable panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osEnvBlock to osEnvBlockFree panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an environment-block read or release, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			loadAcquire or storeRelease panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an ordered load or store, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osHandleFileType panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHandleFileType`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

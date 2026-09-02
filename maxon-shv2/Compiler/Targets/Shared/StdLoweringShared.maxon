@@ -727,6 +727,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// ordered store defines nothing, exactly as `storeIndirect` defines nothing.
 		loadAcquire(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
 		storeRelease then break 'result'
+		// The terminal question defines the file-type word `GetFileType` answers in EAX — an integer, so a
+		// GPR, exactly as the priority read above classes `GetPriorityClass`'s.
+		osHandleFileType(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1102,6 +1105,7 @@ export type ScaledIndexFolds
 			// address, so there is nothing for the indexed form to absorb. Declining to fuse is always safe:
 			// the address op then emits its own `lea` and the access reads it.
 			loadAcquire or storeRelease then break 'mem'
+			osHandleFileType then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 
