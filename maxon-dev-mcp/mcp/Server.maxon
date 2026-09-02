@@ -321,16 +321,22 @@ end 'schemaFieldsForRunProgram'
 // fmt
 // -----------------------------------------------------------------------------
 //
-// NO `compiler` FIELD — `maxon fmt` is a C# bootstrap command and shv2 has no
-// formatter, so the tool is fixed to the bootstrap rather than offering a choice
-// one of the two answers with a usage dump.
-let FmtDescription = "Format a Maxon snippet or file via `maxon fmt` (C# bootstrap). Files are formatted in-place; snippets return the formatted text."
+// `compiler` is OPTIONAL here, where `run_program` makes it required. The two commands
+// differ in what a caller with no opinion should get: the compilers deliberately DISAGREE
+// about programs, so `run_program` must be told which one is meant — but `fmt` is the one
+// place they are meant to agree BYTE FOR BYTE, gated by `tests/fmt/`, whose every
+// expectation is minted by running the bootstrap. Defaulting to the bootstrap is therefore
+// not picking a side; it is naming the reference.
+let FmtDescription = "Format a Maxon snippet or file via `maxon fmt`. Files are formatted in-place; snippets return the formatted text. `compiler` selects which binary formats (default csharp) — both produce byte-identical output, so pass `shv2` only when testing the port itself."
 
 function schemaFieldsForFmt(doc JsonDoc) returns SchemaFieldArray
 	let sourceSchema = schemaSource(doc)
 
+	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler formats. Default csharp. Both produce byte-identical output — `tests/fmt/` mints every expectation from the bootstrap and gates shv2 against it — so pass `shv2` only when testing the port itself.")
+
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
 	return fields
 end 'schemaFieldsForFmt'
 
@@ -378,10 +384,13 @@ end 'schemaFieldsForMmTraceAnalyze'
 // run_scale_test
 // -----------------------------------------------------------------------------
 //
-// NO `compiler` FIELD. Only shv2 has a `scale-test` command, so the tool is fixed to it — exactly
-// as `fmt` is fixed to the C# bootstrap. Offering the field would invite `compiler: "csharp"`
-// and answer it with a usage dump; see Compilers.maxon's header on never handing a compiler a flag
-// it has never heard of.
+// NO `compiler` FIELD. Only shv2 has a `scale-test` command, so the tool is fixed to it. Offering
+// the field would invite `compiler: "csharp"` and answer it with a usage dump; see Compilers.maxon's
+// header on never handing a compiler a flag it has never heard of.
+//
+// ⚠ This paragraph used to cite `fmt` as the parallel case. It is no longer one — shv2 gained `fmt`
+// and the tool now takes an optional `compiler`. The rule here is unchanged, but it stands on this
+// command being shv2-only, not on a sibling that has since moved.
 //
 // NO `updateRequired` EITHER. It rewrote committed memory goldens, and there are none: scale-test is
 // an instrument, not a gate. `note` is what RECORDS a run now, and it stands alone.

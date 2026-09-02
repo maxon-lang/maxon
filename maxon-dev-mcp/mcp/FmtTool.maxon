@@ -1,9 +1,10 @@
-// `fmt` MCP tool. Wraps `./bin/maxon fmt` so a client can format a
+// `fmt` MCP tool. Wraps either compiler's `fmt` so a client can format a
 // snippet (returning the formatted text inline) or a file (formatted
 // in-place on disk).
 //
 // Inputs (JSON):
-//   source: { kind: "file", path } | { kind: "snippet", code }
+//   source:   { kind: "file", path } | { kind: "snippet", code }
+//   compiler: "csharp" (default) | "shv2"
 //
 // Output (JSON):
 //   exitCode, success, durationMs, changed (true iff the formatter modified
@@ -25,13 +26,23 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "fmt: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
+	// ⭐ **BOTH COMPILERS FORMAT NOW**, so the caller says which. Optional rather than required,
+	// defaulting to the bootstrap: `fmt` is the one tool where the two are meant to agree
+	// byte for byte — `tests/fmt/` mints every expectation from the bootstrap and gates shv2
+	// against it — so a caller with no opinion is not being asked to pick between two answers,
+	// the way `run_program`'s REQUIRED `compiler` is.
+	let compiler = try optionalCompiler(argsDoc, argsId: argsId) otherwise (err) 'badCompiler'
+		cleanupResolvedSource(resolved, repoRoot: repoRoot)
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "fmt: {compilerArgErrorReason(err)}")
+	end 'badCompiler'
+
 	// Through `compilerBinaryPath`, which is where a compiler's binary LIVES — this hand-rolled
 	// its own `bin/maxon{exeSuffix()}` copy of that fact, as did `mm_trace_analyze`.
-	let csharpBinary = compilerBinaryPath(repoRoot, compiler: Compiler.csharp)
-	if not File.exists(csharpBinary) 'noCsharp'
+	let binary = compilerBinaryPath(repoRoot, compiler: compiler)
+	if not File.exists(binary) 'noBinary'
 		cleanupResolvedSource(resolved, repoRoot: repoRoot)
-		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "fmt: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
-	end 'noCsharp'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "fmt: `{binary.path}` does not exist. Build it first via the `build` tool.")
+	end 'noBinary'
 
 	let originalBytes = try File.readText(resolved.mainFile) otherwise 'readErr'
 		cleanupResolvedSource(resolved, repoRoot: repoRoot)
@@ -42,7 +53,7 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath
 	argv.push("fmt")
 	argv.push(resolved.mainFile.path)
 	let timing = Clock.nowMs()
-	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: fmtTimeoutMs) otherwise (err) 'spawn'
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: fmtTimeoutMs) otherwise (err) 'spawn'
 		cleanupResolvedSource(resolved, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "fmt: spawn failed: {err.displayReason()}")
 	end 'spawn'
