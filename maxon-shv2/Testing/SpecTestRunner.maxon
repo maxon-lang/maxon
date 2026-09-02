@@ -188,8 +188,8 @@ let RefusalIndent = "    "
 let FaultRipSuffixMarker = " at rip=0x"
 
 // The async-trace worker vocabulary the normalizer drops, and the ` [M=` tag it truncates at. These are the
-// REFERENCE's spellings — shv2 emits none of them (it is single-M) — but the canonical spec text does, so the
-// normalizer has to know them to reduce the EXPECTED side. See `normalizeAsyncTraceStderr`.
+// REFERENCE's spellings — shv2 emits none of them, for the reason `normalizeAsyncTraceStderr` states — but the
+// canonical spec text does, so the normalizer has to know them to reduce the EXPECTED side.
 let AsyncTraceWorkerMarker = " [M="
 
 // ============================================================================
@@ -4281,8 +4281,9 @@ function checkRunStderr(stderr SpecStderr, actual String, asyncTrace bool) retur
 end 'checkRunStderr'
 
 // ⭐⭐ **THE ASYNC-TRACE NORMALIZER — APPLIED TO BOTH SIDES, WHICH IS THE WHOLE POINT.** A green-thread trace
-// carries two kinds of line: the DETERMINISTIC ones a single-threaded scheduler always produces in the same
-// order (`spawn #`, `io_yield #`, `io_resume #`, `await #`), and the WORKER-LIFECYCLE ones
+// carries two kinds of line: the DETERMINISTIC ones a green thread emits from its OWN control flow, one per
+// act it performs and in the order it performs them (`spawn #`, `io_yield #`, `io_resume #`, `await #`), and
+// the WORKER-LIFECYCLE ones
 // (`worker_start`/`worker_park`/`worker_wake`/`worker_exit`) whose count and position depend on how many OS
 // threads the scheduler happened to run and when they woke. Comparing the second kind byte-for-byte would pin
 // a timing accident. So both the expected text and the actual output are reduced to their deterministic subset
@@ -4291,8 +4292,12 @@ end 'checkRunStderr'
 //
 // The ` [M=N]` suffix names the OS thread a line came from and is dropped for the same reason.
 //
-// ⚠ shv2 emits neither today: it is single-M, so it has no worker lifecycle to report and never tags a line
-// with an M. The normalizer still has to run, because the SPEC text it is compared against has both.
+// ⚠ shv2 emits neither today, and ⛔ NOT because "it is single-M" — that premise expired when the default
+// processor count became the machine's, and shv2's scheduler really does start worker Ms for a program that
+// `spawn`s. The reason is narrower and is a property of shv2's TRACE EMITTER: its whole vocabulary is what
+// `GtRuntime.GtTraceTags` registers (`spawn`/`await`/`try_await`/`io_yield`/`io_resume`/`sleep_yield`/
+// `sleep_resume`), which has no worker-lifecycle event in it, and `emitGtTraceLine` appends no M tag to any
+// of them. The normalizer still has to run, because the SPEC text it is compared against has both.
 function normalizeAsyncTraceStderr(text String, asyncTrace bool) returns String
 	if not asyncTrace 'notATraceCase'
 		return text

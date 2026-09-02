@@ -99,13 +99,23 @@
 // it is not a distinct concern, it is 8192 written twice, which is how a page-size change silently leaves
 // the map indexing one geometry and the class table another.
 //
-// ⚠ **NO LOCK, AND THAT IS INHERITED RATHER THAN CHOSEN.** shv2's existing `__slab_alloc` bumps a `.data`
-// cursor with a plain load/store pair and no synchronization, so the layer beneath it adding one would buy
-// nothing while the layer above it stays racy. v1's SLOW PATH holds `__slab_lock` across the callers of
-// these (`__slab_alloc`'s refill, every `__slab_mcentral_*`), which is why it also needs `__slab_init_done`
-// and a separate `__slab_arena_init` entry point — to run the lock's initialization exactly once. ⇒
-// **FOLLOW-UP, NAMED: locking the whole slow path**, allocator and arena together, at the point green
-// threads can run these on more than one OS thread.
+// ✅ **NO LOCK OF ITS OWN, BECAUSE THE CALLER HOLDS ONE — AND THAT IS THE FOLLOW-UP THIS PARAGRAPH USED TO
+// DEFER, NOW DISCHARGED.** It read *"shv2's existing `__slab_alloc` bumps a `.data` cursor with a plain
+// load/store pair and no synchronization, so the layer beneath it adding one would buy nothing while the
+// layer above it stays racy"*, and named **"locking the whole slow path, allocator and arena together, at
+// the point green threads can run these on more than one OS thread"**. That point arrived with the default
+// processor count, and S5 had already paid for it: `SlabRuntime` holds `__slab_lock` across every call into
+// this file on the allocate and release paths — `__slab_refill` takes it before `__slab_arena_alloc_chunks`
+// and `__slab_arena_map_set` and releases it after installing the span, `__slab_scavenge` holds it from its
+// entry through `__slab_arena_scavenge`, and `__slab_meta_alloc` and `__slab_span_destroy` state the same
+// requirement as a documented precondition rather than re-acquiring it. So this file needs no lock — for
+// v1's reason (*"the slow path is locked by its caller"*), not for the absent one it used to give.
+//
+// ⚠ **ONE ENTRY POINT IS REACHED WITHOUT THE LOCK: `__slab_arena_map_get`, from
+// `SlabRuntime.__slab_drain_remote`'s walk**, which is a cross-P path and therefore exactly where a second M
+// is. It is a READ of the reverse map, and it is named here because "the caller holds the lock" is the
+// sentence above and this is its one exception — not because the exception has been shown to be safe. It
+// has not been measured either way.
 //
 // ⚠ **AND THERE IS NO `__slab_init` / `__slab_init_done` HERE FOR A SECOND REASON THAT SURVIVES THE LOCK.**
 // The `.data` image IS the initialization, exactly as `MmRuntime`'s slab cursor's zero means "no arena yet":

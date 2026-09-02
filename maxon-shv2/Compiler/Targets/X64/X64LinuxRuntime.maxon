@@ -51,8 +51,10 @@ end 'x64OsCallKind'
 // ⚠ `exit_group` (231), NOT `exit` (60) — a DELIBERATE DIVERGENCE from v1, which emits 60, and the same
 // divergence the arm64 side makes (94 not 93). `exit` terminates the calling THREAD; `exit_group`
 // terminates the whole thread group, which is what `main` returning means and what a C `_exit` invokes.
-// The two are indistinguishable in a single-threaded process, so this costs nothing today and stays
-// correct the day shv2 grows OS threads (P1.5) — at which point 60 would leave the others running.
+// The two are indistinguishable in a single-threaded process, which x64-linux still is
+// (`StdToX64Conversion.lowerOsThreadCreate` refuses off Windows), so this costs nothing HERE. ⚠ It is not
+// a bet on the future either: the arm64-linux twin ALREADY runs worker Ms through a real `clone`, and 93
+// there would leave them running — its block carries that measurement.
 export let X64LinuxSyscallWrite = 1
 export let X64LinuxSyscallMmap = 9
 export let X64LinuxSyscallExitGroup = 231

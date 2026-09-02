@@ -20,11 +20,24 @@ program, which is what the cases below drive:
 | **the ownership stamp** | every span carries the P that owns it; a cached span owned by somebody else is a MISS, not something to pop |
 | **the remote-free queue** | a free by a P that does not own the slot's span CAS-pushes it onto the OWNER's Treiber stack, and the owner replays the chain on its next allocation slow path |
 
-⛔⛔ **A SPEC CASE CANNOT SET `MAXON_MAX_PROCS`, SO NOTHING BELOW TESTS TWO PROCESSORS.** The harness
-gives a case `Args:` and no environment, and the processor count is read once from `MAXON_MAX_PROCS` at
-scheduler start — so the whole multi-M half of S5 is out of reach from here and the cases below do not
-pretend otherwise. **The multi-processor gate is `maxon-shv2/track0/alloc-torture.maxon` driven across
-`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}`**, which is a harness program precisely because a spec cannot be one.
+⛔⛔ **THIS PARAGRAPH SAID A SPEC CASE COULD NOT SET `MAXON_MAX_PROCS`, AND THAT HAS EXPIRED** — the harness
+gained a per-case processor marker (`specs-shv2/sched-default-procs.md` owns it), and the default is now the
+machine's processor count rather than 1, so an unmarked case is already multi-processor on any ordinary
+host. The last case in this file uses that marker to pin ONE processor, which is a deliberate choice and not
+the old limitation.
+
+⚠ **BUT THE SENTENCE'S CONCLUSION SURVIVES ITS REASON, AND THAT IS THE USEFUL PART.** Nothing here tests two
+processors, because a committed case cannot: the multi-M properties need the OS to actually run a second
+machine while twelve harness workers compete for the box, and it sometimes does not. MEASURED, twice, on
+this tree — a multi-processor version of the last case failed **1 run in 6** at eight messages, and failed
+1 in 6 again in a version that WAITED for the property across up to 500 waves. `pin-matrix.sh:100-137` had
+already hit the same wall from the other side.
+
+⚠ **AND THE OLD SENTENCE NAMED THE WRONG GATE.** It called `track0/alloc-torture.maxon` "the
+multi-processor gate", which EC10 ended: its work is `async`, an `async` frame is a coroutine of its caller,
+and that program now reads `workers=1` at every count — a fact this file's own later paragraphs already
+record. The multi-processor readings come from the SPAWN family (`service-torture`, `service-fanin-torture`)
+driven by `track0/pin-matrix.sh`, which runs standalone and sweeps the count.
 
 What a ONE-processor program CAN reach, and what each case below is for:
 
@@ -41,10 +54,17 @@ What a ONE-processor program CAN reach, and what each case below is for:
   observed that sentinel would be a double free, and the runtime aborts (`slabFreeOfParkedSpan`, exit
   89) rather than pushing onto a span that is already fully free.
 
-⚠ **WHAT IS NOT REACHABLE FROM HERE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the remote-free
-Treiber push and its drain, the ownership gate actually REJECTING a span, two threads contending for the
-raw row, and — since EC8 — whether the traffic counters are stepped ATOMICALLY. All four need a second OS
-thread. They were verified by measurement instead — see the rung's report and `track0/`.
+⚠ **WHAT IS NOT REACHABLE FROM HERE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the ownership gate
+actually REJECTING a span, two threads contending for the raw row, and — since EC8 — whether the traffic
+counters are stepped ATOMICALLY. Those need a second OS thread crediting the same word, and were verified
+by measurement instead — see `track0/`.
+
+⭐ **THE REMOTE-FREE TREIBER PUSH IS NOW COUNTABLE, WHICH IS NOT THE SAME AS BEING PINNED HERE.**
+`__Builtins.slabRemoteFreeCount()` sums a per-P counter, so the road that `service-torture` and
+`service-fanin-torture` have driven since SV1 finally moves a number instead of being believed. ⚠ **The
+non-zero reading is `track0`'s and not this file's** — see the last case for the measurement that says why.
+What this file pins is the counter's other edge: at one processor it must be exactly **0**, because a
+counter that answers non-zero where no free can cross is counting the wrong frees.
 
 ⚠ **EVERY CASE HERE CARRIES A `targets:` MARKER, AND THAT IS A PROPERTY OF THE SUBJECT RATHER THAN A
 CONVENIENCE.** All are green-thread programs, because sharding is only compiled into a program that has a
@@ -379,7 +399,9 @@ inequality with a fudge factor.
 ⚠⚠ **WHAT THIS DOES NOT PIN, BECAUSE THE HARNESS CANNOT: THE `lock` PREFIX.** `emitGlobalAccumulate`
 emits an `atomicRmw` when the program has green threads and a plain load/add/store when it does not, and
 telling those two apart needs a second M crediting the same column at the same instant — which needs
-`MAXON_MAX_PROCS>1`, which a spec case cannot set (see the note above). At one processor the plain form
+more than one processor. ⛔ This used to add *"which a spec case cannot set"*, and that expired when the
+per-case processor marker landed: a case CAN ask for four now, and the case at the end of this file does.
+At one processor the plain form
 is exact too, so this case passes either way and does not claim otherwise. That half is measured with
 `track0/alloc-torture.maxon` across `MAXON_MAX_PROCS ∈ {1, 2, 4, 12}`, where the leak gate (exit 101) IS
 the lost-update oracle — EC8 measured it clean with the atomic and exit 101 at 2, 4 and 12 with the
@@ -392,6 +414,15 @@ on one M and `workers=1` at every `MAXON_MAX_PROCS`. It still proves determinism
 longer discriminates the `lock` prefix. ⚠ **This does NOT mean the counters went plain** — `emitGlobalAccumulate`
 keeps its `multiM` arm, and a `.data` word is reachable from the IOCP completion thread whatever `async`
 does. It means the ORACLE for that arm is waiting on `spawn`, which is where a second M comes back.
+
+⚠⚠ **`spawn` HAS LANDED, AND THIS DEBT IS THEREFORE DISCHARGEABLE AND NOT DISCHARGED — SAID PLAINLY SO IT
+IS NOT READ AS PAID.** The condition the paragraph above names as missing is available today: a spawned
+program at four processors really does put two Ms on one column. What the case at the end of this file adds
+is NOT that — it observes that the remote-free ROAD IS TAKEN (`slabRemoteFreeCount() > 0`), which is a
+different subject from whether a contended column loses an update. ⇒ **the `lock`-prefix oracle is still
+owed**, and what it needs is this case's two waves driven by `spawn` rather than `async`, with the atomic
+forced off as the positive control that `alloc-torture` used to be. Whoever writes it should read EC8's
+measurement first: exit 101 at 2, 4 and 12 with the atomic off, clean with it on.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Count = int(0 to 65536)
@@ -451,4 +482,97 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: slab-sharding.a-local-free-is-never-counted-as-a-remote-one -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- procs: 1 -->
+⭐ **`__Builtins.slabRemoteFreeCount()` EXISTS BECAUSE THE CROSS-P FREE HAD PRODUCERS AND NO OBSERVER.** A
+box `main` allocates and a `spawn`ed service drops is released by whichever machine ran that receiver —
+`SlabRuntime`'s remote-free road, a CAS push onto the owning P's Treiber stack. `service-torture` and
+`service-fanin-torture` drive thousands of those, and `track0/README.md` said what that was worth: the road
+was **exercised but not observed**. This counter is the observation; it is per-P and summed like
+`schedStealCount()`, so it costs no `.data` word and no golden churn.
+
+⭐⭐ **WHAT THIS CASE PINS IS THE HALF THAT IS DETERMINISTIC: AT ONE PROCESSOR THE ANSWER IS EXACTLY ZERO.**
+Every free in a one-P program is local by construction, so a counter that ever answers non-zero here is
+counting the wrong frees — which is a real defect and the one this case exists to catch. It runs the same
+spawn-and-move traffic the multi-processor reading uses, so the boxes genuinely travel between green
+threads; what they cannot do at one processor is travel between MACHINES.
+
+⛔⛔ **THE OTHER HALF — "a remote free ACTUALLY HAPPENS" — IS NOT A SPEC CASE, AND THAT WAS MEASURED RATHER
+THAN ASSUMED.** Two versions were written and both were flaky under suite load: eight messages failed 1 run
+in 6, and so did a version that **waited** for the property, sending up to 500 waves and stopping the instant
+a box crossed. The reason is structural, not a matter of scale: `main` sends and then awaits, so main's own
+driver runs the receivers INLINE on main's machine unless a worker M steals one first — and whether the OS
+schedules that worker while twelve harness workers are competing is not something the program decides.
+`pin-matrix.sh:100-137` had already measured the same wall from the other side: at total CPU saturation
+*both* 400 and 4,000 rounds failed 40 of 40, and *"no program-side change can fix that"*.
+
+⇒ **A committed case that needs the OS to co-operate is a flake, so the multi-M reading lives in `track0/`**,
+which runs standalone rather than under a twelve-way load, sweeps the processor count, and already asserts
+the same class of property (`steals > 0` at every effective N ≥ 2) for the spawn family. ⚠ **This is a
+statement about where the reading belongs, not a retreat from taking it** — the counter is read there, and a
+green run of this case plus a green `pin-matrix.sh` row is the pair.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias SinkHandleArray = Array with Sink.handle
+typealias CountPromise = Promise with (Integer, ServiceError)
+typealias CountPromiseArray = Array with CountPromise
+
+let sinkCount = 8
+let waves = 40
+
+type Sink
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(s String) returns Integer
+		self.seen = self.seen + s.count()
+
+		return 1
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	var sinks = SinkHandleArray.create()
+	var i = 0
+	while i < sinkCount 'spawnEach'
+		sinks.push(spawn Sink.create())
+		i = i + 1
+	end 'spawnEach'
+
+	var delivered = 0
+	var wave = 0
+	while wave < waves 'waves'
+		var replies = CountPromiseArray.create()
+		var k = 0
+		while k < sinkCount 'sendEach'
+			let s = try sinks.get(k) otherwise panic("sinks.get OOB at {k}")
+			replies.push(s.take("payload-{k}-{wave}"))
+			k = k + 1
+		end 'sendEach'
+
+		var n = 0
+		while n < sinkCount 'collect'
+			let p = try replies.get(n) otherwise panic("replies.get OOB at {n}")
+			delivered = delivered + (try await p otherwise 0)
+			n = n + 1
+		end 'collect'
+		wave = wave + 1
+	end 'waves'
+
+	print("delivered={delivered} remote={__Builtins.slabRemoteFreeCount()}\n")
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+delivered=320 remote=0
+```
+```exitcode
+0
 ```

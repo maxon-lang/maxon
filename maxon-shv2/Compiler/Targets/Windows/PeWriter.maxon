@@ -134,7 +134,8 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 //
 // `CreateProcessA`/`GetExitCodeProcess`/`WaitForSingleObject`/`WaitForMultipleObjects`/`CloseHandle` (P1.5
 // subprocess seed) are the green-thread SUBPROCESS substrate's spawn + yielding-wait + reap: `__gt_process_run`
-// spawns a child with CreateProcessA and parks the GT; the scheduler's netpoll blocks the single M on
+// spawns a child with CreateProcessA and parks the GT; the scheduler's netpoll blocks the M that holds the
+// single-poller claim (`GtRuntime.GtProcPollerLabel`) on
 // WaitForMultipleObjects (or per-handle WaitForSingleObject polls) and, once a child exits, reads its code with
 // GetExitCodeProcess and closes both handles. They lower from the Std `osProcessSpawn`/`osProcessExitCode`/
 // `osWaitHandles`/`osWaitHandle`/`osCloseHandle` ops. APPENDED AFTER `Sleep` so every existing slot INDEX (and

@@ -318,6 +318,29 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.greenThreads)
 	end 'select'
 
+	// ⭐⭐ **THE THREE PER-P COUNTER SUMS — the select's case exactly, one band over.** Each is a walk of
+	// `__sched_procs`, so asking one INSTALLS the whole scheduler (`RuntimeUsage.recordCallUsage` routes all
+	// three to `recordGtUsage`), and a lane with no green-thread floor therefore has no TLS slot for the
+	// install to reach: it died in a runtime emitter that knows it is x64-windows-only rather than at the
+	// call. MEASURED 2026-09-02 on a four-line `__Builtins.schedRetakeCount()` program —
+	// `panic at SchedRuntime.maxon:2078: tlsSlotArrayBase: wasi has no per-OS-thread slot this scheduler`
+	// (wasm32-wasi) and `panic at StdToX64Conversion.maxon:3719: lowerTlsSetValue: TlsSetValue is
+	// x64-windows only` (x64-linux) — which is the `__gt_await_any` paragraph's own argument arriving late:
+	// a builtin that turns on `usesGt` and is not named here is a door left open.
+	//
+	// ⚠ **THE ROSTER IS THE ONE `RuntimeUsage` ASKS, NOT A SECOND COPY OF IT.** Both halves of what these
+	// three names mean — install the scheduler, require its floor — read `isSchedPerProcSumCallee`, which is
+	// why a fourth per-P sum cannot arrive gated at one end and open at the other.
+	//
+	// ⚠ **THEIR BAND-MATES `__sched_max_active_workers` AND `__sched_processor_count` ARE DELIBERATELY
+	// ABSENT**, for the reason the paragraph on the first of them gives below: each is one `.data` load and a
+	// `ret`, which lowers on every target shv2 emits, and neither sets `usesGt`.
+	// `specs-shv2/builtins-cpu-parallel.md` pins that acceptance, which is what keeps this a NARROW gate
+	// rather than a family-wide one.
+	if isSchedPerProcSumCallee(callee) 'perProcSums'
+		return CalleeFacility.needs(HostFacility.greenThreads)
+	end 'perProcSums'
+
 	// The two subprocess surfaces whose entries live in the SCHEDULER band rather than behind the
 	// `__gt_subp_` prefix, named individually for that reason.
 	if callee.equals(GtProcessRunName) or callee.equals(IoReadName) 'spawnDoors'

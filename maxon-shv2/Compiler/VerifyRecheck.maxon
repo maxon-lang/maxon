@@ -195,15 +195,17 @@ end 'verifyDiagnosticsClear'
 // ONE: `maxon build` compiles one project and exits, `spec-test` compiles cases one after another,
 // and `verify-warm-rebuild` builds each probe on its own fresh project.
 //
-// => "Two projects can be open at once" is an untested premise, and three module-level latches rest on
-// it being false: `Diagnostics`' capture latch, `PhaseProbe.openPhaseSpans` and
-// `QueryEngine.sharedFileMemos` each document their soundness as resting on compiles in a process
-// being STRICTLY SERIAL. Interleaved IS still serial - no two compiles overlap - so this asks the
-// weaker and answerable question: does checking B change what A answers?
+// => "Two projects can be open at once" is an untested premise, and the module-level latches
+// `Diagnostics`' capture latch rosters all rest on it being false: each documents its soundness as
+// resting on compiles in a process being STRICTLY SERIAL. Interleaved IS still serial - no two compiles
+// overlap - so this asks the weaker and answerable question: does checking B change what A answers?
 //
-// It is deliberately NOT a concurrency test. shv2's green threads are single-M and a compile blocks
-// the loop, so genuinely parallel compiles are unreachable; a gate pretending otherwise would be
-// testing a configuration that cannot occur.
+// It is deliberately NOT a concurrency test. It used to justify that with "shv2's green threads are
+// single-M", which expired when the default processor count became the machine's; what makes genuinely
+// parallel compiles unreachable is that this compiler creates green threads only through `async` -
+// coroutines of their caller, never published where a worker M could take them - and never through
+// `spawn`. Diagnostics.maxon carries that argument. A gate pretending otherwise would be testing a
+// configuration that cannot occur.
 //
 // ⚠⚠ **READ THIS AS A REGRESSION PIN, NOT AS EVIDENCE OF A FIX — IT WAS GREEN THE FIRST TIME IT RAN,
 // AND NO SABOTAGE WAS FOUND THAT IT CATCHES.** Two were tried. Removing

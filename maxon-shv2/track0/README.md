@@ -11,14 +11,14 @@ in the repo had ever raced them. This harness builds a torture program that
 forces the cross-P paths and asserts the runtime stays correct as the core count
 varies.
 
-## ⛔ THREE DRIVERS, AND THEY MEASURE TWO DIFFERENT COMPILERS
+## ⛔ FOUR DRIVERS, AND THEY MEASURE TWO DIFFERENT COMPILERS
 
 This directory holds programs whose readings a spec case has no reason to assert:
 they sweep the processor count across four values plus the default, and a case
 that named one of those counts would be pinning the harness rather than the
 runtime. (A spec case CAN set the count now — `<!-- procs: N -->`, which
 `specs-shv2/sched-default-procs.md` owns — so the old reason given here, that it
-could not set an environment variable at all, has expired.) It holds **three**
+could not set an environment variable at all, has expired.) It holds **four**
 drivers, and the first question to ask of any reading from here is *which compiler
 produced the binary*.
 
@@ -30,7 +30,7 @@ produced the binary*.
 | `awaitany-index-race.sh` | **shv2** | does a driver with nothing runnable OBSERVE a promise another M answered, or sleep through it — read as the SELECT LATENCY, in the exit code (W219) |
 
 ⭐⭐ **AND ONE PROGRAM HERE HAS NO DRIVER ON PURPOSE: `runnext-starvation-probe.maxon`
-(MC1).** Every program the three drivers run asserts something about the SHIPPED
+(MC1).** Every program the four drivers run asserts something about the SHIPPED
 compiler; that one goes red only against a compiler with `runnext` BUILT, which no
 tree here produces — so a driver would assert nothing, for ever. It is committed
 because it is the measurement `SchedRuntime.POffRunnext` cites for keeping the slot
@@ -39,16 +39,22 @@ carries both readings and how to reproduce them.
 
 ⚠ **`validate.sh` DOES NOT MEASURE SHV2 AND NEVER DID.** It defaults `MAXON` to
 `$REPO/bin/maxon.exe`, and one of its checks calls `maxon monitor`, which shv2
-does not have. Everything it says is about the bootstrap's emitted runtime. The
-two shv2 drivers were added by EC10 because W212 drove these programs under shv2
-BY HAND ("240 runs at 1/2/7/12") and left no script, so its readings could not be
-reproduced.
+does not have. Everything it says is about the bootstrap's emitted runtime.
+`pin-matrix.sh` and `refcount-race.sh` were added by EC10 because W212 drove these
+programs under shv2 BY HAND ("240 runs at 1/2/7/12") and left no script, so its
+readings could not be reproduced; `awaitany-index-race.sh` joined them at W219.
 
 ```
-bash maxon-shv2/track0/validate.sh          # the bootstrap; REPS=N, default 15
-bash maxon-shv2/track0/pin-matrix.sh        # shv2; PROCS_LIST=, PROGRAMS=, MAXON=
-bash maxon-shv2/track0/refcount-race.sh 12  # shv2; reps as argv[1], MAXON=
+bash maxon-shv2/track0/validate.sh              # the bootstrap; REPS=N, default 15
+bash maxon-shv2/track0/pin-matrix.sh            # shv2; PROCS_LIST=, PROGRAMS=, MAXON=
+bash maxon-shv2/track0/refcount-race.sh 12      # shv2; reps as argv[1], MAXON=
+bash maxon-shv2/track0/awaitany-index-race.sh   # shv2; the exit code IS the reading (W219)
 ```
+
+⚠ **THE COUNT IN THIS SECTION SAID "THREE" IN FOUR PLACES WHILE THE TABLE LISTED FOUR, AND THE BLOCK
+ABOVE LISTED THREE.** `awaitany-index-race.sh` had been on disk since W219 without ever being added to
+either. A roster kept by hand in three places is a roster that goes stale in at least one of them — if a
+fifth driver arrives, the table, this block and the counts all move together or none of them do.
 
 Each exits `0` iff every check passes (`refcount-race.sh` records rather than
 asserts — see its header for why). Override the compiler with `MAXON=<path>`,
@@ -178,13 +184,31 @@ the before arm's wall time was spent NOT RUNNING.
 
 | Env var | Effect |
 |---|---|
-| `MAXON_MAX_PROCS=N` | Clamp the scheduler to at most `N` live Ps. `=1` forces single-threaded (no worker Ms). |
-| `MAXON_SLAB_STATS=1` | Dump `[slab-stats] lock_wait=<n> ownership_gate_miss=<n> remote_free=<n>` to stderr at exit. |
-| `MAXON_SLAB_GLOBAL_LOCK=1` | Bracket alloc/free in one global spinlock — the A/B bisection safety net. |
+| `MAXON_MAX_PROCS=N` | **Both compilers.** The processor count is `min(N, cpuCount)`, floor 1; a value that is not a count at all (unset, malformed, `< 1`, over 32 bytes) is `cpuCount`. `=1` forces single-threaded (no worker Ms). |
+| `MAXON_SLAB_STATS=1` | **Bootstrap only.** Dump `[slab-stats] lock_wait=<n> ownership_gate_miss=<n> remote_free=<n>` to stderr at exit. |
+| `MAXON_SLAB_GLOBAL_LOCK=1` | **Bootstrap only.** Bracket alloc/free in one global spinlock — the A/B bisection safety net. |
+
+⛔⛔ **THE FIRST ROW BRIEFLY SAID THE VARIABLE "lowers *and* raises", AND THAT IS BACKWARDS — IT IS THE ONE
+DIRECTION THE FLIP TOOK AWAY.** `SchedRuntime.emitResolveMaxProcs` settles the count to `osCpuCount`, or to
+`min(requested, osCpuCount)` when the variable names one, and its own ceiling note says it in as many words:
+*"a request at or below the machine is taken EXACTLY … that direction is what the variable gained with the
+flip: it used to be able only to raise a default of 1."* ⇒ with the default already `cpuCount`, `N` can only
+LOWER or leave it alone; `MAXON_MAX_PROCS=32` on a 16-way box is 16, not 32. ⚠ **The one source of truth is
+`emitResolveMaxProcs`** — re-derive this row from it, not from this prose. `pin-matrix.sh` agrees:
+`effective_count()` is `min(N, HOST_CPUS)` and its `default` row is `HOST_CPUS` itself.
+⚠ **The other two rows are the BOOTSTRAP's knobs and did not say so**, even though
+this file already states that `validate.sh` measures only the bootstrap: shv2 exposes no slab-stats counter,
+so a reader setting `MAXON_SLAB_STATS=1` against an shv2 binary gets silence and no error.
 
 `remote_free` is the counter added for this harness (item 1a.3): it increments on
 every cross-P remote-free push in `__slab_free`, giving direct observability of
 the otherwise-invisible MPSC path.
+
+⚠ **shv2 COUNTS THE SAME EVENT AND DOES NOT EXPOSE IT THROUGH THIS VARIABLE — it is a LANGUAGE SURFACE.**
+`__Builtins.slabRemoteFreeCount()` sums a per-P word (`SchedRuntime.POffRemoteFreeCount`) credited at
+`SlabRuntime.emitSlabRemotePush`, so an shv2 program reads its own number instead of a stderr dump at exit,
+and `specs-shv2/slab-sharding.md`'s `a-box-freed-on-another-machine-takes-the-remote-free-road` asserts on
+it. That is why the `MAXON_SLAB_STATS` row above says BOOTSTRAP ONLY rather than "shv2 cannot see this".
 
 ## The four checks
 

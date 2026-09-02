@@ -4352,7 +4352,9 @@ Dispatch is decided by the receiver's TYPE, so no method ever changes meaning; a
 
 **A service can be gone.** `h.shutdown()` enqueues a poison pill behind everything queued, and dropping the last handle closes the mailbox, which drains it the same way. `stdlib/Builtins.maxon` declares `ServiceError.stopped` for the reply that will report it.
 
-**Services are `x64-windows` by substrate.** A running service reaches a green thread's hand-assembled context switch, which exists on one lane; a `spawn` compiled for `wasm32-wasi` or `arm64-macos` is refused with **E3104**, the same diagnostic `sleep` has always given there.
+**Services run wherever a green thread does: `x64-windows`, `arm64-macos` and `arm64-linux`.** A running service reaches a green thread's hand-assembled context switch, so the lane set is that switch's; a `spawn` compiled for `wasm32-wasi` or `x64-linux` is refused with **E3104**, the same diagnostic `sleep` has always given there.
+
+⛔ **This used to say services were `x64-windows` "by substrate" and named `arm64-macos` among the refusals.** Both halves were wrong, and the second was wrong in the more expensive direction — it described a lane that WORKS as one that is rejected, so a reader would have avoided it or filed a bug against a case that passes. **Derived, not guessed:** of the target markers in `specs-shv2/services.md`, **47 read `x64-windows, arm64-macos, arm64-linux`** and two read `x64-windows, arm64-macos`; the only refusal cases are `error.a-service-is-rejected-on-wasm` and `error.a-service-is-rejected-on-a-native-target`, and the latter is pinned to `x64-linux`. ⚠ **This sentence has one source of truth and it is those markers** — re-derive it from them rather than editing the prose if a lane moves.
 
 ### Yielding
 

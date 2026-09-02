@@ -160,8 +160,11 @@ export let GtOffTibStackLimit = 0x98
 // slot the authoritative GtLayout (`Arm64MacosGreenThread.maxon` / v1 `GtLayout`) calls `io_yielded`, so the
 // later subprocess/IOCP slices — whose in-flight-I/O fields (`io_result_val@0x60`, `io_handle@0x80`, …) fill
 // the 0x60–0xA0 gap this rung leaves ZEROED-BUT-UNUSED — graft on without moving a field. Its role at THIS
-// rung is documentation + the resume contract; single-M has no race, so it is a plain flag, not the
-// multi-M park-gate the reference uses it for.
+// rung is documentation + the resume contract, and it is a plain field rather than the multi-M park-gate the
+// reference uses it for because it is WRITTEN BY THE GREEN THREAD IT BELONGS TO AND READ BY NOTHING: the only
+// two writers are `buildGtSleep`'s park/resume pair and the syscall bracket's handoff, both storing through
+// `selfGt`, and no site loads it. ⛔ That used to be argued from *"single-M has no race"*, which expired when
+// the default processor count became the machine's — a per-GT word only its owner writes never needed it.
 let GtOffIoYielded = 0xA8
 
 // --- P1.5 dogfood slice 1a-ii: the IOCP overlapped-read handshake fields ---

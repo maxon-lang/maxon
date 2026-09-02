@@ -1,0 +1,13 @@
+// Test: builtins-cpu-parallel.error.the-per-processor-counters-are-refused-on-a-native-target
+function main() returns ExitCode
+	let steals = __Builtins.schedStealCount()
+	let retakes = __Builtins.schedRetakeCount()
+	let remote = __Builtins.slabRemoteFreeCount()
+
+	return (steals + retakes + remote) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3104: <fragment>:3:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_steal_count', which has no x64-linux implementation
+error E3104: <fragment>:4:27: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_retake_count', which has no x64-linux implementation
+error E3104: <fragment>:5:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__slab_remote_free_count', which has no x64-linux implementation

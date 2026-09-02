@@ -1004,6 +1004,40 @@ export function emitGlobalAccumulate(module StdModule, block IrBlock, label Byte
 	return prior
 end 'emitGlobalAccumulate'
 
+// ⭐⭐ **`record.field += delta`, ANSWERING THE COUNT AS IT STOOD BEFORE — `emitGlobalAccumulate`'s twin, one
+// STORAGE CLASS over.** That one steps a `.data` word reached through `globalAddr`; this one steps a word
+// inside a record the caller already holds a pointer to, which is what every PER-PROCESSOR counter is
+// (`SchedRuntime.POffStealCount`, `POffRetakeCount`, `POffRemoteFreeCount` — the three
+// `__Builtins.schedStealCount()` / `schedRetakeCount()` / `slabRemoteFreeCount()` sum). Its contract is that
+// one's in every respect a caller can observe: `multiM` has no default, and BOTH arms answer the PRIOR value
+// so no caller has to know which arm it got.
+//
+// ⛔⛔ **IT EXISTS BECAUSE THOSE THREE SPELLED THE SEQUENCE OUT THREE TIMES AND DISAGREED ON THE ONE THING
+// THAT MATTERS.** Two are single-writer — a P counts its own steals, sysmon is the only party that retakes —
+// and stepped with a plain load/add/store; the third is MPSC by construction and stepped with an
+// `atomicRmw`. The choice was made by writing a different sequence of ops at each site, so a fourth per-P
+// counter's author picks a flavour by copying whichever neighbour they happened to read. ⚠ **The wrong copy
+// does not fail loudly**: a plain step on a contended word LOSES COUNTS and answers a number that is merely
+// too small — which is precisely the lost update EC8 measured as exit 101 on the `.data` counter this
+// function's twin guards. ⇒ the sequence is written once; the DECISION stays an argument every caller states.
+export function emitFieldAccumulate(module StdModule, block IrBlock, record ValueId, offset ByteOffset, delta ValueId, multiM bool, ids ValueMinter) returns ValueId
+	if not multiM 'soleWriter'
+		let current = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
+		let stepped = emitBin(module, block: block, a: current, b: delta, opcode: StdBinOpcode.add, ids: ids)
+		emitStoreField(module, block: block, record: record, offset: offset, value: stepped)
+
+		return current
+	end 'soleWriter'
+
+	// The address is minted BEFORE the result, which is the order the hand-written site had and the order
+	// `emitFieldAddr`'s own two ops force: a `ValueMinter` hands out ids in emission order.
+	let addr = emitFieldAddr(module, block: block, record: record, offset: offset, ids: ids)
+	let prior = ids.mint()
+	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: addr, operandId: delta, opcode: StdAtomicRmwOpcode.add))
+
+	return prior
+end 'emitFieldAccumulate'
+
 // ⭐ **A NUL-TERMINATED C STRING IN A FRESH SLAB REGION — the shape every Win32 `A` entry point takes.**
 // One `__slab_alloc` of `len + 1`, one `u8` store per byte, and the terminator is the allocator's own zero
 // (the `+ 1` is what reserves the byte for it).
@@ -1738,9 +1772,22 @@ end 'emitLoadRefcount'
 // refcount is not and never was.
 //
 // ⚠ **THE ONE OS THREAD THAT IS NOT THE OWNER'S M REACHES EXACTLY TWO FUNCTIONS, AND THIS IS NOT ONE OF
-// THEM.** An emitted program creates OS threads at exactly two `osThreadCreate` sites: the IOCP completion
-// thread (`GtRuntime.buildIoInit`) and a worker M (`SchedRuntime.emitSchedWakeOrSpawn`, which has had no
-// caller with a producer since EC10 and waits for `spawn`). MEASURED from the emitted bytes of a program
+// THEM.** An emitted program creates OS threads at **three** `osThreadCreate` sites: the IOCP completion
+// thread (`GtRuntime.buildIoInit`), a worker M (`SchedRuntime.emitSchedWakeOrSpawn`), and the syscall
+// monitor (`SchedRuntime.emitSchedSysmonLazyStart`, W213-C3).
+//
+// ⛔ **THIS SAID "EXACTLY TWO", AND THE COUNT IS LOAD-BEARING RATHER THAN DECORATIVE — the plain refcount
+// rests on ENUMERATING the threads, so a missing one is a missing case.** Two things expired: `spawn` has
+// landed, so the worker M's "no caller with a producer" clause is gone; and W213-C3 added the monitor.
+// ✅ **The conclusion survives the third thread, and here is why rather than an assurance.** The monitor
+// runs with NO processor and never executes Maxon user code: its whole job is to read per-M state words,
+// claim a stuck processor and hand it on. It touches queues, status words and claims — every one of which
+// states its `MultiMSharing` class — and it never dereferences a box, so it cannot be a second writer of a
+// refcount. It is the same argument the worker M gets, arrived at differently: the worker is safe because
+// every refcount it touches belongs to the green thread it is RUNNING; the monitor is safe because it runs
+// none.
+//
+// MEASURED from the emitted bytes of a program
 // using `async`, a subprocess and a heap `String` — the completion thread's whole call graph is
 // `__io_completion_loop` → `__gt_coro_enqueue`, five Win32 IAT calls, one direct call, no other Maxon
 // function and not one `lock` prefix. A queue append is all it does; it never touches a box.

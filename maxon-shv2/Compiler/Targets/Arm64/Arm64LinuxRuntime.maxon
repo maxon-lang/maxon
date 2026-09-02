@@ -75,9 +75,12 @@
 //
 // ⚠ `exit_group` (94), NOT `exit` (93) — a DELIBERATE DIVERGENCE from v1, which emits 93. `exit`
 // terminates the calling THREAD; `exit_group` terminates the whole thread group, which is what a C
-// `_exit` actually invokes and what `main` returning means. The two are indistinguishable in a
-// single-threaded process, so this costs nothing today and stays correct the day shv2 grows OS
-// threads (P1.5) — at which point 93 would silently leave the other threads running.
+// `_exit` actually invokes and what `main` returning means. ⛔ **THIS USED TO READ *"the two are
+// indistinguishable in a single-threaded process, so this costs nothing today and stays correct the day
+// shv2 grows OS threads (P1.5)"*, AND THAT DAY HAS COME ON THIS LANE**: `osThreadCreate` here is a real
+// `clone` (`StdToArm64Conversion.lowerOsThreadCreate`), so a green-thread program runs worker Ms and the
+// divergence is load-bearing rather than free — 93 would end the calling thread and leave the others
+// running.
 export let Arm64LinuxSyscallWrite = 64
 export let Arm64LinuxSyscallMmap = 222
 export let Arm64LinuxSyscallExitGroup = 94
@@ -250,7 +253,10 @@ let LinuxFutexUnusedArg = 0
 // ⚠ **`mmap` RATHER THAN A `malloc` THIS LANE DOES NOT HAVE**, and rather than the slab, for the Darwin
 // twin's reason: the slab is Std-tier and reachable only through a `bl` the Std reachability walk cannot
 // see. A whole page for two words is the mapping granularity, not a choice, and these objects are
-// process-lifetime — one per P, and `DefaultMaxProcs` is 1.
+// process-lifetime — one per P. ⛔ That last clause used to read *"one per P, and `DefaultMaxProcs` is
+// 1"*; there is no such constant any more and the count is the machine's processors, so the waste is a
+// page per processor decided once at bring-up rather than the single page it was — still a fixed set,
+// still not a per-operation cost.
 //
 // ⚠ **THE PAGE COMES BACK ZERO-FILLED**, which `MAP_ANONYMOUS` guarantees, so the signal word needs no
 // explicit store — unlike Darwin's, whose `malloc` does not zero and which therefore writes every field.

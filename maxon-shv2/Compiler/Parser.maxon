@@ -5198,9 +5198,13 @@ let ParallelBoundaryArity = 0 as ParamCount
 //
 // ⚠ **THEY ANSWER TWO DIFFERENT KINDS OF QUESTION, AND THE DIFFERENCE DECIDES THEIR TARGETS.**
 // `cpuCount` asks the OS about the MACHINE and lowers on x64-windows alone (`__cpu_count`, refused
-// elsewhere with E3104); `schedMaxActiveWorkers` asks THIS COMPILER's scheduler about itself and lowers
-// everywhere, because shv2's scheduler is single-M and the answer is a constant. See
-// `CpuParallelRuntime`'s header, which owns that split — this file only routes the names.
+// elsewhere with E3104); `schedMaxActiveWorkers` asks THE RUNNING PROGRAM's own scheduler about itself
+// and lowers everywhere, because the answer is a `.data` word that scheduler maintains — a `globalAddr`
+// and a load, which every backend has. ⛔ This used to read *"because shv2's scheduler is single-M and
+// the answer is a constant"*, and both halves have expired: the mark has had a real writer since G1
+// (`__sched_worker_loop` raises it on entry), so it is a MEASUREMENT of what the scheduler did rather
+// than a constant. See `CpuParallelRuntime`'s header, which owns that split — this file only routes the
+// names.
 let BuiltinsCpuCountName = b"__Builtins.cpuCount"
 let BuiltinsSchedMaxActiveWorkersName = b"__Builtins.schedMaxActiveWorkers"
 
@@ -5278,6 +5282,26 @@ let BuiltinsSchedRetakeCountName = b"__Builtins.schedRetakeCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedRetakeCountArity = 0 as ParamCount
+
+// ⭐⭐ **`__Builtins.slabRemoteFreeCount()` — THE ALLOCATOR'S ONE OUTCOME QUERY, and the only way a program
+// can observe that a box was freed on a machine other than the one that allocated it.** It answers the sum of
+// every processor's remote-free counter, which is 0 on the one-processor default and rises the moment a
+// service running on one machine drops a payload built on another.
+//
+// ⛔⛔ **IT EXISTS BECAUSE THE CROSS-PROCESSOR FREE ROAD WAS EXERCISED AND NOT OBSERVED.**
+// `track0/service-torture` and `track0/service-fanin-torture` push thousands of heap boxes across machines in
+// each direction, and nothing anywhere read a number that would move if the road stopped being taken — a
+// regression routing every free down the LOCAL arm would have left both tortures and the whole suite green.
+// `specs-shv2/slab-sharding.md`'s `ok=yes` is what this makes an assertion rather than a hope.
+//
+// ⚠ **NEITHER REFERENCE DECLARES IT.** The C# bootstrap counts the same event, but only behind a
+// `MAXON_SLAB_STATS` build switch reporting to its own stderr dump — not a language surface — and v1 does not
+// build. The name is invented here on the argumentless-integer shape the family already has.
+// `SlabRuntime.SlabRemoteFreeCountName` owns what it costs; this file only routes the name.
+let BuiltinsSlabRemoteFreeCountName = b"__Builtins.slabRemoteFreeCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SlabRemoteFreeCountArity = 0 as ParamCount
 
 // ⭐⭐ **`__Builtins.schedProcessorCount()` — THE FOURTH SCHEDULER QUERY, AND THE ONLY ONE WHOSE ANSWER IS
 // NOT AN OUTCOME.** It reports how many Ps `MAXON_MAX_PROCS` resolved to — `min(requested, cpuCount())`,
@@ -74872,6 +74896,15 @@ export type Parser
 			if callee.equals(BuiltinsSchedRetakeCountName) 'schedRetakeCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedRetakeCountName, runtimeName: SchedRetakeCountName, arity: SchedRetakeCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedRetakeCount'
+
+			// ⭐ **THE ALLOCATOR'S OUTCOME QUERY**, whose shape is the two scheduler counts' exactly: an `int`
+			// answer, no arguments, nothing to own, and — like both of them — it sets `usesGt`, because the
+			// answer is summed by a walk over `__sched_procs` and there is nothing to walk without a scheduler.
+			// What differs is only WHOSE outcome it reports: those two say what the SCHEDULER did, this says
+			// what the ALLOCATOR did on the scheduler's machines. See `SlabRuntime.SlabRemoteFreeCountName`.
+			if callee.equals(BuiltinsSlabRemoteFreeCountName) 'slabRemoteFreeCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabRemoteFreeCountName, runtimeName: SlabRemoteFreeCountName, arity: SlabRemoteFreeCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'slabRemoteFreeCount'
 
 			// ⭐ **THE FOURTH SCHEDULER QUERY**, and the only one that asks about the SETTING rather than about
 			// the outcome: how many Ps `MAXON_MAX_PROCS` resolved to. Same door again — an `int` answer, no

@@ -2850,7 +2850,8 @@ type StdToX64Lowering
 	end 'lowerOsProcessExitCode'
 
 	// Lower `osWaitHandles(handleArrayPtr, count, timeoutMs)` to `WaitForMultipleObjects(count, handleArrayPtr,
-	// FALSE, timeoutMs)` through the IAT — the netpoll's single-M block on the parked children. Win64 args:
+	// FALSE, timeoutMs)` through the IAT — the netpoll's block on the parked children, performed by the M that
+	// holds the single-poller claim (`GtRuntime.GtProcPollerLabel`). Win64 args:
 	// count=rcx, handleArrayPtr=rdx, bWaitAll=FALSE=r8, timeoutMs=r9. No result captured (the netpoll re-scans).
 	function lowerOsWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'

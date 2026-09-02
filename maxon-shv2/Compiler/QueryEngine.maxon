@@ -165,11 +165,11 @@ end 'fileChanged'
 // `ContentHashSet`), which bounds the exposure to a set that is small, fixed and not chosen by user
 // input.
 //
-// ⚠⚠ **IT IS SOUND ONLY WHILE COMPILES IN A PROCESS ARE STRICTLY SERIAL, exactly as
-// `PhaseProbe.openPhaseSpans` and `Diagnostics`' capture latch are** — shv2's scheduler is single-M
-// and the pipeline holds no yield point, so two compiles cannot interleave. **A shared memo must not
-// become the reason to parallelise compiles inside one process**; that would invalidate all three at
-// once, and this one would then need a lock rather than a rewrite.
+// ⚠⚠ **IT IS SOUND ONLY WHILE COMPILES IN A PROCESS ARE STRICTLY SERIAL** — one of the four
+// module-level latches `Diagnostics`' capture latch rosters, and that comment carries the reason two
+// compiles cannot interleave. ⛔ The reason is no longer "the scheduler is single-M"; read it there.
+// **A shared memo must not become the reason to parallelise compiles inside one process**; that would
+// invalidate all four at once, and this one would then need a lock rather than a rewrite.
 var sharedFileMemos = SharedFileMemoMap.create()
 
 // How many distinct byte-contents this process is holding. Reported beside the per-compile hit

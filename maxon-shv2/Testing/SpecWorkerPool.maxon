@@ -14,6 +14,30 @@
 // API. This file does not use it.
 //
 // ============================================================================================
+// ⭐⭐ THIS PROCESS RUNS MAXON ON EXACTLY ONE M — AND ⛔ NOT BECAUSE "shv2 IS SINGLE-M"
+// ============================================================================================
+//
+// Four notes below lean on there being ONE OS thread running this file's Maxon — `JobKillGraceMs`,
+// `drainResultsThunk`, the `spokeAt` slot array's declaration and `silenceMs` — and all four used to say
+// so by citing a scheduler that no longer exists. The default processor count is the machine's since the
+// `DefaultMaxProcs` flip, and a green-thread program really does run on several Ms.
+//
+// What holds instead holds at EVERY `MAXON_MAX_PROCS`: a worker M is started only by
+// `__sched_wake_or_spawn`, reached only from the GREEN-THREAD arm of a publish door, and `spawn` is the
+// sole producer of green threads. **This harness spawns no service.** Its only concurrency is `async`,
+// and since EC10 an `async` frame is a COROUTINE of the green thread that created it — published only to
+// that thread's own queue, driven only by its chain of drivers, and so running on its M.
+// `SchedRuntime.maxon`'s header states the invariant; `specs-shv2/builtins-cpu-parallel.md`'s
+// `sched-max-active-workers-is-one-under-async` pins the reading.
+//
+// ⚠ The IOCP completion thread IS a second OS thread here — the workers' pipes are read through it — and
+// it is not a counter-example: its whole call graph is `__io_completion_loop` -> `__gt_coro_enqueue`, so
+// it re-readies a parked drain onto its owner's queue and runs none of this file.
+//
+// ⇒ the dispatcher and its drains interleave only at the drains' own yield points, which is exactly what
+// the four notes need. **A `spawn` added to this harness would end all four at once.**
+//
+// ============================================================================================
 // THE CONTRACT: `--workers=1` AND `--workers=N` PRINT BYTE-IDENTICAL STDOUT
 // ============================================================================================
 //
@@ -332,9 +356,10 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 // can exercise), and adding one to reach a kill this call already performs would be a second door onto
 // one act.
 //
-// It is SHORT because the call BLOCKS the scheduler's one OS thread — shv2 is single-M — and a worker
-// that has gone silent for its whole progress bound is not about to answer in the next 50 ms. It is
-// not zero because zero means "wait for ever" to `waitWithTimeout`.
+// It is SHORT because the call BLOCKS the one OS thread this process runs Maxon on (see the one-M
+// section at the top of this file for why there is exactly one, which is no longer "shv2 is single-M")
+// — and a worker that has gone silent for its whole progress bound is not about to answer in the next
+// 50 ms. It is not zero because zero means "wait for ever" to `waitWithTimeout`.
 let JobKillGraceMs = 50
 
 // The headroom the pool's idleness bound keeps over the interval it is actually measuring.
@@ -1279,8 +1304,11 @@ typealias SlotInstantArray = Array with InstantMs
 // tell a worker two seconds into a compile from one that stopped four minutes ago — and bounded the
 // whole job by an estimate for want of the distinction. `spokeAt` is the parent's own array, handed to
 // this thread by the spawn: `async` gives a managed argument its OWN REFERENCE to the same heap object
-// (`Parser.emitAsyncCall`), and shv2 is single-M with cooperative scheduling, so a write here is
-// immediately and atomically visible to the dispatcher — this GT yields only inside `readStdoutLine`.
+// (`Parser.emitAsyncCall`), and this drain is a COROUTINE of the dispatcher green thread — driven by the
+// dispatcher's own chain of drivers, on the dispatcher's own M (see the one-M section at the top of this
+// file; the old wording, "shv2 is single-M with cooperative scheduling", expired at the default flip).
+// So a write here is immediately and atomically visible to the dispatcher — this GT yields only inside
+// `readStdoutLine`.
 //
 // ⚠ IT STAMPS A CLOCK RATHER THAN COUNTING LINES, and the alternative is why: a counter would need the
 // dispatcher to remember the previous count AND when it changed — two more per-slot arrays and a second
@@ -1884,7 +1912,8 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	//
 	// ⚠ `spokeAt` IS THE ONE THIS LOOP DOES NOT OWN ALONE: each slot's drain green thread stamps its own
 	// entry as lines arrive (`drainResultsThunk`), which is the only way the parent can see a worker
-	// making progress before its job ends. Single-M cooperative scheduling makes that safe — see there.
+	// making progress before its job ends. What makes that safe is that the drain runs on the dispatcher's
+	// own M and yields only inside `readStdoutLine` — see there, and the one-M section at the top.
 	// HOW THIS LANE PERFORMS A SPEC'S EXECUTIONS, asked ONCE — see `progressDeadlineMs`, which is the
 	// only reader and is asked per busy slot per park.
 	let runStrategy = runStrategyFor(effectiveTarget)
@@ -2208,8 +2237,9 @@ end 'spawnReadyWorker'
 // says so (*"guards against bugs"*), but there both readings are taken by one thread. Here `since` is
 // stamped by the slot's DRAIN GREEN THREAD while `now` is read by the dispatcher, so "the stamp is no
 // newer than the park instant" is an ORDERING property rather than an arithmetic one — it holds today
-// only because nothing between the two yields (`waitWithTimeout` BLOCKS the single M rather than
-// yielding, which is what `JobKillGraceMs` says about it). That is a property of the current code, not
+// only because nothing between the two yields (`waitWithTimeout` BLOCKS this process's one M rather than
+// yielding, which is what `JobKillGraceMs` says about it — and the one-M section at the top of this file
+// says why there is one). That is a property of the current code, not
 // of the invariant, and what it would cost if it lapsed is not a wrong number: `InstantMs` is
 // `int(0 to u64.max)`, so a subtraction going below the range PANICS — taking the whole run down from
 // inside the one guard whose job is to stop a single bad worker doing exactly that.

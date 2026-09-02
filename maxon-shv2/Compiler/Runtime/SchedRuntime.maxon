@@ -14,13 +14,17 @@
 // > and never to a P ring or the global queue. A green thread runs on one M at a time. Therefore every
 // > refcount read-modify-write on a box happens on the M running that box's one owning green thread, and
 // > refcounts are plain (`MmRuntime.emitAdjustRefcount`). The cross-thread writers that remain — the IOCP
-// > completion loop re-readying a parked coroutine onto its owner's queue, and (once `spawn` exists) worker
+// > completion loop re-readying a parked coroutine onto its owner's queue, and worker
 // > Ms publishing, popping and stealing GREEN THREADS — touch queues, status words, counters and claims,
 // > every one of which states its `MultiMSharing` class; none touches a refcount.**
 //
 // ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
-// emitted program creates an OS thread at exactly two `osThreadCreate` sites: `buildIoInit`'s completion
-// thread and `buildSchedWakeOrSpawn`'s worker M. **A worker M is not a counter-example to the clause above
+// emitted program creates an OS thread at **three** `osThreadCreate` sites: `buildIoInit`'s completion
+// thread, `buildSchedWakeOrSpawn`'s worker M, and `emitSchedSysmonLazyStart`'s syscall monitor (W213-C3).
+// ⛔ **This said "exactly two" until the monitor landed, and the count is the argument** — an enumeration
+// with a member missing proves nothing. **The monitor is not a counter-example either**: it holds no
+// processor and runs no green thread, so it never dereferences a box; it reads per-M state words, claims a
+// stuck processor and hands it on. **A worker M is not a counter-example to the clause above
 // and never was**: it RUNS green threads, so every refcount it touches belongs to the one green thread it is
 // running — which is the invariant, not an exception to it. The completion thread is the one that owns no
 // green thread at all, and its whole Maxon call graph — read off the emitted bytes of a program using
@@ -61,6 +65,16 @@
 // a list in a comment cannot keep, because nothing makes the next slot join it. Every slot the six producers
 // in this runtime lay out now states its own class where it is created, and a slot whose author has not
 // decided does not compile. The classes and what each promises are on the enum.
+//
+// ✅ **THE PROSE SWEEP THIS PARAGRAPH TELLS YOU TO RUN WAS RUN AT THE DEFAULT FLIP, AND HERE IS WHAT IT
+// FOUND.** `MultiMSharing` covers the `.data` slots structurally; what it cannot cover is an ARGUMENT
+// somewhere else in the tree whose warrant is the machine count, and the grep turned up fourteen. Every
+// conclusion survived — none of them actually needed one machine — but the REASONS did not, and each now
+// states the one that holds: for the compiler's four module-level latches, `Diagnostics`' capture latch
+// (this compiler has no `spawn`, so its `async` frames are coroutines and it runs Maxon on one M at every
+// count); for the spec harness, `SpecWorkerPool`'s one-M section; for the netpoll's blocking wait, the
+// single-poller claim at `GtRuntime.GtProcPollerLabel`. **The class of defect is a comment that justifies
+// a real property with a premise that has expired, and it is not caught by anything the compiler runs.**
 //
 // ⚠⚠ **WHAT G2 FLIPPED, AND WHAT IT LEFT — THE SHORT FORM. The long form is at each slot.**
 //
@@ -1063,6 +1077,43 @@ let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 // steps it, and a reader that wants it exact reads it after its work has finished, which is when it is.
 let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 
+// ⭐⭐⭐ **HOW MANY SLOTS HAVE BEEN FREED ONTO THIS PROCESSOR'S REMOTE-FREE QUEUE BY SOMEBODY ELSE — the
+// reading `__Builtins.slabRemoteFreeCount()` sums, and the ONE way a program can observe that the
+// cross-processor free road was TAKEN rather than merely built.** `track0/service-torture` and
+// `track0/service-fanin-torture` push thousands of heap boxes across machines in each direction, and until
+// this slot existed nothing anywhere read a number that would move if that road stopped being taken: the
+// sharded allocator's remote arm was EXERCISED but not OBSERVED, so a regression that quietly routed every
+// free down the local arm would have left both tortures and the whole suite green.
+//
+// ⚠ **A PER-P WORD AND NOT A `.data` COUNTER, FOR `POffStealCount`'s REASON EXACTLY** — a `.data` word
+// appears in the `data {` section of every green-thread golden in the corpus, and this is per-processor
+// state. It sits beside the two counters above because it is the same shape asked of the same array, which
+// is why all three are summed by ONE parameterised body (`buildSchedPerProcSum`).
+//
+// ⛔⛔ **IT IS CREDITED TO THE **TARGET** P — THE ONE WHOSE QUEUE RECEIVES THE SLOT — AND NOT TO THE FREEING
+// P. THE CHOICE IS FORCED, NOT A PREFERENCE.** The sum is over every P either way, so the total is the same
+// number whenever both parties have a P; what differs is the case where the FREEING side has none.
+// `SlabRuntime.emitSlabCurrentP` answers `MspanOwningPNone` for three real situations — before
+// `__sched_init_procs` has run, on an OS thread holding no M (the IOCP completion thread for its whole life),
+// and on an M holding no P — and every one of those can free a box whose span a live P owns. That IS a
+// cross-processor free and it takes this road; crediting the pusher would have to store through a sentinel,
+// so it would need a guard, and the guard would DROP exactly those frees from the count. The target, by
+// contrast, is a live P by construction: `buildSlabFree` has already ruled out both `MspanOwningPNone` and
+// `MspanOwningPParked` before it reaches the push. ⇒ target-credit needs no branch and loses no free.
+//
+// ⚠⚠ **AND THAT IS WHY IT IS THE ONE PER-P COUNTER STEPPED WITH AN `atomicRmw` RATHER THAN A PLAIN
+// LOAD/ADD/STORE.** Its two neighbours are single-writer — a P counts its OWN steals, and sysmon is the only
+// party that retakes — so each may use a plain read-modify-write. This one is MPSC by construction, the same
+// many-producers property that makes the queue beside it a Treiber stack: every other machine in the process
+// may be crediting one P at the same instant, and a plain step would lose exactly the counts a contended run
+// exists to produce. One `lock xadd` on a path that already executes a CAS loop.
+// ⚠ All three step through `MmRuntime.emitFieldAccumulate`, whose `multiM` argument HAS NO DEFAULT for
+// `emitGlobalAccumulate`'s stated reason: the wrong answer here is a count that is merely TOO SMALL, which no
+// suite, no leak gate and no fixpoint can see — so the sequence is shared and the decision is not.
+// EXPORTED, unlike its two neighbours, because its one WRITER is in another file: the credit happens at
+// `SlabRuntime.emitSlabRemotePush`, where the slot is handed over. The sum stays here with the walk.
+export let POffRemoteFreeCount = POffRetakeCount + (PointerSlotBytes as ByteOffset)
+
 // ⭐⭐⭐ **THE DEFERRED PARK SLOT — the THIRD deferred-re-enqueue slot, and the one W218 needed (SV1).** The
 // two above hold a thread that is RUNNABLE and must not be discoverable until its registers are saved; this
 // holds one that is about to WAIT and must not be registered on the store that will wake it until the same
@@ -1077,7 +1128,7 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 //
 // ⚠ It is a `.data`-free slot for `POffStealCount`'s reason: a `.data` word would appear in the `data {`
 // section of every green-thread golden in the corpus.
-let POffPendingPark = POffRetakeCount + (PointerSlotBytes as ByteOffset)
+let POffPendingPark = POffRemoteFreeCount + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐⭐ **`__sched_pidle`'s LINK — Go's `p.link` as `pidleput`/`pidleget` use it (`proc.go:7425`/`:7454`),
 // and the slot that makes *"a processor with no machine"* a state this runtime can write down (W213-C2).**
@@ -1715,6 +1766,33 @@ export let SchedStealCountName = b"__sched_steal_count"
 // per-P word, and a second copy of that loop is one fact written twice.
 export let SchedRetakeCountName = b"__sched_retake_count"
 
+// ⭐⭐ **THE THREE PER-P COUNTER SUMS, AS ONE BAND — the roster that says "asking this question IS asking
+// for the scheduler".** They are `buildSchedPerProcSum`'s three names (below): one body, one walk of
+// `__sched_procs`, three field offsets. Two facts follow from that shared body and BOTH are asked through
+// here, so the membership is written down once:
+//
+//   • `RuntimeUsage.recordCallUsage` routes them to `recordGtUsage` — there is nothing to walk without
+//     `__sched_init_procs`, so the question installs the machinery it is about.
+//   • `TargetFacilities.calleeHostFacility` routes them to `HostFacility.greenThreads` — that machinery is
+//     the green-thread floor, so a lane without it must REFUSE the call at its own span (E3104).
+//
+// ⛔ **THE SECOND HALF WAS MISSING AND A LEGAL PROGRAM PANICKED THE COMPILER.** MEASURED 2026-09-02, a
+// four-line `__Builtins.schedRetakeCount()` program: `panic at SchedRuntime.maxon:2078: tlsSlotArrayBase:
+// wasi has no per-OS-thread slot this scheduler` on `--target=wasm32-wasi`, and `panic at
+// StdToX64Conversion.maxon:3719: lowerTlsSetValue: TlsSetValue is x64-windows only` on `--target=x64-linux`
+// — the scheduler install trampling a lane with no TLS substrate, naming a runtime emitter rather than the
+// call the user wrote. It is `TargetFacilities`' own standing warning made real: the `usesGt` half of a
+// callee's requirement and the E3104 half are ONE fact, and a name that declares only the first opens
+// exactly the door `__gt_await_any` was named individually to close.
+//
+// ⚠ **IT IS A NAME TEST OVER THREE NAMES AND NOT A PREFIX TEST**, for `isSchedRuntimeCallee`'s measured
+// reason one file over: the `__sched_` band also holds scheduler INTERNALS a program never writes, and the
+// third member does not wear that prefix at all — it is a `__slab_` name, because the number it reports is
+// the ALLOCATOR's (see `SlabRuntime.SlabRemoteFreeCountName`).
+export function isSchedPerProcSumCallee(callee ByteArray) returns bool
+	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName)
+end 'isSchedPerProcSumCallee'
+
 // ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
 // WHO CAN USE IT" — Go's `handoffp` (`proc.go:3147`), minus every arm shv2 has no subject for (W213-C3).**
 //
@@ -2154,10 +2232,15 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedSteal(module)
 	buildSchedFindRunnable(module)
 	buildSchedSweepDropped(module)
-	// The two per-P sums, from ONE body: they differ in the name they answer to and the field they read, and in
-	// nothing else. See `buildSchedPerProcSum`.
+	// The three per-P sums, from ONE body: they differ in the name they answer to and the field they read, and
+	// in nothing else. See `buildSchedPerProcSum`.
+	//
+	// ⚠ The third answers to a `__slab_` name because the number is the ALLOCATOR's — see
+	// `SlabRuntime.SlabRemoteFreeCountName` for why the counter is nonetheless a per-P word summed by this
+	// scheduler walk, and why that puts its body here rather than in `installSlabRuntime`.
 	buildSchedPerProcSum(module, name: SchedStealCountName, offset: POffStealCount)
 	buildSchedPerProcSum(module, name: SchedRetakeCountName, offset: POffRetakeCount)
+	buildSchedPerProcSum(module, name: SlabRemoteFreeCountName, offset: POffRemoteFreeCount)
 	buildSchedAnyExecuting(module)
 	buildSchedWorkerLoop(module)
 	buildSchedStartM(module)
@@ -2169,10 +2252,30 @@ export function installSchedRuntime(module StdModule, target Target)
 	// because it is a `DeadFunctionElimination` root (the shim calls it from hand-assembly, where no Std
 	// caller reaches it), so its root is gated on the same answer.
 	//
-	// ⚠ **`buildSchedPerProcSum` ABOVE IS DELIBERATELY *NOT* GATED**, and that is the point of putting the
-	// retake counter on a per-P field: `__Builtins.schedRetakeCount()` compiles and answers on EVERY target,
-	// reading a straight 0 where no monitor ever ran. A builtin that exists on one lane only is a worse
-	// divergence than a thread that idles.
+	// ⚠ **`buildSchedPerProcSum` ABOVE IS DELIBERATELY *NOT* GATED ON `targetBracketsBlockingSyscalls`**, and
+	// that is the point of putting the retake and remote-free counters on per-P fields rather than behind the
+	// machinery that moves them: all three sums compile on every target THIS INSTALLER RUNS ON, reading a
+	// straight 0 where no monitor ever ran and where no free ever crossed a processor. A counter that exists
+	// only on the lane with a sysmon would be a worse divergence than a thread that idles.
+	//
+	// ⛔⛔ **THIS NOTE USED TO SAY "COMPILES AND ANSWERS ON *EVERY TARGET*", AND THAT IS FALSE — MEASURED
+	// 2026-09-02, ALL THREE COUNTERS, TWO LANES.** `installSchedRuntime` is reached from `usesGt`, and the
+	// three builtins that read these fields SET `usesGt` (`RuntimeUsage.recordCallUsage`), so a scalar program
+	// whose only concurrency contact is `__Builtins.schedStealCount()`, `schedRetakeCount()` or
+	// `slabRemoteFreeCount()` drags the whole P/M substrate in — which on a lane without it does not refuse,
+	// it PANICS THE COMPILER: `wasm32-wasi` dies in `buildSchedInitProcs` (*"tlsSlotArrayBase: wasi has no
+	// per-OS-thread slot"*) and `x64-linux` in `StdToX64Conversion.lowerTlsSetValue`. The three lanes that
+	// provide `HostFacility.greenThreads` — x64-windows, arm64-macOS and arm64-linux — build it.
+	// ⇒ **the honest claim is "every target the SCHEDULER compiles on"**.
+	//
+	// ✅ **AND THAT GAP IS CLOSED, IN THE SAME CHANGE THAT WROTE THE PARAGRAPH ABOVE.** The three names are on
+	// `TargetFacilities.calleeHostFacility` now, under `HostFacility.greenThreads`, beside `__gt_await_any` —
+	// the same substrate and the same argument — so a lane without the floor REFUSES with E3104 at the call's
+	// own span and never reaches this installer at all. The membership both ends read is
+	// `isSchedPerProcSumCallee`, and `buildSchedPerProcSum` will not build a sum that is off it.
+	// ⚠ The wasm refusal is pinned by
+	// `specs-shv2/builtins-cpu-parallel.md`'s `error.the-per-processor-counters-are-refused-off-their-substrate`;
+	// the x64-linux one was MEASURED and is not pinned by a case.
 	if targetBracketsBlockingSyscalls(target) 'theSyscallHandoff'
 		// `__sched_handoffp` is `__sched_retake`'s only caller of `__sched_startm`, `__sysmon` is
 		// `__sched_retake`'s only caller, and `__sched_syscall_regain` is the shim's road back.
@@ -2548,7 +2651,8 @@ end 'emitSchedRunqPut'
 // ⭐ **EXPORTED AGAIN AT SV1, AND ITS TWO CROSS-FILE CALLERS ARE THE DRIVERS' GREEN-THREAD FALLBACK.**
 // `GtRuntime`'s `__gt_drive_until` and `__gt_resched`'s GT0 arm each ask their OWN coroutine queue first —
 // an `async` frame never enters any of the three tiers this consults — and then ask this, which is what
-// makes P0 run GREEN THREADS cooperatively at the default `MAXON_MAX_PROCS=1`. Without that second question
+// makes P0 run GREEN THREADS cooperatively at `MAXON_MAX_PROCS=1` (which is no longer the DEFAULT — it is
+// the floor of the range the resolver accepts). Without that second question
 // a green thread published to a ring at N=1 would sit there for ever: nothing else consults a ring but a
 // worker M, and there is no second P for `__sched_wake_or_spawn` to start one on.
 export function emitSchedFindRunnable(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
@@ -2610,7 +2714,7 @@ end 'emitSchedDeferPark'
 
 // ⭐⭐ **`__sched_init_procs()` — the whole of scheduler bring-up that is about Ms rather than about green
 // threads.** Ports the C# `EmitSchedInit` (`X86CodeEmitter.Runtime.cs:3399`) and v1's `emitX64GtInit`
-// (`X64Backend.maxon:9000`), restricted to what a single-M-by-default rung needs and expressed in
+// (`X64Backend.maxon:9000`), restricted to the subset shv2's own P/M model needs and expressed in
 // builder-built Std rather than hand-assembled bytes — so it gets register allocation, a checked frame and
 // the leak-safe backend for free, exactly as `MmRuntime`'s reasoning one tier up.
 //
@@ -3717,10 +3821,10 @@ function buildSchedFindRunnable(module StdModule)
 	let stealFailed = emitCmp(module, block: victimTry, a: stolenGt, b: stealZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(victimTry, op: StdOp.condBranch(stealFailed, thenBlockId: victimNext.id, elseBlockId: stole.id))
 
-	// The counter `__Builtins.schedStealCount()` sums. Owner-written, so a plain read-modify-write.
-	let stealStep = emitConst(module, block: stole, value: 1, ids: ids)
-	let stolenSoFar = emitBin(module, block: stole, a: emitLoadField(module, block: stole, record: p, offset: POffStealCount, ids: ids), b: stealStep, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: stole, record: p, offset: POffStealCount, value: stolenSoFar)
+	// The counter `__Builtins.schedStealCount()` sums. A P counts its OWN steals and nothing else writes the
+	// word, so `multiM: false` — the plain arm. The prior value has no reader.
+	let stealStep = emitConst(module, block: stole, value: OneMore, ids: ids)
+	_ = emitFieldAccumulate(module, block: stole, record: p, offset: POffStealCount, delta: stealStep, multiM: false, ids: ids)
 	module.setTerminator(stole, op: StdOp.branch(candidate.id))
 	stole.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(stolenGt)))
 
@@ -3839,14 +3943,16 @@ function buildSchedSweepDropped(module StdModule)
 end 'buildSchedSweepDropped'
 
 // ==========================================================================
-// `__sched_steal_count` and `__sched_retake_count`
+// `__sched_steal_count`, `__sched_retake_count` and `__slab_remote_free_count`
 // ==========================================================================
 
 // ⭐⭐ **THE SUM OF ONE PER-P COUNTER OVER `__sched_procs`** — the floor of `__Builtins.schedStealCount()`
-// (`POffStealCount`) and of `__Builtins.schedRetakeCount()` (`POffRetakeCount`). Between them they are the
-// only ways a Maxon program can observe that work stealing ever happened and that a processor was ever
-// retaken from a machine stuck in the kernel, which is what makes `track0/steal-torture.maxon`'s
-// `steals > 0` and `sched-syscall-handoff`'s `retaken=yes` assertions rather than hopes.
+// (`POffStealCount`), of `__Builtins.schedRetakeCount()` (`POffRetakeCount`) and of
+// `__Builtins.slabRemoteFreeCount()` (`POffRemoteFreeCount`). Between them they are the only ways a Maxon
+// program can observe that work stealing ever happened, that a processor was ever retaken from a machine
+// stuck in the kernel, and that a box was ever freed on a machine other than the one that allocated it —
+// which is what makes `track0/steal-torture.maxon`'s `steals > 0`, `sched-syscall-handoff`'s `retaken=yes`
+// and `slab-sharding`'s `ok=yes` assertions rather than hopes.
 //
 // ⚠ **IT SUMS RATHER THAN READING A GLOBAL, AND THAT IS THE `.data` RULE THIS RUNG IS ARRANGED AROUND.** A
 // `__sched_steal_count` word would appear in the `data {` section of every green-thread program's golden, so
@@ -3857,11 +3963,31 @@ end 'buildSchedSweepDropped'
 // own P, so every value the walk reads is a value some P really wrote; what a concurrent steal costs is
 // FRESHNESS, not a torn number. A harness reads it after its work has finished, which is when it is exact.
 //
-// ⭐⭐ **THE BODY IS PARAMETERISED ON THE FIELD, BECAUSE `__sched_retake_count` IS THE SAME WALK (W213-C3).**
-// Both sum ONE per-P word over `__sched_procs`; everything above — why the counter is per-P rather than
-// `.data`, why the walk needs no null test, why the read is not atomic — is true of both, word for word. Two
-// bodies would be that argument written twice, and the second copy is the one that rots.
+// ⭐⭐ **THE BODY IS PARAMETERISED ON THE FIELD, BECAUSE `__sched_retake_count` (W213-C3) AND
+// `__slab_remote_free_count` ARE THE SAME WALK.** All three sum ONE per-P word over `__sched_procs`;
+// everything above — why the counter is per-P rather than `.data`, why the walk needs no null test, why the
+// read is not atomic — is true of all three, word for word. Three bodies would be that argument written
+// three times, and the copies are what rot.
+//
+// ⚠ **THE READ STAYS NON-ATOMIC EVEN THOUGH `POffRemoteFreeCount` IS *WRITTEN* ATOMICALLY**, and the two
+// facts are about different parties. The atomic on the write side serialises the MANY PRODUCERS crediting one
+// P against each other, without which counts are lost outright; this walk is a single reader taking a
+// snapshot, and what a concurrent credit costs it is FRESHNESS, not a torn number — an aligned word is read
+// whole on both lanes. A harness reads it after its work has finished, which is when it is exact.
+//
+// ⛔⛔ **THE ROSTER DRIFT GUARD, AND IT IS THE SAME ONE EVERY THROWING FAMILY CARRIES** (`ListRuntime`'s, whose
+// header states the shape). The three names below are written down TWICE — once as this function's three call
+// sites in `installSchedRuntime`, once as `isSchedPerProcSumCallee`'s three arms — and nothing but this line
+// makes the two agree. A fourth sum built here and left off that predicate gets `usesGt` from nobody, so
+// `installSchedRuntime` never runs, so the body this call just built is never installed and the program dies
+// at `resolveCallFixups: call to unknown function` — a compiler PANIC naming a symbol, in front of whoever
+// wrote the builtin. ⇒ it fails at INSTALL instead, naming the predicate to add the name to. Three name
+// compares per compile that has a scheduler at all.
 function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffset)
+	if not isSchedPerProcSumCallee(name) 'offRoster'
+		panic("buildSchedPerProcSum: '{String.from(name)}' is built as a per-P sum but is not on `isSchedPerProcSumCallee`'s roster — add it there, which is the ONE membership `RuntimeUsage.recordCallUsage` (install the scheduler) and `TargetFacilities.calleeHostFacility` (E3104 off its substrate) both read")
+	end 'offRoster'
+
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -3990,7 +4116,9 @@ end 'buildSchedAnyExecuting'
 //      this.
 //   4. **Outside the lock**: hand the spinning credit over, deliver the processor through `MOffNextP`, and
 //      signal. Or, with no idle machine, CREATE one on that processor — which is how a process goes from
-//      one M to several, and is the only `osThreadCreate` in the scheduler.
+//      one M to several. ⚠ It was "the only `osThreadCreate` in the scheduler" until W213-C3 added
+//      `emitSchedSysmonLazyStart`'s monitor; it is still the only one that creates a machine that RUNS
+//      green threads, which is the property this step depends on.
 //
 // ⚠ **A NEW MACHINE TOUCHES NO WORD THIS CALL WRITES, WHICH IS WHY `osThreadCreate` MAY SIT INSIDE THE
 // CRITICAL SECTION.** `emitSchedAllocM` states the split: the creator writes the park event, the handle,
@@ -5301,9 +5429,10 @@ function buildSchedRetake(module StdModule)
 	let releasedProc = emitConst(module, block: tookIt, value: 0, ids: ids)
 	module.appendOp(tookIt, op: StdOp.atomicCas(ids.mint(), addrId: procAddr, expectedId: heldProc, replacementId: releasedProc))
 
-	// The counter `__Builtins.schedRetakeCount()` sums. sysmon is its only writer, so a plain read-modify-write.
-	let oneRetake = emitConst(module, block: tookIt, value: 1, ids: ids)
-	emitStoreField(module, block: tookIt, record: heldProc, offset: POffRetakeCount, value: emitBin(module, block: tookIt, a: emitLoadField(module, block: tookIt, record: heldProc, offset: POffRetakeCount, ids: ids), b: oneRetake, opcode: StdBinOpcode.add, ids: ids))
+	// The counter `__Builtins.schedRetakeCount()` sums. sysmon is its only writer, so `multiM: false` — the
+	// plain arm. The prior value has no reader.
+	let oneRetake = emitConst(module, block: tookIt, value: OneMore, ids: ids)
+	_ = emitFieldAccumulate(module, block: tookIt, record: heldProc, offset: POffRetakeCount, delta: oneRetake, multiM: false, ids: ids)
 	// The note is refreshed to the word this CAS just wrote, and the clock restarts. Neither is strictly
 	// required — the stolen bit alone keeps the next pass off this machine, because `rtproc` demands the state
 	// bits be EXACTLY `MSyscallInCall` — but leaving a note that names a word no longer in memory is the kind

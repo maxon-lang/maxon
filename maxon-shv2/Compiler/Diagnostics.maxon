@@ -243,12 +243,32 @@ end 'reportPositionedWithNote'
 // build, whichever way the build failed. The set is written here, at the sink, because this is the one
 // place a reader can see all of it.
 //
-// ⚠ **THE LATCH IS MODULE-LEVEL, AND THAT IS EXACT ONLY BECAUSE A COMPILE IS SERIAL.** shv2's
-// scheduler is single-M and the compile pipeline contains no yield point, so two compiles cannot
-// interleave inside one process — which makes a second `begin` while one is open a CALLER BUG rather
-// than a race, and is why it panics instead of nesting. It is the same argument that lets
-// `PhaseProbe.openPhaseSpans` be a process-wide stack. A compiler that ever runs two compiles
-// concurrently in one process needs a per-compile home for both, not a lock around this one.
+// ⚠⚠ **THE LATCH IS MODULE-LEVEL, AND THAT IS EXACT ONLY BECAUSE A COMPILE IS SERIAL — AND THIS IS THE
+// ONE PLACE THAT ARGUMENT IS WRITTEN OUT.** Four module-level latches rest on it and this comment is
+// the roster: this capture latch, `Logger.currentTraceUnit` (written by `Compiler.compileToProduct`),
+// `PhaseProbe.openPhaseSpans` and `QueryEngine.sharedFileMemos`. Each states WHAT it needs and points
+// here for WHY, so the reason moves in one edit rather than four.
+//
+// ⛔⛔ **ALL FOUR USED TO SAY "shv2's SCHEDULER IS SINGLE-M", AND THAT PREMISE HAS EXPIRED.** The default
+// processor count is the machine's since the `DefaultMaxProcs` flip, and a green-thread program really
+// does run on several Ms. The CONCLUSION is unchanged; what carries it is EC10, one door further in:
+//
+//   * A worker M is started only by `__sched_wake_or_spawn`, which only the GREEN-THREAD arm of a publish
+//     door reaches, and `spawn` is the sole producer of green threads (`SchedRuntime.maxon`'s header
+//     states the invariant in full).
+//   * **This compiler contains no `spawn`.** Its only concurrency is `async`, and an `async` frame is a
+//     COROUTINE of the green thread that created it — published only to that thread's own queue, driven
+//     only by its chain of drivers, and therefore running on its M. So this process runs Maxon on exactly
+//     ONE M at every `MAXON_MAX_PROCS`.
+//   * The IOCP completion thread is a second OS thread and is not a counter-example: its whole call graph
+//     is `__io_completion_loop` -> `__gt_coro_enqueue`, so it re-readies a parked coroutine and compiles
+//     nothing.
+//   * `compileToProduct` reaches no yield point between its ends, so the one M is inside one compile.
+//
+// ⇒ two compiles cannot interleave inside one process — which makes a second `begin` while one is open a
+// CALLER BUG rather than a race, and is why it panics instead of nesting. A compiler that ever runs two
+// compiles concurrently in one process — by spawning a service, or by yielding inside the pipeline —
+// needs a per-compile home for all four, not a lock around this one.
 
 // The exact bytes each captured line would have been printed as, in report order — TERMINATED, so
 // that joining them is a concatenation rather than a second decision about the line ending.

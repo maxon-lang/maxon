@@ -1258,7 +1258,9 @@ export union StdOp
 	// code to `[codePtr]` (an out-param buffer, like `osReadClock`'s). Two VALUE operands, no result.
 	osProcessExitCode(handleId ValueId, codePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// `osWaitHandles(handleArrayPtr, count, timeoutMs)` = `WaitForMultipleObjects(count, handleArrayPtr, FALSE,
-	// timeoutMs)` — the netpoll's single-M block on the parked children (and the earliest timer delta). Three VALUE
+	// timeoutMs)` — the netpoll's block on the parked children (and the earliest timer delta), performed by the
+	// ONE M that holds the single-poller claim (`GtRuntime.GtProcPollerLabel`; this used to say "single-M block"
+	// and meant the process, which is what that claim replaced). Three VALUE
 	// operands, no result: the netpoll re-scans each handle with `osWaitHandle(h, 0)` after the wait returns, so
 	// the aggregate wait result is not read.
 	osWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}

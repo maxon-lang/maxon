@@ -384,6 +384,27 @@ let SlabOsDirectFreeName = b"__slab_os_direct_free"
 // still needs every layer under it.
 export let SlabScavengeName = b"__slab_scavenge"
 
+// ⭐⭐ `__slab_remote_free_count() -> i64` — how many slots have been freed onto a processor's remote-free
+// queue by a machine that did not own their span, summed over every P. `__Builtins.slabRemoteFreeCount()`
+// lowers straight to it, and it is the ONLY way a program can observe that the cross-processor free road was
+// TAKEN. `track0/service-torture` and `track0/service-fanin-torture` drive thousands of boxes down it in each
+// direction and nothing read a number that would move if it stopped being taken — the road was exercised but
+// not observed, and a regression routing every free down the LOCAL arm would have kept the suite green.
+//
+// ⚠ **IT WEARS THE `__slab_` PREFIX BUT ITS BODY IS BUILT BY `SchedRuntime.installSchedRuntime`, AND THE
+// SPLIT IS THE SAME ONE `__sched_steal_count` MAKES IN THE OPPOSITE DIRECTION.** The NUMBER is the
+// allocator's, so the name is; the STORAGE is a per-P word (`SchedRuntime.POffRemoteFreeCount`, which carries
+// why it is not a `.data` counter and why the target rather than the pusher is credited) and the walk that
+// sums it is `buildSchedPerProcSum`, shared with the scheduler's own two counters. Putting a third copy of
+// that loop in `installSlabRuntime` to keep a prefix tidy is one fact written twice.
+//
+// ⚠ **AND THAT IS WHY `RuntimeUsage.recordCallUsage` ROUTES IT TO `usesGt` AND NOT TO `usesHeap`**, unlike
+// every other name in this band: the question is answered by walking `__sched_procs`, an array only
+// `__sched_init_procs` builds, so asking it IS asking for the scheduler. It has no bit of its own for
+// `SlabScavengeName`'s reason — `DeadFunctionElimination` drops the body from every program that never calls
+// it.
+export let SlabRemoteFreeCountName = b"__slab_remote_free_count"
+
 // --- The OS-direct tier ---
 //
 // ⭐⭐ **ABOVE `SlabMaxSmallSize` A REQUEST IS ITS OWN MAPPING, AND ITS SIZE RIDES IN A 16-BYTE PREFIX.**
@@ -851,12 +872,23 @@ end 'emitSlabLockLeave'
 //
 // ⚠ `StdOp.atomicCas`'s result is the SUCCESS BOOLEAN, not the prior value — the op's own header states the
 // convention, and a loop written for the other one spins forever on its first success.
+//
+// ⭐⭐ **IT ALSO CREDITS THE TARGET'S REMOTE-FREE COUNTER, WHICH IS THE ONE OBSERVATION THIS ROAD HAD NONE
+// OF.** `SchedRuntime.POffRemoteFreeCount` carries why the TARGET is credited rather than the pusher and why
+// the step is atomic; the step itself is `MmRuntime.emitFieldAccumulate`, shared with the two single-writer
+// per-P counters, and `multiM: true` is this site's whole half of that decision. What belongs here is WHERE
+// the step goes. It is emitted in `cur`, ahead of the
+// retry loop, and NOT inside `retry`: a contended push runs the loop body several times for ONE free, so a
+// credit in there would count CAS attempts and turn a cross-processor-free counter into a contention meter.
+// The prior value has no reader — the sum is taken later, by a walk over every P.
 function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, target ValueId, slot ValueId, ids ValueMinter) returns IrBlock
 	var retry = module.addBlock(func, label: b"rpush")
 	let done = module.addBlock(func, label: b"rpushed")
 
-	let offset = emitConst(module, block: cur, value: POffRemoteFreeHead as ParsedInt, ids: ids)
-	let headAddr = emitBin(module, block: cur, a: target, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let credit = emitConst(module, block: cur, value: OneMore, ids: ids)
+	_ = emitFieldAccumulate(module, block: cur, record: target, offset: POffRemoteFreeCount, delta: credit, multiM: true, ids: ids)
+
+	let headAddr = emitFieldAddr(module, block: cur, record: target, offset: POffRemoteFreeHead, ids: ids)
 	module.setTerminator(cur, op: StdOp.branch(retry.id))
 
 	let head = emitLoadField(module, block: retry, record: headAddr, offset: 0, ids: ids)
@@ -1928,8 +1960,7 @@ function buildSlabDrainRemote(module StdModule)
 
 	let noProc = emitConst(module, block: entry, value: MspanOwningPNone, ids: ids)
 	let hasNoQueue = emitCmp(module, block: entry, a: p, b: noProc, pred: StdCmpPred.eq, ids: ids)
-	let offset = emitConst(module, block: entry, value: POffRemoteFreeHead as ParsedInt, ids: ids)
-	let headAddr = emitBin(module, block: entry, a: p, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let headAddr = emitFieldAddr(module, block: entry, record: p, offset: POffRemoteFreeHead, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(hasNoQueue, thenBlockId: done.id, elseBlockId: detach.id))
 
 	// ⚠ **THE EMPTINESS TEST COMES BEFORE THE CAS, AND THAT IS WHAT KEEPS THE COMMON CASE FREE.** This runs

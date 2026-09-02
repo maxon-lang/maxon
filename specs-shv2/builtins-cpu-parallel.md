@@ -404,8 +404,19 @@ end 'main'
 coroutines, runs them and awaits them observes one worker M — since EC10 because a coroutine is never
 published where a worker M could take it, so nothing calls `__sched_wake_or_spawn` at all. It goes red
 the day `spawn` gives that call site a producer, and not the day a worker loop exists, because one does.
-⚠ It is a DEFAULT-`MAXON_MAX_PROCS` reading only because a spec case cannot set that variable; the
-sweep over `{1, 2, 7, 12}` is `track0/pin-matrix.sh`'s. The bootstrap, whose default IS the processor count, answers 12 for the same SHAPE
+⚠ It is a DEFAULT-`MAXON_MAX_PROCS` reading, and that is now a CHOICE rather than a limitation. ⛔ This
+sentence used to give the reason as *"a spec case cannot set that variable"*, which stopped being true when
+the per-case processor marker landed — `specs-shv2/sched-default-procs.md` owns it, and three other files
+already retracted this same claim. The case stays unpinned deliberately: its subject is that an `async`-only
+program reaches no worker M **at whatever count the machine happens to have**, so pinning one would narrow
+it to a count nobody runs. The sweep over `{1, 2, 7, 12}` is still `track0/pin-matrix.sh`'s, because
+comparing counts is what that instrument is for and a spec case runs at exactly one.
+
+⛔ **THE MARKER IS NAMED HERE AND NOT SPELLED, AND THAT IS DELIBERATE.** Writing it out verbatim inside a
+case's marker region makes the parser read the prose AS a marker — `parseProcsValue` panics on the `N`,
+and the whole FILE stops parsing. (Measured: this paragraph did exactly that.) `sched-default-procs.md`
+can spell it because its copy sits in the Documentation section, above `## Tests`, which nothing scans for
+markers. The bootstrap, whose default IS the processor count, answers 12 for the same SHAPE
 on a 12-CPU host and 1 under `MAXON_MAX_PROCS=1` (MEASURED — see the differential table above): the
 two compilers agree on the contract, agree under the clamp, and differ only in what they default to.
 ```maxon
@@ -463,4 +474,67 @@ end 'main'
 ```
 ```exitcode
 3
+```
+
+<!-- test: builtins-cpu-parallel.error.the-per-processor-counters-are-refused-off-their-substrate -->
+<!-- targets: wasm32-wasi -->
+⛔⛔ **THESE THREE PANICKED THE COMPILER INSTEAD OF REFUSING, AND THE SUITE COULD NOT SEE IT BECAUSE NO CASE
+CALLED ONE OF THEM OFF x64-windows.** MEASURED 2026-09-02, a four-line scalar program per builtin:
+`wasm32-wasi` died at `SchedRuntime.tlsSlotArrayBase` (*"wasi has no per-OS-thread slot this scheduler"*) and
+`x64-linux` at `StdToX64Conversion.lowerTlsSetValue`. **A panic is the worst answer a compiler can give**:
+no span, no code, and it names a runtime emitter rather than the call the user wrote.
+
+⇒ The three per-P counter sums now sit in `TargetFacilities.calleeHostFacility` under
+`HostFacility.greenThreads`, exactly as `__gt_await_any` and a service's two ops already do, so the refusal
+lands on the call's own span. ⚠ **They are named individually and NOT by prefix** — one of the three is a
+`__slab_` entry, and `schedMaxActiveWorkers`/`schedProcessorCount` set no `usesGt` and **must keep working
+here**, which the sibling case `sched-max-active-workers-runs-on-wasm` in this file is what proves.
+
+⚠ **ONE PROGRAM NAMES ALL THREE ON PURPOSE.** The band is a roster in the compiler, so the thing worth
+pinning is that every member of it is on the roster; a per-builtin case would pass while a sibling was
+quietly dropped from the list.
+
+⛔ **A SECOND DEFECT RODE WITH THE FIRST, AND IT REACHED x64-windows.** All three set `usage.usesGt` BY HAND
+instead of calling `recordGtUsage`, so `usesHeap` stayed off and the scheduler linked against a
+`__slab_alloc` that dead-function elimination had pruned — `resolveCallFixups: call to unknown function`, on
+**every** lane. It hid because the obvious probe prints its answer, and `print` turns `usesHeap` on by
+itself; only a program that discards the value shows it. That is why the program below **returns** the
+counter rather than printing it.
+```maxon
+function main() returns ExitCode
+	let steals = __Builtins.schedStealCount()
+	let retakes = __Builtins.schedRetakeCount()
+	let remote = __Builtins.slabRemoteFreeCount()
+
+	return (steals + retakes + remote) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_steal_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:4:27: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_retake_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:5:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__slab_remote_free_count', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-cpu-parallel.error.the-per-processor-counters-are-refused-on-a-native-target -->
+<!-- targets: x64-linux -->
+⚠ **THE SECOND LANE, BECAUSE THE FIRST ONE'S GREEN DOES NOT COVER IT.** The wasm case above and this one
+reach `E3104` through the same arm of `TargetFacilities.calleeHostFacility`, but they reach the PANIC they
+replaced through different code: wasm died in `SchedRuntime.tlsSlotArrayBase` and x64-linux in
+`StdToX64Conversion.lowerTlsSetValue` — the same x64 backend that serves the lane where these builtins
+WORK. A gate that pins only the first proves the facility arm fires somewhere, not that this backend stopped
+panicking. `services.md` carries the same pair for the same reason (`error.a-service-is-rejected-on-wasm`
+beside `error.a-service-is-rejected-on-a-native-target`).
+```maxon
+function main() returns ExitCode
+	let steals = __Builtins.schedStealCount()
+	let retakes = __Builtins.schedRetakeCount()
+	let remote = __Builtins.slabRemoteFreeCount()
+
+	return (steals + retakes + remote) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_steal_count', which has no x64-linux implementation
+error E3104: <fragment>:4:27: this construct is x64-windows only at this rung: it lowers to the runtime entry '__sched_retake_count', which has no x64-linux implementation
+error E3104: <fragment>:5:26: this construct is x64-windows only at this rung: it lowers to the runtime entry '__slab_remote_free_count', which has no x64-linux implementation
 ```

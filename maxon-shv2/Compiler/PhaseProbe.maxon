@@ -95,9 +95,10 @@ typealias TraceNameArray = Array with TraceName
 // goes through, rather than off the command-line entry it used to be enough to guard.
 //
 // A process-wide stack is exact here for the same reason the diagnostic-capture latch is (see
-// Diagnostics.maxon): a compile is SERIAL — single-M scheduler, no yield point in the pipeline — so
-// two compiles cannot interleave their brackets. Compiling two programs at once in one process needs
-// a per-compile home for this, not a lock around it.
+// Diagnostics.maxon, which carries that reason for all four latches that rest on it): a compile is
+// SERIAL, so two compiles cannot interleave their brackets. ⛔ NOT because the scheduler is single-M —
+// that premise expired at the `DefaultMaxProcs` flip and what replaced it is stated there. Compiling
+// two programs at once in one process needs a per-compile home for this, not a lock around it.
 var openPhaseSpans = TraceNameArray.create()
 
 // What one phase consumed. The unit of attribution: every phase in the report is one of

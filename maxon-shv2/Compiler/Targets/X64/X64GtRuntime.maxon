@@ -288,9 +288,25 @@ end 'buildGtTrampolineChunk'
 // use is invisible. The args (rcx/rdx/r8/r9) are untouched BEFORE the call; the result (rax) is untouched
 // AFTER it — the post-call TIB restore uses rcx, which is dead once the call has returned.
 //
-// ⚠ NO NESTING. The shim switches to THIS P's FIXED `systemStackSP` (reset every entry, not a bump
-// pointer). Safe only because a kernel call is a LEAF that never re-enters guarded Maxon code, and single-M
-// runs one thing at a time — a shimmed call must never reach another shimmed call on the same thread.
+// ⚠ ONE REGION PER MACHINE, AND THE SAFETY IS PER OS THREAD — NOT PER PROCESSOR, AND NOT "ONE AT A TIME".
+// The shim switches to THIS M's FIXED `systemStackSP` (`SchedRuntime.MOffSystemStackSP`, reset every entry,
+// not a bump pointer). Two Ms in the kernel at once are fine BY CONSTRUCTION: they are different regions.
+// What must never happen is one OS THREAD re-entering its own region while a frame is live in it.
+//
+// ⛔⛔ **THIS COMMENT USED TO SAY "THIS P's" AND "single-M runs one thing at a time", AND BOTH HAVE EXPIRED.**
+// The region moved from the P to the M at W213-C1, and the default is now the machine's processor count, so
+// several Ms are routinely inside shimmed calls simultaneously. ⚠ The two spellings were the SAME PARTITION
+// only while an M held one P for its whole life — and W213's `handoffp` ended that, so a comment that says
+// "P" where the field says "M" now names a different thing rather than a synonym.
+// `track0/syscall-stack-torture.maxon` is what pins the surviving property: sabotaged to share ONE region it
+// segfaults 9 of 9 at `MAXON_MAX_PROCS` 2/7/12 and is clean 3 of 3 at 1.
+//
+// ⭐ RE-ENTRY DOES HAPPEN NOW, AND IT IS SAFE FOR A STATED REASON RATHER THAN BY ABSENCE. A kernel call is a
+// LEAF that never re-enters guarded Maxon code, so the call itself cannot nest — but `exitsyscall`'s slow
+// path calls `__sched_syscall_regain`, which takes `__sched_lock` through a shimmed `EnterCriticalSection`.
+// That is a second entry on the same thread, and it is safe because the slow path runs on the GT STACK: the
+// unwind above has already restored RSP off the system stack, so the inner entry re-reads `systemStackSP`
+// with nothing of the outer call live above it.
 
 // A pushed 64-bit register is 8 bytes. The shim pushes two such words (the caller's r10 on the GT stack, then
 // the saved GT rsp on the system stack). This is BOTH the offset from `r10` — which points at the first pushed
@@ -922,7 +938,11 @@ end 'emitGtShimmedIatCall'
 //
 // ⭐ THE HIGHEST-RISK PIECE IN THE LADDER: a chain-walk bug is a silent stack-corruption use-after-free. Ported
 // line-by-line from v1 `maxon-selfhosted/Compiler/Targets/X64/X64Backend.maxon:7102` (`emitX64GtMorestack`) and
-// its walk `:7226` (`emitX64GtMorestackWalkBody`), adapted to shv2's single-M model and register discipline.
+// its walk `:7226` (`emitX64GtMorestackWalkBody`), adapted to shv2's stack model and register discipline.
+// ⚠ It said "shv2's SINGLE-M model", which expired at the default flip. Nothing here rests on a machine
+// count: a growable stack belongs to ONE GREEN THREAD, the walk runs on the thread that owns it, and several
+// Ms growing several stacks at once never meet. What it is adapted AWAY from is v1's arrangement, not a
+// concurrency assumption.
 //
 // SOUNDNESS (established, do not re-derive): shv2 has NO addressable stack slots — the spiller spills VALUES
 // rsp-relative (never a stack pointer), rbp is non-allocatable and used ONLY as the saved-rbp chain link, and

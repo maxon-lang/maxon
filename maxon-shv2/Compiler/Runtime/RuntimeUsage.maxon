@@ -798,26 +798,33 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(SchedProcessorCountName) 'schedProcessorCount'
 		usage.usesSchedProcessorCount = true
 	end 'schedProcessorCount'
-	// ⭐⭐ **THE STEAL COUNT SETS `usesGt` AND HAS NO BIT OF ITS OWN, WHICH IS THE OPPOSITE OF BOTH ITS
-	// BAND-MATES ABOVE — and the difference is what the three questions actually need.**
-	// `__sched_max_active_workers` is a `.data` load whose answer (1) is TRUE for a program with no scheduler
-	// at all, so it must not drag one in. `__sched_steal_count` walks `__sched_procs`, an array only
-	// `__sched_init_procs` builds: without the scheduler there is nothing to walk, so asking the question IS
-	// asking for the machinery. And a bit of its own would gate nothing — the body is installed inside
-	// `installSchedRuntime` behind `usesGt` like every other function there, and
-	// `DeadFunctionElimination` drops it from every program that never calls it, which is
-	// `__slab_scavenge`'s situation exactly (below).
-	if callee.equals(SchedStealCountName) 'schedStealCount'
-		usage.usesGt = true
-	end 'schedStealCount'
-	// ⭐ **THE RETAKE COUNT RIDES THE STEAL COUNT'S ANSWER EXACTLY, AND FOR THE IDENTICAL REASON.** It is the
-	// same walk of `__sched_procs` over a sibling field (`POffRetakeCount`), so without the scheduler there is
-	// nothing to walk and asking the question IS asking for the machinery. It has no bit of its own for the
-	// same reason its band-mate has none: the body is installed inside `installSchedRuntime` behind `usesGt`,
-	// and `DeadFunctionElimination` drops it from every program that never calls it.
-	if callee.equals(SchedRetakeCountName) 'schedRetakeCount'
-		usage.usesGt = true
-	end 'schedRetakeCount'
+	// ⭐⭐ **THE THREE PER-P COUNTER SUMS TAKE THE SCHEDULER, WHICH IS THE OPPOSITE OF BOTH BAND-MATES ABOVE —
+	// and the difference is what the questions actually need.** `__sched_max_active_workers` is a `.data`
+	// load whose answer (1) is TRUE for a program with no scheduler at all, so it must not drag one in.
+	// These three walk `__sched_procs`, an array only `__sched_init_procs` builds: without the scheduler
+	// there is nothing to walk, so asking the question IS asking for the machinery. None has a bit of its
+	// own, and none needs one — all three bodies are installed inside `installSchedRuntime` behind `usesGt`
+	// like every other function there, and `DeadFunctionElimination` drops them from every program that never
+	// calls one, which is `__slab_scavenge`'s situation exactly (below). ⚠ The third answers to a `__slab_`
+	// name because the number is the ALLOCATOR's — how many slots were freed onto a processor by a machine
+	// that did not own their span — but its STORAGE is a per-P word and its body is its band-mates' walk.
+	//
+	// ⛔ **IT IS `recordGtUsage` AND IT USED TO BE A BARE `usage.usesGt = true`, WHICH BROKE THIS FILE'S OWN
+	// INVARIANT ON EVERY LANE.** Every other producer of the scheduler goes through that recorder, which sets
+	// `usesHeap` with it; three hand-written assignments set half of it, and `usesGt ⟹ usesHeap` is a
+	// premise the rest of the compiler already reads as settled (`MmRuntime`'s GT leak gate states it
+	// outright). MEASURED 2026-09-02 on a `__Builtins.schedStealCount()` program that touches nothing else:
+	// `panic at X64Backend.maxon:2422: resolveCallFixups: call to unknown function '__slab_alloc'`, on
+	// x64-windows — the GT runtime's Target-tier chunks reach the allocator by an edge
+	// `DeadFunctionElimination` cannot see, so a scheduler installed without the heap floor links against a
+	// callee that was pruned. The cure is the recorder every other arm already uses, not a fourth root.
+	//
+	// ⚠ **THE MEMBERSHIP IS `SchedRuntime.isSchedPerProcSumCallee`'s AND NOT A LIST HERE**, because the
+	// E3104 gate must refuse exactly this set (`TargetFacilities.calleeHostFacility`) and a roster spelled at
+	// both ends is the one that drifts.
+	if isSchedPerProcSumCallee(callee) 'perProcSums'
+		recordGtUsage(usage)
+	end 'perProcSums'
 	// ⭐ **THE ALLOCATOR'S TRAFFIC COUNTERS.** The `__mm_counter_` band is a STRICT SUBSET of the `__mm_` one
 	// the first arm of this function already matched, so `usesHeap` is set by the time this line runs — which
 	// is exactly the transitive declaration the counters need (see `usesMmCounters`) and the reason the band

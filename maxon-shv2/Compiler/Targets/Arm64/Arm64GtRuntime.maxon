@@ -396,9 +396,16 @@ end 'emitArm64LoadCurrentMOrBail'
 // old stack could still be read from (there are no TIB bounds beside them to notice first), the cost is
 // four instructions on a path that has just called `mmap`, and v1's arm64 grower does the same.
 //
-// ENTRY CONTRACT (from the prologue guard): x11 = the current GT, x12 = this P's system-stack top, SP = the
+// ENTRY CONTRACT (from the prologue guard): x11 = the current GT, x12 = this M's system-stack top, SP = the
 // GT stack pointing at the guard's saved-x30 cell, x30 = the return into the guard. Everything it saves goes
 // on the SYSTEM stack, so the near-overflow GT stack never holds this frame.
+//
+// ⛔ **THIS LINE SAID "this P's" AND THE GUARD THAT FILLS x12 SAYS "this M's" — one contract, written twice,
+// disagreeing.** The producer is right: `emitArm64GtStackGuard`'s cold path loads `MOffSystemStackSP` out of
+// the current **M**, and the region moved from the P to the M at W213-C1. ⚠ The two spellings were the SAME
+// PARTITION only while an M held one P for its whole life; `handoffp` ended that, so a comment that says "P"
+// where the field says "M" now names a different thing rather than a synonym.
+// `X64GtRuntime.buildGtMorestackChunk`'s shim paragraph carries the same correction on the other lane.
 //
 // ⭐ WHAT IT PRESERVES, AND WHY THAT SET. The guard runs at offset 0 of the entry block, BEFORE the prologue
 // and before the `param` captures, so the guarded function has established nothing: every incoming argument
