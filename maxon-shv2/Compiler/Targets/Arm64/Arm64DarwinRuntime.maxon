@@ -26,11 +26,11 @@
 // it does not inherit these, and must not, because the ARGUMENTS differ as well as the route (Darwin's
 // `clock_gettime_nsec_np` has no Linux counterpart at all).
 //
-// ⭐⭐ **WHAT THE TWO LANES DO SHARE MOVED TO `Arm64PosixRuntime`, AND THIS PARAGRAPH USED TO OVERSTATE THE
-// SPLIT.** The CALLS differ; the Win32-shaped facts behind them do not — the symbol names the isel branches
-// to, the errno→Win32 mapping, the `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAA` fill and
-// the two string walkers `FindFirstFileA`'s glob split is built out of are the same on both, once `struct
-// stat`'s layout is a parameter. The filesystem chunks below therefore build under the SHARED `mrt_host_*`
+// ⭐⭐ **ONLY THE CALLS DIFFER.** The Win32-shaped facts behind them do not — the symbol names the isel
+// branches to and the POSIX constants are `Targets/Shared/PosixRuntime`, and the errno→Win32 mapping, the
+// `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAA` fill and the two string walkers
+// `FindFirstFileA`'s glob split is built out of are `Arm64PosixRuntime`, one body for both arm64 lanes once
+// `struct stat`'s layout is a parameter. The filesystem chunks below therefore build under the SHARED `mrt_host_*`
 // names, and this file's remaining private symbols (`mrt_darwin_dir_prefix`, `mrt_darwin_dup_cstring`) are
 // the two that `malloc`, which is the thing a static Linux image cannot do from a chunk.
 //
@@ -89,13 +89,11 @@ let NothingToFree = 0
 // which lane owns the body — a Linux lane adding its own must not be able to collide with one of these by
 // picking the same verb.
 //
-// ⚠ **EVERY NAME THAT ONCE LIVED HERE AND NOW HAS TWO BODIES HAS MOVED TO `Arm64PosixRuntime` UNDER THE
-// SHARED `mrt_host_` PREFIX** — the wall clock, the thread CPU clock and the executable path at L3, at
-// L4 the whole green-thread floor (the monotonic clock, the OS-thread park, the wait object's four verbs,
-// the lock's initialiser, the environment read and the per-thread slot), and at L5 the whole child-process
-// substrate. NOT ONE NAME IS LEFT HERE, which is the shape this file was heading for from L3 onwards: what
-// remains below is bodies, and the only lane-private symbol in the file is `mrt_darwin_dup_cstring`, a
-// `malloc` the other lane has no counterpart for.
+// ⚠ **EVERY NAME WITH MORE THAN ONE BODY IS `Targets/Shared/PosixRuntime`'s, UNDER THE SHARED `mrt_host_`
+// PREFIX** — the two clocks and the executable path, the whole green-thread floor (the monotonic clock, the
+// OS-thread park, the wait object's four verbs, the lock's initialiser, the environment read and the
+// per-thread slot) and the whole child-process substrate. What remains in this file is BODIES; its only
+// lane-private symbol is `mrt_darwin_dup_cstring`, a `malloc` no other lane has a counterpart for.
 
 // ==========================================================================
 // Shared emit fragments
@@ -963,6 +961,32 @@ function buildArm64DarwinEnvReadChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinEnvReadChunk'
 
 // ==========================================================================
+// mrt_host_handle_file_type(x0 = fd) -> x0 = the GetFileType word
+// ==========================================================================
+
+// `GetFileType` on a lane whose descriptors carry no such enumeration. `isatty` asks exactly the question
+// `__tty_stdout_wants_color` needs — is a PERSON on the other end — and its two answers are the two words
+// the caller compares against (`Arm64PosixRuntime.arm64EmitFileTypeFromStatus`).
+//
+// ⚠ **`isatty` RATHER THAN THE `ioctl` IT IS BUILT FROM, WHICH IS WHAT KEEPS THIS BODY THREE LINES.**
+// Darwin's `ioctl` is VARIADIC, so its third argument travels on the STACK under AAPCS64 and the
+// `struct termios` it fills would have to be a frame this chunk owns — the Linux lanes pay both of those
+// because they link no libc and have no `isatty` to call.
+//
+// ⚠ **THE NARROWING IS NOT OPTIONAL.** `isatty` returns a C `int`, whose upper half AAPCS64 leaves
+// unspecified — a compare on the full register would read a stale high word as "a terminal", which is
+// `mrt_host_exe_path`'s trap one facility over.
+function buildArm64DarwinHandleFileTypeChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.isatty)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitFileTypeFromStatus(asm, terminalWhen: Arm64CondCode.ne)
+
+	return asm.finishFunction(HostHandleFileTypeName)
+end 'buildArm64DarwinHandleFileTypeChunk'
+
+// ==========================================================================
 // MAC4/5/6/7 — the filesystem, standard-input and argv surface
 // ==========================================================================
 
@@ -994,8 +1018,8 @@ function darwinStatLayout() returns PosixStatLayout
 end 'darwinStatLayout'
 
 // The two walkers this lane owns. `mrt_darwin_dir_prefix` and `mrt_darwin_dup_cstring` both `malloc`, which
-// is the one thing the Linux surface has no way to do from a chunk — so unlike the four in
-// `Arm64PosixRuntime` they wear the lane infix rather than the shared `mrt_host_` prefix.
+// is the one thing a Linux surface has no way to do from a chunk — so unlike the four in
+// `Targets/Shared/PosixRuntime` they wear the lane infix rather than the shared `mrt_host_` prefix.
 let DarwinDirPrefixName = b"mrt_darwin_dir_prefix"
 let DarwinDupCStringName = b"mrt_darwin_dup_cstring"
 
@@ -1013,9 +1037,8 @@ let DarwinDefaultGlobFlags = 0
 // `ENOTSUP`. The one errno this lane PUBLISHES rather than reads: `mrt_host_spawn` answers it for a
 // caller-built environment block, which is a shape it has no conversion for. See that chunk's own note.
 //
-// ⚠ The errno values BESIDE this one moved to `Arm64PosixRuntime` as `Posix*` when arm64-Linux became a
-// second POSIX lane: both lanes measured them identical, so one copy is the point. This one stays
-// Darwin-named because the NUMBERS DIVERGE — `ENOTSUP` is 45 here and 95 on Linux, which is
+// ⚠ The errno values BESIDE this one are `Targets/Shared/PosixRuntime`'s `Posix*`: every POSIX lane
+// measured them identical, so one copy is the point. This one stays Darwin-named because the NUMBERS DIVERGE — `ENOTSUP` is 45 here and 95 on Linux, which is
 // `LinuxErrnoNameTooLong`'s situation rather than the shared five's. Both lanes now publish it, and for the
 // same refusal: `Arm64LinuxRuntime.LinuxErrnoNotSupported` is the twin.
 let DarwinErrnoNotSupported = 45
@@ -1130,7 +1153,7 @@ end 'buildArm64DarwinTransferChunk'
 function buildArm64DarwinFileSizeChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
 	let SlotStat = 1 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1 + posixStatSlotCount(darwinStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let measured = asm.newLabel()
 	let answered = asm.newLabel()
@@ -1362,7 +1385,7 @@ end 'buildArm64DarwinDupCStringChunk'
 // `__mf_stat` publishes derived from ONE reading of `st_mode`.
 function buildArm64DarwinFileAttributesChunk() returns FunctionCodeChunk
 	let SlotStat = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(posixStatSlotCount(darwinStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let described = asm.newLabel()
 	let answered = asm.newLabel()
@@ -1458,7 +1481,7 @@ function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
 	let SlotFindData = 1 as StackSize
 	let SlotEntry = 2 as StackSize
 	let SlotStat = 3 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(3 + posixStatSlotCount(darwinStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(3 + runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let nextEntry = asm.newLabel()
 	let exhausted = asm.newLabel()
@@ -1487,7 +1510,7 @@ function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
 	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: nextEntry)
 
-	arm64EmitZeroSlots(asm, firstSlot: SlotStat, slotCount: posixStatSlotCount(darwinStatLayout()))
+	arm64EmitZeroSlots(asm, firstSlot: SlotStat, slotCount: runtimeFrameSlots(darwinStatLayout().bytes))
 	// `fstatat(dirfd(dir), name, &st, 0)` — RELATIVE to the open directory, which is why this walk never
 	// builds a path and never owns a path buffer.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
@@ -1543,7 +1566,7 @@ function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns F
 	let SlotSearch = 6 as StackSize
 	let SlotSavedErrno = 7 as StackSize
 	let SlotStat = 8 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(8 + posixStatSlotCount(darwinStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(8 + runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let walk = asm.newLabel()
 	let described = asm.newLabel()
@@ -1938,6 +1961,22 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinExePathChunk())
 	end 'executablePath'
 
+	// `installTerminalRuntime`'s own bit, and the only producer of `osHandleFileType` is the detecting body
+	// it builds under exactly this condition — one bit, two tiers, as everywhere else here.
+	if usage.usesTerminalDetection 'terminalDetection'
+		chunks.push(buildArm64DarwinHandleFileTypeChunk())
+	end 'terminalDetection'
+
+	// ⭐⭐ **THE ENVIRONMENT READ RIDES A UNION, BECAUSE `osEnvRead` HAS TWO PRODUCERS.**
+	// `SchedRuntime.emitResolveMaxProcs` reads `MAXON_MAX_PROCS` in every green-thread program, and
+	// `TerminalRuntime.buildTerminalStdoutWantsColor` reads `NO_COLOR` and `TERM` in every program that asks
+	// whether stdout wants colour — which need not have a scheduler. Gated on `usesGt` alone it was a `bl` to
+	// a symbol nothing laid out, MEASURED as `arm64ResolveCallFixups: bl to unknown function
+	// 'mrt_host_env_read'` on the first such program built for this lane.
+	if posixReadsEnvironment(usage) 'envRead'
+		chunks.push(buildArm64DarwinEnvReadChunk())
+	end 'envRead'
+
 	// The monotonic clock and the timed park both ride `usesGt`: `__gt_now_ns` and `__gt_sleep` are
 	// scheduler functions, installed together by `installGtRuntime`, so a program that has either has the
 	// whole band. Splitting them here would be a second reachability analysis that could disagree with the
@@ -1957,7 +1996,6 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinWaitOneChunk(globalData))
 		chunks.push(buildArm64DarwinWaitCloseChunk())
 		chunks.push(buildArm64DarwinLockInitChunk())
-		chunks.push(buildArm64DarwinEnvReadChunk())
 		chunks.push(buildArm64DarwinTlsAllocChunk(globalData))
 		// ⭐⭐ **MAC8's CHILD-PROCESS CORE RIDES `usesGt`, NOT THE SUBPROCESS BIT, BECAUSE `installGtRuntime`
 		// BUILDS `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a

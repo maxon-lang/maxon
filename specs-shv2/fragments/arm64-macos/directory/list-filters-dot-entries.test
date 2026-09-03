@@ -63,9 +63,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @main {
@@ -88,9 +89,7 @@ func @main {
     arm64.bl __mf_open_write
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x21, 1
     arm64.movRegReg x0, x20
@@ -115,9 +114,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __mf_write
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x22, 2
     arm64.movRegReg x0, x20
@@ -143,9 +140,7 @@ func @main {
     arm64.bl Directory.list
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x21
@@ -162,18 +157,14 @@ func @main {
     arm64.ret
   tryok#5:
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.bl FilePath.filename
     arm64.movRegReg x23, x0
@@ -181,19 +172,14 @@ func @main {
     arm64.movRegReg x0, x23
     arm64.bl __str_eq
     arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit
-    arm64.b orrhs
-  critsplit:
-    arm64.b scmerge
+    arm64.cbnz x0, scmerge
   orrhs:
     arm64.leaRdata x1, __str_rec_27  ; ".."
     arm64.movRegReg x0, x23
     arm64.bl __str_eq
     arm64.movRegReg x1, x0
-    arm64.b scmerge
   scmerge:
-    arm64.cbnz x1, dot
-    arm64.b ifcont#14
+    arm64.cbz x1, ifcont#14
   dot:
     arm64.movImm x22, 4
     arm64.movRegReg x0, x23
@@ -215,16 +201,13 @@ func @main {
   ifcont#14:
     arm64.movRegReg x0, x23
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.add x22, x22, 1
     arm64.b forhdr
   forexit:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 1
-    arm64.cset x0, ne
-    arm64.cbnz x0, countOne
-    arm64.b ifcont#16
+    arm64.b.eq ifcont#16
   countOne:
     arm64.movImm x22, 5
     arm64.movRegReg x0, x20
@@ -248,9 +231,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq tryok#17
   tryerr#18:
     arm64.movImm x23, 6
     arm64.movRegReg x0, x22
@@ -280,9 +261,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl Directory.list
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#20
-    arm64.b tryok#19
+    arm64.b.eq tryok#19
   tryerr#20:
     arm64.movImm x23, 7
     arm64.movRegReg x0, x22
@@ -304,9 +283,7 @@ func @main {
   tryok#19:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, countZero
-    arm64.b ifcont#22
+    arm64.b.eq ifcont#22
   countZero:
     arm64.movImm x23, 8
     arm64.bl __managed_decref

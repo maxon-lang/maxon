@@ -154,27 +154,18 @@ func @main {
     arm64.leaRdata x1, __layout_Container_String
     arm64.movRegReg x0, x19
     arm64.bl Container.duplicate
-    arm64.b __il_body#7
   __il_body#7:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.b __il_cont#6
-  __il_cont#6:
-    arm64.b __il_body#8
   __il_body#8:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
-    arm64.b __il_cont#5
-  __il_cont#5:
+  __il_cont:
     arm64.cmp x1, 2
-    arm64.cset x1, eq
-    arm64.cbnz x1, aok
-    arm64.b ifcont#4
+    arm64.b.ne ifcont
   aok:
     arm64.cmp x2, 2
-    arm64.cset x1, eq
-    arm64.cbnz x1, bok
-    arm64.b ifcont#3
+    arm64.b.ne ifcont
   bok:
     arm64.movImm x20, 0
     arm64.bl __destruct_Container_String
@@ -188,9 +179,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#3:
-    arm64.b ifcont#4
-  ifcont#4:
+  ifcont:
     arm64.movImm x20, 1
     arm64.bl __destruct_Container_String
     arm64.movRegReg x0, x19

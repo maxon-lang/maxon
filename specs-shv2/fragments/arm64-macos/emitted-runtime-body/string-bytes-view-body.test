@@ -35,8 +35,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.cbnz x21, ok
-    arm64.b ifcont
+    arm64.cbz x21, ifcont
   ok:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
@@ -66,13 +65,10 @@ func @__str_bytes_view {
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, -4
-    arm64.cset x0, eq
-    arm64.cbnz x0, bvret
-    arm64.b bvcoown
+    arm64.b.eq bvret
   bvcoown:
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
-    arm64.b bvret
   bvret:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0

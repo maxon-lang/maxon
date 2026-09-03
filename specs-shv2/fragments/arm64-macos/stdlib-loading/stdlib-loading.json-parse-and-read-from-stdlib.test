@@ -58,9 +58,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot4, x19
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_20  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:4: Json.parse rejected a valid document\x0a"
     arm64.bl mrt_panic
@@ -85,9 +83,7 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot2, x20
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_22  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:7: count missing\x0a"
     arm64.bl mrt_panic
@@ -112,9 +108,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.storeSlotReg slot0, x21
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.leaRdata x0, __str_blob_24  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:10: name missing\x0a"
     arm64.bl mrt_panic
@@ -138,9 +132,7 @@ func @main {
     arm64.bl JsonDoc.getBool
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_blob_26  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:13: ok missing\x0a"
     arm64.bl mrt_panic
@@ -164,9 +156,7 @@ func @main {
     arm64.bl JsonDoc.getChild
     arm64.movRegReg x23, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#10
-    arm64.b tryok#9
+    arm64.b.eq tryok#9
   tryerr#10:
     arm64.leaRdata x0, __str_blob_27  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:16: tags missing\x0a"
     arm64.bl mrt_panic
@@ -190,9 +180,7 @@ func @main {
     arm64.movRegReg x24, x0
     arm64.storeSlotReg slot3, x24
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq tryok#11
   tryerr#12:
     arm64.leaRdata x0, __str_blob_28  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:19: tags is not an array\x0a"
     arm64.bl mrt_panic
@@ -216,9 +204,7 @@ func @main {
     arm64.bl JsonDoc.arrayAt
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#14
-    arm64.b tryok#13
+    arm64.b.eq tryok#13
   tryerr#14:
     arm64.leaRdata x0, __str_blob_35  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:22: tags[1] missing\x0a"
     arm64.bl mrt_panic
@@ -394,9 +380,7 @@ func @main {
     arm64.bl JsonDoc.getInt
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.leaRdata x0, __str_rec_37  ; "absent key refused\x0a"
     arm64.bl print
@@ -406,14 +390,10 @@ func @main {
     arm64.loadRegSlot x1, slot1
     arm64.add x19, x0, x1
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_63  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

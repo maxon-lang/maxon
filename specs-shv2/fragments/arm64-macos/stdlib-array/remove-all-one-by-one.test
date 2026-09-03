@@ -56,22 +56,17 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, gt
-    arm64.cbnz x0, drain
-    arm64.b whileexit
+    arm64.b.le whileexit
   drain:
     arm64.movImm x1, 0
     arm64.leaRdata x2, __layout_Array_Int
     arm64.movRegReg x0, x19
     arm64.bl Array.remove
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x20, 99
     arm64.movRegReg x0, x19
@@ -90,14 +85,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at remove-all-one-by-one.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

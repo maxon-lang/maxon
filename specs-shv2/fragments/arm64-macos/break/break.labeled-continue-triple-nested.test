@@ -27,55 +27,33 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x1, 2
-    arm64.cset x2, lt
-    arm64.cbnz x2, outer
-    arm64.b whileexit#3
+    arm64.b.ge whileexit
   outer:
     arm64.add x1, x1, 1
     arm64.movImm x2, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.cmp x2, 3
-    arm64.cset x3, lt
-    arm64.cbnz x3, middle
-    arm64.b whileexit#6
+    arm64.b.ge whilehdr#1
   middle:
     arm64.add x2, x2, 1
     arm64.movImm x3, 0
-    arm64.b whilehdr#7
   whilehdr#7:
     arm64.cmp x3, 4
-    arm64.cset x4, lt
-    arm64.cbnz x4, inner
-    arm64.b whileexit#9
+    arm64.b.ge whilehdr#4
   inner:
     arm64.add x3, x3, 1
     arm64.add x0, x0, 1
     arm64.cmp x3, 2
-    arm64.cset x4, eq
-    arm64.cbnz x4, check
-    arm64.b ifcont
-  check:
-    arm64.b whilehdr#4
-  ifcont:
+    arm64.b.eq whilehdr#4
     arm64.b whilehdr#7
-  whileexit#9:
-    arm64.b whilehdr#4
-  whileexit#6:
-    arm64.b whilehdr#1
-  whileexit#3:
+  whileexit:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at break.labeled-continue-triple-nested.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

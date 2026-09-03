@@ -3943,7 +3943,7 @@ error E3139: <fragment>:10:15: service call cycle — these messages can deadloc
 ```
 
 <!-- test: a-blocking-cycle-through-an-indirect-call-aborts -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 4 -->
 ⛔⛔ **THE HALF OF THE DEADLOCK RULE THAT IS A RUNTIME PROPERTY, BECAUSE E3139 CANNOT REACH IT.**
 `ServiceCallCycleCheck` walks a graph of NAMED callees, so every case above it can be refused at compile
@@ -4585,7 +4585,7 @@ names a thread true
 ```
 
 <!-- test: a-service-shut-down-with-async-work-in-flight -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 4 -->
 ⭐⭐ **W226's SHAPE, COMMITTED — AND IT IS THE PROOF THAT THE LEAK IT PREDICTED IS NOT THERE.** No case in
 this file had a handler use `async` at all, and the `SV1` review that opened `W226` could not measure whether

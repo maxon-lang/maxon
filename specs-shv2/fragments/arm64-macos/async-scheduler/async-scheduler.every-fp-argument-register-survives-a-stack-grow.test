@@ -55,9 +55,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @six {
@@ -75,9 +76,7 @@ func @six {
     arm64.add x19, x0, x1
     arm64.fpLoadRdata d6, [rdata + __fconst_1]
     arm64.fcmp d0, d6
-    arm64.cset x0, mi
-    arm64.cbnz x0, base
-    arm64.b ifcont
+    arm64.b.pl ifcont
   base:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
@@ -120,9 +119,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __gt_await
     arm64.cmp x0, 105
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

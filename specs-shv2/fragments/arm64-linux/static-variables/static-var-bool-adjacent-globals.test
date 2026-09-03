@@ -26,8 +26,7 @@ func @main {
     arm64.prologue 16
     arm64.leaGlobal x0, __data_flag
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.cbnz x0, checkFalse
-    arm64.b ifcont#2
+    arm64.cbz x0, ifcont#2
   checkFalse:
     arm64.leaRdata x0, __str_rec_2  ; "flag should be false\x0a"
     arm64.bl print
@@ -38,9 +37,7 @@ func @main {
     arm64.leaGlobal x0, __data_counter
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 42
-    arm64.cset x0, eq
-    arm64.cbnz x0, checkCounter
-    arm64.b ifcont#4
+    arm64.b.ne ifcont#4
   checkCounter:
     arm64.movImm x0, 0
     arm64.epilogue 16

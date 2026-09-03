@@ -76,12 +76,13 @@ data {
   __sched_lock@248 = i64 0
   __sched_nmspinning@256 = i64 0
   __sched_parked_drivers@264 = i64 0
-  __mrt_errno@272 = i64 0
-  __mrt_envp@280 = i64 0
-  __mrt_tls_next_key@288 = i64 0
-  __slab_arena_list@296 = i64 0
-  __slab_arena_map_l1@304 = i64 0
-  __slab_state@312 = i64 0
+  __sched_sysmon_started@272 = i64 0
+  __mrt_errno@280 = i64 0
+  __mrt_envp@288 = i64 0
+  __mrt_tls_next_key@296 = i64 0
+  __slab_arena_list@304 = i64 0
+  __slab_arena_map_l1@312 = i64 0
+  __slab_state@320 = i64 0
 }
 
 func @done {
@@ -119,12 +120,9 @@ func @main {
     arm64.movImm x19, 0
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x21, 1
-    arm64.cset x0, lt
-    arm64.cbnz x0, warm
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   warm:
     arm64.leaFuncAddr x0, sleeper
     arm64.bl __gt_spawn
@@ -152,12 +150,9 @@ func @main {
     arm64.bl __mm_counter_raw_alloc_live
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.cmp x22, 3
-    arm64.cset x0, lt
-    arm64.cbnz x0, parkedThenDropped
-    arm64.b whileexit#6
+    arm64.b.ge whileexit#6
   parkedThenDropped:
     arm64.leaFuncAddr x0, sleeper
     arm64.bl __gt_spawn

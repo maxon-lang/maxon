@@ -66,9 +66,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @drainThunk {
@@ -85,9 +86,7 @@ func @drainThunk {
     arm64.movRegReg x0, x20
     arm64.bl __destruct_FilePath
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, bad
-    arm64.b ifcont
+    arm64.b.ge ifcont
   bad:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -159,18 +158,14 @@ func @main {
     arm64.bl __managed_push
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -178,9 +173,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.sub x0, x9, 1
     arm64.movRegReg x0, x20
@@ -190,7 +183,6 @@ func @main {
     arm64.add x20, x20, x1
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.movRegReg x20, x0

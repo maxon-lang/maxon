@@ -32,9 +32,7 @@ func @main {
     arm64.leaRdata x0, __str_rec_1  ; "value"
     arm64.bl __enum_from_name_Container#value
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -43,15 +41,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#5
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#5:
     arm64.movImm x19, 0
     arm64.bl __mm_decref
@@ -61,21 +54,15 @@ func @main {
     arm64.ret
   matchnext:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#4
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#4:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.bl __mm_decref
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at fromName-associated-compile-time.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

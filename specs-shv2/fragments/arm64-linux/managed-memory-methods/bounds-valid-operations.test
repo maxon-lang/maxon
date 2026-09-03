@@ -42,9 +42,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_grow
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at bounds-valid-operations.test:7: grow OOB\x0a"
     arm64.bl mrt_panic
@@ -60,9 +58,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_1  ; "panic at bounds-valid-operations.test:8: setLength OOB\x0a"
     arm64.bl mrt_panic
@@ -78,34 +74,24 @@ func @main {
     arm64.movImm x2, 10
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#25
-    arm64.b __im_owned#26
+    arm64.b.ne __im_slow#25
   __im_owned#26:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#25
-    arm64.b __im_bounds#27
+    arm64.b.lt __im_slow#25
   __im_bounds#27:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#25
-    arm64.b __im_buffer#28
+    arm64.b.ls __im_slow#25
   __im_buffer#28:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#25
-    arm64.b __im_viewed#29
+    arm64.b.eq __im_slow#25
   __im_viewed#29:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#25
-    arm64.b __im_store#30
+    arm64.b.eq __im_store#30
   __im_slow#25:
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_set
@@ -114,12 +100,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#24
   __im_cont#24:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.leaRdata x0, __str_blob_2  ; "panic at bounds-valid-operations.test:9: set OOB\x0a"
     arm64.bl mrt_panic
@@ -135,34 +118,24 @@ func @main {
     arm64.movImm x2, 20
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#32
-    arm64.b __im_owned#33
+    arm64.b.ne __im_slow#32
   __im_owned#33:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#32
-    arm64.b __im_bounds#34
+    arm64.b.lt __im_slow#32
   __im_bounds#34:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#32
-    arm64.b __im_buffer#35
+    arm64.b.ls __im_slow#32
   __im_buffer#35:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#32
-    arm64.b __im_viewed#36
+    arm64.b.eq __im_slow#32
   __im_viewed#36:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#32
-    arm64.b __im_store#37
+    arm64.b.eq __im_store#37
   __im_slow#32:
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_set
@@ -172,12 +145,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#31
   __im_cont#31:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_blob_3  ; "panic at bounds-valid-operations.test:10: set OOB\x0a"
     arm64.bl mrt_panic
@@ -193,34 +163,24 @@ func @main {
     arm64.movImm x2, 30
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#39
-    arm64.b __im_owned#40
+    arm64.b.ne __im_slow#39
   __im_owned#40:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#39
-    arm64.b __im_bounds#41
+    arm64.b.lt __im_slow#39
   __im_bounds#41:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 2
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#39
-    arm64.b __im_buffer#42
+    arm64.b.ls __im_slow#39
   __im_buffer#42:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#39
-    arm64.b __im_viewed#43
+    arm64.b.eq __im_slow#39
   __im_viewed#43:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#39
-    arm64.b __im_store#44
+    arm64.b.eq __im_store#44
   __im_slow#39:
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_set
@@ -230,12 +190,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#38
   __im_cont#38:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#10
-    arm64.b tryok#9
+    arm64.b.eq tryok#9
   tryerr#10:
     arm64.leaRdata x0, __str_blob_4  ; "panic at bounds-valid-operations.test:11: set OOB\x0a"
     arm64.bl mrt_panic
@@ -251,34 +208,24 @@ func @main {
     arm64.movImm x2, 40
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#46
-    arm64.b __im_owned#47
+    arm64.b.ne __im_slow#46
   __im_owned#47:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#46
-    arm64.b __im_bounds#48
+    arm64.b.lt __im_slow#46
   __im_bounds#48:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 3
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#46
-    arm64.b __im_buffer#49
+    arm64.b.ls __im_slow#46
   __im_buffer#49:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#46
-    arm64.b __im_viewed#50
+    arm64.b.eq __im_slow#46
   __im_viewed#50:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#46
-    arm64.b __im_store#51
+    arm64.b.eq __im_store#51
   __im_slow#46:
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_set
@@ -288,12 +235,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#45
   __im_cont#45:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq tryok#11
   tryerr#12:
     arm64.leaRdata x0, __str_blob_5  ; "panic at bounds-valid-operations.test:12: set OOB\x0a"
     arm64.bl mrt_panic
@@ -308,23 +252,17 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#53
-    arm64.b __im_load#54
+    arm64.b.ls __im_slow#53
   __im_load#54:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#55
-    arm64.b critsplit#68
+    arm64.b.eq critsplit#68
   __im_empty#55:
     arm64.cmp x20, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#53
-    arm64.b critsplit#69
+    arm64.b.ne critsplit#69
   __im_slow#53:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -335,12 +273,9 @@ func @main {
     arm64.b __im_cont#52
   critsplit#68:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#52
   __im_cont#52:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#14
-    arm64.b tryok#13
+    arm64.b.eq tryok#13
   tryerr#14:
     arm64.leaRdata x0, __str_blob_6  ; "panic at bounds-valid-operations.test:13: get OOB\x0a"
     arm64.bl mrt_panic
@@ -355,9 +290,7 @@ func @main {
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#57
-    arm64.b __im_load#58
+    arm64.b.ls __im_slow#57
   __im_load#58:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 8
@@ -365,14 +298,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#59
-    arm64.b critsplit#70
+    arm64.b.eq critsplit#70
   __im_empty#59:
     arm64.cmp x21, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#57
-    arm64.b critsplit#71
+    arm64.b.ne critsplit#71
   __im_slow#57:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -383,12 +312,9 @@ func @main {
     arm64.b __im_cont#56
   critsplit#70:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#56
   __im_cont#56:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.leaRdata x0, __str_blob_7  ; "panic at bounds-valid-operations.test:14: get OOB\x0a"
     arm64.bl mrt_panic
@@ -403,9 +329,7 @@ func @main {
     arm64.movImm x1, 2
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 2
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#61
-    arm64.b __im_load#62
+    arm64.b.ls __im_slow#61
   __im_load#62:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 16
@@ -413,14 +337,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#63
-    arm64.b critsplit#72
+    arm64.b.eq critsplit#72
   __im_empty#63:
     arm64.cmp x22, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#61
-    arm64.b critsplit#73
+    arm64.b.ne critsplit#73
   __im_slow#61:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -431,12 +351,9 @@ func @main {
     arm64.b __im_cont#60
   critsplit#72:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#60
   __im_cont#60:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq tryok#17
   tryerr#18:
     arm64.leaRdata x0, __str_blob_8  ; "panic at bounds-valid-operations.test:15: get OOB\x0a"
     arm64.bl mrt_panic
@@ -451,9 +368,7 @@ func @main {
     arm64.movImm x1, 3
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 3
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#65
-    arm64.b __im_load#66
+    arm64.b.ls __im_slow#65
   __im_load#66:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 24
@@ -461,14 +376,10 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#67
-    arm64.b critsplit#74
+    arm64.b.eq critsplit#74
   __im_empty#67:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#65
-    arm64.b critsplit#75
+    arm64.b.ne critsplit#75
   __im_slow#65:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -478,12 +389,9 @@ func @main {
     arm64.b __im_cont#64
   critsplit#74:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont#64
   __im_cont#64:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#20
-    arm64.b tryok#19
+    arm64.b.eq tryok#19
   tryerr#20:
     arm64.leaRdata x0, __str_blob_9  ; "panic at bounds-valid-operations.test:16: get OOB\x0a"
     arm64.bl mrt_panic
@@ -501,14 +409,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_10  ; "panic at bounds-valid-operations.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -137,12 +137,12 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	// ⭐⭐ **THE ENVIRONMENT VECTOR, AND ONLY arm64-LINUX NEEDS IT CAPTURED AT ALL (L4).** Every other lane
 	// asks the platform for a variable — `GetEnvironmentVariableA` on Windows, `getenv` through libSystem on
 	// macOS — and a raw static image has neither, so the one moment the vector is reachable is HERE, where
-	// the kernel left it on the stack. It rides `usesGt` because `__sched_init_procs` is the only reader
-	// (`MAXON_MAX_PROCS`), which is the same one-bit-two-tiers arrangement argv's capture uses.
+	// the kernel left it on the stack. It rides `PosixRuntime.posixReadsEnvironment` — the union of the
+	// scheduler's `MAXON_MAX_PROCS` read and terminal detection's `NO_COLOR`/`TERM` — because a
+	// terminal-detecting program need not have a scheduler.
 	//
-	// ⚠ **IT IS INDEPENDENT OF THE argv CAPTURE ABOVE, DELIBERATELY.** The two ride different bits — a
-	// green-thread program that never asks for its arguments carries this and not that — so it re-reads `sp`
-	// rather than depending on a register the other arm happened to leave behind.
+	// ⚠ **IT IS INDEPENDENT OF THE argv CAPTURE ABOVE, DELIBERATELY.** The two ride different bits, so it
+	// re-reads `sp` rather than depending on a register the other arm happened to leave behind.
 	if captureEnvp 'envp'
 		emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
 	end 'envp'
@@ -282,16 +282,9 @@ function emitArm64EnvpFromEntryStack(code ByteArray, rdataRelocs RdataRelocation
 	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: LinuxEnvpLabel, src: Arm64Register.x0)
 end 'emitArm64EnvpFromEntryStack'
 
-// The two words between the count and the environment: the count's own slot and argv's NUL terminator.
-let LinuxEntryEnvpSkippedWords = 2 as Imm32
-
 // A word index scales to a byte offset by the machine word width, spelled as a shift because `lsl` is what
 // the instruction takes. Derived from `SpillSlotBytes`'s 8 rather than written as a 3.
 let LinuxEntryWordScaleBits = 3 as ShiftCount
-
-// Where the vector starts relative to the entry `sp`: one machine word past the count that precedes it.
-// Derived from `SpillSlotBytes` rather than written as an 8 so it says WHY it is 8.
-let LinuxEntryArgvOffset = SpillSlotBytes as Imm32
 
 // One captured register into one `.data` word.
 function emitArm64ArgvStore(code ByteArray, rdataRelocs RdataRelocationArray, label ByteArray, src Arm64Register)

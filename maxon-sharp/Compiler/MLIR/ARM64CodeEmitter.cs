@@ -4,6 +4,13 @@ using static MaxonSharp.Compiler.Ir.Runtime.GtLayout;
 namespace MaxonSharp.Compiler.Ir;
 
 public partial class ARM64CodeEmitter() {
+  /// Base words for the 64-bit ADD/SUB/SUBS extended-register forms with `option` = UXTX and `imm3` = 0.
+  /// Named because the bit that distinguishes them from the shifted-register forms is what decides
+  /// whether encoding 31 in Rd/Rn means SP or XZR — see EmitAddSubExtendedReg.
+  private const uint Arm64AddExtendedRegUxtx = 0x8B206000;
+  private const uint Arm64SubExtendedRegUxtx = 0xCB206000;
+  private const uint Arm64SubsExtendedRegUxtx = 0xEB206000;
+
   private readonly List<byte> _code = [];
   private readonly List<byte> _rdata = [];
   private readonly List<byte> _data = [];
@@ -550,8 +557,7 @@ public partial class ARM64CodeEmitter() {
           EmitWord(0xEB00001F | (Reg(ARM64Register.X17) << 16) | (Reg(ARM64Register.X16) << 5));
           _condBranchFixups.Add((_code.Count, probeDone));
           EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Lt)); // B.LT done
-          // SUB SP, SP, X17, UXTX (extended register form: Rd=31 means SP, not XZR)
-          EmitWord(0xCB206000 | (Reg(ARM64Register.X17) << 16) | (Reg(ARM64Register.Sp) << 5) | Reg(ARM64Register.Sp));
+          EmitAddSubExtendedReg(ARM64Register.Sp, ARM64Register.Sp, ARM64Register.X17, isAdd: false);
           // Probe: STR XZR, [SP] (touch the page)
           EmitWord(0xF90003FF); // STR XZR, [SP]
           // SUB X16, X16, X17
@@ -560,8 +566,7 @@ public partial class ARM64CodeEmitter() {
 
           DefineLabel(probeDone);
           // Subtract remainder
-          // SUB SP, SP, X16, UXTX (extended register form: Rd=31 means SP, not XZR)
-          EmitWord(0xCB206000 | (Reg(ARM64Register.X16) << 16) | (Reg(ARM64Register.Sp) << 5) | Reg(ARM64Register.Sp));
+          EmitAddSubExtendedReg(ARM64Register.Sp, ARM64Register.Sp, ARM64Register.X16, isAdd: false);
         }
       }
     }
@@ -799,6 +804,17 @@ public partial class ARM64CodeEmitter() {
     EmitWord(baseOpcode | (Reg(src2) << 16) | (Reg(src1) << 5) | Reg(dest));
   }
 
+  /// ADD/SUB in the EXTENDED-register form (`UXTX #0`), which for these two instructions is the ONLY
+  /// register form whose Rd and Rn read encoding 31 as SP. The shifted-register form reads 31 as XZR, so
+  /// `sub sp, sp, x16` encoded that way assembles as `sub xzr, xzr, x16` and drops the write silently.
+  /// With `amount` in a register and no shift the two forms are otherwise identical, so ANY register
+  /// add/sub whose Rd or Rn can be SP must come through here. The remaining shifted-register sites take
+  /// their operands from the register allocator or from X16/X17, neither of which is ever SP.
+  private void EmitAddSubExtendedReg(ARM64Register dest, ARM64Register src, ARM64Register amount, bool isAdd) {
+    var opcode = isAdd ? Arm64AddExtendedRegUxtx : Arm64SubExtendedRegUxtx;
+    EmitWord(opcode | (Reg(amount) << 16) | (Reg(src) << 5) | Reg(dest));
+  }
+
   /// <summary>
   /// Set or clear a bit in a bit string at [baseReg + offset].
   /// bitIndex is a register containing the bit index (0-based from the base).
@@ -850,10 +866,9 @@ public partial class ARM64CodeEmitter() {
       var opcode = isAdd ? 0xD1000000u : 0x91000000u;
       EmitWord(opcode | ((uint)(-immediate) << 10) | (Reg(src) << 5) | Reg(dest));
     } else {
-      // Large immediate: load into X16, then use register variant
+      // Too wide for the imm12 field: materialize it and use the register form.
       EmitMovRegImm(ARM64Register.X16, immediate);
-      var opcode = isAdd ? 0x8B000000u : 0xCB000000u;
-      EmitWord(opcode | (Reg(ARM64Register.X16) << 16) | (Reg(src) << 5) | Reg(dest));
+      EmitAddSubExtendedReg(dest, src, ARM64Register.X16, isAdd);
     }
   }
 
@@ -862,8 +877,10 @@ public partial class ARM64CodeEmitter() {
       // CMP Xn, #imm = SUBS XZR, Xn, #imm
       EmitWord(0xF100001F | ((uint)immediate << 10) | (Reg(lhs) << 5));
     } else {
+      // Extended-register `SUBS` for the same reason `EmitAddSubExtendedReg` exists: it is the form
+      // whose Rn reads 31 as SP. Rd stays 31 = XZR, which is what makes a `SUBS` a `CMP`.
       EmitMovRegImm(ARM64Register.X16, immediate);
-      EmitWord(0xEB00001F | (Reg(ARM64Register.X16) << 16) | (Reg(lhs) << 5));
+      EmitWord(Arm64SubsExtendedRegUxtx | (Reg(ARM64Register.X16) << 16) | (Reg(lhs) << 5) | Reg(ARM64Register.Xzr));
     }
   }
 

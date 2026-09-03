@@ -41,26 +41,20 @@ data {
 func @ascending {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -89,22 +83,17 @@ func @main {
     arm64.movImm x0, 8
     arm64.storeBaseDispReg.word64 [x20 + 24], x0
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b forexit
+    arm64.b.ge forexit
   fill:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr
@@ -122,33 +111,27 @@ func @main {
     arm64.leaRdata x1, __str_rec_14  ; "pdq.partition"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
-    arm64.cbnz x0, p
-    arm64.b ifcont#6
+    arm64.cbz x0, ifcont#6
   p:
     arm64.leaRdata x0, __str_rec_15  ; "partition "
     arm64.bl print
-    arm64.b ifcont#6
   ifcont#6:
     arm64.leaRdata x1, __str_rec_16  ; "pdq.medianOf3"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
-    arm64.cbnz x0, m3
-    arm64.b ifcont#8
+    arm64.cbz x0, ifcont#8
   m3:
     arm64.leaRdata x0, __str_rec_17  ; "medianOf3 "
     arm64.bl print
-    arm64.b ifcont#8
   ifcont#8:
     arm64.leaRdata x1, __str_rec_18  ; "pdq.heapsortFallback"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, nf
-    arm64.b ifcont#10
+    arm64.cbz x0, ifcont#10
   nf:
     arm64.leaRdata x0, __str_rec_19  ; "no-heap-fallback"
     arm64.bl print
-    arm64.b ifcont#10
   ifcont#10:
     arm64.leaRdata x0, __str_rec_20  ; "\x0a"
     arm64.bl print

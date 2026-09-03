@@ -58,9 +58,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @main {
@@ -80,9 +81,7 @@ func @main {
     arm64.bl __mf_open_write
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x21
@@ -105,9 +104,7 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __mf_write
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movRegReg x0, x22
     arm64.bl __mf_close
@@ -139,9 +136,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __mf_rename
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x19, 3
     arm64.movRegReg x0, x23
@@ -172,8 +167,7 @@ func @main {
     arm64.cset x21, ne
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cbnz x21, oldStillThere
-    arm64.b ifcont#8
+    arm64.cbz x21, ifcont#8
   oldStillThere:
     arm64.movImm x19, 4
     arm64.movRegReg x0, x22
@@ -196,8 +190,7 @@ func @main {
     arm64.cset x21, ne
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cbnz x21, newMissing
-    arm64.b ifcont#10
+    arm64.cbz x21, ifcont#10
   newMissing:
     arm64.movImm x19, 5
     arm64.movRegReg x0, x22
@@ -217,9 +210,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq tryok#11
   tryerr#12:
     arm64.movImm x20, 6
     arm64.movRegReg x0, x19

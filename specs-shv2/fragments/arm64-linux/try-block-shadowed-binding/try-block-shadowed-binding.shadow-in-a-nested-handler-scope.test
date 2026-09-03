@@ -50,8 +50,7 @@ ExitCode: 9
 func @callA {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -67,8 +66,7 @@ func @callA {
 func @callB {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -89,43 +87,24 @@ func @main {
     arm64.bl callA
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, critsplit#13
-    arm64.b tryblkok#2
-  critsplit#13:
-    arm64.b tryblkerr
+    arm64.b.ne matcharm
   tryblkok#2:
     arm64.movImm x0, 0
     arm64.bl callB
     arm64.add x1, x9, 1
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, critsplit#14
-    arm64.b tryblkok#3
-  critsplit#14:
-    arm64.b tryblkerr
-  tryblkerr:
-    arm64.b matchnext
-  matchnext:
-    arm64.b matcharm
+    arm64.b.eq tryblkok#3
   matcharm:
     arm64.movImm x0, 9
-    arm64.b matchcont
-  matchcont:
     arm64.b tryblkcont
   tryblkok#3:
     arm64.add x0, x19, x0
-    arm64.b tryblkcont
   tryblkcont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at try-block-shadowed-binding.shadow-in-a-nested-handler-scope.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

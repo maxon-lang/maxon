@@ -212,18 +212,17 @@ maxon test [directory] [options]
 the project directory, and not the staging tree the tests were compiled out of. So a relative path in a
 test body means the same thing it means in the shell you typed the command in.
 
-**`--color=auto` degrades to `never` on targets with no terminal detection.** Asking the OS what kind of
-object a handle is needs a host call, and only **x64-windows** makes it today (`GetFileType`). On every
-other target — **arm64-macos**, **arm64-linux**, **x64-linux** and **wasm32-wasi** — the question is
-answered "not a terminal", so `auto` prints no colour there however the report is being viewed.
-`--color=always` is unaffected and is the way to get colour on those lanes.
+**`--color=auto` degrades to `never` on wasm32-wasi.** Asking the OS what kind of object a handle is needs
+a host call: **x64-windows** makes it with `GetFileType`, **arm64-macos** with `isatty`, and both Linux
+lanes with the `ioctl(1, TCGETS, ...)` `isatty` is made of — a libc-less static image has no `isatty` to
+call, and reads `NO_COLOR` and `TERM` out of the environment vector its entry stub captured. On
+**wasm32-wasi** the question is answered "not a terminal", so `auto` prints no colour there however the
+report is being viewed. `--color=always` is unaffected and is the way to get colour on that lane.
 
 The build is never refused for it: the answer degrades rather than the compile failing, because "not a
 terminal" is a sound conservative answer where a missing file surface or a missing stdin would leave a
-program with no answer at all. What each lane owes to answer it properly is one call, and the gap is
-recorded per lane in `TargetFacilities.targetProvidesFacility`'s `terminalDetection` row — `isatty(1)`
-on Darwin, `ioctl(1, TCGETS, ...)` on the libc-less Linux lanes, translated into the `FILE_TYPE_CHAR`
-vocabulary `StdOp.osHandleFileType` speaks. wasm32-wasi is the one lane where it is not merely unwritten:
+program with no answer at all. Which lanes can ask is recorded in
+`TargetFacilities.targetProvidesFacility`'s `terminalDetection` row. wasm32-wasi is not merely unwritten:
 a WASI component cannot ask what is on the other end of its `output-stream` at all.
 
 **Outcomes.** A test that does not pass is reported as one of five distinct states, because they

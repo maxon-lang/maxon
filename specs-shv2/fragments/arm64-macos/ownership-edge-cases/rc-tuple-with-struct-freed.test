@@ -60,14 +60,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.bl __destruct___Tuple2.int.Point
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at rc-tuple-with-struct-freed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

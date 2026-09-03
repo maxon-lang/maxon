@@ -85,9 +85,7 @@ func @IntCursor.create {
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, empty
-    arm64.b ifcont
+    arm64.b.ne ifcont
   empty:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -125,9 +123,7 @@ func @IntCursor.current {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_11  ; "panic at for-in-iterable.break-and-return-leave-an-iterable-loop.test:17: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -137,9 +133,7 @@ func @IntCursor.current {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
     arm64.cmp x2, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
     arm64.arm64AddLsl x0, x0, x2, lsl #3
@@ -147,14 +141,10 @@ func @IntCursor.current {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x1 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#9
+    arm64.b.eq critsplit#9
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow
-    arm64.b critsplit#10
+    arm64.b.ne critsplit#10
   __im_slow:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
@@ -165,12 +155,9 @@ func @IntCursor.current {
     arm64.b __im_cont
   critsplit#9:
     arm64.movRegReg x9, x3
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_5  ; "panic at for-in-iterable.break-and-return-leave-an-iterable-loop.test:17: oob\x0a"
     arm64.bl mrt_panic
@@ -190,9 +177,7 @@ func @IntCursor.advance {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x1, x2
-    arm64.cset x1, ge
-    arm64.cbnz x1, atEnd
-    arm64.b ifcont
+    arm64.b.lt ifcont
   atEnd:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -240,9 +225,7 @@ func @IntSeq.createIterator {
     arm64.movRegReg x0, x19
     arm64.bl IntCursor.create
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -267,36 +250,25 @@ func @firstOver {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#9
-    arm64.b forempty
-  critsplit#9:
-    arm64.b forhdr
+    arm64.b.ne forempty
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, each
-    arm64.b critsplit#10
+    arm64.b.ne critsplit
   each:
     arm64.movRegReg x0, x21
     arm64.bl IntCursor.current
     arm64.cmp x0, x19
-    arm64.cset x1, gt
-    arm64.cbnz x1, hit
-    arm64.b ifcont
+    arm64.b.le forstep
   hit:
     arm64.movRegReg x19, x0
     arm64.b forexit
-  ifcont:
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x21
     arm64.bl IntCursor.advance
     arm64.movRegReg x0, x9
     arm64.b forhdr
-  critsplit#10:
+  critsplit:
     arm64.movRegReg x19, x20
-    arm64.b forexit
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_IntCursor
@@ -304,7 +276,6 @@ func @firstOver {
     arm64.b forjoin
   forempty:
     arm64.movRegReg x0, x20
-    arm64.b forjoin
   forjoin:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -322,16 +293,10 @@ func @earlyReturn {
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forjoin
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ne forexit
   each:
     arm64.movRegReg x0, x19
     arm64.bl IntCursor.current
@@ -346,20 +311,12 @@ func @earlyReturn {
   forexit:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_IntCursor
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  forstep:
-    arm64.movRegReg x0, x19
-    arm64.bl IntCursor.advance
-    arm64.movRegReg x0, x9
-    arm64.b forhdr
 }
 
 func @main {

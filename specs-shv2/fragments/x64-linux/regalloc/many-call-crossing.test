@@ -1,0 +1,175 @@
+// Test: many-call-crossing
+typealias Integer = int(i64.min to i64.max)
+
+function ident(x Integer) returns Integer
+	return x
+end 'ident'
+
+function add2(a Integer, b Integer) returns Integer
+	return a + b
+end 'add2'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// 6 working values live across the loop body. Each `ident`-produced
+	// value is opaque to the constant folder, so all 6 land in the live
+	// set crossing the helper calls below. The body's reg-reg ALU mix
+	// is the fold-eligible shape that Phase 3's tryFoldReadFromSlot
+	// rewrites into `*Mem` variants when its source operand spills.
+	let v1 = ident(seed + 1)
+	let v2 = ident(seed + 2)
+	let v3 = ident(seed + 3)
+	let v4 = ident(seed + 4)
+	let v5 = ident(seed + 5)
+	let v6 = ident(seed + 6)
+
+	var total = 0
+	var i = 0
+	while i < 4 'loop'
+		// Each iteration's ALU mix uses every v_i. Spilled-source uses
+		// of these reg-reg forms are exactly the fold-eligible shape for
+		// Phase 3.
+		total = total + add2(v1, b: v2)
+		total = total + (v3 xor v4)
+		total = total + (v5 and v6)
+		total = total + (v1 + v3 + v5)
+		total = total + (v2 or v4 or v6)
+		i = i + 1
+	end 'loop'
+
+	let masked = total and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 116
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect CommandLine.args
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#31
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#32
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#32:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#31:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "0"
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg rcx, r8
+  trycont#3:
+    x64.callDirect __int_fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegImm32 rcx, rax, 1
+  __il_cont#22:
+    x64.leaRegRegImm32 rdx, rax, 2
+  __il_cont#21:
+    x64.leaRegRegImm32 rsi, rax, 3
+  __il_cont#20:
+    x64.leaRegRegImm32 rdi, rax, 4
+  __il_cont#19:
+    x64.leaRegRegImm32 r8, rax, 5
+  __il_cont#18:
+    x64.leaRegRegImm32 rax, rax, 6
+  __il_cont#17:
+    x64.movRegImm32 r9, 0
+    x64.movRegImm32 r10, 0
+    x64.leaRegRegReg r11, rcx, rdx
+    x64.movRegReg r12, rsi
+    x64.xorRegReg r12, rsi, rdi
+    x64.movRegReg r13, r8
+    x64.andRegReg r13, r8, rax
+    x64.leaRegRegReg rcx, rcx, rsi
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.orRegReg rdx, rdx, rdi
+    x64.orRegReg rdx, rdx, rax
+  whilehdr:
+    x64.cmpRegImm32 r10, 4
+    x64.jcc greaterEqual, whileexit
+  __il_cont#29:
+    x64.leaRegRegReg rax, r9, r11
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r9, rax, rdx
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg r12, r9
+    x64.andRegImm32 r12, r9, 255
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at many-call-crossing.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

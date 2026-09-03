@@ -165,9 +165,7 @@ func @Numbered.advance {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x1, ge
-    arm64.cbnz x1, atTheLast
-    arm64.b ifcont
+    arm64.b.lt ifcont
   atTheLast:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -192,50 +190,32 @@ func @returnsOutOfTheBody {
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
     arm64.movImm x0, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, walk
-    arm64.b forexit
+    arm64.b.ne forexit
   walk:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x20 + 32]
     arm64.blr x16
     arm64.movRegReg x21, x0
-    arm64.b __il_body#8
   __il_body#8:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#10
-    arm64.b __rc_ok#9
+    arm64.b.ge __il_cont#7
   __il_slow#10:
     arm64.movRegReg x0, x21
     arm64.bl String.byteLength
-    arm64.b __il_cont#7
-  __rc_ok#9:
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.cmp x0, 0
-    arm64.cset x0, gt
-    arm64.cbnz x0, theFirst
-    arm64.b ifcont
-  theFirst:
-    arm64.b __il_body#12
+    arm64.b.le ifcont
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x19, [x21 + 8]
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow#14
-    arm64.b __rc_ok#13
+    arm64.b.ge __il_cont#11
   __il_slow#14:
     arm64.movRegReg x0, x21
     arm64.bl String.byteLength
     arm64.movRegReg x19, x0
-    arm64.b __il_cont#11
-  __rc_ok#13:
-    arm64.b __il_cont#11
   __il_cont#11:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
@@ -248,7 +228,6 @@ func @returnsOutOfTheBody {
   ifcont:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
@@ -275,36 +254,25 @@ func @breaksOutOfTheBody {
     arm64.movRegReg x20, x1
     arm64.movImm x21, 0
     arm64.movImm x0, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, walk
-    arm64.b critsplit
+    arm64.b.ne critsplit
   walk:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x20 + 32]
     arm64.blr x16
     arm64.movRegReg x22, x0
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x22
     arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x21, x21, x0
     arm64.cmp x21, 100
-    arm64.cset x0, gt
-    arm64.cbnz x0, enough
-    arm64.b ifcont
+    arm64.b.le ifcont
   enough:
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
@@ -313,7 +281,6 @@ func @breaksOutOfTheBody {
   ifcont:
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
@@ -322,7 +289,6 @@ func @breaksOutOfTheBody {
     arm64.b forhdr
   critsplit:
     arm64.movRegReg x0, x21
-    arm64.b forexit
   forexit:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -348,12 +314,9 @@ func @main {
     arm64.movImm x19, 0
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, many
-    arm64.b whileexit
+    arm64.b.ge whileexit
   many:
     arm64.movImm x0, 30
     arm64.bl Numbered.create

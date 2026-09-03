@@ -122,9 +122,7 @@ func @pick {
     arm64.bl build
     arm64.movRegReg x20, x0
     arm64.cmp x19, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#1
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#1:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -144,22 +142,17 @@ func @pick {
     arm64.ret
   matchnext#5:
     arm64.cmp x19, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#2
-    arm64.b matchnext#6
+    arm64.b.ne matchnext#6
   matcharm#2:
     arm64.leaRdata x0, __str_rec_8  ; "green arm leaves it live padded long"
     arm64.bl print
     arm64.b matchcont
   matchnext#6:
     arm64.cmp x19, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#3:
     arm64.leaRdata x0, __str_rec_9  ; "blue arm leaves it live padded long"
     arm64.bl print
-    arm64.b matchcont
   matchcont:
     arm64.movImm x0, 16
     arm64.movImm x1, 0

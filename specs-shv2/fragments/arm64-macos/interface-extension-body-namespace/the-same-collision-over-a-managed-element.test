@@ -123,19 +123,15 @@ func @Bag.createIterator {
 func @isLong {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __il_slow:
     arm64.bl String.byteLength
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x0, x1
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, 5
     arm64.cset x0, gt
@@ -177,8 +173,7 @@ func @main {
     arm64.leaRdata x3, __layout_Bag_String
     arm64.movRegReg x0, x19
     arm64.bl Bag.contains
-    arm64.cbnz x0, long
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   long:
     arm64.leaRdata x0, __str_rec_4  ; "long\x0a"
     arm64.bl print

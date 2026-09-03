@@ -1,0 +1,15 @@
+// Test: a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer
+typealias Byte = int(0 to 200)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0)
+end 'takes'
+
+function main() returns ExitCode
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	return takes(cwd)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Bytes', got 'Array___ManagedByte'

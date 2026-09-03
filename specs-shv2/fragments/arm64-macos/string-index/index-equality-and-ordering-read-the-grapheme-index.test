@@ -44,9 +44,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movRegReg x0, x19
     arm64.bl String.endIndex
@@ -54,14 +52,11 @@ func @main {
     arm64.b trycont
   tryok:
     arm64.movRegReg x21, x0
-    arm64.b trycont
   trycont:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
     arm64.cmp x0, x1
-    arm64.cset x0, lt
-    arm64.cbnz x0, ordered
-    arm64.b ifelse#5
+    arm64.b.ge ifelse#5
   ordered:
     arm64.leaRdata x0, __str_rec_10  ; "lt\x0a"
     arm64.bl print
@@ -69,7 +64,6 @@ func @main {
   ifelse#5:
     arm64.leaRdata x0, __str_rec_11  ; "NOT lt\x0a"
     arm64.bl print
-    arm64.b ifcont#6
   ifcont#6:
     arm64.movRegReg x0, x19
     arm64.bl String.startIndex
@@ -78,8 +72,7 @@ func @main {
     arm64.cmp x1, x2
     arm64.cset x19, eq
     arm64.bl __mm_decref
-    arm64.cbnz x19, same
-    arm64.b ifelse#8
+    arm64.cbz x19, ifelse#8
   same:
     arm64.leaRdata x0, __str_rec_12  ; "eq\x0a"
     arm64.bl print
@@ -87,14 +80,11 @@ func @main {
   ifelse#8:
     arm64.leaRdata x0, __str_rec_13  ; "NOT eq\x0a"
     arm64.bl print
-    arm64.b ifcont#9
   ifcont#9:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.cbnz x0, wrong
-    arm64.b ifelse#11
+    arm64.b.ne ifelse#11
   wrong:
     arm64.leaRdata x0, __str_rec_14  ; "BAD eq\x0a"
     arm64.bl print
@@ -102,7 +92,6 @@ func @main {
   ifelse#11:
     arm64.leaRdata x0, __str_rec_15  ; "ne\x0a"
     arm64.bl print
-    arm64.b ifcont#12
   ifcont#12:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x21

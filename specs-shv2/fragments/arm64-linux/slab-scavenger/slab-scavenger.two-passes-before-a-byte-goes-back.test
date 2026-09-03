@@ -50,14 +50,10 @@ func @build {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_chk#7
+    arm64.b.lt __rc_panic#6
   __rc_chk#7:
     arm64.cmp x19, 65536
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_ok#5
+    arm64.b.le __rc_ok#5
   __rc_panic#6:
     arm64.leaRdata x0, __str_blob_1  ; "panic at slab-scavenger.two-passes-before-a-byte-goes-back.test:7: Range check failed: value outside typealias 'Seed'\x0a"
     arm64.bl mrt_panic
@@ -76,26 +72,24 @@ func @build {
     arm64.movRegReg x0, x20
     arm64.bl Array.reserve
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x21, 96
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b forexit
+    arm64.b.ge forexit
   fill:
     arm64.add x0, x19, x21
-    arm64.movImm x1, 251
-    arm64.sdiv x16, x0, x1
-    arm64.msub x1, x16, x1, x0
+    arm64.movImm x1, 2351776136887273513
+    arm64.smulh x1, x1, x0
+    arm64.asr x1, x1, 5
+    arm64.lsr x2, x1, 63
+    arm64.add x1, x1, x2
+    arm64.movImm x16, 251
+    arm64.mul x1, x1, x16
+    arm64.sub x1, x0, x1
     arm64.cmp x1, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_chk#10
+    arm64.b.lt __rc_panic#9
   __rc_chk#10:
     arm64.cmp x1, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_ok#8
+    arm64.b.le __rc_ok#8
   __rc_panic#9:
     arm64.leaRdata x0, __str_blob_2  ; "panic at slab-scavenger.two-passes-before-a-byte-goes-back.test:11: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
@@ -108,7 +102,6 @@ func @build {
   __rc_ok#8:
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr
@@ -131,20 +124,16 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.movImm x16, 16000
     arm64.cmp x20, x16
-    arm64.cset x0, lt
-    arm64.cbnz x0, alloc
-    arm64.b forexit
+    arm64.b.ge forexit
   alloc:
     arm64.movRegReg x0, x20
     arm64.bl build
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x20, x20, 1
     arm64.b forhdr
@@ -157,9 +146,7 @@ func @main {
     arm64.bl __managed_decref
     arm64.bl __slab_scavenge
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, graceSkipped
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   graceSkipped:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -172,9 +159,7 @@ func @main {
   ifcont#6:
     arm64.bl __slab_scavenge
     arm64.cmp x0, 0
-    arm64.cset x0, le
-    arm64.cbnz x0, nothingReleased
-    arm64.b ifcont#8
+    arm64.b.gt ifcont#8
   nothingReleased:
     arm64.movImm x19, 2
     arm64.movRegReg x0, x20

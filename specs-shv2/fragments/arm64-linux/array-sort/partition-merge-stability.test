@@ -110,26 +110,20 @@ func @byKey {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -302,17 +296,12 @@ func @main {
     arm64.movImm x24, 0
     arm64.movImm x25, 0
     arm64.loadRegBaseDisp.word64 x26, [x19 + 8]
-    arm64.b forhdr
   forhdr:
     arm64.cmp x25, x26
-    arm64.cset x0, lt
-    arm64.cbnz x0, walk
-    arm64.b forexit
+    arm64.b.ge forexit
   walk:
     arm64.cmp x25, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_46  ; "panic at partition-merge-stability.test:58: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -330,9 +319,7 @@ func @main {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x25, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x25, lsl #3
@@ -340,14 +327,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#25
+    arm64.b.eq critsplit#25
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#26
+    arm64.b.ne critsplit#26
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x25
@@ -358,12 +341,9 @@ func @main {
     arm64.b __im_cont
   critsplit#25:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x21, 99
     arm64.movRegReg x0, x22
@@ -386,9 +366,7 @@ func @main {
   tryok:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, x23
-    arm64.cset x1, ne
-    arm64.cbnz x1, newGroup
-    arm64.b critsplit#23
+    arm64.b.eq critsplit#23
   newGroup:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.movImm x2, 0
@@ -396,31 +374,22 @@ func @main {
   critsplit#23:
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x24
-    arm64.b ifcont#8
   ifcont#8:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 100
-    arm64.cset x0, ge
-    arm64.cbnz x0, isRight
-    arm64.b ifelse#10
+    arm64.b.lt ifelse#10
   isRight:
     arm64.movImm x0, 1
     arm64.movRegReg x2, x0
     arm64.movRegReg x0, x21
-    arm64.b ifcont#13
+    arm64.b forstep
   ifelse#10:
-    arm64.cbnz x2, leftAfterRight
-    arm64.b critsplit#24
+    arm64.cbz x2, critsplit#24
   leftAfterRight:
     arm64.movImm x0, 0
-    arm64.b ifcont#12
+    arm64.b forstep
   critsplit#24:
     arm64.movRegReg x0, x21
-    arm64.b ifcont#12
-  ifcont#12:
-    arm64.b ifcont#13
-  ifcont#13:
-    arm64.b forstep
   forstep:
     arm64.add x25, x25, 1
     arm64.movRegReg x21, x0
@@ -428,8 +397,7 @@ func @main {
     arm64.movRegReg x24, x2
     arm64.b forhdr
   forexit:
-    arm64.cbnz x21, ok
-    arm64.b ifelse#15
+    arm64.cbz x21, ifelse#15
   ok:
     arm64.leaRdata x0, __str_rec_10  ; "stable\x0a"
     arm64.bl print
@@ -437,7 +405,6 @@ func @main {
   ifelse#15:
     arm64.leaRdata x0, __str_rec_11  ; "unstable\x0a"
     arm64.bl print
-    arm64.b ifcont#16
   ifcont#16:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x22

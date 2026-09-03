@@ -50,9 +50,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @main {
@@ -71,17 +72,13 @@ func @main {
     arm64.bl FilePath.init
     arm64.movRegReg x19, x0
     arm64.leaRdata x1, __str_rec_21  ; "ABCDE"
-    arm64.b __il_body
   __il_body:
     arm64.movImm x2, 0
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl File.writeText
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -103,20 +100,12 @@ func @main {
     arm64.bl File.info
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movRegReg x0, x19
     arm64.bl File.delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
-  tryerr#6:
-    arm64.b trycont#7
-  tryok#5:
-    arm64.b trycont#7
+    arm64.b.ne trycont#7
   trycont#7:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -137,19 +126,11 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl File.delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#9
-    arm64.b tryok#8
-  tryerr#9:
-    arm64.b trycont#10
-  tryok#8:
-    arm64.b trycont#10
+    arm64.b.ne trycont#10
   trycont#10:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 5
-    arm64.cset x0, ne
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.eq ifcont
   check:
     arm64.leaRdata x0, __str_rec_22  ; "wrong size: "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]

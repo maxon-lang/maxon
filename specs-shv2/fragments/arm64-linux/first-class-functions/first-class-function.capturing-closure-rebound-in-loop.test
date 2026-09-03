@@ -39,12 +39,9 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 5
-    arm64.cset x0, lt
-    arm64.cbnz x0, l
-    arm64.b whileexit
+    arm64.b.ge whileexit
   l:
     arm64.movImm x16, 10
     arm64.mul x21, x20, x16
@@ -54,13 +51,11 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x23, x0
     arm64.storeBaseDispReg.word64 [x23 + 0], x21
-    arm64.b inner
   inner:
     arm64.movImm x0, 1
     arm64.movRegReg x1, x23
     arm64.blr x22
     arm64.add x19, x19, x0
-    arm64.b ifcont
   ifcont:
     arm64.add x20, x20, 1
     arm64.movRegReg x0, x23
@@ -68,14 +63,10 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.capturing-closure-rebound-in-loop.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

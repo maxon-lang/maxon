@@ -47,7 +47,7 @@ print("size: {fi.size}, modified: {fi.modifiedTime}")
 
 ## Targets
 
-⭐ Every case below carries `<!-- targets: x64-windows, arm64-macos, arm64-linux -->`, for the ONE reason stated in
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 **`file-io.md`'s "Targets — the one statement of the FILESYSTEM gate"**: `File.info` lowers to the
 runtime entry `__mf_stat` and the cases that create their fixture reach `__mf_open_write` too, and
 neither has an x64-linux or wasm32-wasi implementation at this rung (arm64-macOS gained one at MAC4,
@@ -58,7 +58,7 @@ not repeated here.
 ## Tests
 
 <!-- test: file-info.basic-size -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_fi_basic.txt"
@@ -86,7 +86,7 @@ size=5
 ```
 
 <!-- test: file-info.timestamps -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_fi_times.txt"
@@ -123,7 +123,7 @@ timestamps ok
 ```
 
 <!-- test: file-info.not-found -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let fi = try File.info(FilePath from "nonexistent_fi_xyz.txt") otherwise 'e'
@@ -142,7 +142,7 @@ not found
 ```
 
 <!-- test: file-info.directory -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_fi_dir"
@@ -168,7 +168,7 @@ is directory
 ```
 
 <!-- test: file-info.read-only -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_fi_rw.txt"
@@ -197,7 +197,7 @@ not read-only
 ```
 
 <!-- test: file-info.empty-file -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_fi_empty.txt"

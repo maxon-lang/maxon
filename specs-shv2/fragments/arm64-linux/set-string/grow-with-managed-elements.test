@@ -48,12 +48,9 @@ func @main {
     arm64.bl Set.create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x20, 20
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   fill:
     arm64.leaRdata x0, __str_rec_1  ; "k"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -101,30 +98,20 @@ func @main {
   whileexit#3:
     arm64.leaRdata x1, __witness_String.Hashable
     arm64.leaRdata x2, __witness_String.Equatable
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 0
-    arm64.cset x3, lt
-    arm64.cbnz x3, __il_slow
-    arm64.b __rc_chk
+    arm64.b.lt __il_slow
   __rc_chk:
     arm64.movImm x3, 4611686018427387904
     arm64.cmp x0, x3
-    arm64.cset x3, gt
-    arm64.cbnz x3, __il_slow
-    arm64.b __rc_ok
+    arm64.b.le __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl Set.count
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, 20
-    arm64.cset x0, ne
-    arm64.cbnz x0, count
-    arm64.b ifcont#5
+    arm64.b.eq ifcont#5
   count:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -143,12 +130,9 @@ func @main {
     arm64.ret
   ifcont#5:
     arm64.movImm x20, 0
-    arm64.b whilehdr#6
   whilehdr#6:
     arm64.cmp x20, 20
-    arm64.cset x0, lt
-    arm64.cbnz x0, check
-    arm64.b whileexit#8
+    arm64.b.ge whileexit#8
   check:
     arm64.leaRdata x0, __str_rec_1  ; "k"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -194,8 +178,7 @@ func @main {
     arm64.eor x21, x0, 1
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
-    arm64.cbnz x21, missing
-    arm64.b ifcont#10
+    arm64.cbz x21, ifcont#10
   missing:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19

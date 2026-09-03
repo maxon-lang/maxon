@@ -85,6 +85,11 @@ end 'arm64FrintOpcode'
 export let Arm64OpAdd = 0x8B000000
 export let Arm64OpSub = 0xCB000000
 export let Arm64OpMul = 0x9B007C00
+
+// `SMULH Xd, Xn, Xm` — the same three-source data-processing form as `MADD` above with `op31` = 0b010
+// (bit 22) instead of 0b000, so it differs from `Arm64OpMul` in exactly that bit. `Ra` stays XZR
+// (0x7C00): the field exists in the encoding and `SMULH` requires it be 0b11111.
+let Arm64OpSmulh = 0x9B407C00
 let Arm64OpSdiv = 0x9AC00C00
 export let Arm64OpUdiv = 0x9AC00800
 export let Arm64OpAnd = 0x8A000000
@@ -275,7 +280,6 @@ let Arm64OpAddsImm = 0xB1000000
 // the condition it is given (the true value comes from the +1 of XZR).
 let Arm64OpCsinc = 0x9A9F07E0
 let Arm64CondFieldShift = 12
-let Arm64CondInvertBit = 0x1
 
 // --- Branches ---
 let Arm64OpB = 0x14000000
@@ -897,7 +901,7 @@ end 'imm32ToWord'
 
 // CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond) — one register set from the flags.
 export function arm64EmitCset(code ByteArray, rd MachineWord, cond Arm64CondCode)
-	let inverted = (cond.rawValue as MachineWord) xor Arm64CondInvertBit
+	let inverted = invertArm64Cond(cond).rawValue as MachineWord
 	emitArm64Insn(code, insn: Arm64OpCsinc or (inverted shl Arm64CondFieldShift) or rd)
 end 'arm64EmitCset'
 
@@ -1512,11 +1516,12 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// three-register emitter: the shift amount is a FIELD of the opcode word (bits 15-10), not a fourth
 		// operand, so nothing about the register encoding changes.
 		arm64AddLsl(dest, base, index, scale) then emitArm64Rrr(code, opcode: Arm64OpAdd or (memoryIndexScaleShift(scale) shl Arm64ShiftedRegAmountShift), rd: arm64GprField(dest), rn: arm64GprField(base), rm: arm64GprField(index))
-		// EC18 — x64's one-operand `imul`. arm64's equivalent is `SMULH Xd, Xn, Xm`, a THREE-operand
-		// instruction with no fixed-register pair, which is a different op of its own and does not exist
-		// in this dialect yet; `StrengthReduceDivision` asks `targetLowersMulHigh` and reduces nothing on
-		// this lane, so no arm64 program can contain one.
-		imulHighReg then panic("emitArm64TargetOp: an x64 one-operand `imul` reached the arm64 encoder — AArch64 spells the high half of a signed product as `SMULH`, which this dialect does not carry")
+		// EC18 — x64's one-operand `imul`, wired to the RAX/RDX pair. arm64's high multiply is
+		// `arm64Smulh`, an op of its own, so `StdToArm64Conversion` never mints this one.
+		imulHighReg then panic("emitArm64TargetOp: an x64 one-operand `imul` reached the arm64 encoder — arm64 spells the high half of a signed product as `arm64Smulh`, a three-address form with no fixed-register pair")
+		// EC18 — `SMULH Xd, Xn, Xm`. The same three-register emitter as `MUL`, because on AArch64 the two
+		// differ only in an opcode-word field.
+		arm64Smulh(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSmulh, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 	end 'emit'
 end 'emitArm64TargetOp'
 
@@ -2513,12 +2518,19 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// `target` reaches the ISEL because the three OS-primitive lowerings differ per OS: macOS routes
 	// them through libSystem GOT imports, Linux through raw `svc #0` (see `arm64OsCallKind`), and the
 	// mmap anonymous-mapping flag word is a different number on each.
-	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, target: target, globalData: globalData, funcNames: funcNames)
+	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usage.usesGt)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
 	try allocateRegisters(targetModule, target: target, project: project, valueClasses: valueClasses)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
+
+	// EC11, and it must run HERE — after the allocator's `applyAllocation` and before the frame pass.
+	// A block whose only op is an `arm64Branch` is genuinely empty only once SSA destruction has placed
+	// (or declined to place) its edge copies; before that it is an edge about to receive moves. The
+	// frame pass then sees the surviving blocks, so a callee-saved register or a `bl` reachable only
+	// from dead code stops being paid for. See `BranchCleanup`'s header.
+	cleanUpBranches(targetModule, project: project)
 
 	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
 	insertArm64PrologueEpilogue(targetModule, target: target)
@@ -2534,7 +2546,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	//
 	// ⚠ It is no longer the WHOLE arm64 runtime: the panic runtime below is the rest of it, and this
 	// comment said "the scalar core needs no panic handler" until A3n landed one three lines away.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: usage.usesGt and target.os == Os.linux, os: target.os, entryFunction: project.entryFunctionName)
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: posixReadsEnvironment(usage) and target.os == Os.linux, os: target.os, entryFunction: project.entryFunctionName)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target))
 	end 'eachFunc'

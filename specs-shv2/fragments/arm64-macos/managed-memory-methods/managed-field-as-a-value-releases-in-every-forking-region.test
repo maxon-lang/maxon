@@ -62,38 +62,30 @@ func @main {
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.b __il_body#16
   __il_body#16:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.b __il_cont#15
   __il_cont#15:
     arm64.cmp x1, 1
     arm64.cset x21, gt
     arm64.bl __managed_decref
-    arm64.cbnz x21, big
-    arm64.b critsplit
+    arm64.cbz x21, critsplit
   big:
     arm64.movImm x0, 1
     arm64.b ifcont
   critsplit:
     arm64.movRegReg x0, x20
-    arm64.b ifcont
   ifcont:
     arm64.movRegReg x20, x0
-    arm64.b whilehdr
   whilehdr:
     arm64.movRegReg x0, x19
     arm64.bl __mm_retain
-    arm64.b __il_body#18
   __il_body#18:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.cmp x1, x20
     arm64.cset x21, gt
     arm64.bl __managed_decref
-    arm64.cbnz x21, spin
-    arm64.b whileexit
+    arm64.cbz x21, whileexit
   spin:
     arm64.add x20, x20, 1
     arm64.b whilehdr
@@ -102,19 +94,14 @@ func @main {
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -122,9 +109,7 @@ func @main {
     arm64.b __im_cont
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, x22
@@ -134,10 +119,8 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl __managed_get_unchecked
-    arm64.b __im_cont
   __im_cont:
     arm64.add x20, x20, x0
-    arm64.b forstep
   forstep:
     arm64.add x22, x22, 1
     arm64.b forhdr
@@ -151,10 +134,8 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x21
     arm64.bl __mm_retain
-    arm64.b __il_body#20
   __il_body#20:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.b __il_cont#19
   __il_cont#19:
     arm64.add x1, x20, x1
     arm64.loadRegBaseDisp.word64 x2, [x21 + 8]

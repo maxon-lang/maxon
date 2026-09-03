@@ -52,49 +52,36 @@ func @steal {
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext#9
+    arm64.b.ne matchnext#9
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
     arm64.movRegReg x0, x20
     arm64.bl __mm_incref
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl String.byteLength
     arm64.movRegReg x21, x0
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.b matchcont#6
   matchnext#5:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead#4
+    arm64.b.ne matchdead#4
   matcharm#3:
     arm64.movImm x20, 0
     arm64.movRegReg x21, x20
-    arm64.b matchcont#6
   matchcont#6:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Ty
@@ -103,12 +90,9 @@ func @steal {
   matchdead#4:
   matchnext#9:
     arm64.cmp x1, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#7
-    arm64.b matchdead#8
+    arm64.b.ne matchdead#8
   matcharm#7:
     arm64.movImm x0, 99
-    arm64.b matchcont#10
   matchcont#10:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -154,49 +138,36 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#1
-    arm64.b matchnext#9
+    arm64.b.ne matchnext#9
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x19, [x21 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
     arm64.cmp x22, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
     arm64.movRegReg x22, x0
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.b matchcont#6
   matchnext#5:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead#4
+    arm64.b.ne matchdead#4
   matcharm#3:
     arm64.movImm x19, 0
     arm64.movRegReg x22, x19
-    arm64.b matchcont#6
   matchcont#6:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Ty
@@ -204,13 +175,10 @@ func @main {
   matchdead#4:
   matchnext#9:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#7
-    arm64.b matchdead#8
+    arm64.b.ne matchdead#8
   matcharm#7:
     arm64.movImm x19, 99
     arm64.movRegReg x22, x19
-    arm64.b matchcont#10
   matchcont#10:
     arm64.leaRdata x0, __str_rec_4  ; "stolen="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]

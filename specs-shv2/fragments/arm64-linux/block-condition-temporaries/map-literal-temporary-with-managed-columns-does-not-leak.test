@@ -31,12 +31,9 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 0
     arm64.movImm x19, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x19, 200
-    arm64.cset x1, lt
-    arm64.cbnz x1, spin
-    arm64.b forexit
+    arm64.b.ge forexit
   spin:
     arm64.add x0, x0, x19
     arm64.sub x20, x0, x19
@@ -137,46 +134,37 @@ func @main {
     arm64.bl Map.upsert
     arm64.leaRdata x1, __witness_String.Hashable
     arm64.leaRdata x2, __witness_String.Equatable
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 32]
     arm64.cmp x0, 0
-    arm64.cset x3, lt
-    arm64.cbnz x3, __il_slow
-    arm64.b __rc_chk#11
+    arm64.b.lt __il_slow
   __rc_chk#11:
     arm64.movImm x3, 4611686018427387904
     arm64.cmp x0, x3
-    arm64.cset x3, gt
-    arm64.cbnz x3, __il_slow
-    arm64.b __rc_ok#10
+    arm64.b.le __il_cont
   __il_slow:
     arm64.movRegReg x0, x23
     arm64.bl Map.count
-    arm64.b __il_cont
-  __rc_ok#10:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x20, x20, x0
     arm64.movRegReg x0, x23
     arm64.bl __destruct_Map_String_String
-    arm64.b forstep
   forstep:
     arm64.add x19, x19, 1
     arm64.movRegReg x0, x20
     arm64.b forhdr
   forexit:
-    arm64.movImm x1, 100
-    arm64.sdiv x0, x0, x1
+    arm64.movImm x1, 11805916207174113035
+    arm64.smulh x1, x1, x0
+    arm64.add x0, x1, x0
+    arm64.asr x0, x0, 6
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk#7
+    arm64.b.lt __rc_panic
   __rc_chk#7:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok#5
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_29  ; "panic at map-literal-temporary-with-managed-columns-does-not-leak.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -191,7 +179,7 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
-  __rc_ok#5:
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

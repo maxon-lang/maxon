@@ -39,9 +39,7 @@ func @main {
     arm64.movImm x1, 5
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 5
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 40
@@ -49,14 +47,10 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#11
+    arm64.b.eq critsplit#11
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#12
+    arm64.b.ne critsplit#12
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -66,28 +60,20 @@ func @main {
     arm64.b __im_cont
   critsplit#11:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x20, 9
     arm64.b trycont
   tryok:
     arm64.movRegReg x20, x0
-    arm64.b trycont
   trycont:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_10  ; "panic at the-emitted-runtime-is-folded-too.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -111,9 +97,7 @@ func @__managed_get {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, oob
-    arm64.b load
+    arm64.b.lo load
   oob:
     arm64.movImm x0, 0
     arm64.movImm x9, 1
@@ -123,24 +107,20 @@ func @__managed_get {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 24]
     arm64.cmp x3, 8
-    arm64.cset x4, eq
-    arm64.cbnz x4, ldword
-    arm64.b esbyte
+    arm64.b.ne esbyte
   ldword:
     arm64.mul x1, x1, x3
     arm64.add x1, x2, x1
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.b ldjoin
+    arm64.b gchkdtor
   esbyte:
     arm64.cmp x3, 1
-    arm64.cset x4, eq
-    arm64.cbnz x4, ldbyte
-    arm64.b ldgen
+    arm64.b.ne ldgen
   ldbyte:
     arm64.mul x1, x1, x3
     arm64.add x1, x2, x1
     arm64.loadRegBaseDisp.byte x1, [x1 + 0]
-    arm64.b ldjoin
+    arm64.b gchkdtor
   ldgen:
     arm64.asr x4, x3, 63
     arm64.movImm x16, 18446744073709551615
@@ -164,29 +144,19 @@ func @__managed_get {
     arm64.add x2, x2, x4
     arm64.movImm x4, 0
     arm64.movImm x6, 0
-    arm64.b ldeh
   ldeh:
     arm64.cmp x4, x3
-    arm64.cset x7, ge
-    arm64.cbnz x7, ldxtr
-    arm64.b ldeb
+    arm64.b.lt ldeb
   ldxtr:
     arm64.lsrv x1, x6, x1
     arm64.and x1, x1, x5
-    arm64.b ldjoin
-  ldjoin:
-    arm64.b gchkdtor
   gchkdtor:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, gchknull
-    arm64.b gok
+    arm64.b.eq gok
   gchknull:
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, gempty
-    arm64.b gok
+    arm64.b.ne gok
   gempty:
     arm64.movImm x0, 0
     arm64.movImm x9, 2
@@ -219,21 +189,15 @@ func @__managed_fill {
     arm64.movRegReg x20, x1
     arm64.movRegReg x21, x3
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, badrange
-    arm64.b chkcount
+    arm64.b.lt badrange
   chkcount:
     arm64.cmp x2, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, badrange
-    arm64.b chkhigh
+    arm64.b.lt badrange
   chkhigh:
     arm64.add x22, x20, x2
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hi
-    arm64.cbnz x0, badrange
-    arm64.b classify
+    arm64.b.ls classify
   badrange:
     arm64.movImm x0, 0
     arm64.movImm x9, 1
@@ -246,9 +210,7 @@ func @__managed_fill {
   classify:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, declined
-    arm64.b prepare
+    arm64.b.eq prepare
   declined:
     arm64.movImm x0, 0
     arm64.movImm x9, 0
@@ -264,19 +226,12 @@ func @__managed_fill {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
     arm64.cmp x1, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, fillword
-    arm64.b esbyte
+    arm64.b.ne esbyte
   fillword:
     arm64.movRegReg x2, x20
-    arm64.b fiwh
   fiwh:
     arm64.cmp x2, x22
-    arm64.cset x3, ge
-    arm64.cbnz x3, fiwd
-    arm64.b fiwb
-  fiwd:
-    arm64.b applied
+    arm64.b.ge applied
   fiwb:
     arm64.mul x3, x2, x1
     arm64.add x3, x0, x3
@@ -285,19 +240,12 @@ func @__managed_fill {
     arm64.b fiwh
   esbyte:
     arm64.cmp x1, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, fillbyte
-    arm64.b fillgen
+    arm64.b.ne fillgen
   fillbyte:
     arm64.movRegReg x2, x20
-    arm64.b fibh
   fibh:
     arm64.cmp x2, x22
-    arm64.cset x3, ge
-    arm64.cbnz x3, fibd
-    arm64.b fibb
-  fibd:
-    arm64.b applied
+    arm64.b.ge applied
   fibb:
     arm64.mul x3, x2, x1
     arm64.add x3, x0, x3
@@ -306,14 +254,9 @@ func @__managed_fill {
     arm64.b fibh
   fillgen:
     arm64.movRegReg x2, x20
-    arm64.b figh
   figh:
     arm64.cmp x2, x22
-    arm64.cset x3, ge
-    arm64.cbnz x3, figd
-    arm64.b figb
-  figd:
-    arm64.b applied
+    arm64.b.lt figb
   applied:
     arm64.movImm x0, 1
     arm64.movImm x9, 0
@@ -325,9 +268,7 @@ func @__managed_fill {
     arm64.ret
   figb:
     arm64.cmp x1, 0
-    arm64.cset x3, lt
-    arm64.cbnz x3, stpk
-    arm64.b stby
+    arm64.b.ge stby
   stpk:
     arm64.asr x3, x1, 63
     arm64.movImm x16, 18446744073709551615
@@ -363,14 +304,9 @@ func @__managed_fill {
     arm64.mul x3, x2, x1
     arm64.add x3, x0, x3
     arm64.movImm x4, 0
-    arm64.b steh
   steh:
     arm64.cmp x4, x1
-    arm64.cset x5, ge
-    arm64.cbnz x5, sted
-    arm64.b steb
-  sted:
-    arm64.b figstep
+    arm64.b.lt steb
   figstep:
     arm64.add x2, x2, 1
     arm64.b figh

@@ -54,23 +54,17 @@ func @probe {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#17
-    arm64.b __im_load#18
+    arm64.b.ls __im_slow#17
   __im_load#18:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#19
-    arm64.b critsplit#31
+    arm64.b.eq critsplit#31
   __im_empty#19:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#17
-    arm64.b critsplit#32
+    arm64.b.ne critsplit#32
   __im_slow#17:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -80,34 +74,21 @@ func @probe {
     arm64.b __im_cont#16
   critsplit#31:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont#16
   __im_cont#16:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq trycont#3
   tryerr#2:
     arm64.movImm x0, 18446744073709551615
-    arm64.b trycont#3
-  tryok#1:
-    arm64.b trycont#3
   trycont#3:
     arm64.cmp x0, -1
-    arm64.cset x0, ne
-    arm64.cbnz x0, zero
-    arm64.b critsplit#28
+    arm64.b.eq ifcont#5
   zero:
     arm64.movImm x20, 1
-    arm64.b ifcont#5
-  critsplit#28:
-    arm64.b ifcont#5
   ifcont#5:
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#21
-    arm64.b __im_load#22
+    arm64.b.ls __im_slow#21
   __im_load#22:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 8
@@ -115,14 +96,10 @@ func @probe {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#23
-    arm64.b critsplit#33
+    arm64.b.eq critsplit#33
   __im_empty#23:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#21
-    arm64.b critsplit#34
+    arm64.b.ne critsplit#34
   __im_slow#21:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -132,34 +109,21 @@ func @probe {
     arm64.b __im_cont#20
   critsplit#33:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont#20
   __im_cont#20:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq trycont#8
   tryerr#7:
     arm64.movImm x0, 18446744073709551615
-    arm64.b trycont#8
-  tryok#6:
-    arm64.b trycont#8
   trycont#8:
     arm64.cmp x0, -1
-    arm64.cset x0, ne
-    arm64.cbnz x0, one
-    arm64.b critsplit#29
+    arm64.b.eq ifcont#10
   one:
     arm64.add x20, x20, 1
-    arm64.b ifcont#10
-  critsplit#29:
-    arm64.b ifcont#10
   ifcont#10:
     arm64.movImm x1, 18446744073709551615
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, -1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#25
-    arm64.b __im_load#26
+    arm64.b.ls __im_slow#25
   __im_load#26:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, -8
@@ -167,14 +131,10 @@ func @probe {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#27
-    arm64.b critsplit#35
+    arm64.b.eq critsplit#35
   __im_empty#27:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#25
-    arm64.b critsplit#36
+    arm64.b.ne critsplit#36
   __im_slow#25:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -184,28 +144,19 @@ func @probe {
     arm64.b __im_cont#24
   critsplit#35:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont#24
   __im_cont#24:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq trycont#13
   tryerr#12:
     arm64.movImm x0, 18446744073709551615
-    arm64.b trycont#13
-  tryok#11:
-    arm64.b trycont#13
   trycont#13:
     arm64.cmp x0, -1
-    arm64.cset x0, ne
-    arm64.cbnz x0, negative
-    arm64.b critsplit#30
+    arm64.b.eq critsplit#30
   negative:
     arm64.add x0, x20, 1
     arm64.b ifcont#15
   critsplit#30:
     arm64.movRegReg x0, x20
-    arm64.b ifcont#15
   ifcont#15:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -226,9 +177,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl probe
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, freshAdmittedSomething
-    arm64.b ifcont#2
+    arm64.b.eq ifcont#2
   freshAdmittedSomething:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -254,9 +203,7 @@ func @main {
     arm64.bl Array.clear
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, clearedCount
-    arm64.b ifcont#4
+    arm64.b.eq ifcont#4
   clearedCount:
     arm64.movImm x21, 2
     arm64.movRegReg x0, x20
@@ -273,9 +220,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl probe
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, clearedAdmittedSomething
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   clearedAdmittedSomething:
     arm64.movImm x21, 3
     arm64.movRegReg x0, x20

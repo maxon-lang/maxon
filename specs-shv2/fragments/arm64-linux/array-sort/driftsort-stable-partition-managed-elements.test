@@ -116,26 +116,20 @@ func @byKey {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -160,29 +154,28 @@ func @main {
     arm64.storeSlotReg slot7, x0
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.storeSlotReg slot3, x0
     arm64.cmp x0, 25
-    arm64.cset x2, lt
-    arm64.cbnz x2, blocks
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   blocks:
-    arm64.movImm x2, 5
-    arm64.sdiv x16, x0, x2
-    arm64.msub x0, x16, x2, x0
+    arm64.movImm x2, 7378697629483820647
+    arm64.smulh x2, x2, x0
+    arm64.asr x2, x2, 1
+    arm64.lsr x3, x2, 63
+    arm64.add x2, x2, x3
+    arm64.movImm x16, 5
+    arm64.mul x2, x2, x16
+    arm64.sub x0, x0, x2
     arm64.movImm x16, 4
     arm64.mul x19, x0, x16
     arm64.movImm x0, 4
     arm64.movRegReg x20, x1
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.storeSlotReg slot8, x20
     arm64.storeSlotReg slot5, x0
     arm64.cmp x0, 0
-    arm64.cset x1, gt
-    arm64.cbnz x1, desc
-    arm64.b whileexit#6
+    arm64.b.le whileexit#6
   desc:
     arm64.add x0, x19, x0
     arm64.storeSlotReg slot10, x0
@@ -259,18 +252,15 @@ func @main {
     arm64.leaRdata x1, __str_rec_24  ; "driftQuicksort.partition"
     arm64.movRegReg x0, x19
     arm64.bl Log.fired
-    arm64.cbnz x0, partitioned
-    arm64.b ifcont#8
+    arm64.cbz x0, ifcont#8
   partitioned:
     arm64.leaRdata x0, __str_rec_27  ; "partitioned "
     arm64.bl print
-    arm64.b ifcont#8
   ifcont#8:
     arm64.movImm x0, 1
     arm64.movImm x1, 1
     arm64.movImm x2, 1
     arm64.movImm x3, 0
-    arm64.b whilehdr#9
   whilehdr#9:
     arm64.storeSlotReg slot6, x3
     arm64.storeSlotReg slot2, x0
@@ -279,14 +269,10 @@ func @main {
     arm64.loadRegSlot x0, slot7
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x3, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, walk
-    arm64.b whileexit#11
+    arm64.b.ge whileexit#11
   walk:
     arm64.cmp x3, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#33
-    arm64.b __rc_ok#32
+    arm64.b.ge __rc_ok#32
   __rc_panic#33:
     arm64.leaRdata x0, __str_blob_117  ; "panic at driftsort-stable-partition-managed-elements.test:45: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -307,9 +293,7 @@ func @main {
     arm64.loadRegSlot x0, slot7
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x3, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#37
-    arm64.b __im_load#38
+    arm64.b.hs __im_slow#37
   __im_load#38:
     arm64.loadRegSlot x0, slot7
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
@@ -318,14 +302,10 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_empty#39
-    arm64.b critsplit#49
+    arm64.b.eq critsplit#49
   __im_empty#39:
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_slow#37
-    arm64.b critsplit#50
+    arm64.b.ne critsplit#50
   __im_slow#37:
     arm64.loadRegSlot x0, slot7
     arm64.movRegReg x1, x3
@@ -338,13 +318,10 @@ func @main {
   critsplit#49:
     arm64.movRegReg x0, x1
     arm64.movRegReg x9, x2
-    arm64.b __im_cont#36
   __im_cont#36:
     arm64.storeSlotReg slot4, x0
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#13
-    arm64.b tryok#12
+    arm64.b.eq tryok#12
   tryerr#13:
     arm64.movImm x20, 90
     arm64.movRegReg x0, x19
@@ -418,27 +395,21 @@ func @main {
     arm64.eor x20, x0, 1
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-    arm64.cbnz x20, labelWrong
-    arm64.b critsplit#44
+    arm64.cbz x20, critsplit#44
   labelWrong:
     arm64.movImm x20, 0
     arm64.b ifcont#15
   critsplit#44:
     arm64.loadRegSlot x20, slot0
-    arm64.b ifcont#15
   ifcont#15:
     arm64.loadRegSlot x0, slot6
     arm64.cmp x0, 0
-    arm64.cset x0, gt
-    arm64.cbnz x0, hasPrev
-    arm64.b critsplit#45
+    arm64.b.le critsplit#45
   hasPrev:
     arm64.loadRegSlot x0, slot6
     arm64.sub x1, x0, 1
     arm64.cmp x1, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#35
-    arm64.b __rc_ok#34
+    arm64.b.ge __rc_ok#34
   __rc_panic#35:
     arm64.leaRdata x0, __str_blob_118  ; "panic at driftsort-stable-partition-managed-elements.test:50: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -459,9 +430,7 @@ func @main {
     arm64.loadRegSlot x0, slot7
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#41
-    arm64.b __im_load#42
+    arm64.b.hs __im_slow#41
   __im_load#42:
     arm64.loadRegSlot x0, slot7
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
@@ -470,14 +439,10 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_empty#43
-    arm64.b critsplit#51
+    arm64.b.eq critsplit#51
   __im_empty#43:
     arm64.cmp x2, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_slow#41
-    arm64.b critsplit#52
+    arm64.b.ne critsplit#52
   __im_slow#41:
     arm64.loadRegSlot x0, slot7
     arm64.bl __managed_get
@@ -489,12 +454,9 @@ func @main {
   critsplit#51:
     arm64.movRegReg x0, x2
     arm64.movRegReg x9, x3
-    arm64.b __im_cont#40
   __im_cont#40:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq tryok#17
   tryerr#18:
     arm64.movImm x20, 91
     arm64.movRegReg x0, x19
@@ -519,24 +481,19 @@ func @main {
     arm64.loadRegSlot x2, slot4
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.cmp x1, x2
-    arm64.cset x1, gt
-    arm64.cbnz x1, outOfOrder
-    arm64.b critsplit#46
+    arm64.b.le critsplit#46
   outOfOrder:
     arm64.movImm x1, 0
     arm64.b ifcont#20
   critsplit#46:
     arm64.loadRegSlot x1, slot2
-    arm64.b ifcont#20
   ifcont#20:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegSlot x3, slot4
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.cmp x2, x3
-    arm64.cset x2, eq
-    arm64.movImm x3, 0
-    arm64.cbnz x2, andrhs
-    arm64.b critsplit#47
+    arm64.movImm x2, 0
+    arm64.b.ne critsplit#47
   andrhs:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.loadRegSlot x2, slot4
@@ -545,23 +502,18 @@ func @main {
     arm64.cset x0, gt
     arm64.b scmerge
   critsplit#47:
-    arm64.movRegReg x0, x3
-    arm64.b scmerge
+    arm64.movRegReg x0, x2
   scmerge:
-    arm64.cbnz x0, unstable
-    arm64.b critsplit#48
+    arm64.cbz x0, critsplit#48
   unstable:
     arm64.movImm x0, 0
-    arm64.b ifcont#24
+    arm64.b ifcont#25
   critsplit#48:
     arm64.loadRegSlot x0, slot1
-    arm64.b ifcont#24
-  ifcont#24:
     arm64.b ifcont#25
   critsplit#45:
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x1, slot2
-    arm64.b ifcont#25
   ifcont#25:
     arm64.loadRegSlot x2, slot6
     arm64.add x3, x2, 1
@@ -570,28 +522,22 @@ func @main {
     arm64.b whilehdr#9
   whileexit#11:
     arm64.loadRegSlot x0, slot2
-    arm64.cbnz x0, isSorted
-    arm64.b ifcont#27
+    arm64.cbz x0, ifcont#27
   isSorted:
     arm64.leaRdata x0, __str_rec_28  ; "sorted "
     arm64.bl print
-    arm64.b ifcont#27
   ifcont#27:
     arm64.loadRegSlot x0, slot1
-    arm64.cbnz x0, isStable
-    arm64.b ifcont#29
+    arm64.cbz x0, ifcont#29
   isStable:
     arm64.leaRdata x0, __str_rec_29  ; "stable "
     arm64.bl print
-    arm64.b ifcont#29
   ifcont#29:
     arm64.loadRegSlot x0, slot0
-    arm64.cbnz x0, isIntact
-    arm64.b ifcont#31
+    arm64.cbz x0, ifcont#31
   isIntact:
     arm64.leaRdata x0, __str_rec_30  ; "intact"
     arm64.bl print
-    arm64.b ifcont#31
   ifcont#31:
     arm64.leaRdata x0, __str_rec_31  ; "\x0a"
     arm64.bl print

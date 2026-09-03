@@ -37,26 +37,18 @@ func @main {
     arm64.movImm x1, 0
     arm64.movImm x16, 1735689600
     arm64.cmp x0, x16
-    arm64.cset x2, gt
-    arm64.cbnz x2, afterKnownPast
-    arm64.b critsplit#5
+    arm64.b.le ifcont#2
   afterKnownPast:
     arm64.movImm x1, 1
-    arm64.b ifcont#2
-  critsplit#5:
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movImm x2, 4102444800
     arm64.cmp x0, x2
-    arm64.cset x0, lt
-    arm64.cbnz x0, beforeFarFuture
-    arm64.b critsplit#6
+    arm64.b.ge critsplit
   beforeFarFuture:
     arm64.add x19, x1, 1
     arm64.b ifcont#4
-  critsplit#6:
+  critsplit:
     arm64.movRegReg x19, x1
-    arm64.b ifcont#4
   ifcont#4:
     arm64.leaRdata x0, __str_rec_2  ; "score="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]

@@ -68,12 +68,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @main {
@@ -99,9 +100,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.storeSlotReg slot1, x21
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -129,9 +128,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __mf_write
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movRegReg x0, x21
     arm64.bl __mf_close
@@ -166,9 +163,7 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot2, x20
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
@@ -312,41 +307,29 @@ func @main {
     arm64.bl __str_decref
     arm64.movImm x19, 0
     arm64.movImm x20, 1
-    arm64.b forhdr
   forhdr:
     arm64.cmp x20, 3
-    arm64.cset x0, le
-    arm64.cbnz x0, stamps
-    arm64.b forexit
+    arm64.b.gt forexit
   stamps:
     arm64.loadRegSlot x0, slot2
     arm64.movRegReg x1, x20
     arm64.bl __mf_stat_field
     arm64.movImm x16, 1577836800
     arm64.cmp x0, x16
-    arm64.cset x1, lt
-    arm64.movImm x2, 1
-    arm64.cbnz x1, critsplit#19
-    arm64.b orrhs
-  critsplit#19:
-    arm64.b scmerge
+    arm64.movImm x1, 1
+    arm64.b.lt scmerge
   orrhs:
     arm64.movImm x1, 4102444800
     arm64.cmp x0, x1
     arm64.cset x0, gt
-    arm64.movRegReg x2, x0
-    arm64.b scmerge
+    arm64.movRegReg x1, x0
   scmerge:
-    arm64.cbnz x2, window
-    arm64.b critsplit#20
+    arm64.cbz x1, critsplit
   window:
     arm64.add x0, x19, 1
-    arm64.b ifcont
-  critsplit#20:
-    arm64.movRegReg x0, x19
-    arm64.b ifcont
-  ifcont:
     arm64.b forstep
+  critsplit:
+    arm64.movRegReg x0, x19
   forstep:
     arm64.add x20, x20, 1
     arm64.movRegReg x19, x0
@@ -409,9 +392,7 @@ func @main {
     arm64.bl __mf_stat
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.movImm x20, 4
     arm64.movRegReg x0, x19
@@ -494,9 +475,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq tryok#17
   tryerr#18:
     arm64.movImm x20, 5
     arm64.movRegReg x0, x19

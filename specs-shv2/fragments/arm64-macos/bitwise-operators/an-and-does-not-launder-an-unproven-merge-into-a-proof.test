@@ -34,21 +34,16 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 1
     arm64.movImm x1, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x1, 7
-    arm64.cset x2, lt
-    arm64.cbnz x2, step
-    arm64.b whileexit
+    arm64.b.ge whileexit
   step:
     arm64.add x0, x0, 10
     arm64.add x1, x1, 1
     arm64.b whilehdr
   whileexit:
     arm64.cmp x0, 71
-    arm64.cset x1, ne
-    arm64.cbnz x1, reached
-    arm64.b ifcont#5
+    arm64.b.eq ifcont#5
   reached:
     arm64.movImm x0, 1
     arm64.epilogue 16
@@ -56,9 +51,7 @@ func @main {
   ifcont#5:
     arm64.and x0, x0, 127
     arm64.cmp x0, 71
-    arm64.cset x1, ne
-    arm64.cbnz x1, laundered
-    arm64.b ifcont#7
+    arm64.b.eq ifcont#7
   laundered:
     arm64.movImm x0, 2
     arm64.epilogue 16
@@ -73,9 +66,7 @@ func @main {
     arm64.mvn x1, x2
     arm64.and x0, x0, x1
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, shl
-    arm64.b ifcont#9
+    arm64.b.eq ifcont#9
   shl:
     arm64.movImm x0, 3
     arm64.epilogue 16

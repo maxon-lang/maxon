@@ -76,15 +76,11 @@ func @Point.hash {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.add x0, x1, x0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.movImm x1, 4294967295
     arm64.cmp x0, x1
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_28  ; "panic at trivial-key-column-survives-rehash.test:13: Range check failed: value outside typealias 'HashValue'\x0a"
     arm64.bl mrt_panic
@@ -102,10 +98,8 @@ func @Point.equals {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x1 + 0]
     arm64.cmp x2, x3
-    arm64.cset x2, eq
-    arm64.movImm x3, 0
-    arm64.cbnz x2, andrhs
-    arm64.b critsplit
+    arm64.movImm x2, 0
+    arm64.b.ne critsplit
   andrhs:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
@@ -113,8 +107,7 @@ func @Point.equals {
     arm64.cset x0, eq
     arm64.b scmerge
   critsplit:
-    arm64.movRegReg x0, x3
-    arm64.b scmerge
+    arm64.movRegReg x0, x2
   scmerge:
     arm64.epilogue 16
     arm64.ret
@@ -135,12 +128,9 @@ func @build {
     arm64.bl Map.create
     arm64.movRegReg x20, x0
     arm64.movImm x21, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x21, x19
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   fill:
     arm64.movImm x16, 3
     arm64.mul x1, x21, x16
@@ -158,19 +148,15 @@ func @build {
     arm64.bl Map.upsert
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-    arm64.b forstep#3
   forstep#3:
     arm64.add x21, x21, 1
     arm64.b forhdr#1
   forexit#4:
     arm64.movImm x21, 0
     arm64.movImm x22, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.cmp x22, x19
-    arm64.cset x0, lt
-    arm64.cbnz x0, read
-    arm64.b forexit#8
+    arm64.b.ge forexit#8
   read:
     arm64.movImm x16, 3
     arm64.mul x1, x22, x16
@@ -184,31 +170,25 @@ func @build {
     arm64.movRegReg x1, x23
     arm64.bl Map.get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x0, 18446744073709551615
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.add x21, x21, x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-    arm64.b forstep#7
   forstep#7:
     arm64.add x22, x22, 1
     arm64.b forhdr#5
   forexit#8:
     arm64.sub x0, x19, 1
     arm64.mul x0, x19, x0
-    arm64.movImm x1, 2
-    arm64.sdiv x0, x0, x1
+    arm64.asr x1, x0, 63
+    arm64.lsr x1, x1, 63
+    arm64.add x0, x0, x1
+    arm64.asr x0, x0, 1
     arm64.cmp x21, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, sum
-    arm64.b ifcont
+    arm64.b.eq ifcont
   sum:
     arm64.movImm x19, 18446744073709551615
     arm64.movRegReg x0, x20
@@ -224,26 +204,18 @@ func @build {
   ifcont:
     arm64.leaRdata x1, __witness_Point.Hashable
     arm64.leaRdata x2, __witness_Point.Equatable
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 32]
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_chk
+    arm64.b.lt __il_slow
   __rc_chk:
     arm64.movImm x0, 4611686018427387904
     arm64.cmp x19, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.le __il_cont
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl Map.count
     arm64.movRegReg x19, x0
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Map_Point_Val

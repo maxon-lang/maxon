@@ -51,15 +51,11 @@ func @categoryOf {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#13
-    arm64.b __rc_chk#14
+    arm64.b.lt __rc_panic#13
   __rc_chk#14:
     arm64.movImm x16, 1114111
     arm64.cmp x19, x16
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#13
-    arm64.b __rc_ok#12
+    arm64.b.le __rc_ok#12
   __rc_panic#13:
     arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-ucd.supp-binary-search.test:5: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
@@ -72,21 +68,15 @@ func @categoryOf {
     arm64.ret
   __rc_ok#12:
     arm64.cmp x19, 65536
-    arm64.cset x0, lt
-    arm64.cbnz x0, bmp
-    arm64.b ifcont#2
+    arm64.b.ge ifcont#2
   bmp:
     arm64.movRegReg x0, x19
     arm64.bl __ucd_bmp_at
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#16
-    arm64.b __rc_chk#17
+    arm64.b.lt __rc_panic#16
   __rc_chk#17:
     arm64.cmp x0, 31
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#16
-    arm64.b __rc_ok#15
+    arm64.b.le __rc_ok#15
   __rc_panic#16:
     arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-ucd.supp-binary-search.test:7: Range check failed: value outside typealias 'GeneralCategory'\x0a"
     arm64.bl mrt_panic
@@ -107,12 +97,9 @@ func @categoryOf {
   ifcont#2:
     arm64.movImm x20, 0
     arm64.movImm x21, 805
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, x21
-    arm64.cset x0, le
-    arm64.cbnz x0, bsearch
-    arm64.b whileexit
+    arm64.b.gt whileexit
   bsearch:
     arm64.add x0, x20, x21
     arm64.asr x22, x0, 1
@@ -122,9 +109,7 @@ func @categoryOf {
     arm64.asr x2, x0, 21
     arm64.and x2, x2, 2097151
     arm64.cmp x19, x1
-    arm64.cset x1, lt
-    arm64.cbnz x1, left
-    arm64.b ifelse#7
+    arm64.b.ge ifelse#7
   left:
     arm64.sub x0, x22, 1
     arm64.movRegReg x1, x0
@@ -132,15 +117,11 @@ func @categoryOf {
     arm64.b ifcont#11
   ifelse#7:
     arm64.cmp x19, x2
-    arm64.cset x1, gt
-    arm64.cbnz x1, right
-    arm64.b ifelse#9
+    arm64.b.le ifelse#9
   right:
     arm64.add x0, x22, 1
-    arm64.b ifcont#10
   ifcont#10:
     arm64.movRegReg x1, x21
-    arm64.b ifcont#11
   ifcont#11:
     arm64.movRegReg x20, x0
     arm64.movRegReg x21, x1
@@ -149,14 +130,10 @@ func @categoryOf {
     arm64.asr x0, x0, 42
     arm64.and x0, x0, 31
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#19
-    arm64.b __rc_chk#20
+    arm64.b.lt __rc_panic#19
   __rc_chk#20:
     arm64.cmp x0, 31
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#19
-    arm64.b __rc_ok#18
+    arm64.b.le __rc_ok#18
   __rc_panic#19:
     arm64.leaRdata x0, __str_blob_2  ; "panic at builtins-ucd.supp-binary-search.test:22: Range check failed: value outside typealias 'GeneralCategory'\x0a"
     arm64.bl mrt_panic
@@ -192,49 +169,32 @@ func @main {
     arm64.movImm x0, 66560
     arm64.bl categoryOf
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, deseretIsUppercase
-    arm64.b critsplit#10
+    arm64.b.ne ifcont#2
   deseretIsUppercase:
     arm64.movImm x19, 1
-    arm64.b ifcont#2
-  critsplit#10:
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movImm x0, 128512
     arm64.bl categoryOf
     arm64.cmp x0, 22
-    arm64.cset x0, eq
-    arm64.cbnz x0, emojiIsOtherSymbol
-    arm64.b critsplit#11
+    arm64.b.ne ifcont#4
   emojiIsOtherSymbol:
     arm64.add x19, x19, 1
-    arm64.b ifcont#4
-  critsplit#11:
-    arm64.b ifcont#4
   ifcont#4:
     arm64.movImm x0, 65
     arm64.bl categoryOf
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, bmpStillWorks
-    arm64.b critsplit#12
+    arm64.b.ne critsplit
   bmpStillWorks:
     arm64.add x0, x19, 1
     arm64.b ifcont#6
-  critsplit#12:
+  critsplit:
     arm64.movRegReg x0, x19
-    arm64.b ifcont#6
   ifcont#6:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at builtins-ucd.supp-binary-search.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

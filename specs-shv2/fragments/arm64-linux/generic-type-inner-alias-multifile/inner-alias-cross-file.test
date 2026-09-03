@@ -161,33 +161,21 @@ func @main {
     arm64.bl GenericModule.pushItem
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.b __il_body#7
   __il_body#7:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.b __il_cont#6
-  __il_cont#6:
-    arm64.b __il_body#8
   __il_body#8:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.b __il_cont#5
-  __il_cont#5:
+  __il_cont:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.movImm x2, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
   andrhs:
     arm64.cmp x1, 1
     arm64.cset x0, eq
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x2
-    arm64.b scmerge
   scmerge:
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   check:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19

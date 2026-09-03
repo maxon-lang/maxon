@@ -1,0 +1,311 @@
+// Test: list-filters-dot-entries
+function main() returns ExitCode
+	let oneFile = FilePath from "test_dots_one"
+	_ = Directory.create(oneFile)
+	var f = try __ManagedFile.openWrite("test_dots_one/only.txt".toByteArray().managed) otherwise return 1
+	try f.write("x".toByteArray().managed) otherwise return 2
+	f.close()
+
+	let entries = try Directory.list(oneFile) otherwise return 3
+	for e in entries 'each'
+		let name = e.filename()
+		if name == "." or name == ".." 'dot'
+			return 4
+		end 'dot'
+	end 'each'
+	if entries.count() != 1 'countOne'
+		return 5
+	end 'countOne'
+	try __ManagedFile.delete("test_dots_one/only.txt".toByteArray().managed) otherwise return 6
+
+	// An empty directory holds ONLY "." and "..". Filtering them must leave an
+	// empty list — not a spurious entry read from an unwritten name buffer.
+	let emptyDir = FilePath from "test_dots_empty"
+	_ = Directory.create(emptyDir)
+	let none = try Directory.list(emptyDir) otherwise return 7
+	if none.count() != 0 'countZero'
+		return 8
+	end 'countZero'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __mrt_errno@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_23]  ; "test_dots_one"
+    x64.callDirect FilePath.init
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Directory.create
+    x64.leaRegRdata rcx, [rip + __str_rec_24]  ; "test_dots_one/only.txt"
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mf_open_write
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.leaRegRdata rcx, [rip + __str_rec_25]  ; "x"
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect __mf_write
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r14, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r14
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_close
+    x64.movRegReg rcx, rbx
+    x64.callDirect Directory.list
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegImm32 r14, 0
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r14*8 + 0]
+  __im_cont:
+    x64.callDirect FilePath.filename
+    x64.movRegReg r15, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_26]  ; "."
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_eq
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, scmerge
+  orrhs:
+    x64.leaRegRdata rdx, [rip + __str_rec_27]  ; ".."
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_eq
+    x64.movRegReg rax, r8
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#14
+  dot:
+    x64.movRegImm32 r14, 4
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r14
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_decref
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.jmp forhdr
+  forexit:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, ifcont#16
+  countOne:
+    x64.movRegImm32 r14, 5
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r14
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#16:
+    x64.leaRegRdata rcx, [rip + __str_rec_24]  ; "test_dots_one/only.txt"
+    x64.callDirect String.toByteArray
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __mf_delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#17
+  tryerr#18:
+    x64.movRegImm32 r15, 6
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#17:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.leaRegRdata rcx, [rip + __str_rec_28]  ; "test_dots_empty"
+    x64.callDirect FilePath.init
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect Directory.create
+    x64.movRegReg rcx, r14
+    x64.callDirect Directory.list
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#19
+  tryerr#20:
+    x64.movRegImm32 r15, 7
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#19:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#22
+  countZero:
+    x64.movRegImm32 r15, 8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#22:
+    x64.movRegImm32 r15, 42
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_destruct
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

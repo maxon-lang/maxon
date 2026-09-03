@@ -1,0 +1,132 @@
+// Test: dialect-roundtrip
+typealias Integer = int(i64.min to i64.max)
+
+function ident(x Integer) returns Integer
+	return x
+end 'ident'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+
+	// Two values defined via opaque calls so the constant folder cannot
+	// see through them. Each combines with a small set of distinct masks
+	// using and/or/xor/cmp — the exact ALU mix that Phase 3 will eventually
+	// fold into addRegMem / andRegMem / xorRegMem when the values spill.
+	let v1 = ident(seed + 7)
+	let v2 = ident(seed + 13)
+
+	var acc = 0
+	acc = acc + (v1 and 255)
+	acc = acc + (v2 or 4096)
+	acc = acc + (v1 xor 21845)
+	acc = acc + (v2 + 1)
+
+	let masked = acc and 255
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 116
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect CommandLine.args
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#18
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#19
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#19:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#18:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "0"
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg rcx, r8
+  trycont#3:
+    x64.callDirect __int_fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegImm32 rcx, rax, 7
+  __il_cont#15:
+    x64.leaRegRegImm32 rax, rax, 13
+  __il_cont#14:
+    x64.movRegReg rdx, rcx
+    x64.andRegImm32 rdx, rcx, 255
+    x64.movRegReg rsi, rax
+    x64.orRegImm32 rsi, rax, 4096
+    x64.leaRegRegReg rdx, rdx, rsi
+    x64.xorRegImm32 rcx, rcx, 21845
+    x64.leaRegRegReg rcx, rdx, rcx
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegReg r12, rcx, rax
+    x64.andRegImm32 r12, r12, 255
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at dialect-roundtrip.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

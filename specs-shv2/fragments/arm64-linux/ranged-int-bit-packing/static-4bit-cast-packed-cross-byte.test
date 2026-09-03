@@ -38,9 +38,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_element_size
     arm64.cmp x0, -4
-    arm64.cset x0, ne
-    arm64.cbnz x0, notPacked
-    arm64.b ifcont
+    arm64.b.eq ifcont
   notPacked:
     arm64.movImm x20, 99
     arm64.movRegReg x0, x19
@@ -55,55 +53,38 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok
   tryerr#4:
     arm64.movImm x20, 0
     arm64.b trycont#5
-  tryok#3:
+  tryok:
     arm64.movRegReg x20, x0
-    arm64.b trycont#5
   trycont#5:
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq trycont#8
   tryerr#7:
     arm64.movImm x0, 0
-    arm64.b trycont#8
-  tryok#6:
-    arm64.b trycont#8
   trycont#8:
     arm64.add x20, x20, x0
     arm64.movImm x1, 4
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#10
-    arm64.b tryok#9
+    arm64.b.eq trycont#11
   tryerr#10:
     arm64.movImm x0, 0
-    arm64.b trycont#11
-  tryok#9:
-    arm64.b trycont#11
   trycont#11:
     arm64.add x20, x20, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at static-4bit-cast-packed-cross-byte.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

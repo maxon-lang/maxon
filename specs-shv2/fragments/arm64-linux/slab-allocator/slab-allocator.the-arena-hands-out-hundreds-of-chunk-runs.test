@@ -57,14 +57,10 @@ func @build {
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_chk#7
+    arm64.b.lt __rc_panic#6
   __rc_chk#7:
     arm64.cmp x19, 65536
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_ok#5
+    arm64.b.le __rc_ok#5
   __rc_panic#6:
     arm64.leaRdata x0, __str_blob_1  ; "panic at slab-allocator.the-arena-hands-out-hundreds-of-chunk-runs.test:7: Range check failed: value outside typealias 'Len'\x0a"
     arm64.bl mrt_panic
@@ -76,14 +72,10 @@ func @build {
     arm64.ret
   __rc_ok#5:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_chk#10
+    arm64.b.lt __rc_panic#9
   __rc_chk#10:
     arm64.cmp x20, 65536
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_ok#8
+    arm64.b.le __rc_ok#8
   __rc_panic#9:
     arm64.leaRdata x0, __str_blob_1  ; "panic at slab-allocator.the-arena-hands-out-hundreds-of-chunk-runs.test:7: Range check failed: value outside typealias 'Len'\x0a"
     arm64.bl mrt_panic
@@ -102,26 +94,24 @@ func @build {
     arm64.movRegReg x1, x19
     arm64.bl Array.reserve
     arm64.movImm x19, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x19, 16
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b forexit
+    arm64.b.ge forexit
   fill:
     arm64.add x0, x19, x20
-    arm64.movImm x1, 251
-    arm64.sdiv x16, x0, x1
-    arm64.msub x1, x16, x1, x0
+    arm64.movImm x1, 2351776136887273513
+    arm64.smulh x1, x1, x0
+    arm64.asr x1, x1, 5
+    arm64.lsr x2, x1, 63
+    arm64.add x1, x1, x2
+    arm64.movImm x16, 251
+    arm64.mul x1, x1, x16
+    arm64.sub x1, x0, x1
     arm64.cmp x1, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#12
-    arm64.b __rc_chk#13
+    arm64.b.lt __rc_panic#12
   __rc_chk#13:
     arm64.cmp x1, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#12
-    arm64.b __rc_ok#11
+    arm64.b.le __rc_ok#11
   __rc_panic#12:
     arm64.leaRdata x0, __str_blob_2  ; "panic at slab-allocator.the-arena-hands-out-hundreds-of-chunk-runs.test:11: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
@@ -134,7 +124,6 @@ func @build {
   __rc_ok#11:
     arm64.movRegReg x0, x21
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x19, x19, 1
     arm64.b forhdr
@@ -160,28 +149,25 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x20, 640
-    arm64.cset x0, lt
-    arm64.cbnz x0, alloc
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   alloc:
-    arm64.movImm x0, 16
-    arm64.sdiv x16, x20, x0
-    arm64.msub x0, x16, x0, x20
+    arm64.asr x0, x20, 63
+    arm64.lsr x0, x0, 60
+    arm64.add x0, x20, x0
+    arm64.asr x0, x0, 4
+    arm64.movImm x16, 16
+    arm64.mul x0, x0, x16
+    arm64.sub x0, x20, x0
     arm64.movImm x16, 1800
     arm64.mul x0, x0, x16
     arm64.add x0, x0, 1000
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 65536
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at slab-allocator.the-arena-hands-out-hundreds-of-chunk-runs.test:22: Range check failed: value outside typealias 'Len'\x0a"
     arm64.bl mrt_panic
@@ -199,25 +185,19 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b forstep#3
   forstep#3:
     arm64.add x20, x20, 1
     arm64.b forhdr#1
   forexit#4:
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.cmp x21, 640
-    arm64.cset x0, lt
-    arm64.cbnz x0, check
-    arm64.b forexit#8
+    arm64.b.ge forexit#8
   check:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#25
-    arm64.b __im_load#26
+    arm64.b.hs __im_slow#25
   __im_load#26:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
@@ -225,14 +205,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty#27
-    arm64.b critsplit#38
+    arm64.b.eq critsplit#38
   __im_empty#27:
     arm64.cmp x22, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#25
-    arm64.b critsplit#39
+    arm64.b.ne critsplit#39
   __im_slow#25:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -244,12 +220,9 @@ func @main {
     arm64.b __im_cont#24
   critsplit#38:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#24
   __im_cont#24:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#10
-    arm64.b tryok#9
+    arm64.b.eq tryok#9
   tryerr#10:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -264,24 +237,17 @@ func @main {
     arm64.ret
   tryok#9:
     arm64.movImm x23, 0
-    arm64.b forhdr#11
   forhdr#11:
     arm64.cmp x23, 16
-    arm64.cset x0, lt
-    arm64.cbnz x0, bytes
-    arm64.b forexit#14
+    arm64.b.ge forstep#7
   bytes:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#29
-    arm64.b __im_load#34
+    arm64.b.hs __im_slow#29
   __im_load#34:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.arm64AddLsl x0, x0, x23, lsl #3
@@ -289,47 +255,31 @@ func @main {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow#29
+    arm64.b.ne __im_slow#29
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#29
-    arm64.b __im_load#35
+    arm64.b.hs __im_slow#29
   __im_load#35:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.add x0, x0, x23
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#36
-    arm64.b critsplit#40
+    arm64.b.eq __im_cont#28
   __im_empty#36:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#29
-    arm64.b critsplit#41
-  critsplit#41:
-    arm64.b __im_cont#28
-  critsplit#40:
-    arm64.b __im_cont#28
+    arm64.b.ne __im_cont#28
   __im_slow#29:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x23
     arm64.bl __managed_get
     arm64.movRegReg x1, x9
-    arm64.b __im_cont#28
   __im_cont#28:
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -344,35 +294,31 @@ func @main {
     arm64.ret
   tryok#15:
     arm64.add x1, x23, x21
-    arm64.movImm x2, 251
-    arm64.sdiv x16, x1, x2
-    arm64.msub x1, x16, x2, x1
+    arm64.movImm x2, 2351776136887273513
+    arm64.smulh x2, x2, x1
+    arm64.asr x2, x2, 5
+    arm64.lsr x3, x2, 63
+    arm64.add x2, x2, x3
+    arm64.movImm x16, 251
+    arm64.mul x2, x2, x16
+    arm64.sub x1, x1, x2
     arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, value
-    arm64.b critsplit#37
+    arm64.b.eq critsplit#37
   value:
     arm64.add x0, x20, 1
-    arm64.b ifcont#18
+    arm64.b forstep#13
   critsplit#37:
     arm64.movRegReg x0, x20
-    arm64.b ifcont#18
-  ifcont#18:
-    arm64.b forstep#13
   forstep#13:
     arm64.add x23, x23, 1
     arm64.movRegReg x20, x0
     arm64.b forhdr#11
-  forexit#14:
-    arm64.b forstep#7
   forstep#7:
     arm64.add x21, x21, 1
     arm64.b forhdr#5
   forexit#8:
     arm64.cmp x20, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, corrupted
-    arm64.b ifcont#20
+    arm64.b.eq ifcont
   corrupted:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
@@ -385,7 +331,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#20:
+  ifcont:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref

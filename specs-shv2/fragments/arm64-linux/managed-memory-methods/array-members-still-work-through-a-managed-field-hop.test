@@ -41,34 +41,24 @@ func @main {
     arm64.movImm x2, 12
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_owned
+    arm64.b.ne __im_slow
   __im_owned:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_bounds
+    arm64.b.lt __im_slow
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_buffer
+    arm64.b.ls __im_slow
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b __im_viewed
+    arm64.b.eq __im_slow
   __im_viewed:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow
-    arm64.b __im_store
+    arm64.b.eq __im_store
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_set
@@ -77,12 +67,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -101,9 +88,7 @@ func @main {
     arm64.bl Array.pop
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -117,9 +102,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_first
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
@@ -134,14 +117,10 @@ func @main {
     arm64.add x1, x1, x20
     arm64.add x20, x1, x0
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at array-members-still-work-through-a-managed-field-hop.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

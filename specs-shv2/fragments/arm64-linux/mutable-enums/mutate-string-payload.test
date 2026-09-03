@@ -46,9 +46,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext#4
+    arm64.b.ne matchnext#4
   matcharm#2:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
@@ -64,9 +62,7 @@ func @main {
     arm64.ret
   matchnext#4:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#1
-    arm64.b matchdead#3
+    arm64.b.ne matchdead#3
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movImm x0, 0
@@ -97,13 +93,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x23
     arm64.movRegReg x0, x23
     arm64.bl __str_decref
-    arm64.b matchcont#5
   matchcont#5:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#7
-    arm64.b matchnext#9
+    arm64.b.ne matchnext#9
   matcharm#7:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
@@ -119,41 +112,29 @@ func @main {
     arm64.ret
   matchnext#9:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#6
-    arm64.b matchdead#8
+    arm64.b.ne matchdead#8
   matcharm#6:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok#16
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
     arm64.movRegReg x21, x0
-    arm64.b __il_cont
-  __rc_ok#16:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Named
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#11
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at mutate-string-payload.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -166,7 +147,7 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  __rc_ok#11:
+  __rc_ok:
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

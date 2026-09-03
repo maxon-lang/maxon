@@ -1,0 +1,66 @@
+// Test: guards-run-in-source-order
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 100000)
+
+function widen(n Wide) returns Wide
+	return n + 1
+end 'widen'
+
+function main() returns ExitCode
+	let a = widen(500)
+	let b = widen(900)
+	let x = a as Small
+	let y = b as Small
+	return x + y
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_ok#13:
+    arm64.movImm x0, 501
+  __rc_ok#19:
+    arm64.movImm x1, 901
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 10
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at guards-run-in-source-order.test:12: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x1, 10
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at guards-run-in-source-order.test:13: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.add x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at guards-run-in-source-order.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#7:
+    arm64.epilogue 16
+    arm64.ret
+}

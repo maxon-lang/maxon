@@ -79,8 +79,7 @@ ExitCode: 11
 func @callAB {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -96,8 +95,7 @@ func @callAB {
 func @callC {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -113,8 +111,7 @@ func @callC {
 func @callA {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -130,8 +127,7 @@ func @callA {
 func @callBC {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -153,9 +149,7 @@ func @main {
     arm64.bl callAB
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, critsplit#22
-    arm64.b tryblkok#2
+    arm64.b.eq tryblkok#2
   critsplit#22:
     arm64.movRegReg x19, x9
     arm64.b tryblkerr#1
@@ -164,85 +158,53 @@ func @main {
     arm64.bl callC
     arm64.add x20, x9, 1
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, critsplit#24
-    arm64.b tryblkok#3
+    arm64.b.eq tryblkok#3
   critsplit#24:
     arm64.movRegReg x19, x20
-    arm64.b tryblkerr#1
   tryblkerr#1:
     arm64.movImm x0, 0
     arm64.bl callA
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, critsplit#23
-    arm64.b tryblkok#5
-  critsplit#23:
-    arm64.b tryblkerr#4
+    arm64.b.ne tryblkerr#4
   tryblkok#5:
     arm64.movImm x0, 0
     arm64.bl callBC
     arm64.add x1, x9, 1
     arm64.cmp x9, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, critsplit#25
-    arm64.b tryblkok#6
+    arm64.b.eq tryblkok#6
   critsplit#25:
     arm64.movRegReg x9, x1
-    arm64.b tryblkerr#4
   tryblkerr#4:
     arm64.cmp x9, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#7
-    arm64.b matchnext#10
-  matcharm#7:
-    arm64.b matchcont#11
+    arm64.b.eq tryblkcont#12
   matchnext#10:
     arm64.cmp x9, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#8
-    arm64.b matchdead#9
-  matcharm#8:
-    arm64.b matchcont#11
-  matchcont#11:
-    arm64.b tryblkcont#12
+    arm64.b.eq tryblkcont#12
   matchdead#9:
   tryblkok#6:
     arm64.add x0, x20, x0
-    arm64.b tryblkcont#12
   tryblkcont#12:
     arm64.cmp x19, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#13
-    arm64.b matchnext#16
+    arm64.b.ne matchnext#16
   matcharm#13:
     arm64.movImm x0, 11
-    arm64.b matchcont#17
+    arm64.b tryblkcont#18
   matchnext#16:
     arm64.cmp x19, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#14
-    arm64.b matchdead#15
+    arm64.b.ne matchdead#15
   matcharm#14:
     arm64.movImm x0, 22
-    arm64.b matchcont#17
-  matchcont#17:
     arm64.b tryblkcont#18
   matchdead#15:
   tryblkok#3:
     arm64.add x0, x19, x0
-    arm64.b tryblkcont#18
   tryblkcont#18:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at main.maxon:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

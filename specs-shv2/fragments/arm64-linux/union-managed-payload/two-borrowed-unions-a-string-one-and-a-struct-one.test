@@ -71,17 +71,13 @@ func @both {
     arm64.movRegReg x19, x1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext#4
+    arm64.b.ne matchnext#4
   matcharm#1:
     arm64.movImm x20, 0
     arm64.b matchcont#5
   matchnext#4:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchdead#3
+    arm64.b.ne matchdead#3
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.movRegReg x0, x20
@@ -90,21 +86,16 @@ func @both {
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.movRegReg x20, x21
-    arm64.b matchcont#5
   matchcont#5:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#6
-    arm64.b matchnext#9
+    arm64.b.ne matchnext#9
   matcharm#6:
     arm64.movImm x0, 0
     arm64.b matchcont#10
   matchnext#9:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#7
-    arm64.b matchdead#8
+    arm64.b.ne matchdead#8
   matcharm#7:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
     arm64.movRegReg x0, x19
@@ -113,7 +104,6 @@ func @both {
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
     arm64.movRegReg x0, x21
-    arm64.b matchcont#10
   matchcont#10:
     arm64.add x0, x20, x0
     arm64.loadRegSlot x19, slot0
@@ -160,14 +150,10 @@ func @main {
     arm64.bl both
     arm64.add x19, x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at two-borrowed-unions-a-string-one-and-a-struct-one.test:39: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

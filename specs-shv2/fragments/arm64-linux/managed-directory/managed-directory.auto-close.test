@@ -41,12 +41,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @main {
@@ -56,12 +57,9 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.leaRdata x0, __str_rec_1  ; "./*"
     arm64.bl String.toByteArray
@@ -70,9 +68,7 @@ func @main {
     arm64.bl __md_open_search
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#5
-    arm64.b tryok#4
+    arm64.b.eq tryok#4
   tryerr#5:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -89,9 +85,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __md_next
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq tryok#6
   tryerr#7:
     arm64.movImm x19, 2
     arm64.movRegReg x0, x21

@@ -57,12 +57,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @writeFile {
@@ -76,9 +77,7 @@ func @writeFile {
     arm64.bl __mf_open_write
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -98,9 +97,7 @@ func @writeFile {
     arm64.movRegReg x1, x19
     arm64.bl __mf_write
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movRegReg x0, x20
     arm64.bl __mf_close
@@ -139,9 +136,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl writeFile
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -164,9 +159,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -180,8 +173,7 @@ func @main {
   tryok#3:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cbnz x21, aFileIsNotADirectory
-    arm64.b ifcont
+    arm64.cbz x21, ifcont
   aFileIsNotADirectory:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot0

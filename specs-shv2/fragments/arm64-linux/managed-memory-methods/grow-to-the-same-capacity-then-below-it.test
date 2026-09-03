@@ -33,9 +33,7 @@ func @main {
     arm64.bl __managed_mem_create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -47,9 +45,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_grow
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -63,9 +59,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_capacity
     arm64.cmp x0, 8
-    arm64.cset x0, ne
-    arm64.cbnz x0, cap
-    arm64.b ifcont
+    arm64.b.eq ifcont
   cap:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
@@ -80,15 +74,11 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_mem_grow
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.sub x0, x9, 1
     arm64.cmp x0, 4
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdefault
+    arm64.b.ne matchdefault
   matcharm:
     arm64.movImm x20, 42
     arm64.movRegReg x0, x19
@@ -115,5 +105,4 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  matchcont:
 }

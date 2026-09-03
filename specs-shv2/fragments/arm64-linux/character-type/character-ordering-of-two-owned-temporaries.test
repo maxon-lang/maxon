@@ -35,13 +35,10 @@ func @main {
     arm64.leaRdata x19, __str_rec_2  ; "\xc3\xbc\xc3\xa9"
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   each:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -53,13 +50,10 @@ func @main {
     arm64.bl __char_at
     arm64.movRegReg x21, x0
     arm64.movImm x23, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, inner
-    arm64.b forexit#8
+    arm64.b.ge forexit#8
   inner:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
@@ -74,25 +68,18 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __char_cmp
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, lt
-    arm64.b critsplit
+    arm64.b.ne ifcont
   lt:
     arm64.add x20, x20, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
   ifcont:
     arm64.movRegReg x0, x23
     arm64.bl __str_decref
-    arm64.b forstep#7
   forstep#7:
     arm64.movRegReg x23, x24
     arm64.b forhdr#5
   forexit#8:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.b forstep#3
   forstep#3:
     arm64.movRegReg x21, x22
     arm64.b forhdr#1

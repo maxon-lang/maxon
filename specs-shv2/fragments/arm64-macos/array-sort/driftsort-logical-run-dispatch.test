@@ -56,26 +56,20 @@ data {
 func @ascending {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -95,12 +89,9 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x21, 25
-    arm64.cset x0, lt
-    arm64.cbnz x0, blocks
-    arm64.b whileexit
+    arm64.b.ge whileexit
   blocks:
     arm64.add x1, x20, 4
     arm64.movRegReg x0, x19
@@ -129,38 +120,29 @@ func @main {
     arm64.leaRdata x1, __str_rec_21  ; "driftsort.logicalRun"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
-    arm64.cbnz x0, lr
-    arm64.b ifcont#5
+    arm64.cbz x0, ifcont#5
   lr:
     arm64.leaRdata x0, __str_rec_22  ; "logicalRun "
     arm64.bl print
-    arm64.b ifcont#5
   ifcont#5:
     arm64.leaRdata x1, __str_rec_23  ; "driftsort.eagerRun"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, ne
-    arm64.b ifcont#7
+    arm64.cbz x0, ifcont#7
   ne:
     arm64.leaRdata x0, __str_rec_24  ; "no-eager "
     arm64.bl print
-    arm64.b ifcont#7
   ifcont#7:
     arm64.movImm x21, 1
     arm64.movImm x22, 1
-    arm64.b forhdr
   forhdr:
     arm64.cmp x22, 100
-    arm64.cset x0, lt
-    arm64.cbnz x0, c
-    arm64.b forexit
+    arm64.b.ge forexit
   c:
     arm64.sub x1, x22, 1
     arm64.cmp x1, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_109  ; "panic at driftsort-logical-run-dispatch.test:32: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -175,9 +157,7 @@ func @main {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#27
-    arm64.b __im_load#28
+    arm64.b.hs __im_slow#27
   __im_load#28:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x1, lsl #3
@@ -185,14 +165,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#29
-    arm64.b critsplit#33
+    arm64.b.eq critsplit#33
   __im_empty#29:
     arm64.cmp x23, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#27
-    arm64.b critsplit#34
+    arm64.b.ne critsplit#34
   __im_slow#27:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -203,12 +179,9 @@ func @main {
     arm64.b __im_cont#26
   critsplit#33:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#26
   __im_cont#26:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#13
-    arm64.b tryok#12
+    arm64.b.eq tryok#12
   tryerr#13:
     arm64.movImm x21, 90
     arm64.movRegReg x0, x20
@@ -226,9 +199,7 @@ func @main {
   tryok#12:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#23
-    arm64.b __im_load#24
+    arm64.b.hs __im_slow#23
   __im_load#24:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -236,14 +207,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#25
-    arm64.b critsplit#31
+    arm64.b.eq critsplit#31
   __im_empty#25:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#23
-    arm64.b critsplit#32
+    arm64.b.ne critsplit#32
   __im_slow#23:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
@@ -254,12 +221,9 @@ func @main {
     arm64.b __im_cont#22
   critsplit#31:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont#22
   __im_cont#22:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#15
-    arm64.b tryok#14
+    arm64.b.eq tryok#14
   tryerr#15:
     arm64.movImm x21, 91
     arm64.movRegReg x0, x20
@@ -276,28 +240,21 @@ func @main {
     arm64.ret
   tryok#14:
     arm64.cmp x23, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, bad
-    arm64.b critsplit#30
+    arm64.b.le critsplit#30
   bad:
     arm64.movImm x0, 0
-    arm64.b ifcont#17
+    arm64.b forstep
   critsplit#30:
     arm64.movRegReg x0, x21
-    arm64.b ifcont#17
-  ifcont#17:
-    arm64.b forstep
   forstep:
     arm64.add x22, x22, 1
     arm64.movRegReg x21, x0
     arm64.b forhdr
   forexit:
-    arm64.cbnz x21, o
-    arm64.b ifcont#19
+    arm64.cbz x21, ifcont#19
   o:
     arm64.leaRdata x0, __str_rec_25  ; "sorted"
     arm64.bl print
-    arm64.b ifcont#19
   ifcont#19:
     arm64.leaRdata x0, __str_rec_26  ; "\x0a"
     arm64.bl print

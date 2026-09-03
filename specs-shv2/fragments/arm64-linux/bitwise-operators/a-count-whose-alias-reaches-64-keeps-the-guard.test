@@ -41,14 +41,10 @@ func @shlBy {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, 64
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-count-whose-alias-reaches-64-keeps-the-guard.test:6: Range check failed: value outside typealias 'UpTo64'\x0a"
     arm64.bl mrt_panic
@@ -71,14 +67,10 @@ func @shrBy {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, 64
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-count-whose-alias-reaches-64-keeps-the-guard.test:10: Range check failed: value outside typealias 'UpTo64'\x0a"
     arm64.bl mrt_panic
@@ -100,14 +92,10 @@ func @shrWordBy {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, 64
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-count-whose-alias-reaches-64-keeps-the-guard.test:14: Range check failed: value outside typealias 'UpTo64'\x0a"
     arm64.bl mrt_panic
@@ -131,27 +119,17 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.b __il_body#9
   __il_body#9:
     arm64.movImm x19, 64
-    arm64.b __rc_chk#11
-  __rc_chk#11:
-    arm64.b __rc_ok#10
-  __rc_ok#10:
-    arm64.b __il_cont#8
   __il_cont#8:
     arm64.movImm x0, 7
-    arm64.b __il_body#13
   __il_body#13:
     arm64.cmp x19, 0
     arm64.cset x20, lt
-    arm64.cbnz x20, __il_slow#16
-    arm64.b __rc_chk#15
+    arm64.b.lt __il_slow#16
   __rc_chk#15:
     arm64.cmp x19, 64
-    arm64.cset x1, gt
-    arm64.cbnz x1, __il_slow#16
-    arm64.b __rc_ok#14
+    arm64.b.le __rc_ok#14
   __il_slow#16:
     arm64.movRegReg x1, x19
     arm64.bl shlBy
@@ -164,12 +142,9 @@ func @main {
     arm64.lslv x0, x0, x19
     arm64.mvn x1, x1
     arm64.and x0, x0, x1
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, shl
-    arm64.b ifcont#2
+    arm64.b.eq ifcont#2
   shl:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -178,15 +153,11 @@ func @main {
     arm64.ret
   ifcont#2:
     arm64.movImm x0, 18446744073709551615
-    arm64.b __il_body#18
   __il_body#18:
     arm64.cbnz x20, __il_slow#21
-    arm64.b __rc_chk#20
   __rc_chk#20:
     arm64.cmp x19, 64
-    arm64.cset x1, gt
-    arm64.cbnz x1, __il_slow#21
-    arm64.b __rc_ok#19
+    arm64.b.le __rc_ok#19
   __il_slow#21:
     arm64.movRegReg x1, x19
     arm64.bl shrBy
@@ -198,12 +169,9 @@ func @main {
     arm64.asr x1, x1, 63
     arm64.orr x1, x19, x1
     arm64.asrv x0, x0, x1
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.cmp x0, -1
-    arm64.cset x0, ne
-    arm64.cbnz x0, shrSign
-    arm64.b ifcont#4
+    arm64.b.eq ifcont#4
   shrSign:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
@@ -212,15 +180,11 @@ func @main {
     arm64.ret
   ifcont#4:
     arm64.movImm x0, 18446744073709551615
-    arm64.b __il_body#23
   __il_body#23:
     arm64.cbnz x20, __il_slow#26
-    arm64.b __rc_chk#25
   __rc_chk#25:
     arm64.cmp x19, 64
-    arm64.cset x1, gt
-    arm64.cbnz x1, __il_slow#26
-    arm64.b __rc_ok#24
+    arm64.b.le __rc_ok#24
   __il_slow#26:
     arm64.movRegReg x1, x19
     arm64.bl shrWordBy
@@ -233,12 +197,9 @@ func @main {
     arm64.lsrv x0, x0, x19
     arm64.mvn x1, x1
     arm64.and x0, x0, x1
-    arm64.b __il_cont#22
   __il_cont#22:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, shrZeroFill
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   shrZeroFill:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot0

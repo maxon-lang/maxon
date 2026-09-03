@@ -1,0 +1,98 @@
+// Test: console-stdin.a-second-reader-also-sees-eof
+function main() returns ExitCode
+	var first = Console.stdin()
+	let a = try first.readLine() otherwise 'firstAtEof'
+		var second = Console.stdin()
+		let b = try second.readLine() otherwise 'secondAtEof'
+			return 3
+		end 'secondAtEof'
+		print(b)
+		return 1
+	end 'firstAtEof'
+	print(a)
+	return 2
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.callDirect Console.stdin
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.readLine
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.callDirect Console.stdin
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect Stdin.readLine
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r13, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r13
+    x64.callDirect print
+    x64.movRegImm32 r14, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

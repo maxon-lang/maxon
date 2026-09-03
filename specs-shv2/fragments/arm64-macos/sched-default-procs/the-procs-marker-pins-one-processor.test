@@ -87,9 +87,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @Adder.create {
@@ -110,18 +111,20 @@ func @Adder.grind {
   entry:
     arm64.prologue 16
     arm64.movImm x3, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x3, x2
-    arm64.cset x4, lt
-    arm64.cbnz x4, spin
-    arm64.b whileexit
+    arm64.b.ge whileexit
   spin:
     arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
     arm64.add x5, x1, x3
-    arm64.movImm x6, 7
-    arm64.sdiv x16, x5, x6
-    arm64.msub x5, x16, x6, x5
+    arm64.movImm x6, 5270498306774157605
+    arm64.smulh x6, x6, x5
+    arm64.asr x6, x6, 1
+    arm64.lsr x7, x6, 63
+    arm64.add x6, x6, x7
+    arm64.movImm x16, 7
+    arm64.mul x6, x6, x16
+    arm64.sub x5, x5, x6
     arm64.add x4, x4, x5
     arm64.storeBaseDispReg.word64 [x0 + 0], x4
     arm64.add x3, x3, 1
@@ -150,12 +153,9 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot4, x19
     arm64.movImm x20, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x20, 8
-    arm64.cset x0, lt
-    arm64.cbnz x0, spawnEach
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   spawnEach:
     arm64.bl Adder.create
     arm64.movRegReg x1, x0
@@ -174,17 +174,12 @@ func @main {
     arm64.b whilehdr#1
   whileexit#3:
     arm64.movImm x20, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.cmp x20, 8
-    arm64.cset x0, lt
-    arm64.cbnz x0, sendEach
-    arm64.b whileexit#6
+    arm64.b.ge whileexit#6
   sendEach:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#18
-    arm64.b __rc_ok#17
+    arm64.b.ge __rc_ok#17
   __rc_panic#18:
     arm64.leaRdata x0, __str_blob_14  ; "panic at the-procs-marker-pins-one-processor.test:40: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -204,9 +199,7 @@ func @main {
   __rc_ok#17:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#22
-    arm64.b __im_load#23
+    arm64.b.hs __im_slow#22
   __im_load#23:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x20, lsl #3
@@ -214,14 +207,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty#24
-    arm64.b critsplit#29
+    arm64.b.eq critsplit#29
   __im_empty#24:
     arm64.cmp x21, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#22
-    arm64.b critsplit#30
+    arm64.b.ne critsplit#30
   __im_slow#22:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -233,12 +222,9 @@ func @main {
     arm64.b __im_cont#21
   critsplit#29:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#21
   __im_cont#21:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_rec_7  ; "panic at the-procs-marker-pins-one-processor.test:40: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -339,17 +325,12 @@ func @main {
   whileexit#6:
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr#9
   whilehdr#9:
     arm64.cmp x21, 8
-    arm64.cset x0, lt
-    arm64.cbnz x0, collect
-    arm64.b whileexit#11
+    arm64.b.ge whileexit#11
   collect:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#20
-    arm64.b __rc_ok#19
+    arm64.b.ge __rc_ok#19
   __rc_panic#20:
     arm64.leaRdata x0, __str_blob_15  ; "panic at the-procs-marker-pins-one-processor.test:48: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -369,9 +350,7 @@ func @main {
   __rc_ok#19:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#26
-    arm64.b __im_load#27
+    arm64.b.hs __im_slow#26
   __im_load#27:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
@@ -379,14 +358,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty#28
-    arm64.b critsplit#31
+    arm64.b.eq critsplit#31
   __im_empty#28:
     arm64.cmp x22, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#26
-    arm64.b critsplit#32
+    arm64.b.ne critsplit#32
   __im_slow#26:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -398,12 +373,9 @@ func @main {
     arm64.b __im_cont#25
   critsplit#31:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#25
   __im_cont#25:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#13
-    arm64.b tryok#12
+    arm64.b.eq tryok#12
   tryerr#13:
     arm64.leaRdata x0, __str_rec_13  ; "panic at the-procs-marker-pins-one-processor.test:48: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -505,14 +477,9 @@ func @main {
     arm64.movRegReg x0, x23
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#15
-    arm64.b tryok#14
+    arm64.b.eq trycont
   tryerr#15:
     arm64.movImm x0, 0
-    arm64.b trycont
-  tryok#14:
-    arm64.b trycont
   trycont:
     arm64.add x20, x20, x0
     arm64.add x21, x21, 1
@@ -644,15 +611,12 @@ func @Adder.__loop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.b serve
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x21, x0
     arm64.cmp x21, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, stopping
-    arm64.b dispatch
+    arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=grind, [2]=total] @__jumptable_16
@@ -661,19 +625,15 @@ func @Adder.__loop {
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.b stopping
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
-    arm64.b drain
   drain:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x1, x0
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, finished
-    arm64.b abandon
+    arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -700,10 +660,8 @@ func @Adder.__loop {
     arm64.b serve
   total:
     arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
@@ -720,21 +678,18 @@ func @Adder.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=grind, [2]=total] @__jumptable_17
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=total] @__jumptable_17
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
     arm64.b abandondrop
-  grind:
-    arm64.b abandondrop
   total:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref

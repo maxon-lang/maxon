@@ -29,17 +29,14 @@ func @main {
     arm64.leaRdata x0, __str_rec_5  ; ""
     arm64.leaRdata x19, __str_rec_6  ; "hello"
     arm64.bl String.isEmpty
-    arm64.cbnz x0, check1
-    arm64.b ifcont#2
+    arm64.cbz x0, ifcont#2
   check1:
     arm64.leaRdata x0, __str_rec_7  ; "1\x0a"
     arm64.bl print
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movRegReg x0, x19
     arm64.bl String.isEmpty
-    arm64.cbnz x0, check2
-    arm64.b ifelse
+    arm64.cbz x0, ifelse
   check2:
     arm64.leaRdata x0, __str_rec_8  ; "0\x0a"
     arm64.bl print
@@ -47,7 +44,6 @@ func @main {
   ifelse:
     arm64.leaRdata x0, __str_rec_9  ; "2\x0a"
     arm64.bl print
-    arm64.b ifcont#5
   ifcont#5:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

@@ -48,9 +48,7 @@ func @Holder.count {
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at self-literal-beside-an-inner-alias.test:16: Range check failed: value outside typealias 'ElementCount'\x0a"
     arm64.bl mrt_panic
@@ -80,9 +78,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.bl Holder.count
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 32

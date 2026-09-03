@@ -1,0 +1,258 @@
+// LinuxRuntime — the Linux facts the host surface reads that are the SAME on x86-64 and on AArch64: the
+// `*at` anchor, the three `open` flag words the generic header defines, the layout of the search object the
+// backends invent for themselves, and `struct linux_dirent64`.
+//
+// ⛔⛔ **A CONSTANT BELONGS HERE ONLY IF THE TWO ARCHES WERE MEASURED TO AGREE, AND MOST DO NOT.** Every
+// syscall NUMBER differs (`getpriority`/`setpriority` are even 140/141 one way and 141/140 the other, so the
+// same number names the opposite call); `O_DIRECTORY` is `0o200000` on x86-64 and `0o40000` on AArch64,
+// which `arch/arm64/include/uapi/asm/fcntl.h` overrides for AArch32 compat; and `struct stat` is 144 bytes
+// with `st_mode` at 24 on x86-64 against 128 bytes with `st_mode` at 16 on AArch64 — while `st_size` and the
+// three timestamps land at the same offsets on both, which is exactly the partial agreement that would let a
+// wrongly-shared layout pass every test until `File.info()` read a mode out of `st_uid`. Those stay with
+// their arch, under an `X64Linux`/`Arm64Linux` prefix, because a number that differs must not be reachable
+// under a name that does not say so.
+//
+// ⭐ **THE POSIX HALF IS `Targets/Shared/PosixRuntime.maxon`** — the errnos, the `st_mode` bits, the glob
+// bytes and `PosixStatLayout` are true of Darwin as well and are not Linux's to state.
+
+// `AT_FDCWD`, as the two's-complement word a `mov` materialises: every `*at` call on either lane anchors
+// here, which is what makes it the plain call it replaces. It is `linux/fcntl.h`'s, not an arch header's, and
+// each lane's `openat` was invoked BY NUMBER through it and answered a live descriptor for a real path.
+// (`MachineWord` is unsigned — `MmapAnonFd` is the same spelling one file over, for the same reason.)
+export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
+
+// --- `open` flags, from `asm-generic/fcntl.h` ---
+//
+// ⚠ **THESE ARE NOT DARWIN'S BIT VALUES AND THE DIFFERENCE IS SILENT.** `O_CREAT` is 0x40 here and 0x200
+// there, `O_TRUNC` 0x200 here and 0x400 there — v1 carries a whole branchless translator for exactly this
+// (`emitMacosOpenFlagXlateArm64`) and records what a wrong bit does: a write open lands `O_ASYNC` instead of
+// `O_TRUNC`. shv2 needs no translator because the macOS lane calls `creat` rather than `open` and never
+// spells a flag word at all; these are Linux's alone.
+//
+// ⚠ **AND THEY ARE THE ARCH-NEUTRAL THREE.** AArch64's `asm/fcntl.h` overrides exactly four flags before
+// including the generic header — `O_DIRECTORY`, `O_NOFOLLOW`, `O_DIRECT`, `O_LARGEFILE` — and none of them
+// appears in either word below, so both arches read the generic values. `O_DIRECTORY` is per-arch for that
+// reason and is declared beside its arch's syscall table.
+//
+// `O_WRONLY|O_CREAT|O_TRUNC` IS `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`, which is the same trio `creat`
+// abbreviates on the Darwin lane — so the two opens agree on semantics while spelling them differently.
+export let LinuxOpenReadOnlyFlags = 0x0
+export let LinuxOpenCreateTruncateFlags = 0x241
+
+// `unlinkat`'s flag word: 0 means "remove a FILE". (`AT_REMOVEDIR` is what would make it an `rmdir`, and
+// this op is `DeleteFileA`, which refuses a directory.)
+export let LinuxUnlinkFileFlags = 0
+
+// `ENAMETOOLONG` — 36 on Linux and 63 on Darwin, so unlike the five in `PosixRuntime` it cannot be a POSIX
+// fact; it is the same 36 on both Linux arches because neither overrides `asm-generic/errno.h` (each arch's
+// `asm/errno.h` is a bare include of it). It is what a search whose DIRECTORY PART does not fit the scratch
+// reports; see either lane's `…DirPrefixChunk` for why that is a refusal rather than a truncation.
+export let LinuxErrnoNameTooLong = 36
+
+// ⭐ **THE `.data` WORD EACH LANE'S HOST SURFACE STASHES A FAILED SYSCALL'S REASON INTO.**
+// `StdOp.osLastError` is a SEPARATE op emitted immediately after the call that failed, so the reason must
+// survive from one to the other; a syscall reports it in the return register and keeps no copy, and a raw
+// static image links no libc to hold one. The LABEL is one name because exactly one lane's runtime reaches
+// any image; what sits behind it is the lane's own choice — a process-wide word where there is one thread,
+// a per-OS-thread scheduler slot where a real `clone` can make more.
+export let LinuxErrnoLabel = b"__mrt_errno"
+
+// ⭐⭐ **THE `.data` WORD HOLDING THE ENVIRONMENT VECTOR, AND ONLY A LIBC-LESS LANE NEEDS ONE.** Windows asks
+// `GetEnvironmentVariableA` and macOS asks `getenv`; a static Linux image has neither, so the kernel's
+// `envp` is reachable exactly once — in the entry stub, where it still sits on the stack — and
+// `mrt_host_env_read` reads it back out of this word. Both Linux lanes capture into the same name because
+// only one lane's runtime ever reaches an image.
+export let LinuxEnvpLabel = b"__mrt_envp"
+
+// `'='` — what separates a name from its value in every `envp` entry. Both lanes' walks compare against it,
+// and a match is the name followed by THIS byte: comparing only the prefix makes `MAXON_MAX` match
+// `MAXON_MAX_PROCS`.
+export let LinuxEnvSeparatorByte = 0x3D
+
+// --- The initial process stack `execve` hands the entry stub ---
+//
+// `[sp]` holds argc, `sp + 8` IS the argument vector, its NUL terminator follows, and the environment
+// begins after that — so `envp` is at `sp + (argc + 2) * 8`. The layout is the System V ELF ABI's and no
+// architecture varies it, which is why both entry stubs read these rather than each spelling them.
+export let LinuxEntryArgvOffset = SpillSlotBytes as Imm32
+export let LinuxEntryEnvpSkippedWords = 2 as Imm32
+
+// `sizeof(sigset_t)` — 64 signals, one bit each, on every Linux architecture. `rt_sigaction` takes it as
+// its fourth argument and `ppoll` as its last, and the kernel checks it even when the mask is NULL.
+export let LinuxSigsetBytes = 8
+
+// `struct timespec` — `tv_sec` then `tv_nsec`, two 64-bit words, which is two of either assembler's 8-byte
+// frame slots. Each clock chunk holds its out-param pointer in slot 0 and reserves these above it. HOW the
+// two fields are then addressed is per-arch: the frames grow in opposite directions, so each lane derives
+// its own offsets (see either `…ReadClockTimespec`).
+export let LinuxTimespecSlots = 2 as StackSize
+
+// The `.data` word above, laid out for the programs that read the environment. Gated on the FACILITIES that
+// reach it rather than on the target alone, exactly as each lane's errno word is: a Linux program that
+// neither schedules nor asks about the terminal never touches it, so it does not carry it.
+//
+// ⚠ **NO `os` TEST INSIDE THE `usage` TEST — the target is asked FIRST**, because the answer really does
+// depend on both and this is the one place that pair is stated (`commandLineRuntimeGlobals`' arrangement).
+export function linuxEnvpGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if target.os != Os.linux or not posixReadsEnvironment(usage) 'notThisLane'
+		return out
+	end 'notThisLane'
+
+	// Written ONCE, in `mrt_start`, before `main` and therefore before anything could make a second OS
+	// thread; every later access is a read.
+	pushRuntimeGlobal(out, label: LinuxEnvpLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	return out
+end 'linuxEnvpGlobals'
+
+// ==========================================================================
+// Is this descriptor a terminal?
+// ==========================================================================
+
+// ⭐⭐ **`isatty` IS `ioctl(fd, TCGETS, &termios)`, AND A LIBC-LESS IMAGE MAKES THAT CALL ITSELF.** The
+// request word is `0x5401` on both Linux arches (neither overrides `asm-generic/ioctls.h`) and the kernel
+// writes **36 bytes** — `struct termios` — through the pointer, so the body needs a frame rather than two
+// inline instructions. Only the syscall NUMBER differs, and it stays with its arch.
+//
+// ⚠ MEASURED by raw syscall on both guests against a 0xAA-filled buffer: `0` on a pty slave and a pty
+// master, `-ENOTTY` on a pipe, a regular file and `/dev/null`, agreeing with `isatty` on all five, and 36
+// bytes overwritten.
+//
+// ⛔ **`0x5402` IS `TCSETS`, WHICH ALSO ANSWERS `0` ON A TERMINAL — AND WRITES THE BUFFER INTO ITS
+// SETTINGS.** An off-by-one here corrupts the user's terminal instead of answering the wrong question,
+// which is why the request is named rather than spelled at its two call sites.
+export let LinuxIoctlTcGets = 0x5401
+export let LinuxTermiosBytes = 36
+
+// The two chunks no Darwin lane spells, so they keep a lane infix rather than the shared `mrt_host_` prefix
+// (`PosixRuntime`'s header states that rule): one exists because a static image has no `fnmatch` and the
+// other because it has no `malloc`.
+export let LinuxGlobMatchName = b"mrt_linux_glob_match"
+export let LinuxDirPrefixName = b"mrt_linux_dir_prefix"
+
+// ==========================================================================
+// The clocks, the running image and the machine query
+// ==========================================================================
+
+// ⭐⭐ **THE THREE `clockid_t` VALUES, AND THEY ARE LINUX'S RATHER THAN EITHER ARCH'S.** No architecture
+// overrides `linux/time.h`, so one set serves both lanes — unlike the syscall NUMBERS that carry them, which
+// differ (`clock_gettime` is 113 on AArch64 and 228 on x86-64) and stay with their arch.
+//
+// ⛔ **A WRONG ID DOES NOT FAIL. It reads a DIFFERENT CLOCK and answers a plausible wrong time**, which is
+// why each is named rather than spelled at its call site. `CLOCK_THREAD_CPUTIME_ID` is 3 here and 16 on
+// Darwin, and the two Darwin/Linux monotonic clocks INVERT their names: Linux's `CLOCK_MONOTONIC` does not
+// advance across a suspend and `CLOCK_BOOTTIME` does, so the id matching Darwin's `CLOCK_UPTIME_RAW`
+// SEMANTICS is this one — taking `CLOCK_BOOTTIME` "because Darwin takes the raw clock" would be reading the
+// name instead of the property.
+//
+// ⚠ MEASURED by number on both guests: id 0 answered a real calendar time, id 1 a positive uptime, id 3 a
+// few tens of milliseconds in a freshly started process.
+export let LinuxClockRealtime = 0
+export let LinuxClockMonotonic = 1
+export let LinuxClockThreadCpuTime = 3
+
+// The symlink whose target IS the running image's path — the whole of `osExecutablePath` on Linux, because
+// `_NSGetExecutablePath` has no counterpart here and no call answers the question.
+export let LinuxProcSelfExe = b"/proc/self/exe"
+
+// ⭐⭐ **`cpu_set_t` IS 128 BYTES, AND `sched_getaffinity` REFUSES A SMALLER ONE.** The kernel demands a size
+// that is a multiple of a word AND large enough for every possible CPU, answering `-EINVAL` otherwise; 128
+// bytes is glibc's `cpu_set_t` and covers 1024 CPUs, which is the size every caller passes. It answers the
+// number of BYTES it filled, not a count of CPUs — the count is a POPCOUNT over those bytes.
+//
+// ⚠ The buffer is zeroed before the call so the popcount may sweep the WHOLE 128 bytes rather than only the
+// prefix the kernel wrote. Sweeping a fixed extent is one loop with one bound; sweeping the returned prefix
+// is the same loop plus a rounding of a byte count up to a word, and the two can disagree.
+export let LinuxCpuSetBytes = 128
+
+// What a failed `sched_getaffinity` answers, in the vocabulary the Std tier ALREADY reads.
+// `CpuParallelRuntime.buildCpuCount` clamps `< 1` to 1 with a SIGNED test written to cover both Windows's 0
+// and `sysconf`'s -1, so each Linux lane reports its own failure as that same -1 rather than inventing a
+// floor here — which would be one contract in two places (`lowerOsCpuCount` states the rule).
+export let LinuxCpuCountUnavailable = 0xFFFFFFFFFFFFFFFF
+
+// `sched_getaffinity`'s `pid` argument. 0 means the CALLING thread, which is the only process either chunk
+// may ask about — and is why the syscall needs no `getpid` ahead of it.
+export let LinuxAffinityWhoIsSelf = 0
+
+// ==========================================================================
+// The search object
+// ==========================================================================
+
+// ⭐⭐ **ONE `mmap`'d PAGE HOLDS THE WHOLE SEARCH, AND THAT IS THE ANSWER TO HAVING NO `malloc`.** Win32's
+// `HANDLE` carries the open directory and the pattern still to be matched; this page carries all four things
+// a walk needs — the descriptor, the cursor and filled count into the `getdents64` buffer, the pattern, and
+// the directory-prefix scratch — and one `munmap` releases all four.
+//
+// ⭐ **THE GEOMETRY IS THE BACKENDS' OWN INVENTION, NOT THE KERNEL'S**, which is why it is arch-neutral by
+// construction rather than by measurement: nothing outside these chunks ever reads this page.
+//
+// ⚠ **A NEGATIVE `dirfd` IS THE EXHAUSTED SINGLE-`stat` SEARCH, NOT AN ERROR.** A pattern with no wildcard is
+// answered by one `stat` and has exactly one entry, which `FindFirstFileA` has already reported — so the
+// object it hands back has no directory to walk and the first `FindNextFileA` must report end-of-iteration
+// rather than call `getdents64(-1)`. Darwin spells the same fact as a NULL `DIR*`; here 0 is a legal
+// descriptor, so the sentinel is -1.
+//
+// ⚠ **`MAP_ANON` PAGES ARE KERNEL-ZEROED**, which is why only `dirfd` is written at birth: the cursor, the
+// filled count and the pattern's first byte are already 0 by the mapping's own contract (the one
+// `PosixMmap`'s header states for the slab).
+export let LinuxSearchDirFdOffset = 0x00 as Imm32
+export let LinuxSearchCursorOffset = 0x08 as Imm32
+export let LinuxSearchFilledOffset = 0x10 as Imm32
+export let LinuxSearchPatternOffset = 0x18 as Imm32
+export let LinuxSearchPrefixOffset = 0x200 as Imm32
+export let LinuxSearchEntriesOffset = 0x400 as Imm32
+export let LinuxSearchBytes = 0x1000
+
+// What the `getdents64` buffer may hold: the whole tail of the page above the two variable-length regions.
+export let LinuxSearchEntriesBytes = LinuxSearchBytes - (LinuxSearchEntriesOffset as ParsedInt)
+
+// The `dirfd` of a search that has no directory to walk. DERIVED from the handle sentinel rather than
+// re-spelled, because both mean "there is nothing here" and the tests that read them are in different files:
+// this one is a signed `< 0` inside the chunks, `InvalidHandleValue` is an `== -1` in the Std tier.
+export let LinuxNoDirectory = PosixInvalidHandle
+
+// `struct linux_dirent64` — `d_ino@0`, `d_off@8`, `d_reclen@16` (u16), `d_type@18` (u8), `d_name@19`. The
+// kernel defines it once in `include/linux/dirent.h` for every architecture, and it was READ BACK on each
+// lane: the first records of a real directory decoded to `.`, `..` and real file names at exactly these
+// offsets.
+//
+// ⚠ **`d_reclen` IS READ AS THE 32-BIT WORD AT 16 AND MASKED** — the other 16 bits of that word are `d_type`
+// and the name's first byte, which the mask discards. (The AArch64 assembler has `ldr Wt` and `ldrb Wt` and
+// no halfword form, and x86-64 takes the same route so the two walks stay one algorithm.)
+//
+// ⚠ Only the NAME is read: `d_type` would answer "is it a directory?" one call cheaper than `fstatat`, and
+// the record needs a SIZE and three TIMESTAMPS from that call regardless, so a `d_type` fast path would be a
+// second source for one of six fields — `Arm64DarwinRuntime` makes the same argument about `readdir`'s.
+export let LinuxDirentRecordLengthOffset = 16 as Imm32
+export let LinuxDirentNameOffset = 19 as Imm32
+export let LinuxDirentRecordLengthMask = 0xFFFF as Imm32
+
+// ⭐ **THE SEARCH PAGE'S THREE REGIONS MUST EACH HOLD WHAT IS WRITTEN INTO THEM, AND NOTHING ELSE CHECKS.**
+// The pattern copy and the directory prefix are bounded by `PosixPathStringCapacity` at their copy sites, and
+// each walk hands `getdents64` the whole tail — so the OFFSETS and the bounds are a pair, in different
+// functions, with a byte-for-byte overrun of a mapped page as the failure. Checked here rather than
+// commented, which is this project's cure ladder: an offset moved without its neighbour fails the build.
+export function assertLinuxSearchGeometry()
+	let patternBytes = (LinuxSearchPrefixOffset - LinuxSearchPatternOffset) as ParsedInt
+	if patternBytes < MaxPathBytes 'patternRegion'
+		panic("LinuxRuntime: the search object's pattern region is {patternBytes} bytes and a pattern copy writes up to {MaxPathBytes} (`PosixPathStringCapacity` plus its terminator) — it would run into the directory-prefix scratch above it")
+	end 'patternRegion'
+
+	let prefixBytes = (LinuxSearchEntriesOffset - LinuxSearchPrefixOffset) as ParsedInt
+	if prefixBytes < MaxPathBytes 'prefixRegion'
+		panic("LinuxRuntime: the search object's directory-prefix scratch is {prefixBytes} bytes and `mrt_linux_dir_prefix` writes up to {MaxPathBytes} — it would run into the `getdents64` buffer above it")
+	end 'prefixRegion'
+
+	if LinuxSearchEntriesBytes < LinuxSearchMinimumEntriesBytes 'entriesRegion'
+		panic("LinuxRuntime: the `getdents64` buffer is {LinuxSearchEntriesBytes} bytes, which cannot hold one worst-case `struct linux_dirent64` ({LinuxSearchMinimumEntriesBytes}) — the kernel would answer EINVAL for every refill")
+	end 'entriesRegion'
+end 'assertLinuxSearchGeometry'
+
+// A FLOOR for one `struct linux_dirent64` at its longest: the fixed header, a name at the filesystem maximum,
+// and one machine word covering the terminator and the 8-byte alignment `d_reclen` is rounded up to. It is
+// deliberately a bound rather than the exact rounded size — this is the threshold of a check, not the size of
+// an allocation, and a bound that is a few bytes generous cannot be wrong in the direction that matters.
+let LinuxDirentMaxNameBytes = 255
+let LinuxSearchMinimumEntriesBytes = (LinuxDirentNameOffset as ParsedInt) + LinuxDirentMaxNameBytes + (SpillSlotBytes as ParsedInt)

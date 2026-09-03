@@ -32,21 +32,15 @@ func @main {
   entry:
     arm64.prologue 32
     arm64.movImm x0, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x0, 3
-    arm64.cset x1, lt
-    arm64.cbnz x1, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.cmp x0, 2
-    arm64.cset x1, lt
-    arm64.cbnz x1, b
-    arm64.b ifcont
+    arm64.b.ge ifcont
   b:
     arm64.leaRegSlot x1, slot0
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.b ifcont
   ifcont:
     arm64.add x0, x0, 1
     arm64.b whilehdr

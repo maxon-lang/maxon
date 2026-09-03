@@ -42,59 +42,41 @@ func @main {
     arm64.movImm x0, 5
     arm64.leaRegSlot x2, slot1
     arm64.storeBaseDispReg.word64 [x2 + 0], x0
-    arm64.b __il_body#11
   __il_body#11:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.b __il_cont#10
-  __il_cont#10:
-    arm64.b __il_body#12
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
-    arm64.b __il_cont#9
-  __il_cont#9:
-    arm64.b __il_body#13
   __il_body#13:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#15
+    arm64.b.ge ifcont#15
   lt:
     arm64.movImm x0, 0
-    arm64.b __il_cont#8
+    arm64.b __il_cont
   ifcont#15:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#17
+    arm64.b.le ifcont#17
   gt:
     arm64.movImm x0, 2
-    arm64.b __il_cont#8
+    arm64.b __il_cont
   ifcont#17:
     arm64.movImm x0, 1
-    arm64.b __il_cont#8
-  __il_cont#8:
+  __il_cont:
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#1
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#1:
     arm64.movImm x0, 0
     arm64.epilogue 32
     arm64.ret
   matchnext#5:
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext#6
+    arm64.b.ne matchnext#6
   matcharm#2:
     arm64.movImm x0, 1
     arm64.epilogue 32
     arm64.ret
   matchnext#6:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#3:
     arm64.movImm x0, 2
     arm64.epilogue 32

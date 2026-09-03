@@ -34,8 +34,7 @@ ExitCode: 146
 ---
 func @rescued {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.add x1, x0, 1
@@ -56,12 +55,9 @@ func @rescued {
     arm64.add x0, x0, 16
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 5
-    arm64.cset x21, lt
-    arm64.cbnz x21, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.add x19, x19, x20
     arm64.add x20, x20, 1
@@ -85,8 +81,7 @@ func @rescued {
     arm64.add x0, x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
 }
 
@@ -96,14 +91,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl rescued
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at rescued-idle-around-loop.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

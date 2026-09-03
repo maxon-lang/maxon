@@ -156,18 +156,14 @@ func @borrowCount {
     arm64.movRegReg x20, x2
     arm64.movImm x21, 0
     arm64.movRegReg x22, x1
-    arm64.b forhdr
   forhdr:
     arm64.cmp x21, 2
-    arm64.cset x0, lt
-    arm64.cbnz x0, r
-    arm64.b forexit
+    arm64.b.ge forexit
   r:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
     arm64.blr x16
     arm64.add x22, x22, x0
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr
@@ -223,9 +219,7 @@ func @withTarget {
     arm64.bl borrowCount
     arm64.movRegReg x22, x0
     arm64.cmp x22, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, empty
-    arm64.b ifcont
+    arm64.b.ne ifcont
   empty:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -239,24 +233,19 @@ func @withTarget {
   ifcont:
     arm64.movImm x23, 0
     arm64.movImm x24, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x24, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x24, lsl #3
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
     arm64.bl forFunc
     arm64.add x23, x23, x0
-    arm64.b forstep
   forstep:
     arm64.add x24, x24, 1
     arm64.b forhdr
@@ -319,14 +308,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at pre-loop-borrow-then-loop-consume.test:74: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

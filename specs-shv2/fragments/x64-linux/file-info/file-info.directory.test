@@ -1,0 +1,94 @@
+// Test: file-info.directory
+function main() returns ExitCode
+	let path = FilePath from "test_fi_dir"
+	// Create directory (may already exist from prior run — ignore result)
+	_ = Directory.create(path)
+	let fi = try File.info(path) otherwise 'e'
+		print("info failed")
+		return 2
+	end 'e'
+	if fi.isDirectory == false 'dc'
+		print("expected directory")
+		return 3
+	end 'dc'
+	print("is directory")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __mrt_errno@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "test_fi_dir"
+    x64.callDirect FilePath.init
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Directory.create
+    x64.movRegReg rcx, rbx
+    x64.callDirect File.info
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_rec_21]  ; "info failed"
+    x64.callDirect print
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.byte rax, [r12 + 32]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont
+  dc:
+    x64.leaRegRdata rcx, [rip + __str_rec_22]  ; "expected directory"
+    x64.callDirect print
+    x64.movRegImm32 r13, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_rec_23]  ; "is directory"
+    x64.callDirect print
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

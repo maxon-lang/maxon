@@ -1,0 +1,628 @@
+// Test: managed-file.read-into-a-non-owned-buffer-is-refused
+typealias Byte = int(0 to 255)
+typealias Bytes = Array with Byte
+
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path) otherwise throw TestFileError.openFailed
+		return TestFile{file: handle}
+	end 'openRead'
+end 'TestFile'
+
+function main() returns ExitCode
+	let path = "test_mf_read_non_owned.txt"
+	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
+	try wf.file.write("ZZZZZZZZZZZZZZZZZZZZZZZZ".toByteArray().managed) otherwise panic("write: 24 bytes to a freshly opened file")
+	wf.file.close()
+
+	var arr = Bytes.create()
+	arr.push(65)
+	arr.push(66)
+	arr.push(67)
+	arr.push(68)
+	let view = try arr.slice(0, endIndex: 4) otherwise panic("slice: 0..4 of a length-4 array")
+
+	// Guard the PREMISE rather than the sentinel's value: if a slice ever stops being a zero-copy view this
+	// case stops testing its subject, and it must go red then rather than quiet.
+	if view.managed.capacity() >= 0 'sliceMustStillBeAView'
+		print("a slice is no longer a non-owned view; this case no longer tests its subject")
+		return 1
+	end 'sliceMustStillBeAView'
+
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
+	let within = try rf.file.read(view.managed, 2) otherwise 999
+	let over = try rf.file.read(view.managed, 24) otherwise 999
+	rf.file.close()
+
+	let p0 = try arr.get(0) otherwise panic("get: index 0 of a length-4 array")
+	let p3 = try arr.get(3) otherwise panic("get: index 3 of a length-4 array")
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise panic("delete: the file this case created")
+
+	print("within={within} over={over} parent={p0},{p3}")
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @TestFile.openWrite {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __mf_open_write
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @TestFile.openRead {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __mf_open_read
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 248
+    x64.leaRegRdata rbx, [rip + __str_rec_7]  ; "test_mf_read_non_owned.txt"
+    x64.storeSlotReg slot25, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect TestFile.openWrite
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at managed-file.read-into-a-non-owned-buffer-is-refused.test:25: openWrite: the runner's working directory is writable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 r12, [r13 + 0]
+    x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "ZZZZZZZZZZZZZZZZZZZZZZZZ"
+    x64.callDirect String.toByteArray
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __mf_write
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at managed-file.read-into-a-non-owned-buffer-is-refused.test:26: write: 24 bytes to a freshly opened file\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __mf_close
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegImm32 rdx, 65
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 66
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 67
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 68
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 4
+    x64.leaRegRdata r9, [rip + __layout_Array_Byte]
+    x64.movRegReg rcx, r12
+    x64.callDirect Array.slice
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot2, r14
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at managed-file.read-into-a-non-owned-buffer-is-refused.test:34: slice: 0..4 of a length-4 array\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, ifcont
+  sliceMustStillBeAView:
+    x64.leaRegRdata rcx, [rip + __str_rec_12]  ; "a slice is no longer a non-owned view; this case no longer tests its subject"
+    x64.callDirect print
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect TestFile.openRead
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot3, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at managed-file.read-into-a-non-owned-buffer-is-refused.test:43: openRead: the file just written\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rbx, [r13 + 0]
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_retain
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rax, 2
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __mf_read
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.movRegImm32 rax, 999
+    x64.jmp trycont#13
+  tryok#11:
+    x64.movRegReg rax, r8
+  trycont#13:
+    x64.storeSlotReg slot24, rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rbx, [r13 + 0]
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 24
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __mf_read
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#14
+  tryerr#15:
+    x64.movRegImm32 rax, 999
+    x64.jmp trycont#16
+  tryok#14:
+    x64.movRegReg rax, r8
+  trycont#16:
+    x64.storeSlotReg slot23, rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __mf_close
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#27
+  __im_word#25:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#24
+  __im_load#29:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#28
+  __im_stride#27:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#24
+  __im_byte#26:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#24
+  __im_load#30:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#28:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#41
+  __im_empty#31:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#24
+  critsplit#42:
+    x64.movRegReg rbx, rax
+    x64.jmp __im_cont#23
+  critsplit#41:
+    x64.movRegReg rbx, rax
+    x64.jmp __im_cont#23
+  __im_slow#24:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r10
+  __im_cont#23:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok#17
+  tryerr#18:
+    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at managed-file.read-into-a-non-owned-buffer-is-refused.test:48: get: index 0 of a length-4 array\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#17:
+    x64.movRegImm32 rdx, 3
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#36
+  __im_word#34:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 3
+    x64.jcc belowEqual, __im_slow#33
+  __im_load#38:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegImm32 rax, rax, 24
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded#37
+  __im_stride#36:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#33
+  __im_byte#35:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 3
+    x64.jcc belowEqual, __im_slow#33
+  __im_load#39:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#37:
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#43
+  __im_empty#40:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#33
+  critsplit#44:
+    x64.movRegReg r12, rax
+    x64.jmp __im_cont#32
+  critsplit#43:
+    x64.movRegReg r12, rax
+    x64.jmp __im_cont#32
+  __im_slow#33:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r10
+  __im_cont#32:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok#19
+  tryerr#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at managed-file.read-into-a-non-owned-buffer-is-refused.test:49: get: index 3 of a length-4 array\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#19:
+    x64.loadRegSlot rcx, slot25
+    x64.callDirect String.toByteArray
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#21
+  tryerr#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at managed-file.read-into-a-non-owned-buffer-is-refused.test:50: delete: the file this case created\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#21:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.leaRegRdata rax, [rip + __str_rec_16]  ; "within="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot14, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot20, rax
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot13, r8
+    x64.loadRegSlot rcx, slot24
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot19, r13
+    x64.leaRegRdata rax, [rip + __str_rec_17]  ; " over="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot12, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot18, rax
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot11, r8
+    x64.loadRegSlot rcx, slot23
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot17, r14
+    x64.leaRegRdata rax, [rip + __str_rec_18]  ; " parent="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot15, rax
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot4, rbx
+    x64.leaRegRdata rax, [rip + __str_rec_19]  ; ","
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.storeSlotReg slot6, r15
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot8, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot22, r8
+    x64.loadRegSlot r12, slot20
+    x64.leaRegRegReg rax, r12, r13
+    x64.loadRegSlot r13, slot18
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot r14, slot15
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rbx, slot22
+    x64.leaRegRegReg rax, rax, rbx
+    x64.storeSlotReg slot9, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot16, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.storeSlotReg slot21, r15
+    x64.movRegReg rcx, r15
+    x64.loadRegSlot rdx, slot14
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r12
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot rdx, slot13
+    x64.loadRegSlot r15, slot19
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot r13, slot11
+    x64.movRegReg rdx, r13
+    x64.loadRegSlot r15, slot17
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot r14, slot5
+    x64.movRegReg rdx, r14
+    x64.loadRegSlot r15, slot4
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot rdx, slot7
+    x64.loadRegSlot r15, slot6
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.movRegReg rcx, r12
+    x64.loadRegSlot r15, slot8
+    x64.movRegReg rdx, r15
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, rbx
+    x64.loadRegSlot rbx, slot16
+    x64.loadRegSlot rax, slot21
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.loadRegSlot rax, slot9
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 42
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_TestFile
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

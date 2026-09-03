@@ -34,12 +34,9 @@ func @main {
     arm64.prologue 32
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x1, 4
-    arm64.cset x2, lt
-    arm64.cbnz x2, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.leaRegSlot x2, slot0
     arm64.storeBaseDispReg.word64 [x2 + 0], x1
@@ -49,14 +46,10 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at rc-loop-per-iteration-freed.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

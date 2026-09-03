@@ -799,12 +799,13 @@ function opIsArm64Band(op TargetOp) returns bool
 		// are x64's, the shifted-register `add` is arm64's.
 		leaRegBaseIndexScale to storeBaseIndexScaleReg gives false
 		arm64AddLsl gives true
-		// EC18's high multiply is x64's one-operand `imul` — no arm64 form of it exists in this dialect
-		// (AArch64 spells the same value as `SMULH`, which nothing emits yet).
+		// EC18's high multiply is one value with two instructions: x64's one-operand `imul` and arm64's
+		// three-address `SMULH`, each its own op.
 		imulHighReg gives false
 		// `fneg` is arm64's own instruction (x64 spells the flip as `negF64RegReg`).
 		arm64Fneg gives true
 		arm64LoadAcquire or arm64StoreRelease gives true
+		arm64Smulh gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -1054,6 +1055,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64Fneg(dest, src) gives "fneg {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64LoadAcquire(dest, base, width) gives "ldar.{accessWidthName(width)} {arm64VregName(dest)}, [{arm64VregName(base)}]"
 		arm64StoreRelease(base, src, width) gives "stlr.{accessWidthName(width)} [{arm64VregName(base)}], {arm64VregName(src)}"
+		arm64Smulh(dest, lhs, rhs) gives "smulh {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 	end 'op'
 end 'formatTargetOp'
 

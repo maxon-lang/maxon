@@ -1,0 +1,504 @@
+// Test: managed-file.write-and-read
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
+type TestFile
+	export var file as __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openWrite(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openRead'
+end 'TestFile'
+
+function main() returns ExitCode
+	let path = "test_managed_file_rw.txt"
+	// Write a file
+	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise 'writeFail'
+		print("write open failed")
+		return 1
+	end 'writeFail'
+	let content = "Hello Managed"
+	try wf.file.write(content.toByteArray().managed) otherwise 'wErr'
+		wf.file.close()
+		return 3
+	end 'wErr'
+	wf.file.close()
+
+	// Read it back
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
+		print("read open failed")
+		return 2
+	end 'readFail'
+	let size = try rf.file.size() otherwise 'sizeErr'
+		return 8
+	end 'sizeErr'
+	var buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
+		return 5
+	end 'allocFail'
+	let bytesRead = try rf.file.read(buffer, size) otherwise 'rErr'
+		rf.file.close()
+		return 9
+	end 'rErr'
+	rf.file.close()
+	try buffer.setLength(bytesRead) otherwise 'setLenFail'
+		return 6
+	end 'setLenFail'
+	// Null-terminate
+	try buffer.setLength(bytesRead + 1) otherwise 'setLenFail2'
+		return 6
+	end 'setLenFail2'
+	try buffer.setByte(bytesRead, 0) otherwise 'setByteFail'
+		return 7
+	end 'setByteFail'
+	try buffer.setLength(bytesRead) otherwise 'setLenFail3'
+		return 6
+	end 'setLenFail3'
+	let readContent = String.init(buffer)
+	print("{readContent}")
+
+	// Clean up
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise 'delErr'
+		return 4
+	end 'delErr'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @TestFile.openWrite {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __mf_open_write
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @TestFile.openRead {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __mf_open_read
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.leaRegRdata rbx, [rip + __str_rec_4]  ; "test_managed_file_rw.txt"
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect TestFile.openWrite
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "write open failed"
+    x64.callDirect print
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "Hello Managed"
+    x64.loadRegBaseDisp.word64 r12, [r13 + 0]
+    x64.callDirect String.toByteArray
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __mf_write
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __mf_close
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __mf_close
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect TestFile.openRead
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "read open failed"
+    x64.callDirect print
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.callDirect __mf_size
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegImm32 rbx, 8
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.leaRegRegImm32 rcx, r12, 1
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __managed_mem_create
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot2, r15
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.movRegImm32 rbx, 5
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.movRegReg rdx, r15
+    x64.movRegReg rax, r12
+    x64.callDirect __mf_read
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.callDirect __mf_close
+    x64.movRegImm32 rbx, 9
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#11:
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.callDirect __mf_close
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.movRegImm32 rbx, 6
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#13:
+    x64.leaRegRegImm32 rdx, r12, 1
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#15
+  tryerr#16:
+    x64.movRegImm32 rbx, 6
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#15:
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_set_byte
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#17
+  tryerr#18:
+    x64.movRegImm32 rbx, 7
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#17:
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#19
+  tryerr#20:
+    x64.movRegImm32 rbx, 6
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#19:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r15
+    x64.callDirect String.init
+    x64.storeSlotReg slot3, r8
+    x64.loadRegBaseDisp.word64 r12, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect print
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.toByteArray
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#21
+  tryerr#22:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_TestFile
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, r12
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#21:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rbx, 42
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_TestFile
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TestFile
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

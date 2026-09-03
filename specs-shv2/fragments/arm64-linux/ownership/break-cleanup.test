@@ -46,19 +46,14 @@ func @main {
     arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x1, 5
-    arm64.cset x2, lt
-    arm64.cbnz x2, loop
-    arm64.b critsplit
+    arm64.b.ge critsplit
   loop:
     arm64.leaRegSlot x2, slot0
     arm64.storeBaseDispReg.word64 [x2 + 0], x1
     arm64.cmp x1, 3
-    arm64.cset x3, eq
-    arm64.cbnz x3, brk
-    arm64.b ifcont
+    arm64.b.ne ifcont
   brk:
     arm64.loadRegBaseDisp.word64 x1, [x2 + 0]
     arm64.add x19, x0, x1
@@ -70,7 +65,6 @@ func @main {
     arm64.b whilehdr
   critsplit:
     arm64.movRegReg x19, x0
-    arm64.b whileexit
   whileexit:
     arm64.movImm x0, 21
     arm64.movImm x1, 0

@@ -78,6 +78,23 @@ end 'constMaterializationOp'
 // travels in an outgoing STACK slot (`win64OutgoingArgDisp`).
 let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi]
 
+// ⭐⭐ **THE HAND-ASSEMBLED RUNTIME CHUNKS TAKE THEIR ARGUMENTS SOMEWHERE ELSE, AND THAT IS NOT AN
+// OVERSIGHT.** Every chunk in `X64Runtime`/`X64LinuxRuntime` is written to the Win64 order — rcx/rdx/r8/r9
+// in, rax out — because that is the order the IAT imports beside them already use, so one hand-written
+// body serves an import call and a chunk call alike. The custom ABI above passes its THIRD argument in RAX
+// and returns in R8, so reaching for `argRegisterAt` here writes a chunk's length argument into the
+// register the chunk answers in. ⛔ MEASURED, and it is a SILENT WRONG ANSWER: `File.writeText("abc")`
+// wrote 94,976 bytes to disk on x64-linux, because `mrt_host_write_file` read its count out of a register
+// nothing had loaded and its BOOL verdict was still true.
+let hostChunkArgRegisters = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9]
+
+// The physical register a host-surface chunk takes argument slot `index` in. Past the file is a
+// compiler-invariant break: no chunk in either runtime file takes a fifth argument, and one that did would
+// need an outgoing stack slot the callers here do not reserve.
+function hostChunkArgRegisterAt(index ParamCount) returns X64Register
+	return try hostChunkArgRegisters.get(index) otherwise panic("hostChunkArgRegisterAt: argument slot {index} exceeds the {hostChunkArgRegisters.count()} register-argument slots a hand-assembled runtime chunk takes — a chunk with more arguments than that needs an outgoing stack slot, which this emission does not reserve")
+end 'hostChunkArgRegisterAt'
+
 // The custom-ABI FLOAT argument registers, in slot order: a FLOAT parameter/argument travels in
 // `argFpRegisters[fpSlot]` = xmm0..xmm5, where `fpSlot` is counted by a SEPARATE FP counter from the
 // integer `argRegisters` (v1's internal convention — see `abiFileSlotIndex`). The two files
@@ -492,31 +509,6 @@ function indirectResultRegister(resultType StdType) returns X64Register
 	return X64Register.xmm0 if stdTypeIsFloat(resultType) else X64Register.r8
 end 'indirectResultRegister'
 
-// Maps a BRANCHING BLOCK to the predicate the `cmp` fused into its terminator compared with.
-// Populated when a fusable `cmp` is lowered and consumed at the `condBranch` terminating that
-// block — the two become `cmp` + `jcc`, and no boolean is written to a register. Keyed by
-// `BlockRef`, which is function-local, so the map is reset per function. **Why the key is the
-// block and not the compare's value is the ⛔⛔ block below** — it was a ValueId until
-// 2026-08-02 and that was a wrong answer, not a style choice.
-//
-// A cmp that is NOT fusable is deliberately ABSENT here, which is what makes
-// `lowerCondBranch`'s lookup the single source of truth: a hit means "the flags this branch
-// reads were set by the compare that defined its condition", and that fact is established at
-// exactly one place (`computeFusedCmps`).
-//
-// ⛔⛔ **KEYED BY THE BRANCHING BLOCK, NOT BY THE COMPARE'S VALUE, AND THAT IS THE WHOLE
-// CORRECTNESS ARGUMENT.** Fusion is a fact about a *(compare, branch)* PAIR — "the flags this
-// `jcc` reads are the ones that `cmp` set" — and a compare's value can feed MORE THAN ONE
-// branch (`let sub = e < -1022` tested once here and again fifty ops later). Keyed by ValueId,
-// the entry recorded for the first branch answered for the second one too: the later `jcc` was
-// emitted BARE, reading whatever flags the intervening calls and compares had left, and
-// `computeValuesReadFromRegisters` — which excludes a fused branch's condition — excluded BOTH
-// uses, so no `setcc` was emitted anywhere and the boolean existed in no register at all.
-// MEASURED as a silent wrong answer: `stdlib/Builtins.maxon`'s `__float_bitsFromDecimal` took
-// its `isSubnormal` branch on a false condition and `0.5` printed as `4503599627370496`.
-// A block has exactly ONE terminator, so keyed by the block the fact is exact.
-typealias CmpPredMap = Map with (BlockRef, StdCmpPred)
-
 // A block whose float-equality branch was split → the id of the `ordered` block minted for it.
 // See `reserveFloatEqualityBlocks`, which is the only writer, and `lowerCondBranch`, the only
 // reader. A MISS means "this block's branch is not a float equality", which `try/otherwise`
@@ -579,7 +571,7 @@ let FloatInequalityUnorderedReg = X64Register.rdx
 // here — `cmp` vs `ucomisd` is a flag-semantics question and signed-vs-unsigned is a flag-CHOICE
 // question, neither of them a width one. Taking the projections lets the FUSED-branch caller answer
 // from two dense bool columns instead of carrying a full type per compare that every reader would
-// throw all but two bits of away (see `fusedFloatCmps`). The contract's point stands unchanged: the
+// throw all but two bits of away (see `CompareFusionCensus`'s `fusedFloatCmps`). The contract's point stands unchanged: the
 // family is chosen by the operand type and never by the predicate.
 //
 // ⚠ FLOAT IS ASKED FIRST AND THE ORDER IS NOT ARBITRARY: a float compare ALREADY uses the unsigned
@@ -734,46 +726,6 @@ function parityTargetOf(pred StdCmpPred, thenBlockId BlockId, elseBlockId BlockI
 	end 'p'
 end 'parityTargetOf'
 
-// Record `condId` as fusable, but only when `pred`'s compare is the one that DEFINES it.
-//
-// NO `Optional`-shaped return anywhere in this analysis, and that is a MEASURED constraint
-// rather than a style preference. A payload-carrying union is HEAP-BOXED in Maxon (see
-// StdDialect's header), and the natural spelling of the two questions this analysis asks —
-// "what value does this compare define?" and "what predicate does it carry?" — asks them
-// ONCE PER STD OP, which puts a fresh heap object on every op of every function the backend
-// lowers. The first cut of this pass did exactly that, and `scale-test` charged it ~3,500
-// allocations on the SMALLEST rung. So every classifier here either returns a `bool` or
-// writes its answer through an accumulator it is handed, and allocates nothing.
-// Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
-// predicate and the float-ness of the compare carrying it can never disagree, because nothing
-// can write one without the other.
-function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
-	if defId != condId 'someOtherCompare'
-		return
-	end 'someOtherCompare'
-	// The PREDICATE is recorded against the branching BLOCK (see `CmpPredMap`); the FLOAT-NESS
-	// stays against the compare's VALUE, and the asymmetry is exact rather than convenient. "Which
-	// flags does this jcc read?" is a question about a pair, so only a block can answer it; "is the
-	// compare defining v a float compare?" is a property of v's one defining op and cannot differ
-	// between readers. Every reader of the second column reaches it through a hit in the first.
-	//
-	// ⭐ **THE SIGNEDNESS IS THE THIRD COLUMN AND IT IS THE VALUE's FOR THE SAME REASON THE FLOAT-NESS
-	// IS.** Both are projections of the ONE `operandType` the defining op carries, taken here because
-	// this is the one place that op is in hand; both are read only after a `cmpPreds` hit; and both are
-	// dense bool columns rather than a stored `StdType` for `fusedFloatCmps`' measured reason — a
-	// program with no unsigned ordering compare inserts nothing and allocates no backing array.
-	//
-	// ⚠ THE TWO ARE DISJOINT BY CONSTRUCTION, not by a rule anyone maintains: `stdTypeIsUnsigned` is
-	// false for every float `StdType`, and `comparisonSignedness` never routes a float here at all.
-	fused.upsert(blockRef, value: pred)
-	if stdTypeIsFloat(operandType) 'float'
-		floatCmps.insert(condId)
-	end 'float'
-	if stdTypeIsUnsigned(operandType) 'unsigned'
-		unsignedCmps.insert(condId)
-	end 'unsigned'
-end 'fuseIfDefines'
-
 // The three group-2 shift instructions x64 has, and the whole of what the shift lowering needs
 // to know about a Std shift opcode. Named for the INSTRUCTIONS rather than for the opcodes,
 // because the mapping between the two is exactly the fact worth stating once: `shl`→SHL,
@@ -844,49 +796,13 @@ type StdToX64Lowering
 	// Exported so the free-function entry can read the finished module after
 	// driving the per-function loop (M5's fan-out driver reads it too).
 	export var targetModule as TargetModule
-	// Per-function `cmp`-value → predicate table for the fused compare/branch
-	// lowering. Reset at the start of each function (ValueIds are function-local).
-	var cmpPreds as CmpPredMap
-	// ⭐ THE FUSED COMPARES WHOSE OPERANDS ARE FLOATS — `cmpPreds`' second column, written at the
-	// same instant by the same call (`fuseIfDefines`).
-	//
-	// It stores the QUESTION ITS READERS ACTUALLY ASK, and that is the whole design. Both of them
-	// — the condition-code family and the parity split — need to know only whether the compare is
-	// a float one; nobody asks f32-vs-f64 or i8-vs-i64. A `Map with (ValueId, StdType)` here would
-	// store a full type per compare so that every reader could immediately throw all but one bit
-	// of it away, and MEASURED it cost ~4.7 allocations PER FUSED COMPARE — ~1,300 of a +1,528
-	// rung-0 delta — on a corpus that contains no float at all. A column nobody reads is not free.
-	//
-	// A dense bool column (`StdValueUseSet`), so an all-integer function inserts NOTHING and the
-	// backing array is never allocated: the cost is now zero for programs that use no floats,
-	// rather than proportional to their compares.
-	//
-	// ⚠ IT IS A SUBSET OF `cmpPreds`' KEYS AND IS ONLY EVER CONSULTED AFTER A `cmpPreds` HIT. That
-	// is what makes `settleFloatEqualityCondition`'s un-fuse safe without removing from it (there is no
-	// `remove` on a dense set): dropping the `cmpPreds` entry makes the entry here unreachable,
-	// because every reader gates on the predicate lookup first.
-	var fusedFloatCmps as StdValueUseSet
-	// ⭐ THE FUSED COMPARES THAT READ CF RATHER THAN OF/SF — `cmpPreds`' THIRD column, written at the
-	// same instant by the same call (`fuseIfDefines`), and a dense bool column for `fusedFloatCmps`'
-	// measured reason. A program whose every ordering compare is signed inserts nothing into it.
-	var fusedUnsignedCmps as StdValueUseSet
+	// Which compares this function keeps in the EFLAGS and which must write their boolean to a
+	// register — the TARGET-INDEPENDENT analysis both native isels read (`CompareFusionCensus`, in the
+	// shared lowering). Created ONCE and recomputed per function, like `scaledIndexFolds` below.
+	var compareFusion as CompareFusionCensus
 	// The `ordered` block minted for each float-equality branch — see OrderedBlockIdMap and
-	// `reserveFloatEqualityBlocks`. Reset per function with the two columns above.
+	// `reserveFloatEqualityBlocks`. Reset per function beside the census.
 	var orderedBlockIds as OrderedBlockIdMap
-	// Every value this function reads AS A VALUE — out of a REGISTER, rather than as the EFLAGS
-	// a fused branch tests. A compare whose result lands in here needs a `setcc` to write its
-	// boolean into a register; one that does not stays in the flags.
-	//
-	// It is deliberately NOT narrowed to just the compare results. The only thing that ever
-	// asks is a compare, about ITSELF, so narrowing it could not change a single answer — and
-	// would cost a second full walk over every op of every function to do it.
-	//
-	// Computed once per function, BEFORE the op walk, because a compare is lowered long before
-	// the phi edge or the later `if` that reads it is reached. INDEPENDENT of `cmpPreds`: a
-	// compare can be both fused (its own branch reads its flags) AND read as a value (a `let`
-	// binds it), and then it emits `cmp` + `setcc` + `jcc` — sound because `setcc` and `movzx`
-	// READ the flags rather than writing them.
-	var valuesReadFromRegisters as StdValueUseSet
 	// EC16 — the `base + index*scale` chains this function's element accesses spell, and which of them
 	// the memory op itself can carry (`ScaledIndexFolds`, in the shared lowering). x64 answers
 	// `foldsIntoMemoryOps: true`: its `mov`/`movsd`/`movzx` all take a full SIB operand with a
@@ -911,7 +827,7 @@ type StdToX64Lowering
 	var calleeParamClasses as CalleeParamClassMap
 
 	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToX64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), fusedUnsignedCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockIdMap.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
 	end 'create'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
@@ -1131,11 +1047,7 @@ type StdToX64Lowering
 	// compare is lowered long before the branch or the phi edge that decides what it must produce.
 	function prepareFunctionTables(funcIdx FuncIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
-		self.cmpPreds = CmpPredMap.create()
-		self.fusedFloatCmps = StdValueUseSet.create()
-		self.fusedUnsignedCmps = StdValueUseSet.create()
-		self.computeFusedCmps(srcFunc, fused: self.cmpPreds, floatCmps: self.fusedFloatCmps, unsignedCmps: self.fusedUnsignedCmps)
-		self.valuesReadFromRegisters = self.computeValuesReadFromRegisters(srcFunc)
+		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, foldsIntoMemoryOps: true)
 	end 'prepareFunctionTables'
 
@@ -1181,268 +1093,6 @@ type StdToX64Lowering
 
 		return outgoingArgBytes
 	end 'lowerFunctionBlocks'
-
-	// ==========================================================================
-	// Compare/branch fusion — which compares keep their boolean in the FLAGS, and
-	// which must write it to a REGISTER
-	// ==========================================================================
-
-	// The compares whose EFLAGS the branch terminating their own block will read — keyed to
-	// the predicate that branch's `jcc` must test. `lowerCondBranch` fuses exactly the
-	// condition values found here and nothing else.
-	//
-	// PURELY LOCAL, and that is precisely what makes it sound: x64 EFLAGS survive neither a
-	// block boundary nor an intervening flag-clobbering instruction, so the flags a `jcc`
-	// reads are ALWAYS those of the LAST flag-clobbering op before it. Fusion is legal
-	// exactly when that op is the compare whose result the branch is testing — no more, no
-	// less. Nothing about how many OTHER things read the compare enters into it (a compare
-	// that is both fused and materialized emits `cmp` + `setcc` + `jcc`, which is correct
-	// because `setcc`/`movzx` read the flags rather than writing them).
-	//
-	// This is the guard that used to be a `panic` ("`condBranch` on a value no `cmp`
-	// defined"): a boolean condition that is a call result, a parameter or a merge phi has
-	// no flags to fuse, and it is now LOWERED (`cmp reg, 0` + `jne`) rather than rejected.
-	//
-	// ⚠ THE PRECONDITION NOBODY HAD WRITTEN DOWN, AND THE WHOLE THING RESTS ON IT: this scan
-	// runs on STD ops, but the REGISTER ALLOCATOR later inserts TARGET ops into the very
-	// window it just proved safe — the gap between a fused `cmp` and its `jcc`. The fusion
-	// survives only because **every op the allocator can insert there is flag-neutral**:
-	//
-	//     storeSlotReg · loadRegSlot (spill/reload) · movRegReg (phi copies, reuse copies) ·
-	//     xchgRegReg (permutation cycles) · a REMATERIALIZED `const` (`constMaterializationOp`,
-	//     a bare `mov r, imm`)
-	//
-	// Every one is a `mov`-class instruction that writes no EFLAGS. (`prologue`/`epilogue` DO
-	// write flags — they are a `sub`/`add rsp` — but they land at a function's entry and exit
-	// blocks, never inside a compare/branch window.)
-	//
-	// ⇒ **IF A FLAG-WRITING OP IS EVER ADDED TO WHAT THE ALLOCATOR CAN INSERT, THIS FUSION
-	// BECOMES A SILENT MISCOMPILE** — a `jcc` would read flags that op had already destroyed,
-	// and the Std-tier scan cannot see it coming, because the op does not exist at Std tier.
-	// The likeliest candidate is a spill/reload growing an address computation, or a memzero
-	// (whose size ladder `cmp`s — see ARCHITECTURE.md). Re-check this list then.
-	// Fills ALL THREE fusion columns in one walk — see `fusedFloatCmps` for why the float-ness (and,
-	// beside it, the signedness) is a column rather than a field inside the predicate. They are handed
-	// in rather than returned so the three can only be created together.
-	function computeFusedCmps(func IrFunction, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try self.stdModule.blocks.get(blockRef) otherwise panic("computeFusedCmps: blockRef from func.blockRefs not in stdModule.blocks")
-			if not block.hasTerminatorOp() 'noTerm'
-				continue
-			end 'noTerm'
-			let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("computeFusedCmps: terminatorIndex not in stdModule.ops")
-			match term 'term'
-				condBranch(condId, _, _) then self.recordFusableCompare(block, blockRef: blockRef, condId: condId, fused: fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps)
-				const to mod then break 'term'
-				branch to rdataAddr then break 'term'
-				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
-				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
-				tryCall to osFreePages then break 'term'
-				// The jump table does its OWN `cmp` against the bounds count — it fuses no preceding compare.
-				switch then break 'term'
-				// A witness call is a call — like `tryCall` it is not the compare, so it fuses nothing. The
-				// throwing form is a call for the identical reason.
-				witnessCall then break 'term'
-				witnessTryCall then break 'term'
-				// P1.5 dogfood slice 1a: the IOCP ops are value-consuming/void body ops, never terminators.
-				osPipeCreate to osWriteFile then break 'term'
-				// The wall-clock read is a void body op, never a terminator.
-				osReadWallClock then break 'term'
-				// R4.1 + R4.2: every file op is a value-producing or void body op, never a terminator.
-				osFileOpenRead to osFileAttributes then break 'term'
-				// A panic is a body op, never a terminator, under either spelling.
-				osPanicValue then break 'term'
-				// A command-line read is a value-producing body op, never a terminator.
-				osCommandLine then break 'term'
-				// W5: a handle read and a path fill are value-producing body ops, never terminators.
-				osStdHandle then break 'term'
-				osExecutablePath then break 'term'
-				// W35: a stream write is a value-producing body op, never a terminator.
-				osWriteStderr then break 'term'
-				// A frame address is a value-producing body op, never a terminator.
-				stackRecordAddr then break 'term'
-				osOpenNamedSegment to osTickCountMs then break 'term'
-				osHandleSetInherit to osThreadCpuTicks then break 'term'
-				// F1a: a decommit is a body op, never a terminator — nothing to fuse.
-				osDecommitPages then break 'term'
-				// F1b: a byte fill is a body op, never a terminator — nothing to fuse.
-				memFill then break 'term'
-				// F1c: a reserve and a commit are body ops, never terminators — nothing to fuse.
-				osCommitPages to osReservePages then break 'term'
-				// F2: the two atomics and the thread token are value-producing body ops, never terminators.
-				atomicCas to currentThreadToken then break 'term'
-				// G1: the TLS ops and the event signal are body ops, never terminators — nothing to fuse.
-				tlsAlloc to osEnterBackgroundPriority then break 'term'
-				osFileOpenWriteExecutable then break 'term'
-				osEnvBlock to osEnvBlockFree then break 'term'
-				loadAcquire or storeRelease then break 'term'
-				osHandleFileType then break 'term'
-			end 'term'
-		end 'eachBlock'
-	end 'computeFusedCmps'
-
-	// Record `condId` as fusable iff the LAST flag-clobbering body op of `block` is a
-	// compare that DEFINES it. Walked backward from the end of the body, because that is
-	// the order the flags are overwritten in.
-	function recordFusableCompare(block IrBlock, blockRef BlockRef, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
-		var i = block.opRefs.count()
-		while i > 0 'scanBackward'
-			i = i - 1
-			let opIdx = try block.opRefs.get(i) otherwise panic("recordFusableCompare: opRefs.get OOB at {i}")
-			let op = try self.stdModule.ops.get(opIdx) otherwise panic("recordFusableCompare: opIdx {opIdx} not in stdModule.ops")
-			if not op.rawValue.clobbersFlags 'flagsPreserved'
-				continue
-			end 'flagsPreserved'
-
-			// The first flag-clobbering op found walking backward IS the one whose flags the
-			// branch will read. If it is not the compare being tested, nothing is fusable —
-			// and the scan stops HERE rather than looking further back, because whatever was
-			// there had its flags overwritten by this very op. The two compare variants answer
-			// identically: `foldConstOperands` moved the right operand into an immediate, which
-			// changed the instruction, not what the compare means.
-			match op 'isTheCompare'
-				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
-				// `cmpImm` is INTEGER BY CONSTRUCTION — no SSE form takes an immediate, so
-				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
-				// variant. It used to be spelled `StdType.i64` HERE, which was the right answer to
-				// "is it a float?" and a guess at the width beside it; the op now carries its own
-				// `operandType` (X5) and this asks it rather than re-deciding.
-				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
-				const to unaryOp then break 'isTheCompare'
-				binOpImm then break 'isTheCompare'
-				// Extended past `retVoid` to take in the memory band, and past `storeIndirect` to take in
-				// the system band. It is reached only for an op that already answered `clobbersFlags:
-				// true`, and no memory op does — so the memory arms are unreachable in practice and must
-				// still be NAMED rather than swallowed: the day a flag-writing memory op exists, "is it
-				// the compare?" is a question to answer here.
-				//
-				// ⚠ `osAllocPages`/`osWriteStdout` are NOT in that unreachable set — they declare
-				// `clobbersFlags: true`, so either genuinely lands here as the last flag-writer before a
-				// branch, exactly as `call` already does. `break` is the right answer for the same reason
-				// it is for a call: it is not the compare, so the scan stops and no fusion is recorded.
-				// Declining a fusion is always safe. (`rdataAddr` never reaches here — the loop guards on
-				// `clobbersFlags` and it sets none — but it is named rather than swallowed.)
-				div to rdataAddr then break 'isTheCompare'
-				// `callIndirect` declares `clobbersFlags: true` (it is a call), so it CAN genuinely land here
-				// as the last flag-writer before a branch, exactly as `call`/`tryCall` do — and like them it
-				// is not the compare, so the scan stops and no fusion is recorded (declining is always safe).
-				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
-				// is named rather than swallowed. (P1.5-A1)
-				tryCall to osFreePages then break 'isTheCompare'
-				switch then break 'isTheCompare'
-				// A witness call is a call, not the compare — the scan stops and records no fusion (safe). The
-				// throwing form is a call for the identical reason.
-				witnessCall then break 'isTheCompare'
-				witnessTryCall then break 'isTheCompare'
-				// P1.5 dogfood slice 1a: the IOCP ops declare `clobbersFlags: true` (they lower to calls), so one
-				// CAN land here as the last flag-writer before a branch; like a `call`, it is not the compare, so
-				// the scan stops and no fusion is recorded (declining is always safe).
-				osPipeCreate to osWriteFile then break 'isTheCompare'
-				// The wall-clock read declares `clobbersFlags: true` (it lowers to a call), so it CAN be the
-				// last flag-writer before a branch; like a `call` it is not the compare, so the scan stops.
-				osReadWallClock then break 'isTheCompare'
-				// R4.1 + R4.2: every file op declares `clobbersFlags: true` (each lowers to a call), so like the
-				// wall-clock read one can be the last flag-writer before a branch — and, like a `call`, it is
-				// not the compare, so the scan stops.
-				osFileOpenRead to osFileAttributes then break 'isTheCompare'
-				// A call, not the compare — the scan stops, exactly as it does at `osPanic`.
-				osPanicValue then break 'isTheCompare'
-				// An import call, not the compare — the scan stops.
-				osCommandLine then break 'isTheCompare'
-				// W5: import calls too, and not the compare — the scan stops.
-				osStdHandle then break 'isTheCompare'
-				osExecutablePath then break 'isTheCompare'
-				// W35: an import call or a syscall, not the compare — the scan stops.
-				osWriteStderr then break 'isTheCompare'
-				// A frame address, not the compare — the scan stops.
-				stackRecordAddr then break 'isTheCompare'
-				osOpenNamedSegment to osTickCountMs then break 'isTheCompare'
-				osHandleSetInherit to osThreadCpuTicks then break 'isTheCompare'
-				// F1a: a decommit declares `clobbersFlags: true` (it lowers to a call or a syscall), so it CAN
-				// land here as the last flag-writer before a branch; like a `call`, it is not the compare, so the
-				// scan stops and records no fusion (declining is always safe).
-				osDecommitPages then break 'isTheCompare'
-				// ⛔ F1b: the fill ladder `cmp`s the length to pick its arm, so it declares `clobbersFlags: true`
-				// and CAN land here as the last flag-writer before a branch — which is precisely the hazard that
-				// declaration exists to prevent. It is not the compare, so the scan stops and fuses nothing.
-				memFill then break 'isTheCompare'
-				// F1c: the reserve and the commit are calls or syscalls, so either can be the last flag-writer
-				// before a branch; like a `call`, neither is the compare, so the scan stops.
-				osCommitPages to osReservePages then break 'isTheCompare'
-				// ⛔ F2: all three declare `clobbersFlags: true` and every one of them CAN be the last
-				// flag-writer before a branch — `lock cmpxchg` sets ZF (that IS its answer), `lock xadd` sets the
-				// arithmetic flags, and the Linux thread token is a syscall. None is the compare, so the scan
-				// stops and fuses nothing; declining is always safe, and fusing across any of them would read
-				// flags the atomic has since overwritten.
-				atomicCas to currentThreadToken then break 'isTheCompare'
-				// G1: three of the four are import calls and clobber flags; the `gs:` slot read declares
-				// `clobbersFlags: false` and so cannot be the last flag-writer either. None is the compare, so the
-				// scan stops — declining to fuse is always safe.
-				tlsAlloc to osEnterBackgroundPriority then break 'isTheCompare'
-				osFileOpenWriteExecutable then break 'isTheCompare'
-				osEnvBlock to osEnvBlockFree then break 'isTheCompare'
-				// G3: `mov` writes no flags, so neither ordered access can be the last flag-writer.
-				loadAcquire or storeRelease then break 'isTheCompare'
-				osHandleFileType then break 'isTheCompare'
-			end 'isTheCompare'
-			return
-		end 'scanBackward'
-	end 'recordFusableCompare'
-
-	// The compare results this function reads as a VALUE — each needs a `setcc` to put its
-	// boolean in a register. A value use is any operand of any op, or any phi branch-edge
-	// argument, EXCEPT the condition of a branch that `computeFusedCmps` already resolved to
-	// read that compare's FLAGS (which is a use of the flags, not of a register).
-	//
-	// The exception is per-BLOCK, not per-value, and it has to be: one compare's result can
-	// feed the `condBranch` of its own block (fused, no register needed) AND the `condBranch`
-	// of a LATER block (`if r … end / if r … end`), where the flags are long gone and the
-	// value must be in a register. Skipping every `condBranch` use unconditionally would miss
-	// that second one and leave the branch reading a value nothing ever wrote.
-	function computeValuesReadFromRegisters(func IrFunction) returns StdValueUseSet
-		var readAsValue = StdValueUseSet.create()
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try self.stdModule.blocks.get(blockRef) otherwise panic("computeValuesReadFromRegisters: blockRef from func.blockRefs not in stdModule.blocks")
-
-			for opIdx in block.opRefs 'eachBodyOp'
-				let op = try self.stdModule.ops.get(opIdx) otherwise panic("computeValuesReadFromRegisters: opIdx {opIdx} not in stdModule.ops")
-				collectStdOpUses(op, referenced: readAsValue)
-			end 'eachBodyOp'
-
-			// A phi operand is a genuine register read: SSA destruction turns it into a `mov`
-			// on the edge, and a compare feeding one (the RHS of a short-circuit `and`/`or`)
-			// must therefore have been materialized.
-			for edge in block.branchEdges 'eachEdge'
-				for argId in edge.argIds 'eachArg'
-					readAsValue.insert(argId)
-				end 'eachArg'
-			end 'eachEdge'
-
-			self.collectTerminatorValueUses(block, blockRef: blockRef, readAsValue: readAsValue)
-		end 'eachBlock'
-
-		return readAsValue
-	end 'computeValuesReadFromRegisters'
-
-	// Add the terminator's value uses to `readAsValue` — unless it is a `condBranch` whose
-	// condition this block FUSES, in which case it consumes EFLAGS and not a register.
-	//
-	// ⭐ **THE MEMBERSHIP TEST IS THE WHOLE QUESTION, because the map is keyed by BLOCK** (see
-	// `CmpPredMap`): an entry exists for exactly those blocks whose terminator is a `condBranch`
-	// that `recordFusableCompare` PROVED reads its compare's flags. This used to be a match over
-	// every `StdOp` variant asking "is this terminator a fused condBranch?", and every arm but one
-	// answered `false` — the arms were re-deriving what a lookup already knows, off a key that
-	// could not tell this block's branch from another block's.
-	function collectTerminatorValueUses(block IrBlock, blockRef BlockRef, readAsValue StdValueUseSet)
-		if not block.hasTerminatorOp() 'noTerm'
-			return
-		end 'noTerm'
-		if self.cmpPreds.contains(blockRef) 'flagsOnly'
-			return
-		end 'flagsOnly'
-		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("collectTerminatorValueUses: terminatorIndex not in stdModule.ops")
-		collectStdOpUses(term, referenced: readAsValue)
-	end 'collectTerminatorValueUses'
 
 	// Lower a regular (non-terminator) Std op. `ret` reaching here is the rare
 	// mid-block form (LowerMaxonToStd emits it as a body op for a partially-
@@ -1573,7 +1223,7 @@ type StdToX64Lowering
 			// not, so the two intents are now two ops that happen to be ONE `CreateFileA` call here. That
 			// coincidence is a fact about Windows — an executable bit is not part of an NTFS file's mode — and
 			// stating it as a shared arm is what keeps it a decision rather than an omission.
-			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpenWriteExecutable(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerOsFileSize(resultId, handleId: handleId, sizeOutPtrId: sizeOutPtrId, dstBlock: dstBlock)
 			osFileDelete(resultId, pathPtrId) then self.lowerOsFileDelete(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
@@ -2689,7 +2339,9 @@ type StdToX64Lowering
 	function lowerOsReadWallClock(ftPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call1(IatSlot.GetSystemTimeAsFileTime, arg0: ftPtrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsReadWallClock: GetSystemTimeAsFileTime is x64-windows only — the wall clock is x64-windows-gated at this rung, and SemanticCheck refuses it on every other target")
+			// The calendar's POSIX spelling is `clock_gettime(CLOCK_REALTIME)`, whose `timespec` needs a frame to
+			// hold the caller's out-param across it — so it is a chunk rather than an inline sequence.
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWallClockName, args: argsOf(ftPtrId))
 		end 'route'
 	end 'lowerOsReadWallClock'
 
@@ -2796,10 +2448,15 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsPipePeek'
 
-	// `GetEnvironmentVariableA(name, buf, len)` — three register arguments, the character count in RAX.
+	// `GetEnvironmentVariableA(name, buf, len)` — three arguments in the same order on both routes, the
+	// character count in RAX. It is a CHUNK on Linux because a static image links no libc: there is no
+	// `getenv`, so the body walks the `envp` vector the entry stub captured.
 	function lowerOsEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osEnvRead")
-		self.lowerOsWin64Call3(IatSlot.GetEnvironmentVariableA, arg0: namePtrId, arg1: bufPtrId, arg2: bufLenId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call3(IatSlot.GetEnvironmentVariableA, arg0: namePtrId, arg1: bufPtrId, arg2: bufLenId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostEnvReadName, args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId))
+		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsEnvRead'
 
@@ -2823,12 +2480,19 @@ type StdToX64Lowering
 		self.lowerOsWin64Call1(IatSlot.FreeEnvironmentStringsA, arg0: blockPtrId, dstBlock: dstBlock)
 	end 'lowerOsEnvBlockFree'
 
-	// `GetFileType(handle)` — one register argument, the file-type DWORD in RAX. The RAW word is what the
-	// result carries: masking and comparing it is the CALLER's, in the target-neutral builder, for
+	// `GetFileType(handle)` — one argument, the file-type DWORD in RAX. The RAW word is what the result
+	// carries: masking and comparing it is the CALLER's, in the target-neutral builder, for
 	// `StdOp.osHandleFileType`'s stated reason — one lane cannot own a test every lane has to make.
+	//
+	// It is a CHUNK on Linux, where a descriptor carries no such enumeration: the question there is
+	// `ioctl(fd, TCGETS, &termios)`, which needs a frame for the structure the kernel fills, and the status
+	// is mapped into the two words this tier reads.
 	function lowerOsHandleFileType(resultId ValueId, handleId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osHandleFileType")
-		self.lowerOsWin64Call1(IatSlot.GetFileType, arg0: handleId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.GetFileType, arg0: handleId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostHandleFileTypeName, args: argsOf(handleId))
+		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsHandleFileType'
 
@@ -3103,7 +2767,7 @@ type StdToX64Lowering
 	// allocator's copy into it, on the path a refcount update runs everywhere. `lock add` reads two
 	// registers and writes none.
 	//
-	// The deadness question is `self.valuesReadFromRegisters`, the per-function census this backend already
+	// The deadness question is `compareFusion.valueIsReadFromRegister`, the per-function census this backend already
 	// computes for `materializeCompareIfRead` — the same shape, the same set, no new analysis.
 	//
 	// ⚠ **`lock inc`/`lock dec` ARE NOT EMITTED, AND THE MISSING PIECE IS NAMED.** They would additionally
@@ -3113,7 +2777,7 @@ type StdToX64Lowering
 	// immediate form to fold into. Adding one is a Std-tier `atomicRmwImm` variant plus a `FoldConstOperands`
 	// arm, which is dialect vocabulary this rung deliberately does not add ahead of a measured consumer.
 	function lowerAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode, dstBlock IrBlock)
-		let priorValueIsRead = self.valuesReadFromRegisters.contains(resultId)
+		let priorValueIsRead = self.compareFusion.valueIsReadFromRegister(resultId)
 		let insn = match opcode 'op'
 			add gives x64AtomicAdd(resultId, addrId: addrId, operandId: operandId, priorValueIsRead: priorValueIsRead)
 		end 'op'
@@ -3201,6 +2865,36 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
 	end 'emitCaptureRax'
 
+	// ⭐⭐ **A LINUX HOST-SURFACE CHUNK CALL — MOVE THE OPERANDS INTO rcx/rdx/r8/r9 IN ORDER, THEN `call`.**
+	// Fourteen file and directory ops take this shape and differ only in their arity, in whether there is
+	// an answer, and (for the working directory) in the ORDER the op names its operands versus the order
+	// the syscall does. Written once, because fourteen hand-written argument sequences are fourteen chances
+	// to transpose a buffer and a length.
+	//
+	// ⚠ The symbol is one of the SHARED `mrt_host_*` names (`Arm64PosixRuntime`), so this is not an x64
+	// lowering wearing a neutral name: exactly one backend's chunks reach any image, and which body an
+	// image gets is decided once, by `buildX64Backend`, from `target.os`.
+	//
+	// ⚠ The moves are emitted IN ORDER and that is what makes them sound: an operand coloured into an
+	// argument register the sequence has already written is prevented by the physical def of that register,
+	// exactly as `lowerCall`'s own argument moves are.
+	function emitLinuxHostChunkCall(dstBlock IrBlock, chunk ByteArray, args ValueIdArray)
+		var index = 0 as ParamCount
+		for arg in args 'eachArg'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(hostChunkArgRegisterAt(index)), srcReg: TargetVReg.virtual(arg)))
+			index = index + 1
+		end 'eachArg'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(chunk))
+	end 'emitLinuxHostChunkCall'
+
+	// The same call with its answer captured, for the ops whose Windows route captures inside its own
+	// emission and so has nothing to share with this one. No widening: every chunk in this band computes a
+	// full 64-bit answer (a BOOL, a byte count, a handle, an attribute mask).
+	function lowerLinuxHostChunkValue(resultId ValueId, args ValueIdArray, chunk ByteArray, dstBlock IrBlock)
+		self.emitLinuxHostChunkCall(dstBlock, chunk: chunk, args: args)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerLinuxHostChunkValue'
+
 	// Lower `osPipeCreate` to the five-call overlapped-read-pipe sequence (ported from v1's
 	// `__subp_create_overlapped_pipe`, read path). The two handles land in `[readPtr]`/`[writePtr]`; each later call
 	// RELOADS the read end from `[readPtr]` rather than pinning a register across an intervening `iatCall`.
@@ -3265,9 +2959,16 @@ type StdToX64Lowering
 	// The failure classification is NOT here: this yields the raw handle (or `INVALID_HANDLE_VALUE`) and
 	// `ManagedFileRuntime`'s builder-built Std reads `osLastError` to choose the error variant. See the
 	// `osFileOpenRead` op's own comment in `StdDialect` for why that split is deliberate.
+	//
+	// ⭐ **LINUX HAS NO VARARG PROBLEM AND A DIFFERENT ONE INSTEAD.** `openat(AT_FDCWD, path, flags, mode)`
+	// takes everything in registers, but a raw `syscall` answers `-errno` where the Std tier tests for
+	// exactly `-1`, and there is no libc `errno` for the `osLastError` that follows to read. Both of those
+	// are `mrt_host_file_open`'s work, which is why this route branches into a chunk.
 	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileOpenRead")
-		self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, shareMode: FileShareRead, disposition: OpenExisting, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, shareMode: FileShareRead, disposition: OpenExisting, dstBlock: dstBlock)
+			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: LinuxOpenReadOnlyFlags, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
+		end 'route'
 	end 'lowerOsFileOpenRead'
 
 	// ⭐ **R4.2: `CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
@@ -3277,10 +2978,34 @@ type StdToX64Lowering
 	// ⭐ **`openWriteExecutable` REACHES THIS SAME LOWERING**, because its only difference in either
 	// reference is a Unix 0755 mode bit and shv2's file IO is host-only Windows by the R4.1 ruling. See
 	// `StdDialect.osFileOpenWrite`.
+	//
+	// ⭐ **THE PERMISSION MASK IS WHAT SPLITS `openWriteExecutable` OFF ON THE LINUX ROUTE, AND ONLY THERE.**
+	// Win32 has no executable bit at all, so both ops are one `CreateFileA` on that route; POSIX has one, so
+	// the two carry different modes here. That is why the mode is a parameter of the shared emission.
 	function lowerOsFileOpenWrite(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileOpenWrite")
-		self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericWrite, shareMode: FileShareReadWrite, disposition: CreateAlways, dstBlock: dstBlock)
+		self.lowerOsFileOpenWriteMode(resultId, pathPtrId: pathPtrId, mode: PosixCreateFileMode as MachineWord, dstBlock: dstBlock)
 	end 'lowerOsFileOpenWrite'
+
+	function lowerOsFileOpenWriteExecutable(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		self.lowerOsFileOpenWriteMode(resultId, pathPtrId: pathPtrId, mode: PosixCreateExecutableFileMode as MachineWord, dstBlock: dstBlock)
+	end 'lowerOsFileOpenWriteExecutable'
+
+	function lowerOsFileOpenWriteMode(resultId ValueId, pathPtrId ValueId, mode MachineWord, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericWrite, shareMode: FileShareReadWrite, disposition: CreateAlways, dstBlock: dstBlock)
+			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: LinuxOpenCreateTruncateFlags, mode: mode, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsFileOpenWriteMode'
+
+	// The flag word and the permission mask into rdx/r8, then the chunk that turns a `-errno` into the
+	// `-1`-plus-stashed-reason pair the Std tier reads.
+	function emitLinuxFileOpen(resultId ValueId, pathPtrId ValueId, flags MachineWord, mode MachineWord, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: flags))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: mode))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(HostFileOpenName))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'emitLinuxFileOpen'
 
 	// ⭐ **THE ONE `CreateFileA` EMISSION, PARAMETERIZED BY THE THREE CONSTANTS THE TWO OPENS DIFFER IN.**
 	// The read and write opens differ ONLY in `dwDesiredAccess`, `dwShareMode` and `dwCreationDisposition`;
@@ -3399,12 +3124,24 @@ type StdToX64Lowering
 	// THREAD's processor group, so a 128-processor machine answers 64, while `ALL_PROCESSOR_GROUPS` answers
 	// 128. On every host with at most 64 logical processors — one group, hence every machine either compiler
 	// is tested on — the two are identical (MEASURED: both answer 12 on the 12-CPU development host).
+	// ⭐ **TWO APIs WITH TWO FAILURE CONVENTIONS AND ONE QUESTION.** Windows answers a count and 0 for
+	// failure; the Linux chunk answers a popcount and -1, which is `sysconf`'s spelling. Neither is clamped
+	// here — `CpuParallelRuntime.buildCpuCount`'s signed `< 1 ⇒ 1` reads both, and the clamp must stay in
+	// exactly one place.
 	function lowerOsCpuCount(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osCpuCount")
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: AllProcessorGroups))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetActiveProcessorCount)))
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsCpuCountWin64(dstBlock)
+			syscall then self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(HostCpuCountName))
+		end 'route'
+
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsCpuCount'
+
+	// Its own function rather than an inline arm because a `match` arm is one expression and this is two.
+	function lowerOsCpuCountWin64(dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: AllProcessorGroups))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetActiveProcessorCount)))
+	end 'lowerOsCpuCountWin64'
 
 	// ⭐⭐ **`osThreadCpuTicks(outPtr)` ⇒ `QueryThreadCycleTime((HANDLE)-2, outPtr)`** — one immediate into
 	// rcx, the caller's `.data` scratch address into rdx, one `iatCall`. Nothing is captured from RAX: the
@@ -3412,12 +3149,21 @@ type StdToX64Lowering
 	// one shape over — its only documented failure is an invalid handle, and this handle is a compile-time
 	// constant naming the running thread, so there is no runtime condition under which it can fail and
 	// nothing a caller measuring its own cost could do if it somehow did.
+	// ⚠ **THE UNIT IS THE HOST'S OWN AND NOTHING CONVERTS** — TSC ticks on Windows, nanoseconds on Linux.
+	// `__thread_cpu_ticks` promises only that two readings may be SUBTRACTED (`ClockRuntime`); scaling either
+	// route to look like the other would be a guess wearing a unit's name.
 	function lowerOsThreadCpuTicks(outPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osThreadCpuTicks")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsThreadCpuTicksWin64(outPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostThreadCpuName, args: argsOf(outPtrId))
+		end 'route'
+	end 'lowerOsThreadCpuTicks'
+
+	function lowerOsThreadCpuTicksWin64(outPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: CurrentThreadPseudoHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(outPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryThreadCycleTime)))
-	end 'lowerOsThreadCpuTicks'
+	end 'lowerOsThreadCpuTicksWin64'
 
 	// ⭐⭐ **`osEnterBackgroundPriority(result)` ⇒ `SetPriorityClass((HANDLE)-1, 0x4000)` THEN
 	// `GetPriorityClass((HANDLE)-1)`** — two `iatCall`s, and the second one is the answer.
@@ -3473,10 +3219,21 @@ type StdToX64Lowering
 	// ⭐ **R4.1: `CloseHandle(handle)`** — register-only (one argument in rcx), and the BOOL it returns is
 	// DISCARDED, exactly as `osWriteStdout` discards `WriteFile`'s. A close that fails leaves a caller
 	// nothing to do, and `close()` is documented idempotent, so there is no verdict worth capturing.
+	//
+	// ⭐ **ON LINUX IT IS ONE INLINE `close(fd)` AND NEEDS NO CHUNK**, for the reason `lowerOsFreePages`
+	// needs none: nothing is read back, so there is no `-errno` to turn into a sentinel and no reason to
+	// stash. `StdOp.osFileClose` defines no result because a failed close leaves a caller nothing to do.
 	function lowerOsFileClose(handleId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileClose")
-		self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
+			syscall then self.lowerOsFileCloseLinux(handleId, dstBlock: dstBlock)
+		end 'route'
 	end 'lowerOsFileClose'
+
+	function lowerOsFileCloseLinux(handleId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(handleId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallClose))
+	end 'lowerOsFileCloseLinux'
 
 	// ⭐ **R4.2: `ReadFile(handle, buf, len, bytesOutPtr, NULL)`** — SYNCHRONOUS, and the exact mirror of
 	// `osWriteFile`'s emission (which is why both go through `emitWin64FileIoCall`). The handle R4.1 opens
@@ -3484,59 +3241,77 @@ type StdToX64Lowering
 	// port, so this is the read that handle supports; the bootstrap's overlapped `__io_submit_read` is a
 	// different call for a different handle.
 	function lowerOsReadFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osReadFile")
-		self.emitWin64FileIoCall(IatSlot.ReadFile, resultId: resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.emitWin64FileIoCall(IatSlot.ReadFile, resultId: resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: HostReadFileName, dstBlock: dstBlock)
+		end 'route'
 	end 'lowerOsReadFile'
 
 	// ⭐ **R4.2: `GetFileSizeEx(handle, sizeOutPtr)`** — the 64-bit size lands in the caller's out-param
 	// word and the BOOL verdict in `resultId`. Register-only (two arguments).
 	function lowerOsFileSize(resultId ValueId, handleId ValueId, sizeOutPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileSize")
-		self.lowerOsWin64Call2(IatSlot.GetFileSizeEx, arg0: handleId, arg1: sizeOutPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call2(IatSlot.GetFileSizeEx, arg0: handleId, arg1: sizeOutPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostFileSizeName, args: twoArgs(handleId, second: sizeOutPtrId))
+		end 'route'
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileSize'
 
 	// ⭐ **R4.2: `DeleteFileA(path)`** — register-only, the BOOL captured. The `A` entry point for the
 	// reason every path-taking import here uses it: a Maxon path is a UTF-8 byte buffer.
 	function lowerOsFileDelete(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileDelete")
-		self.lowerOsWin64Call1(IatSlot.DeleteFileA, arg0: pathPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.DeleteFileA, arg0: pathPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostFileDeleteName, args: argsOf(pathPtrId))
+		end 'route'
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileDelete'
 
 	// ⭐ **R4.2: `MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`** — three
 	// register arguments, the BOOL captured. See `MoveFileReplaceWriteThrough` for the flags.
 	function lowerOsFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileRename")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsFileRenameWin64(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: twoArgs(oldPathPtrId, second: newPathPtrId), chunk: HostFileRenameName, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsFileRename'
+
+	function lowerOsFileRenameWin64(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(oldPathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(newPathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: MoveFileReplaceWriteThrough))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.MoveFileExA)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsFileRename'
+	end 'lowerOsFileRenameWin64'
 
 	// ⭐ **R4.2: `FindFirstFileA(path, findDataPtr)`** — register-only; the search HANDLE (or
 	// `INVALID_HANDLE_VALUE`) is captured and the 320-byte `WIN32_FIND_DATAA` record is written through the
 	// caller's buffer pointer.
 	function lowerOsFileFindFirst(resultId ValueId, pathPtrId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileFindFirst")
-		self.lowerOsWin64Call2(IatSlot.FindFirstFileA, arg0: pathPtrId, arg1: findDataPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call2(IatSlot.FindFirstFileA, arg0: pathPtrId, arg1: findDataPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirFindFirstName, args: twoArgs(pathPtrId, second: findDataPtrId))
+		end 'route'
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileFindFirst'
 
 	// ⭐ **R4.2: `FindClose(handle)`** — register-only, the BOOL discarded for the reason `osFileClose`
 	// discards `CloseHandle`'s.
 	function lowerOsFileFindClose(handleId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileFindClose")
-		self.lowerOsWin64Call1(IatSlot.FindClose, arg0: handleId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.FindClose, arg0: handleId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirFindCloseName, args: argsOf(handleId))
+		end 'route'
 	end 'lowerOsFileFindClose'
 
 	// ⭐ **R4.3: `FindNextFileA(handle, findDataPtr)`** — register-only; the BOOL is captured because a FALSE
 	// is the only thing that distinguishes end-of-iteration from an OS error, and `ManagedDirectoryRuntime`
 	// makes that distinction from `GetLastError`.
 	function lowerOsFileFindNext(resultId ValueId, handleId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileFindNext")
-		self.lowerOsWin64Call2(IatSlot.FindNextFileA, arg0: handleId, arg1: findDataPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call2(IatSlot.FindNextFileA, arg0: handleId, arg1: findDataPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirFindNextName, args: twoArgs(handleId, second: findDataPtrId))
+		end 'route'
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileFindNext'
 
@@ -3544,19 +3319,30 @@ type StdToX64Lowering
 	// IMMEDIATE, which is why this does not go through `lowerOsWin64Call2` (that one moves two virtual
 	// registers): a second argument that is a constant has no ValueId to move from.
 	function lowerOsDirCreate(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osDirCreate")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsDirCreateWin64(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: argsOf(pathPtrId), chunk: HostDirCreateName, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsDirCreate'
+
+	function lowerOsDirCreateWin64(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateDirectoryA)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsDirCreate'
+	end 'lowerOsDirCreateWin64'
 
 	// ⭐ **R4.3: `GetCurrentDirectoryA(bufLen, bufPtr)`** — register-only, and note that the LENGTH is the
 	// first argument and the buffer the second, which is the reverse of every other path-taking import in
 	// this file. The three-way answer (0 / fits / required size) is classified in builder-built Std.
+	//
+	// ⚠ **THE TWO ROUTES TAKE THE OPERANDS IN OPPOSITE ORDERS**, which is why the transposition is spelled
+	// here rather than at the op: `GetCurrentDirectoryA` takes the length first and `getcwd` the buffer.
 	function lowerOsDirCurrentPath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osDirCurrentPath")
-		self.lowerOsWin64Call2(IatSlot.GetCurrentDirectoryA, arg0: bufLenId, arg1: bufPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call2(IatSlot.GetCurrentDirectoryA, arg0: bufLenId, arg1: bufPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirCurrentPathName, args: twoArgs(bufPtrId, second: bufLenId))
+		end 'route'
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsDirCurrentPath'
 
@@ -3564,8 +3350,10 @@ type StdToX64Lowering
 	// own comment in `StdDialect` for why this import exists beside `FindFirstFileA` rather than being
 	// folded into it.
 	function lowerOsFileAttributes(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osFileAttributes")
-		self.lowerOsWin64Call1(IatSlot.GetFileAttributesA, arg0: pathPtrId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.GetFileAttributesA, arg0: pathPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostFileAttributesName, args: argsOf(pathPtrId))
+		end 'route'
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsFileAttributes'
 
@@ -3597,11 +3385,27 @@ type StdToX64Lowering
 	//
 	// The handle is the OS's, not a duplicate: `__con_read_stdin` reads through it and must never close it,
 	// and neither must a spawn that hands it to a child's STARTUPINFO.
+	//
+	// ⭐⭐ **ON LINUX IT IS THE DESCRIPTOR ITSELF, WITH NO CALL AT ALL.** Win32 numbers its three selectors
+	// DOWNWARDS from `(DWORD)-10` while POSIX numbers its three descriptors UPWARDS from 0, so the whole map
+	// is one subtraction from the input selector: `fd = StdInputHandleSelector - which`. The relation is
+	// ASSERTED rather than trusted — see `ConsoleRuntime.assertStdHandleSelectorsMapToPosixFds`.
 	function lowerOsStdHandle(resultId ValueId, whichId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osStdHandle")
-		self.lowerOsWin64Call1(IatSlot.GetStdHandle, arg0: whichId, dstBlock: dstBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.GetStdHandle, arg0: whichId, dstBlock: dstBlock)
+			syscall then self.emitLinuxStdHandle(whichId, dstBlock: dstBlock)
+		end 'route'
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsStdHandle'
+
+	// The selector arrives as a VALUE and not as an immediate, so this is arithmetic rather than a
+	// compile-time answer. It runs entirely in the two argument registers a call would have clobbered
+	// anyway, which is what keeps the allocator out of it.
+	function emitLinuxStdHandle(whichId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(whichId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: StdInputHandleSelector as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(x64PhysReg(X64Register.rax), lhs: x64PhysReg(X64Register.rax), rhs: x64PhysReg(X64Register.rcx)))
+	end 'emitLinuxStdHandle'
 
 	// ⭐ **`GetEnvironmentVariableA(name, buf, len)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, buf)`
 	// — the DebugStream producer's attach, in one op** (Workstream O3). The env value is pure scratch that
@@ -3673,14 +3477,25 @@ type StdToX64Lowering
 	// ⚠ It cannot use `lowerOsWin64Call2`: that helper moves TWO virtual registers into rcx/rdx, and the
 	// first argument here is an IMMEDIATE with no ValueId to move from — exactly the case `lowerOsDirCreate`
 	// documents, whose hand-written form this follows.
+	// ⚠ **THE OP READS `(result, bufLen, bufPtr)` AND BOTH ROUTES TAKE THE BUFFER FIRST**, so the
+	// transposition happens here — the only place that knows an ABI. It is a CHUNK on Linux because the
+	// caller's pointer must still be live after a call that answers in a register, and only a frame can hold
+	// it; on Windows `GetModuleFileNameA` takes both directly.
 	function lowerOsExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osExecutablePath")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsExecutablePathWin64(bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostExePathName, args: twoArgs(bufPtrId, second: bufLenId))
+		end 'route'
+
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsExecutablePath'
+
+	function lowerOsExecutablePathWin64(bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: CurrentModuleHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufLenId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetModuleFileNameA)))
-		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsExecutablePath'
+	end 'lowerOsExecutablePathWin64'
 
 	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
@@ -3810,7 +3625,7 @@ type StdToX64Lowering
 	function lowerOsLastError(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsLastErrorWin64(resultId, dstBlock: dstBlock)
-			syscall then panic("lowerOsLastError: GetLastError is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostLastErrorName, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsLastError'
 
@@ -3834,9 +3649,17 @@ type StdToX64Lowering
 	function lowerOsGetPid(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsGetPidWin64(resultId, dstBlock: dstBlock)
-			syscall then panic("lowerOsGetPid: GetCurrentProcessId is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+			// ⚠ **NO WIDENING, UNLIKE THE arm64 TWIN.** `getpid` answers a 32-bit `pid_t` and the Linux syscall
+			// sign-extends it into a full `long`, while writing EAX zeroes the upper half architecturally — so
+			// `process-id.fits-in-a-dword` holds here for free where that lane has to buy it.
+			syscall then self.lowerOsGetPidLinux(resultId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsGetPid'
+
+	function lowerOsGetPidLinux(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallGetPid))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsGetPidLinux'
 
 	function lowerOsGetPidWin64(resultId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetCurrentProcessId)))
@@ -3888,7 +3711,7 @@ type StdToX64Lowering
 	function lowerOsWriteFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.emitWin64FileIoCall(IatSlot.WriteFile, resultId: resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
-			syscall then panic("lowerOsWriteFile: the streaming stdin write is x64-windows only — the subprocess substrate is x64-windows-gated at this rung")
+			syscall then self.lowerLinuxHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: HostWriteFileName, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsWriteFile'
 
@@ -3970,7 +3793,7 @@ type StdToX64Lowering
 	// as a value (`computeValuesReadFromRegisters`). A compare read ONLY by the branch it fuses with
 	// needs no register at all, which is why `if a > b` still lowers to a bare `cmp` + `jcc`.
 	function materializeCompareIfRead(resultId ValueId, pred StdCmpPred, operandType StdType, dstBlock IrBlock)
-		if not self.valuesReadFromRegisters.contains(resultId) 'flagsOnly'
+		if not self.compareFusion.valueIsReadFromRegister(resultId) 'flagsOnly'
 			return
 		end 'flagsOnly'
 		if stdTypeIsFloat(operandType) and predicateIsEquality(pred) 'floatEquality'
@@ -4104,9 +3927,9 @@ type StdToX64Lowering
 	// `addOrderedBlock` APPENDS `ordered` to `blockRefs`, so it is not the physically next block
 	// even before the RPO reorder moves it again — and this lowering emits BOTH edges for the
 	// reason `lowerCondBranch` gives above: correctness may never rest on block ordering. What
-	// turns the pair into a real fall-through is `X64BranchCleanup`, once the layout is final.
+	// turns the pair into a real fall-through is `BranchCleanup`, once the layout is final.
 	function lowerFloatEqualityBranch(blockRef BlockRef, thenBlockId BlockId, elseBlockId BlockId, orderedId BlockId, dstBlock IrBlock)
-		let pred = try self.cmpPreds.get(blockRef) otherwise panic("lowerFloatEqualityBranch: block ref {blockRef} fuses no compare, but an `ordered` block was reserved for its branch")
+		let pred = self.compareFusion.fusedPredicateOf(blockRef)
 		let parityTarget = parityTargetOf(pred, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
 		self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(X64CondCode.parity, targetBlockId: parityTarget))
 		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(orderedId))
@@ -4135,11 +3958,11 @@ type StdToX64Lowering
 	// The condition code the branch's `jcc` tests, emitting the truth-test `cmp reg, 0` first
 	// when the condition is a value rather than a fused compare's flags.
 	function branchConditionCode(condId ValueId, blockRef BlockRef, dstBlock IrBlock) returns X64CondCode
-		let pred = try self.cmpPreds.get(blockRef) otherwise 'notFused'
+		if not self.compareFusion.blockFusesCompare(blockRef) 'notFused'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(condId), imm: BoolFalseImm))
 			return X64CondCode.notEqual
 		end 'notFused'
-		return condCodeForPred(pred, isFloat: self.fusedFloatCmps.contains(condId), isUnsigned: self.fusedUnsignedCmps.contains(condId))
+		return condCodeForPred(self.compareFusion.fusedPredicateOf(blockRef), isFloat: self.compareFusion.fusedCompareIsFloat(condId), isUnsigned: self.compareFusion.fusedCompareIsUnsigned(condId))
 	end 'branchConditionCode'
 
 	// ==========================================================================
@@ -4214,7 +4037,7 @@ type StdToX64Lowering
 	// passes makes that ordering local and structural instead of a comment about pass order, and
 	// it is sound because each branch's decision reads only its OWN condition.
 	//
-	// It is also a scoped READ of the function (the un-fuse touches only `cmpPreds`), complete
+	// It is also a scoped READ of the function (the un-fuse touches only the census's predicate map), complete
 	// before `reserveFloatEqualityBlocks` mints anything.
 	function blocksNeedingFloatEqualitySplit(funcIdx FuncIndex) returns BlockRefArray
 		let srcFunc = self.stdModule.getFunc(funcIdx)
@@ -4300,7 +4123,7 @@ type StdToX64Lowering
 	//     lowering instead. Dropping the fusion is the whole fix and costs nothing that matters:
 	//     the branch then truth-tests the materialized bool (`cmp reg, 0` + `jne`), exactly as
 	//     every other non-fused boolean condition already does. It is SELF-CONSISTENT — the value
-	//     is in `valuesReadFromRegisters` precisely because something reads it, so the `setcc` the
+	//     is read from a register precisely because something reads it, so the `setcc` the
 	//     branch now depends on is emitted regardless of this.
 	//   • anything else ⇒ no split. An UNFUSED condition is an ordinary bool in a register; an
 	//     INTEGER compare has no unordered answer; an ORDERED float predicate is answered by a
@@ -4309,26 +4132,25 @@ type StdToX64Lowering
 		if not self.isFusedFloatEquality(blockRef, condId: condId) 'notFloatEquality'
 			return false
 		end 'notFloatEquality'
-		if not self.valuesReadFromRegisters.contains(condId) 'flagsOnly'
+		if not self.compareFusion.valueIsReadFromRegister(condId) 'flagsOnly'
 			return true
 		end 'flagsOnly'
 
-		// The entry is provably present — `isFusedFloatEquality` just read it — so the "was it
-		// there?" answer carries no information and is discarded. Only `cmpPreds` is unwound, and
-		// that is correct rather than a half-erasure: dropping the predicate makes this value's
-		// `fusedFloatCmps` bit UNREACHABLE, because every reader of that set gates on a `cmpPreds`
-		// hit first (see the field). A dense bool column has no `remove` to call anyway.
-		_ = self.cmpPreds.remove(blockRef)
+		// The entry is provably present — `isFusedFloatEquality` just read it. `dropFusion` unwinds the
+		// predicate alone, and that is correct rather than a half-erasure: it makes this value's
+		// float-ness bit UNREACHABLE, because every reader of that column gates on `blockFusesCompare`
+		// first. A dense bool column has no `remove` to call anyway.
+		self.compareFusion.dropFusion(blockRef)
 		return false
 	end 'settleFloatEqualityCondition'
 
 	// True iff `condId` is defined by a FUSED compare that is a FLOAT `==` or `!=` — the one
 	// compare shape whose branch cannot be a single jump.
 	function isFusedFloatEquality(blockRef BlockRef, condId ValueId) returns bool
-		let pred = try self.cmpPreds.get(blockRef) otherwise 'notFused'
+		if not self.compareFusion.blockFusesCompare(blockRef) 'notFused'
 			return false
 		end 'notFused'
-		return self.fusedFloatCmps.contains(condId) and predicateIsEquality(pred)
+		return self.compareFusion.fusedCompareIsFloat(condId) and predicateIsEquality(self.compareFusion.fusedPredicateOf(blockRef))
 	end 'isFusedFloatEquality'
 
 	// Create the `ordered` block for `blockRef`'s float-equality branch, emit it complete, and
@@ -4344,7 +4166,7 @@ type StdToX64Lowering
 		// The condition value is not needed here any more: the predicate is looked up by BLOCK
 		// (see `CmpPredMap`), which is the same key this split was selected under.
 		let (_, thenBlockId, elseBlockId) = self.condBranchFieldsOf(blockRef)
-		let pred = try self.cmpPreds.get(blockRef) otherwise panic("buildOrderedBlock: block ref {blockRef} fuses no compare, but blockNeedsFloatEqualitySplit said it needs a split")
+		let pred = self.compareFusion.fusedPredicateOf(blockRef)
 
 		// The original's phi edges, cloned BEFORE the new block exists — the walk prunes the
 		// original down to its one surviving edge later, and `ordered` needs both.

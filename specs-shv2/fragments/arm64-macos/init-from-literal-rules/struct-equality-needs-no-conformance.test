@@ -41,14 +41,10 @@ func @Box.make {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 100
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at struct-equality-needs-no-conformance.test:7: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
@@ -82,37 +78,28 @@ func @main {
     arm64.movImm x0, 2
     arm64.bl Box.make
     arm64.movRegReg x21, x0
-    arm64.b __il_body#6
   __il_body#6:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.cmp x0, x1
     arm64.cset x0, eq
-    arm64.b __il_cont#5
   __il_cont#5:
-    arm64.cbnz x0, eq
-    arm64.b ifcont#2
+    arm64.cbz x0, __il_body#8
   eq:
     arm64.leaRdata x0, __str_rec_2  ; "equal\x0a"
     arm64.bl print
-    arm64.b ifcont#2
-  ifcont#2:
-    arm64.b __il_body#8
   __il_body#8:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
     arm64.cmp x0, x1
     arm64.cset x0, eq
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, neq
-    arm64.b ifcont#4
+    arm64.cbz x0, ifcont
   neq:
     arm64.leaRdata x0, __str_rec_3  ; "not equal\x0a"
     arm64.bl print
-    arm64.b ifcont#4
-  ifcont#4:
+  ifcont:
     arm64.movImm x22, 0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref

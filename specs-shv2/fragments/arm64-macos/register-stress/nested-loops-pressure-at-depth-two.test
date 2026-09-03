@@ -53,20 +53,14 @@ func @depthTwo {
     arm64.add x0, x0, 12
     arm64.movImm x12, 0
     arm64.movImm x13, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x13, 3
-    arm64.cset x14, lt
-    arm64.cbnz x14, outer
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   outer:
     arm64.movImm x14, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.cmp x14, 3
-    arm64.cset x15, lt
-    arm64.cbnz x15, inner
-    arm64.b whileexit#6
+    arm64.b.ge whileexit#6
   inner:
     arm64.add x12, x12, x14
     arm64.add x14, x14, 1
@@ -97,9 +91,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl depthTwo
     arm64.cmp x0, 87
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

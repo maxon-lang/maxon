@@ -1,0 +1,220 @@
+// Test: an-inverted-unsigned-branch-keeps-its-arms
+typealias Cell = int(0 to u8.max)
+typealias CellArray = Array with Cell
+
+function main() returns ExitCode
+	var xs = CellArray.create()
+	xs.push(4)
+	xs.push(5)
+	let a = try xs.get(0) otherwise 200
+	let b = try xs.get(1) otherwise 200
+	var hits = 0
+
+	if a < b 'lo'
+		hits = hits + 1
+	end 'lo' else 'loElse'
+		return 31
+	end 'loElse'
+
+	if a > b 'hi'
+		return 32
+	end 'hi' else 'hiElse'
+		hits = hits + 1
+	end 'hiElse'
+
+	if a <= b 'ls'
+		hits = hits + 1
+	end 'ls' else 'lsElse'
+		return 33
+	end 'lsElse'
+
+	if a >= b 'hs'
+		return 34
+	end 'hs' else 'hsElse'
+		hits = hits + 1
+	end 'hsElse'
+
+	return 0 if hits == 4 else 35
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride#29
+  __im_word#27:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#26
+  __im_load#31:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded#30
+  __im_stride#29:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#26
+  __im_byte#28:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#26
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+  __im_loaded#30:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_cont#25
+  __im_empty#33:
+    arm64.cmp x0, 0
+    arm64.b.ne __im_cont#25
+  __im_slow#26:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x9
+  __im_cont#25:
+    arm64.cmp x2, 0
+    arm64.b.eq tryok
+  tryerr#2:
+    arm64.movImm x20, 200
+    arm64.b trycont#3
+  tryok:
+    arm64.movRegReg x20, x0
+  trycont#3:
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride#38
+  __im_word#36:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#35
+  __im_load#40:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __im_loaded#39
+  __im_stride#38:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#35
+  __im_byte#37:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#35
+  __im_load#41:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 1
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+  __im_loaded#39:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_cont#34
+  __im_empty#42:
+    arm64.cmp x0, 0
+    arm64.b.ne __im_cont#34
+  __im_slow#35:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x9
+  __im_cont#34:
+    arm64.cmp x2, 0
+    arm64.b.eq trycont#6
+  tryerr#5:
+    arm64.movImm x0, 200
+  trycont#6:
+    arm64.cmp x20, x0
+    arm64.b.ge ifelse#8
+  ifcont#9:
+    arm64.cmp x20, x0
+    arm64.b.le ifcont#12
+  hi:
+    arm64.movImm x20, 32
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#12:
+    arm64.cmp x20, x0
+    arm64.b.gt ifelse#14
+  ifcont#15:
+    arm64.cmp x20, x0
+    arm64.b.lt ternarytrue
+  hs:
+    arm64.movImm x20, 34
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ternarytrue:
+    arm64.movImm x20, 0
+  matchcont:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at an-inverted-unsigned-branch-keeps-its-arms.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifelse#14:
+    arm64.movImm x20, 33
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifelse#8:
+    arm64.movImm x20, 31
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

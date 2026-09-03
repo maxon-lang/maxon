@@ -25,12 +25,9 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.movImm x1, 68
-    arm64.b forhdr
   forhdr:
     arm64.cmp x1, 72
-    arm64.cset x2, lt
-    arm64.cbnz x2, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.movImm x2, 7
     arm64.and x3, x1, -64
@@ -41,9 +38,7 @@ func @main {
     arm64.mvn x4, x3
     arm64.and x2, x2, x4
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, shl
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   shl:
     arm64.movImm x0, 1
     arm64.epilogue 16
@@ -53,24 +48,19 @@ func @main {
     arm64.orr x3, x1, x3
     arm64.asrv x2, x2, x3
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, shr
-    arm64.b ifcont#8
+    arm64.b.eq ifcont#8
   shr:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
   ifcont#8:
     arm64.add x0, x0, 1
-    arm64.b forstep
   forstep:
     arm64.add x1, x1, 1
     arm64.b forhdr
   forexit:
     arm64.cmp x0, 4
-    arm64.cset x0, ne
-    arm64.cbnz x0, iterations
-    arm64.b ifcont#10
+    arm64.b.eq ifcont#10
   iterations:
     arm64.movImm x0, 3
     arm64.epilogue 16

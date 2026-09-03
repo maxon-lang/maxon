@@ -86,12 +86,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @Sink.create {
@@ -145,12 +146,9 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot3, x19
     arm64.movImm x20, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x20, 8
-    arm64.cset x0, lt
-    arm64.cbnz x0, spawnEach
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   spawnEach:
     arm64.bl Sink.create
     arm64.movRegReg x1, x0
@@ -170,31 +168,23 @@ func @main {
   whileexit#3:
     arm64.movImm x0, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.storeSlotReg slot0, x0
     arm64.cmp x20, 40
-    arm64.cset x0, lt
-    arm64.cbnz x0, waves
-    arm64.b whileexit#6
+    arm64.b.ge whileexit#6
   waves:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __gt_promise_drop
     arm64.bl __managed_create
     arm64.storeSlotReg slot2, x0
     arm64.movImm x21, 0
-    arm64.b whilehdr#7
   whilehdr#7:
     arm64.storeSlotReg slot1, x21
     arm64.cmp x21, 8
-    arm64.cset x0, lt
-    arm64.cbnz x0, sendEach
-    arm64.b whileexit#9
+    arm64.b.ge whileexit#9
   sendEach:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#21
-    arm64.b __rc_ok#20
+    arm64.b.ge __rc_ok#20
   __rc_panic#21:
     arm64.leaRdata x0, __str_blob_29  ; "panic at slab-sharding.a-local-free-is-never-counted-as-a-remote-one.test:38: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -214,9 +204,7 @@ func @main {
   __rc_ok#20:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#25
-    arm64.b __im_load#26
+    arm64.b.hs __im_slow#25
   __im_load#26:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
@@ -224,14 +212,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#27
-    arm64.b critsplit#32
+    arm64.b.eq critsplit#32
   __im_empty#27:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#25
-    arm64.b critsplit#33
+    arm64.b.ne critsplit#33
   __im_slow#25:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -242,13 +226,10 @@ func @main {
     arm64.b __im_cont#24
   critsplit#32:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont#24
   __im_cont#24:
     arm64.storeSlotReg slot4, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#11
-    arm64.b tryok#10
+    arm64.b.eq tryok#10
   tryerr#11:
     arm64.leaRdata x0, __str_rec_14  ; "panic at slab-sharding.a-local-free-is-never-counted-as-a-remote-one.test:38: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -409,17 +390,12 @@ func @main {
   whileexit#9:
     arm64.movImm x21, 0
     arm64.loadRegSlot x22, slot0
-    arm64.b whilehdr#12
   whilehdr#12:
     arm64.cmp x21, 8
-    arm64.cset x0, lt
-    arm64.cbnz x0, collect
-    arm64.b whileexit#14
+    arm64.b.ge whileexit#14
   collect:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#23
-    arm64.b __rc_ok#22
+    arm64.b.ge __rc_ok#22
   __rc_panic#23:
     arm64.leaRdata x0, __str_blob_30  ; "panic at slab-sharding.a-local-free-is-never-counted-as-a-remote-one.test:45: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -440,9 +416,7 @@ func @main {
     arm64.loadRegSlot x0, slot2
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#29
-    arm64.b __im_load#30
+    arm64.b.hs __im_slow#29
   __im_load#30:
     arm64.loadRegSlot x0, slot2
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
@@ -451,14 +425,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_empty#31
-    arm64.b critsplit#34
+    arm64.b.eq critsplit#34
   __im_empty#31:
     arm64.cmp x23, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_slow#29
-    arm64.b critsplit#35
+    arm64.b.ne critsplit#35
   __im_slow#29:
     arm64.loadRegSlot x0, slot2
     arm64.movRegReg x1, x21
@@ -470,12 +440,9 @@ func @main {
     arm64.b __im_cont#28
   critsplit#34:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont#28
   __im_cont#28:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.leaRdata x0, __str_rec_16  ; "panic at slab-sharding.a-local-free-is-never-counted-as-a-remote-one.test:45: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -554,14 +521,9 @@ func @main {
     arm64.movRegReg x0, x23
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq trycont
   tryerr#18:
     arm64.movImm x0, 0
-    arm64.b trycont
-  tryok#17:
-    arm64.b trycont
   trycont:
     arm64.add x22, x22, x0
     arm64.add x21, x21, 1
@@ -682,15 +644,12 @@ func @Sink.__loop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.b serve
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x21, x0
     arm64.cmp x21, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, stopping
-    arm64.b dispatch
+    arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=take] @__jumptable_55
@@ -699,19 +658,15 @@ func @Sink.__loop {
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.b stopping
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
-    arm64.b drain
   drain:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x1, x0
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, finished
-    arm64.b abandon
+    arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -765,7 +720,6 @@ func @Sink.__abandon {
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Sink.request

@@ -41,22 +41,15 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forjoin
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop
-    arm64.b forexit
+    arm64.b.ne forexit
   loop:
     arm64.leaRdata x1, __layout_ArrayIterator_int
     arm64.movRegReg x0, x21
     arm64.bl ArrayIterator.current
     arm64.add x20, x20, x0
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x21
     arm64.bl ArrayIterator.advance
@@ -65,21 +58,14 @@ func @main {
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_ArrayIterator_int
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at from-array-literal-iterate.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

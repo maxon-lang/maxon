@@ -41,9 +41,7 @@ func @divsAcross {
     arm64.add x3, x0, 23
     arm64.add x4, x0, 12
     arm64.cmp x4, 1
-    arm64.cset x5, lt
-    arm64.cbnz x5, __rc_panic#2
-    arm64.b __rc_ok#1
+    arm64.b.ge __rc_ok#1
   __rc_panic#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at six-div-results-live-across-the-call.test:12: Range check failed: value outside typealias 'Positive'\x0a"
     arm64.bl mrt_panic
@@ -53,9 +51,7 @@ func @divsAcross {
   __rc_ok#1:
     arm64.add x5, x0, 7
     arm64.cmp x5, 1
-    arm64.cset x6, lt
-    arm64.cbnz x6, __rc_panic#4
-    arm64.b __rc_ok#3
+    arm64.b.ge __rc_ok#3
   __rc_panic#4:
     arm64.leaRdata x0, __str_blob_1  ; "panic at six-div-results-live-across-the-call.test:13: Range check failed: value outside typealias 'Positive'\x0a"
     arm64.bl mrt_panic
@@ -65,9 +61,7 @@ func @divsAcross {
   __rc_ok#3:
     arm64.add x0, x0, 9
     arm64.cmp x0, 1
-    arm64.cset x6, lt
-    arm64.cbnz x6, __rc_panic#6
-    arm64.b __rc_ok#5
+    arm64.b.ge __rc_ok#5
   __rc_panic#6:
     arm64.leaRdata x0, __str_blob_2  ; "panic at six-div-results-live-across-the-call.test:14: Range check failed: value outside typealias 'Positive'\x0a"
     arm64.bl mrt_panic
@@ -84,7 +78,6 @@ func @divsAcross {
     arm64.sdiv x5, x3, x0
     arm64.sdiv x16, x3, x0
     arm64.msub x0, x16, x0, x3
-    arm64.b __il_body
   __il_body:
     arm64.movImm x16, 100000
     arm64.mul x3, x6, x16
@@ -101,7 +94,6 @@ func @divsAcross {
     arm64.mul x5, x5, x16
     arm64.add x6, x6, x5
     arm64.add x6, x6, x0
-    arm64.b __il_cont
   __il_cont:
     arm64.add x3, x6, x3
     arm64.add x1, x3, x1
@@ -120,9 +112,7 @@ func @main {
     arm64.bl divsAcross
     arm64.movImm x16, 1692650
     arm64.cmp x0, x16
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

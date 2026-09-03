@@ -1387,6 +1387,9 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		arm64Fneg then break 'hint'
 		// G3: an ordered access is not a move, so there is nothing to coalesce.
 		arm64LoadAcquire or arm64StoreRelease then break 'hint'
+		// EC18: `SMULH` is a 3-address multiply, not a MOVE — nothing to coalesce, and unlike
+		// `imulHighReg` it constrains no physical register at all.
+		arm64Smulh then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -2375,6 +2378,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), width: width)
 		arm64StoreRelease(base, src, width) then return TargetOp.arm64StoreRelease(colorVRegWith(base, alloc: alloc), src: colorVRegWith(src, alloc: alloc), width: width)
+		arm64Smulh(dest, lhs, rhs) then return TargetOp.arm64Smulh(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

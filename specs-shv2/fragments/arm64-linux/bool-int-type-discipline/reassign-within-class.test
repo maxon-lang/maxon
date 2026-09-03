@@ -23,23 +23,18 @@ ExitCode: 1
 func @main {
   entry:
     arm64.prologue 16
-    arm64.b pos
   pos:
     arm64.movImm x0, 0
     arm64.movImm x1, 10
-    arm64.b ifcont#2
   ifcont#2:
-    arm64.cbnz x0, stillTrue
-    arm64.b ifcont#4
+    arm64.cbz x0, ifcont#4
   stillTrue:
     arm64.movImm x0, 99
     arm64.epilogue 16
     arm64.ret
   ifcont#4:
     arm64.cmp x1, 10
-    arm64.cset x0, eq
-    arm64.cbnz x0, doubled
-    arm64.b ifcont#6
+    arm64.b.ne ifcont#6
   doubled:
     arm64.movImm x0, 1
     arm64.epilogue 16

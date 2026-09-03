@@ -88,13 +88,10 @@ func @main {
     arm64.bl Container.create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.storeSlotReg slot0, x20
     arm64.cmp x20, 3
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b forexit
+    arm64.b.ge __il_body
   fill:
     arm64.leaRdata x0, __str_rec_2  ; "element number "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -144,23 +141,17 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
     arm64.bl Container.push
-    arm64.b forstep
   forstep:
     arm64.loadRegSlot x0, slot0
     arm64.add x0, x0, 1
     arm64.movRegReg x20, x0
     arm64.b forhdr
-  forexit:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, 3
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.ne ifcont
   check:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19

@@ -580,7 +580,7 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.a-container-drops-its-un-awaited-elements -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐ The container is an OWNER. An array of promises that reaches scope exit holding un-awaited elements
 drops each one — the same `__gt_promise_drop` a bare binding gets, reached through the element
 destructor the array record stamps. Before this slice the record stamped `element_destroy@40 = 0`,
@@ -607,7 +607,7 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.an-element-moved-out-by-pop-belongs-to-the-caller -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 `pop` MOVES the element out: the array no longer holds it and the caller's binding does, so the binding
 drops it at scope exit like any other owned promise. Before this slice a popped promise was owned by
 NOBODY — the array had already forgotten it and the binding never adopted it — so both the promise's
@@ -640,7 +640,7 @@ popped a thread true, array now 0
 ```
 
 <!-- test: async-promise-drop.a-struct-field-drops-the-promise-it-holds -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A struct FIELD is an owner too, and the struct's synthesized destructor drops it. This case could not
 even be WRITTEN before promises were typed: `Holder.of(async plain())` was refused (`expected
 'IntPromise', got 'int'`) because the spawn was a bare machine word, so the only way a promise ever
@@ -747,7 +747,7 @@ error E3141: <fragment>:15:13: a promise cannot be borrowed through 'current': i
 ```
 
 <!-- test: async-promise-drop.a-move-out-hands-the-thread-over -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 The other side of the rule above: `pop` MOVES the element out, so the container has stopped naming it and
 the caller owns it outright — the read is legal and the awaited value arrives intact. This is what keeps
 the refusal a statement about BORROWING rather than a ban on getting a promise out of a container.

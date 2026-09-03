@@ -73,9 +73,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @TestFile.openWrite {
@@ -86,9 +87,7 @@ func @TestFile.openWrite {
     arm64.bl __mf_open_write
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -127,9 +126,7 @@ func @createEmptyFile {
     arm64.movRegReg x20, x0
     arm64.movRegReg x21, x9
     arm64.cmp x21, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -171,9 +168,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, check1
-    arm64.b ifcont#2
+    arm64.b.eq ifcont#2
   check1:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -186,9 +181,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl createEmptyFile
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x0, 10
     arm64.loadRegSlot x19, slot0
@@ -206,9 +199,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.cmp x21, 1
-    arm64.cset x0, ne
-    arm64.cbnz x0, check2
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   check2:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
@@ -223,9 +214,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.movImm x20, 4
     arm64.movRegReg x0, x19

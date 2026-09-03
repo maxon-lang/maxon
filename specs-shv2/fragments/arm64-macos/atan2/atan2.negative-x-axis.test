@@ -75,15 +75,11 @@ func @main {
     arm64.bl __str_decref
     arm64.fpLoadRdata d0, [rdata + __fconst_3.14]
     arm64.fcmp d8, d0
-    arm64.cset x0, gt
-    arm64.cbnz x0, check1
-    arm64.b ifcont#4
+    arm64.b.le ifcont
   check1:
     arm64.fpLoadRdata d0, [rdata + __fconst_3.15]
     arm64.fcmp d8, d0
-    arm64.cset x0, mi
-    arm64.cbnz x0, check2
-    arm64.b ifcont#3
+    arm64.b.pl ifcont
   check2:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -97,9 +93,7 @@ func @main {
     arm64.loadRegSlot d8, slot8
     arm64.epilogue 96
     arm64.ret
-  ifcont#3:
-    arm64.b ifcont#4
-  ifcont#4:
+  ifcont:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

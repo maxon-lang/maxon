@@ -37,17 +37,12 @@ func @main {
     arm64.movImm x0, 0
     arm64.movImm x1, 0
     arm64.movImm x2, 9223372036854775807
-    arm64.b forhdr
   forhdr:
     arm64.cmp x1, x2
-    arm64.cset x2, le
-    arm64.cbnz x2, forever
-    arm64.b critsplit
+    arm64.b.gt critsplit
   forever:
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at range-check-panic.an-inclusive-counted-loop-to-i64-max-keeps-its-guard.test:8: Range check failed: value outside typealias 'NonNeg'\x0a"
     arm64.bl mrt_panic
@@ -68,7 +63,6 @@ func @main {
     arm64.b forexit
   critsplit:
     arm64.movRegReg x19, x0
-    arm64.b forexit
   forexit:
     arm64.leaRdata x0, __str_rec_2  ; "total="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -130,7 +124,4 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  forstep:
-    arm64.add x1, x1, 1
-    arm64.b forhdr
 }

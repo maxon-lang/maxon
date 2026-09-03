@@ -72,28 +72,21 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.storeBaseDispReg.word64 [x0 + 8], x19
     arm64.bl Drawing.create
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#5
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#5:
     arm64.movImm x1, 1
     arm64.b __il_cont
   matchnext:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#6
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#6:
     arm64.movImm x1, 0
-    arm64.b __il_cont
   __il_cont:
-    arm64.cbnz x1, ok
-    arm64.b ifcont
+    arm64.cbz x1, ifcont
   ok:
     arm64.movImm x19, 1
     arm64.bl __destruct_Drawing

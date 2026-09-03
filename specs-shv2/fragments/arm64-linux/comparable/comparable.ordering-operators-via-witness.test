@@ -140,58 +140,40 @@ func @Pair.mask {
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Pair.lt
-    arm64.cbnz x0, a1
-    arm64.b critsplit#12
+    arm64.cbz x0, ifcont#2
   a1:
     arm64.movImm x21, 1
-    arm64.b ifcont#2
-  critsplit#12:
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Pair.le
-    arm64.cbnz x0, a2
-    arm64.b critsplit#13
+    arm64.cbz x0, ifcont#4
   a2:
     arm64.add x21, x21, 2
-    arm64.b ifcont#4
-  critsplit#13:
-    arm64.b ifcont#4
   ifcont#4:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Pair.gt
-    arm64.cbnz x0, a3
-    arm64.b critsplit#14
+    arm64.cbz x0, ifcont#6
   a3:
     arm64.add x21, x21, 4
-    arm64.b ifcont#6
-  critsplit#14:
-    arm64.b ifcont#6
   ifcont#6:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Pair.ge
-    arm64.cbnz x0, a4
-    arm64.b critsplit#15
+    arm64.cbz x0, critsplit
   a4:
     arm64.add x0, x21, 8
     arm64.b ifcont#8
-  critsplit#15:
+  critsplit:
     arm64.movRegReg x0, x21
-    arm64.b ifcont#8
   ifcont#8:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.movImm x1, 4294967295
     arm64.cmp x0, x1
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at comparable.ordering-operators-via-witness.test:36: Range check failed: value outside typealias 'Integer'\x0a"
     arm64.bl mrt_panic
@@ -222,9 +204,7 @@ func @main {
     arm64.movRegReg x0, x2
     arm64.bl Pair.mask
     arm64.cmp x0, 3
-    arm64.cset x0, ne
-    arm64.cbnz x0, p1
-    arm64.b ifcont#2
+    arm64.b.eq ifcont#2
   p1:
     arm64.movImm x0, 1
     arm64.epilogue 64
@@ -240,9 +220,7 @@ func @main {
     arm64.movRegReg x0, x2
     arm64.bl Pair.mask
     arm64.cmp x0, 10
-    arm64.cset x0, ne
-    arm64.cbnz x0, p2
-    arm64.b ifcont#4
+    arm64.b.eq ifcont#4
   p2:
     arm64.movImm x0, 2
     arm64.epilogue 64
@@ -258,9 +236,7 @@ func @main {
     arm64.movRegReg x0, x2
     arm64.bl Pair.mask
     arm64.cmp x0, 12
-    arm64.cset x0, ne
-    arm64.cbnz x0, p3
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   p3:
     arm64.movImm x0, 3
     arm64.epilogue 64

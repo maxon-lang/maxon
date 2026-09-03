@@ -46,20 +46,13 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.b __il_body#9
   __il_body#9:
     arm64.fpLoadRdata d0, [rdata + __fconst_0x7ff0000000000000]
-    arm64.b __il_cont#8
-  __il_cont#8:
-    arm64.b __il_body#10
   __il_body#10:
     arm64.fsub d0, d0, d0
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.fcmp d0, d0
-    arm64.cset x0, eq
-    arm64.cbnz x0, infinityMinusInfinityIsNan
-    arm64.b ifcont#2
+    arm64.b.ne ifcont#2
   infinityMinusInfinityIsNan:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -71,15 +64,11 @@ func @main {
     arm64.ret
   ifcont#2:
     arm64.fpLoadRdata d1, [rdata + __fconst_-4]
-    arm64.b __il_body#12
   __il_body#12:
     arm64.fsqrt d1, d1
-    arm64.b __il_cont#11
   __il_cont#11:
     arm64.fcmp d1, d1
-    arm64.cset x0, eq
-    arm64.cbnz x0, rootOfANegativeIsNan
-    arm64.b ifcont#4
+    arm64.b.ne ifcont#4
   rootOfANegativeIsNan:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
@@ -118,8 +107,7 @@ func @main {
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
-    arm64.cbnz x20, andItPrintsAsOne
-    arm64.b ifcont#6
+    arm64.cbz x20, ifcont#6
   andItPrintsAsOne:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot0

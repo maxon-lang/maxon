@@ -184,8 +184,8 @@ export let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shap
 // computes `reg - [mem]` and sets flags in THAT direction (unlike `cmp [mem], reg` = 0x39, which negates them).
 // EXPORTED because the GT stack guard (X64GtRuntime) needs `projectedRsp - [gt+stackGuard]` for its `jae`.
 let OpcodeCmpRegRm = 0x3B
-let OpcodeAndRmReg = 0x21  // and r/m, r  (reg field = source), same shape as sub
-let OpcodeOrRmReg = 0x09  // or  r/m, r  (reg field = source), same shape as sub
+export let OpcodeAndRmReg = 0x21  // and r/m, r  (reg field = source), same shape as sub
+export let OpcodeOrRmReg = 0x09  // or  r/m, r  (reg field = source), same shape as sub
 export let OpcodeXorRmReg = 0x31  // xor r/m, r  (reg field = source), same shape as sub
 let OpcodeXchgRmReg = 0x87  // xchg r/m, r (reg field = one operand), swaps r/m and r
 let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
@@ -216,6 +216,7 @@ let OpcodeSyscallSecondByte = 0x05
 // three atomics below are in it.
 let LockPrefix = 0xF0
 let OpcodeCmpxchgRmReg = 0xB1  // cmpxchg r/m64, r64 (0F B1 /r) — reg field = the SOURCE stored on a match
+
 // EXPORTED: the syscall bracket's exit (`X64GtRuntime.emitGtExitSyscall`) is the one hand-assembled caller
 // that wants `xadd`'s two answers at once — it clears the in-call bit and reads what the bit was, which is
 // how it learns whether a processor was taken while it was in the kernel, in ONE instruction.
@@ -421,10 +422,22 @@ end 'SseMandatoryPrefix'
 let SsePrefixScalarDoubleByte = 0xF2
 let SsePrefixPackedDoubleByte = 0x66
 
-// The GS segment-override legacy prefix (0x65). On Win64 `gs:` addresses the Thread Information Block, whose
-// StackBase/StackLimit the GT syscall shim repoints for a kernel call (see `encodeMovGsAbsReg`). Like the SSE
-// mandatory prefixes it precedes the REX byte.
+// The two segment-override legacy prefixes. On Win64 `gs:` addresses the Thread Information Block, whose
+// StackBase/StackLimit the GT syscall shim repoints for a kernel call (see `encodeMovGsAbsReg`); under SysV
+// `fs:` addresses the thread pointer, which on the Linux lane is the scheduler's own slot block. Like the SSE
+// mandatory prefixes each precedes the REX byte.
 let GsSegmentPrefix = 0x65
+let FsSegmentPrefix = 0x64
+
+// The prefix byte a segment choice becomes — the ONE map, so a lane that picks a segment cannot also pick a
+// byte and have the two disagree. `X64ThreadPointerSegment` is `X64LinuxRuntime`'s, beside `x64OsCallKind`,
+// because which segment holds the thread pointer is an OS fact rather than an encoding one.
+function segmentPrefixByte(segment X64ThreadPointerSegment) returns MachineWord
+	return match segment 'seg'
+		gs gives GsSegmentPrefix
+		fs gives FsSegmentPrefix
+	end 'seg'
+end 'segmentPrefixByte'
 
 // Emit an SSE instruction's mandatory prefix, if it has one. The shared ModR/M assemblers
 // call this BEFORE `emitRex` — see `SseMandatoryPrefix` for why that order is load-bearing.
@@ -443,7 +456,7 @@ let OpcodeImul2ndByte = 0xAF
 
 // Group-1 ALU opcode-extension (ModR/M reg field) values.
 export let Grp1ExtAdd = 0  // ADD — exported: `__gt_morestack` (X64GtRuntime) does `add reg, imm32` (guard margin, +8 rsp fixup)
-let Grp1ExtOr = 1  // OR  (the `or r/m, imm` immediate form)
+export let Grp1ExtOr = 1  // OR  (the `or r/m, imm` immediate form)
 export let Grp1ExtAnd = 4  // AND (the `and r/m, imm` immediate form)
 export let Grp1ExtSub = 5  // SUB — exported: the GT syscall shim computes the TIB StackLimit as `sub rax, GtSystemStackSize`
 let Grp1ExtXor = 6  // XOR (the `xor r/m, imm` immediate form — also the LOGICAL `not`)
@@ -461,7 +474,7 @@ export let Grp2ExtShr = 5  // SHR r/m, count — LOGICAL right shift (zero-filli
 let Grp3ExtNot = 2  // NOT r/m — one's complement (writes NO flags, unlike NEG)
 let Grp3ExtNeg = 3  // NEG r/m
 let Grp3ExtImul = 5  // IMUL r/m — SIGNED 128-bit multiply RAX × r/m (low→RAX, HIGH→RDX)
-let Grp3ExtDiv = 6  // DIV r/m — UNSIGNED divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
+export let Grp3ExtDiv = 6  // DIV r/m — UNSIGNED divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 let Grp3ExtIdiv = 7  // IDIV r/m — signed divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 
 // 2^32 — used to fold a negative signed 32-bit immediate/displacement into its
@@ -661,17 +674,21 @@ end 'encodeRmRegDirect'
 // r/m is the SOURCE — the OPPOSITE mapping from the `r/m, r` forms above — and its
 // opcode is two-byte, so it takes the escape path through the shared primitive
 // rather than `encodeRmRegDirect`.
-function encodeImulRegReg(code ByteArray, dest X64Register, src X64Register)
+export function encodeImulRegReg(code ByteArray, dest X64Register, src X64Register)
 	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeImul2ndByte, regField: dest, rmField: src, wide: true)
 end 'encodeImulRegReg'
 
 // The GROUP-3 unary ALU forms (`F7 /ext`, always 64-bit, in-place on one register):
-// `neg` (/3, `reg = -reg`), `not` (/2, `reg = ~reg`) and `idiv` (/7, signed divide
-// RDX:RAX by `reg`). All three are byte-identical but for the extension nibble, so they
-// share ONE encoder rather than three one-line wrappers around the same call. The /ext
+// `neg` (/3, `reg = -reg`), `not` (/2, `reg = ~reg`), `idiv` (/7) and `div` (/6, UNSIGNED
+// divide RDX:RAX by `reg`). All are byte-identical but for the extension nibble, so they
+// share ONE encoder rather than four one-line wrappers around the same call. The /ext
 // rides the ModR/M reg field, which is why this routes through `encodeModRmExtDirect`
 // (with `sub/add rsp` and the group-1 immediate forms) and not the reg-to-reg path.
-function encodeGrp3Reg(code ByteArray, ext MachineWord, reg X64Register)
+//
+// ⚠ **BOTH DIVIDES READ RDX AND THE CALLER MUST SET IT.** `div` needs `xor edx, edx` ahead
+// of it or the dividend is a 128-bit value with garbage in its high half — which faults
+// (#DE) rather than answering wrongly whenever the quotient overflows 64 bits.
+export function encodeGrp3Reg(code ByteArray, ext MachineWord, reg X64Register)
 	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: ext, rmField: reg)
 end 'encodeGrp3Reg'
 
@@ -1136,7 +1153,7 @@ end 'sibByte'
 // `imul dest, src, imm32` — the 3-operand signed multiply (REX.W 69 /r id): reg field
 // the DESTINATION, rm field the SOURCE, then a signed imm32. Reuses the shared
 // register-direct assembly; only the opcode + trailing immediate differ.
-function encodeImulRegRegImm32(code ByteArray, dest X64Register, src X64Register, imm Imm32)
+export function encodeImulRegRegImm32(code ByteArray, dest X64Register, src X64Register, imm Imm32)
 	encodeModRmDirect(code, twoByteEscape: false, opcode: OpcodeImulRegImm, regField: dest, rmField: src, wide: true)
 	writeImm32Signed(code, value: imm)
 end 'encodeImulRegRegImm32'
@@ -1874,10 +1891,15 @@ export function encodeMovRegGsAbs(code ByteArray, dest X64Register, disp Imm32)
 	writeImm32Signed(code, value: disp)
 end 'encodeMovRegGsAbs'
 
-// `mov destReg, gs:[baseReg]` (64-bit) — a LOAD from a GS-segment address held in a REGISTER, which is what
-// makes a TLS slot readable in two loads and no call: the caller has the precomputed `index * 8 + 0x1480` in
-// `baseReg` and this dereferences it. The GT syscall shim and every current-GT read in the scheduler go
-// through it, so it is the hottest instruction the multi-M substrate has.
+// `mov destReg, seg:[baseReg]` (64-bit) — a LOAD from a segment-relative address held in a REGISTER, which
+// is what makes a TLS slot readable in two loads and no call: the caller has the precomputed
+// `key * 8 + tlsSlotArrayBase` in `baseReg` and this dereferences it. The GT syscall shim and every current-GT
+// read in the scheduler go through it, so it is the hottest instruction the multi-M substrate has.
+//
+// ⭐ **THE SEGMENT IS A PARAMETER RATHER THAN TWO ENCODERS, BECAUSE ONLY THE PREFIX BYTE DIFFERS.** Windows
+// reads `gs:` (the TIB) and Linux `fs:` (the SysV thread pointer); everything below — the REX rules, the
+// rbp/r13 trap, the rsp/r12 SIB — is identical, and a second copy of it is exactly the duplication that lets
+// one lane inherit a fix the other does not.
 //
 // ⚠ **IT DELEGATES ITS ModR/M TO `encodeModRmBaseDisp`, AND THAT IS THE WHOLE OF ITS CORRECTNESS.** A hand-
 // assembled `mod=00 | reg | rm=base` byte — which is what both reference compilers write — encodes `[rbp]`
@@ -1889,10 +1911,10 @@ end 'encodeMovRegGsAbs'
 // ⚠ The segment prefix must come BEFORE the REX byte — REX is required to be the last prefix — which is why
 // the push order here is not the one `encodeModRmBaseDisp` would produce on its own; the prefix is emitted
 // here and the rest delegated.
-export function encodeMovRegGsBase(code ByteArray, dest X64Register, base X64Register)
-	code.push(GsSegmentPrefix)
+export function encodeMovRegSegBase(code ByteArray, dest X64Register, base X64Register, segment X64ThreadPointerSegment)
+	code.push(segmentPrefixByte(segment))
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: dest, base: base, disp: 0, wide: true)
-end 'encodeMovRegGsBase'
+end 'encodeMovRegSegBase'
 
 // A raw Linux x86-64 supervisor call: `mov eax, number` then `syscall` (0F 05). The x86-64 Linux ABI
 // puts the number in eax/rax and arguments in rdi/rsi/rdx/r10/r8/r9 (which the isel pre-moved, exactly
@@ -1992,7 +2014,7 @@ end 'slotDisplacement'
 // every block's offset is known (see resolveChunkRel32Fixups). `spillBaseDisp` is the
 // function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
 // spill/reload slot displacement.
-function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool)
+function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment)
 	match op 'emit'
 		// `probeScratchIsFree` is certified here and NOWHERE ELSE. Both minters of this op stand at
 		// a function ENTRY — `insertPrologueAtEntry` (X64PrologueEpilogue) and `prependEntryStub`'s
@@ -2172,7 +2194,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// GS form the GT context switch reads NT_TIB StackBase/StackLimit through, so the segment-addressing
 		// bytes (prefix, REX, the no-base SIB) are stated once rather than a second time here.
 		x64TebSelfPointer(dest) then encodeMovRegGsAbs(code, dest: resolveGpr(dest), disp: WindowsTebSelfPointerOffset)
-		x64GsLoadRegBase(dest, base) then encodeMovRegGsBase(code, dest: resolveGpr(dest), base: resolveGpr(base))
+		x64GsLoadRegBase(dest, base) then encodeMovRegSegBase(code, dest: resolveGpr(dest), base: resolveGpr(base), segment: threadPointerSegment)
 		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
 		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
 		arm64AtomicCas to arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
@@ -2196,6 +2218,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		imulHighReg(src) then encodeGrp3Reg(code, ext: Grp3ExtImul, reg: resolveGpr(src))
 		arm64Fneg then panic("emitTargetOp: an arm64 `fneg` reached the x64 encoder — the arm64 backend encodes the arm64 band; x64 spells the flip as `negF64RegReg`")
 		arm64LoadAcquire or arm64StoreRelease then panic("emitTargetOp: an arm64 `LDAR`/`STLR` reached the x64 encoder — x64 is TSO, so `StdToX64Conversion` lowers the ordered pair to the ordinary `mov` forms and never mints these")
+		arm64Smulh then panic("emitTargetOp: an arm64 `SMULH` reached the x64 encoder — x64 spells the high half of a signed product as the one-operand `imulHighReg`, which reads RAX and writes RDX:RAX")
 	end 'emit'
 end 'emitTargetOp'
 
@@ -2266,18 +2289,18 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 		chunkLabelOffsets.place(block.id, value: code.count())
 
 		if isFirstBlock and emitGuard 'guard'
-			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target))
+			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), os: target.os)
 		end 'guard'
 		isFirstBlock = false
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
-			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
+			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
-			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
+			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
 		end 'hasTerm'
 	end 'eachBlock'
 

@@ -98,7 +98,7 @@ arithmetic that produces one.
 ## Tests
 
 <!-- test: console-stdin.read-line-at-eof-throws -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The first `readLine()` on a closed stdin throws `ConsoleError.endOfFile`. If it instead SUCCEEDED
 with an empty line — the failure a NUL-scanned length would produce — the program falls through to
 `return 1`.
@@ -117,7 +117,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.error.a-non-exported-method-is-refused -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⭐ **THE ONE CASE IN THE SUITE THAT ASKS VISIBILITY OF AN INSTANCE METHOD.** `eof()` carries no
 `export`, and a user program holding a `Stdin` value is refused it — the fact the section above
 MEASURED under both compilers and left unpinned. It is pinned here because the method-dispatch door
@@ -134,7 +134,7 @@ error E3008: <fragment>:4:20: function 'Stdin.eof' is not exported
 ```
 
 <!-- test: console-stdin.a-second-reader-also-sees-eof -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 `Stdin` is STATEFUL and its state is PER INSTANCE: a second `Console.stdin()` is a fresh reader with
 its own empty buffer and its own `eofSeen`, so it asks the OS itself and reaches the same answer.
 That is what makes the module's own warning — *"constructing a new one silently drops anything
@@ -162,7 +162,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.repeat-reads-at-eof-are-idempotent -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 `fillOnce` returns without a syscall once `eofSeen` is set, so the second and third `readLine()`
 throw exactly as the first did. A reader that re-issued the read would still be correct here; one
 that answered a stale buffer, or that stopped throwing, would not.
@@ -188,7 +188,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-answers-zero-bytes-at-eof -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The intrinsic under the module, driven directly: EOF is a length of 0, not a failure and not a
 1-byte NUL buffer. A capacity leaking into the length would answer 64.
 ```maxon
@@ -205,7 +205,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-result-is-owned -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Each call answers a FRESH owned `__ManagedMemory`, dropped at the end of the statement that bound
 it. A hundred of them in a loop is the leak gate's shape: a missing drop is a non-zero mm balance
 at exit, which the runtime reports as exit 101 rather than as a wrong number.
@@ -226,7 +226,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-takes-a-ranged-count -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The byte budget may be spelled with a RANGED typealias, which carries the `named` tag until
 TypeResolution collapses it. The narrow `tag == integer` test would refuse this argument by naming
 one type twice; the operand check is `tagIsIntegral`, which is the measured-correct predicate for

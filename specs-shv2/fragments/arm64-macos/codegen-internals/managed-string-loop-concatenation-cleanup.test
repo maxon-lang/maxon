@@ -47,45 +47,31 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
     arm64.leaRdata x19, __str_rec_3  ; "a"
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 5
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge __il_body
   loop:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
     arm64.bl String.append
     arm64.add x20, x20, 1
     arm64.b whilehdr
-  whileexit:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x19, [x21 + 8]
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok#9
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x21
     arm64.bl String.byteLength
     arm64.movRegReg x19, x0
-    arm64.b __il_cont
-  __rc_ok#9:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#4
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at managed-string-loop-concatenation-cleanup.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -96,7 +82,7 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  __rc_ok#4:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

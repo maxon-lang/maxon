@@ -54,9 +54,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @main {
@@ -85,17 +86,13 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot1, x20
     arm64.leaRdata x1, __str_rec_20  ; "Hello"
-    arm64.b __il_body
   __il_body:
     arm64.movImm x2, 0
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl File.writeText
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x21, 1
     arm64.movRegReg x0, x20
@@ -120,9 +117,7 @@ func @main {
     arm64.bl File.readText
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x21, 2
     arm64.movRegReg x0, x20
@@ -146,9 +141,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl File.delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x22, 3
     arm64.movRegReg x0, x21
@@ -222,15 +215,12 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl String.count
     arm64.cmp x0, 5
-    arm64.cset x0, eq
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
+    arm64.b.ne ternaryfalse
   ternarytrue:
     arm64.movImm x19, 0
     arm64.b matchcont
   ternaryfalse:
     arm64.movImm x19, 4
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
@@ -239,14 +229,10 @@ func @main {
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_95  ; "panic at wide-byte-program-still-round-trips-a-file.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

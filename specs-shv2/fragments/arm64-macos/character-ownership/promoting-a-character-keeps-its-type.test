@@ -51,14 +51,11 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
     arm64.leaRdata x19, __str_rec_5  ; "ab\xe4\xb8\xad"
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.storeSlotReg slot0, x21
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -76,7 +73,6 @@ func @main {
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x20, x22
     arm64.movRegReg x21, x23

@@ -30,31 +30,22 @@ func @colorValue {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.movImm x0, 10
     arm64.b matchcont
   matchnext:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#2
-    arm64.b matchdefault
+    arm64.b.ne matchdefault
   matcharm#2:
     arm64.movImm x0, 20
-    arm64.b matchcont
   matchcont:
     arm64.movImm x9, 0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at default-throws-expression.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -78,14 +69,9 @@ func @main {
     arm64.movImm x0, 1
     arm64.bl colorValue
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x0, 0
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.epilogue 16
     arm64.ret

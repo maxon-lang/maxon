@@ -173,14 +173,10 @@ func @main {
     arm64.bl String.count
     arm64.movRegReg x21, x0
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_13  ; "panic at bare-generic-name-nested-three-levels.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

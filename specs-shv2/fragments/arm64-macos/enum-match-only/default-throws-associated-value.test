@@ -40,21 +40,15 @@ func @getValue {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.movImm x9, 0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#7
-    arm64.b __rc_chk#8
+    arm64.b.lt __rc_panic#7
   __rc_chk#8:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#7
-    arm64.b __rc_ok#6
+    arm64.b.le __rc_ok#6
   __rc_panic#7:
     arm64.leaRdata x0, __str_blob_0  ; "panic at default-throws-associated-value.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -67,21 +61,15 @@ func @getValue {
     arm64.ret
   matchnext:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchdefault
+    arm64.b.ne matchdefault
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.movImm x9, 0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#10
-    arm64.b __rc_chk#11
+    arm64.b.lt __rc_panic#10
   __rc_chk#11:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#10
-    arm64.b __rc_ok#9
+    arm64.b.le __rc_ok#9
   __rc_panic#10:
     arm64.leaRdata x0, __str_blob_1  ; "panic at default-throws-associated-value.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -97,7 +85,6 @@ func @getValue {
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  matchcont:
 }
 
 func @main {
@@ -116,15 +103,12 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl getValue
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x19, 0
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref

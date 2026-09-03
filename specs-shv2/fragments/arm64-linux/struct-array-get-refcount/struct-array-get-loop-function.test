@@ -89,41 +89,31 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b __il_body
   __il_body:
     arm64.movImm x20, 0
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, x1
-    arm64.cset x3, lt
-    arm64.cbnz x3, loop
-    arm64.b forexit
+    arm64.b.ge __il_cont
   loop:
     arm64.arm64AddLsl x3, x2, x0, lsl #3
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
-    arm64.b __im_cont#19
   __im_cont#19:
     arm64.loadRegBaseDisp.word64 x4, [x3 + 0]
     arm64.add x4, x20, x4
     arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
     arm64.add x3, x4, x3
-    arm64.b forstep
   forstep:
     arm64.add x0, x0, 1
     arm64.movRegReg x20, x3
     arm64.b forhdr
-  forexit:
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x1, lsl #3
@@ -131,14 +121,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#20
+    arm64.b.eq critsplit#20
   __im_empty:
     arm64.cmp x21, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#21
+    arm64.b.ne critsplit#21
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -149,12 +135,9 @@ func @main {
     arm64.b __im_cont#9
   critsplit#20:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#9
   __im_cont#9:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.movImm x1, 0
@@ -164,12 +147,9 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __mm_incref
     arm64.movRegReg x0, x21
-    arm64.b trycont
   trycont:
     arm64.cmp x20, 21
-    arm64.cset x1, eq
-    arm64.cbnz x1, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
@@ -178,14 +158,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at struct-array-get-loop-function.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

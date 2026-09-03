@@ -262,21 +262,28 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	// calls it, so the walk reaches it by an ordinary edge.
 	try markCompilerOwnedRoot(SchedPublishLockedName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
-	// ⭐ **THE SYSCALL SHIM'S RETURN ROAD (W213-C3), AND IT IS THE IOCP LOOP'S CASE EXACTLY.**
-	// `__sched_syscall_regain` is called only from `emitGtExitSyscall`, which is a hand-assembled Target-tier
-	// chunk emitted per BRACKETED IMPORT — so no Std caller reaches it, the prune drops it, and the failure is
-	// `resolveCallFixups` panicking on an unknown function at the END of codegen rather than a compile error
-	// anywhere near the cause. ⚠ **WITHIN A LANE THAT BRACKETS, THE ROOT CANNOT BE NARROWED FURTHER**: which
-	// imports get a bracket is decided at codegen and this pass runs before it.
+	// ⭐ **THE SYSCALL BRACKET AND ITS RETURN ROAD, AND IT IS THE IOCP LOOP'S CASE EXACTLY.** All three are
+	// called only from the TARGET tier — `__sched_enter_syscall` / `__sched_exit_syscall` from the arm64
+	// isel's dispatch door, `__sched_syscall_regain` from `emitGtExitSyscall`'s hand-assembly — so no Std
+	// caller reaches them, the prune drops them, and the failure is `resolveCallFixups` panicking on an
+	// unknown function at the END of codegen rather than a compile error anywhere near the cause.
+	// ⚠ **WITHIN A LANE THAT BRACKETS, THE ROOTS CANNOT BE NARROWED FURTHER**: which calls get a bracket is
+	// decided at codegen and this pass runs before it.
 	//
 	// ⛔ **IT IS GATED ON THE TARGET, AND THAT GATE IS ONE OF FOUR THAT MUST AGREE** — see
-	// `SchedRuntime.targetBracketsBlockingSyscalls`, which carries the fork and how it is removed. On a lane
-	// with no bracket `installSchedRuntime` does not BUILD this function, and rooting a name the module does
-	// not define is a SILENT no-op rather than an error, so an ungated root here is exactly the shape in which
-	// the two halves would drift apart with nothing to say so.
+	// `SchedRuntime.targetBracketsBlockingSyscalls`, which carries the fork; the bracket's own pair rides the
+	// narrower `targetCallsTheSyscallBracket`, which is the same question the installer builds them under. On
+	// a lane that does not build one of these, rooting a name the module does not define is a SILENT no-op
+	// rather than an error, so an ungated root here is exactly the shape in which the two halves would drift
+	// apart with nothing to say so.
 	if targetBracketsBlockingSyscalls(project.target) 'theSyscallHandoffIsBuilt'
 		try markCompilerOwnedRoot(SchedSyscallRegainName, project: project, index: index, reached: reached, worklist: worklist)
 	end 'theSyscallHandoffIsBuilt'
+
+	if targetCallsTheSyscallBracket(project.target) 'theBracketIsCalled'
+		try markCompilerOwnedRoot(SchedEnterSyscallName, project: project, index: index, reached: reached, worklist: worklist)
+		try markCompilerOwnedRoot(SchedExitSyscallName, project: project, index: index, reached: reached, worklist: worklist)
+	end 'theBracketIsCalled'
 	// ⭐ **THE ENTRY STUB's SCHEDULER TEARDOWN (SV1)** — `__gt_drain_at_exit`, called from `mrt_start` between
 	// the global cleanup and the leak gate and from nowhere else. Exactly `__mm_leak_check`'s position, and
 	// rooted for exactly its reason: the gate emits its call from `RuntimeUsage.usesGt` — where installation

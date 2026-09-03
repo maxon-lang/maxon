@@ -66,7 +66,7 @@ differs.
 ## Tests
 
 <!-- test: builtins-parallel-boundary.marks-a-cpu-bound-spawn -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 A CPU-bound function whose only concession to the scheduler is `__Builtins.parallelBoundary()` is a
 legal `async` target: the spawn compiles, runs, and hands back the value it computed.
 

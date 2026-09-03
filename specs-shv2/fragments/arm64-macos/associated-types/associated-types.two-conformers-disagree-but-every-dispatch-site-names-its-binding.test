@@ -80,19 +80,13 @@ func @TextRunner.take {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
     arm64.cmp x0, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x1
     arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot0
@@ -157,14 +151,10 @@ func @main {
     arm64.bl useText
     arm64.add x20, x20, x0
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at associated-types.two-conformers-disagree-but-every-dispatch-site-names-its-binding.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

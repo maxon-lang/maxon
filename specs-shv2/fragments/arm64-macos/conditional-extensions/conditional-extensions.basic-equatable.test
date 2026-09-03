@@ -68,27 +68,20 @@ func @IntList.has {
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
     arm64.movImm x0, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop
-    arm64.b forexit
+    arm64.b.ne forexit
   loop:
     arm64.movRegReg x0, x19
     arm64.bl IntList.current
     arm64.cmp x0, x20
-    arm64.cset x0, eq
-    arm64.cbnz x0, found
-    arm64.b ifcont
+    arm64.b.ne forstep
   found:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x19
     arm64.bl IntList.advance
@@ -108,9 +101,7 @@ func @IntList.current {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at conditional-extensions.basic-equatable.test:28: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -120,9 +111,7 @@ func @IntList.current {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
     arm64.cmp x2, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
     arm64.arm64AddLsl x0, x0, x2, lsl #3
@@ -130,14 +119,10 @@ func @IntList.current {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x1 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#9
+    arm64.b.eq critsplit#9
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow
-    arm64.b critsplit#10
+    arm64.b.ne critsplit#10
   __im_slow:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
@@ -148,12 +133,9 @@ func @IntList.current {
     arm64.b __im_cont
   critsplit#9:
     arm64.movRegReg x9, x3
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at conditional-extensions.basic-equatable.test:28: IntList.current: idx out of bounds\x0a"
     arm64.bl mrt_panic
@@ -173,9 +155,7 @@ func @IntList.advance {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x1, x2
-    arm64.cset x1, ge
-    arm64.cbnz x1, done
-    arm64.b ifcont
+    arm64.b.lt ifcont
   done:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -200,9 +180,7 @@ func @IntList.create {
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, empty
-    arm64.b ifcont
+    arm64.b.ne ifcont
   empty:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -253,9 +231,7 @@ func @main {
     arm64.bl IntList.create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
@@ -266,8 +242,7 @@ func @main {
     arm64.movImm x1, 20
     arm64.movRegReg x0, x19
     arm64.bl IntList.has
-    arm64.cbnz x0, yes
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   yes:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19

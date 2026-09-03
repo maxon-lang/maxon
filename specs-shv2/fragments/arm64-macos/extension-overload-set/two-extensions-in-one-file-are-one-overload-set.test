@@ -44,9 +44,6 @@ data {
 func @Five.pick {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x0, x1, 5
     arm64.epilogue 16
@@ -56,18 +53,13 @@ func @Five.pick {
 func @Five.pick#bool {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
   __il_cont:
-    arm64.cbnz x1, ternarytrue
-    arm64.b ternaryfalse
+    arm64.cbz x1, ternaryfalse
   ternarytrue:
     arm64.movImm x0, 100
     arm64.b matchcont
   ternaryfalse:
     arm64.movImm x0, 0
-    arm64.b matchcont
   matchcont:
     arm64.add x0, x0, 5
     arm64.epilogue 16
@@ -102,14 +94,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at two-extensions-in-one-file-are-one-overload-set.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

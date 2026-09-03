@@ -4989,6 +4989,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		arm64Fneg gives false
 		// G3: an ordered load reads MEMORY another thread writes — the opposite of rematerializable.
 		arm64LoadAcquire or arm64StoreRelease gives false
+		// EC18: `SMULH` reads two registers the pass cannot reconstruct. Not rematerializable.
+		arm64Smulh gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -5826,6 +5828,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		imulHighReg panic("constDefInfo: def is not a constant materialization")
 		arm64Fneg panic("constDefInfo: def is not a constant materialization")
 		arm64LoadAcquire or arm64StoreRelease panic("constDefInfo: def is not a constant materialization")
+		arm64Smulh panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -6082,6 +6085,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), width: width)
 		arm64StoreRelease(base, src, width) then return TargetOp.arm64StoreRelease(substituteVReg(base, from: from, to: to), src: substituteVReg(src, from: from, to: to), width: width)
+		arm64Smulh(dest, lhs, rhs) then return TargetOp.arm64Smulh(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 	end 'rewrite'
 end 'substituteValueInOp'
 

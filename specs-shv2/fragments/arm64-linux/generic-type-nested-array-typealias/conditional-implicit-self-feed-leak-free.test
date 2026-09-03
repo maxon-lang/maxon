@@ -68,8 +68,7 @@ func @Container.create {
 func @Container.addMaybe {
   entry:
     arm64.prologue 16
-    arm64.cbnz x2, maybe
-    arm64.b iffalse
+    arm64.cbz x2, iffalse
   maybe:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __managed_push
@@ -77,7 +76,6 @@ func @Container.addMaybe {
   iffalse:
     arm64.movRegReg x0, x3
     arm64.bl __drop_type_param
-    arm64.b ifcont
   ifcont:
     arm64.epilogue 16
     arm64.ret
@@ -98,12 +96,9 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x20, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b forexit
+    arm64.b.ge forexit
   loop:
     arm64.leaRdata x0, __layout_Container_String
     arm64.bl Container.create
@@ -148,24 +143,19 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x27
     arm64.bl Container.addMaybe
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.b __il_cont
   __il_cont:
     arm64.add x19, x19, x0
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Container_String
-    arm64.b forstep
   forstep:
     arm64.add x20, x20, 1
     arm64.b forhdr
   forexit:
     arm64.cmp x19, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.ne ifcont
   check:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

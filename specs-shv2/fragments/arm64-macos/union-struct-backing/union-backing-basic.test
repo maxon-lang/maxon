@@ -50,23 +50,17 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 16], x20
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
     arm64.add x19, x1, x2
     arm64.bl __mm_decref
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_chk#10
+    arm64.b.lt __rc_panic#9
   __rc_chk#10:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_ok#8
+    arm64.b.le __rc_ok#8
   __rc_panic#9:
     arm64.leaRdata x0, __str_blob_1  ; "panic at union-backing-basic.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -83,23 +77,17 @@ func @main {
     arm64.ret
   matchnext#5:
     arm64.cmp x1, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#2
-    arm64.b matchnext#6
+    arm64.b.ne matchnext#6
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
     arm64.mul x19, x1, x2
     arm64.bl __mm_decref
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#12
-    arm64.b __rc_chk#13
+    arm64.b.lt __rc_panic#12
   __rc_chk#13:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#12
-    arm64.b __rc_ok#11
+    arm64.b.le __rc_ok#11
   __rc_panic#12:
     arm64.leaRdata x0, __str_blob_2  ; "panic at union-backing-basic.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -116,9 +104,7 @@ func @main {
     arm64.ret
   matchnext#6:
     arm64.cmp x1, 2
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#3
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#3:
     arm64.movImm x19, 0
     arm64.bl __mm_decref

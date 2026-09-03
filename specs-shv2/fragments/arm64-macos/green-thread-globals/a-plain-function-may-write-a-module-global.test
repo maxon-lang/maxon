@@ -65,9 +65,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @Counter.create {
@@ -109,14 +110,12 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot0, x20
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.b __il_body#8
   __il_body#8:
     arm64.leaGlobal x0, __data_ledger
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, 10
     arm64.leaGlobal x1, __data_ledger
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.movImm x19, 5
     arm64.movImm x0, 16
@@ -143,24 +142,18 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x19, 0
-    arm64.b trycont
+    arm64.b __il_body#10
   tryok:
     arm64.movRegReg x19, x0
-    arm64.b trycont
-  trycont:
-    arm64.b __il_body#10
   __il_body#10:
     arm64.leaGlobal x0, __data_ledger
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x19
     arm64.leaGlobal x1, __data_ledger
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.b __il_cont#9
   __il_cont#9:
     arm64.leaRdata x0, __str_rec_3  ; "ledger="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -245,14 +238,10 @@ func @main {
     arm64.leaGlobal x0, __data_ledger
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_6  ; "panic at a-plain-function-may-write-a-module-global.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -296,14 +285,11 @@ func @Counter.__loop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.b serve
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, stopping
-    arm64.b dispatch
+    arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=add, [2]=total] @__jumptable_7
@@ -311,19 +297,15 @@ func @Counter.__loop {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
     arm64.bl __mm_decref
-    arm64.b stopping
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
-    arm64.b drain
   drain:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x1, x0
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, finished
-    arm64.b abandon
+    arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -341,21 +323,17 @@ func @Counter.__loop {
     arm64.b drain
   add:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.b __il_body#11
   __il_body#11:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.add x1, x2, x1
     arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.b __il_cont#10
   __il_cont#10:
     arm64.bl __mm_decref
     arm64.b serve
   total:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.b __il_body#13
   __il_body#13:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
-    arm64.b __il_cont#12
   __il_cont#12:
     arm64.bl __mm_decref
     arm64.movImm x2, 0
@@ -371,21 +349,18 @@ func @Counter.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=add, [2]=total] @__jumptable_8
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=total] @__jumptable_8
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
     arm64.b abandondrop
-  add:
-    arm64.b abandondrop
   total:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref

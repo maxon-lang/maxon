@@ -1,0 +1,274 @@
+// Test: a-service-shut-down-with-async-work-in-flight
+typealias Integer = int(i64.min to i64.max)
+
+function slowWork(n Integer) returns Integer
+	sleep(30)
+	return n * 2
+end 'slowWork'
+
+type Worker
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	// Starts a coroutine on the SERVICE's own green thread and never awaits it. The promise dies at handler
+	// scope exit, and the service is shut down by the handle drop below while the sleep is still in flight.
+	export function fire(v Integer) returns Integer
+		let p = async slowWork(v)
+		_ = p
+		self.n = self.n + 1
+		return self.n
+	end 'fire'
+end 'Worker'
+
+function main() returns ExitCode
+	for round in 1 to 8 'rounds'
+		let w = spawn Worker.create()
+		w.fire(round)
+	end 'rounds'
+
+	print("survived\n")
+	return 42 as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
+}
+
+func @slowWork {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 30
+    arm64.bl sleep
+    arm64.movImm x16, 2
+    arm64.mul x0, x19, x16
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Worker.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Worker.fire {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.leaFuncAddr x0, slowWork
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 0]
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+  forhdr:
+    arm64.cmp x19, 8
+    arm64.b.gt forexit
+  rounds:
+    arm64.bl Worker.create
+    arm64.movRegReg x1, x0
+    arm64.leaFuncAddr x0, Worker.__loop
+    arm64.leaFuncAddr x2, Worker.__abandon
+    arm64.bl __svc_spawn
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+    arm64.movImm x0, 0
+    arm64.bl __gt_cell_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x19
+    arm64.storeBaseDispReg.word64 [x1 + 16], x20
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __mbox_send
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_handle_drop_box
+  forstep:
+    arm64.add x19, x19, 1
+    arm64.b forhdr
+  forexit:
+    arm64.leaRdata x0, __str_rec_1  ; "survived\x0a"
+    arm64.bl print
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Worker.__loop {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+  serve:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.movRegReg x21, x0
+    arm64.cmp x21, 0
+    arm64.b.eq stopping
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=fire] @__jumptable_3
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.storeBaseDispReg.word64 [x20 + 56], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+  stopping:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_close
+  drain:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.b.ne abandon
+  finished:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_service_exit
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  abandon:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_abandon
+    arm64.b drain
+  fire:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 16]
+    arm64.movRegReg x0, x19
+    arm64.bl Worker.fire
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movImm x2, 0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __gt_cell_complete
+    arm64.b serve
+}
+
+func @Worker.__abandon {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=fire] @__jumptable_4
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  fire:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+  abandondrop:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

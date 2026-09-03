@@ -557,7 +557,6 @@ func @bucket {
     arm64.b matchcont
   matcharm#128:
     arm64.movImm x0, 128
-    arm64.b matchcont
   matchcont:
     arm64.epilogue 16
     arm64.ret
@@ -571,97 +570,62 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl bucket
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, a
-    arm64.b critsplit#21
+    arm64.b.ne ifcont#2
   a:
     arm64.movImm x19, 1
-    arm64.b ifcont#2
-  critsplit#21:
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movImm x0, 31
     arm64.bl bucket
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, b
-    arm64.b critsplit#22
+    arm64.b.ne ifcont#4
   b:
     arm64.add x19, x19, 1
-    arm64.b ifcont#4
-  critsplit#22:
-    arm64.b ifcont#4
   ifcont#4:
     arm64.movImm x0, 32
     arm64.bl bucket
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, c
-    arm64.b critsplit#23
+    arm64.b.ne ifcont#6
   c:
     arm64.add x19, x19, 1
-    arm64.b ifcont#6
-  critsplit#23:
-    arm64.b ifcont#6
   ifcont#6:
     arm64.movImm x0, 2047
     arm64.bl bucket
     arm64.cmp x0, 64
-    arm64.cset x0, eq
-    arm64.cbnz x0, d
-    arm64.b critsplit#24
+    arm64.b.ne ifcont#8
   d:
     arm64.add x19, x19, 1
-    arm64.b ifcont#8
-  critsplit#24:
-    arm64.b ifcont#8
   ifcont#8:
     arm64.movImm x0, 4095
     arm64.bl bucket
     arm64.cmp x0, 128
-    arm64.cset x0, eq
-    arm64.cbnz x0, e
-    arm64.b critsplit#25
+    arm64.b.ne ifcont#10
   e:
     arm64.add x19, x19, 1
-    arm64.b ifcont#10
-  critsplit#25:
-    arm64.b ifcont#10
   ifcont#10:
     arm64.movImm x0, 4096
     arm64.bl bucket
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, f
-    arm64.b critsplit#26
+    arm64.b.ne ifcont#12
   f:
     arm64.add x19, x19, 1
-    arm64.b ifcont#12
-  critsplit#26:
-    arm64.b ifcont#12
   ifcont#12:
     arm64.movImm x0, 18446744073709551615
     arm64.bl bucket
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, g
-    arm64.b critsplit#27
+    arm64.b.ne critsplit
   g:
     arm64.add x0, x19, 1
     arm64.b ifcont#14
-  critsplit#27:
+  critsplit:
     arm64.movRegReg x0, x19
-    arm64.b ifcont#14
   ifcont#14:
     arm64.cmp x0, 0
     arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#16
-    arm64.b __rc_chk#17
+    arm64.b.lt __rc_panic#16
   __rc_chk#17:
     arm64.cmp x0, 255
     arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic#16
-    arm64.b __rc_ok#15
+    arm64.b.le __rc_ok#15
   __rc_panic#16:
     arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.span-4096-boundary.test:164: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -671,10 +635,8 @@ func @main {
     arm64.ret
   __rc_ok#15:
     arm64.cbnz x1, __rc_panic#19
-    arm64.b __rc_chk#20
   __rc_chk#20:
-    arm64.cbnz x2, __rc_panic#19
-    arm64.b __rc_ok#18
+    arm64.cbz x2, __rc_ok#18
   __rc_panic#19:
     arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.span-4096-boundary.test:164: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

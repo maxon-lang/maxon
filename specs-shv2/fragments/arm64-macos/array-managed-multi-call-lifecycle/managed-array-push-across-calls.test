@@ -154,22 +154,18 @@ func @clearAllModule {
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, scan
-    arm64.b forexit
+    arm64.b.ge forexit
   scan:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.jumpTable x0, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=matcharm#7, [3]=matcharm#8] @__jumptable_7
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=forstep, [3]=matcharm#8] @__jumptable_7
   matchdead:
   matcharm#5:
     arm64.movRegReg x0, x23
@@ -177,15 +173,13 @@ func @clearAllModule {
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x23
     arm64.bl __managed_push
-    arm64.b matchcont
+    arm64.b forstep
   matcharm#6:
     arm64.movRegReg x0, x23
     arm64.bl __mm_incref
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x23
     arm64.bl __managed_push
-    arm64.b matchcont
-  matcharm#7:
     arm64.b forstep
   matcharm#8:
     arm64.movRegReg x0, x23
@@ -193,9 +187,6 @@ func @clearAllModule {
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x23
     arm64.bl __managed_push
-    arm64.b matchcont
-  matchcont:
-    arm64.b forstep
   forstep:
     arm64.add x22, x22, 1
     arm64.b forhdr
@@ -323,14 +314,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Database
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_6  ; "panic at managed-array-push-across-calls.test:60: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

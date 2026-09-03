@@ -61,12 +61,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @main {
@@ -86,9 +87,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __md_create
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq trycont
   tryerr#2:
     arm64.movRegReg x0, x19
     arm64.bl String.toByteArray
@@ -98,8 +97,7 @@ func @main {
     arm64.eor x21, x0, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cbnz x21, noScratchRoot
-    arm64.b ifcont#4
+    arm64.cbz x21, trycont
   noScratchRoot:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -114,10 +112,6 @@ func @main {
     arm64.loadRegSlot x25, slot6
     arm64.epilogue 80
     arm64.ret
-  ifcont#4:
-    arm64.b trycont
-  tryok#1:
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
@@ -130,8 +124,7 @@ func @main {
     arm64.eor x21, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-    arm64.cbnz x21, needCreate
-    arm64.b ifcont#9
+    arm64.cbz x21, ifcont#9
   needCreate:
     arm64.movRegReg x0, x19
     arm64.bl String.toByteArray
@@ -139,9 +132,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __md_create
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -159,7 +150,6 @@ func @main {
   tryok#7:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-    arm64.b ifcont#9
   ifcont#9:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
@@ -195,9 +185,7 @@ func @main {
     arm64.bl __md_open_search
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#11
-    arm64.b tryok#10
+    arm64.b.eq tryok#10
   tryerr#11:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -222,9 +210,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __md_next
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#13
-    arm64.b tryok#12
+    arm64.b.eq tryok#12
   tryerr#13:
     arm64.movImm x19, 3
     arm64.movRegReg x0, x20
@@ -241,9 +227,7 @@ func @main {
     arm64.ret
   tryok#12:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, emptyDirectoryHasNoRealEntry
-    arm64.b ifcont#15
+    arm64.b.eq ifcont#15
   emptyDirectoryHasNoRealEntry:
     arm64.movImm x19, 4
     arm64.movRegReg x0, x20
@@ -262,9 +246,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __md_next
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#17
-    arm64.b tryok#16
+    arm64.b.eq tryok#16
   tryerr#17:
     arm64.movImm x19, 5
     arm64.movRegReg x0, x20
@@ -281,9 +263,7 @@ func @main {
     arm64.ret
   tryok#16:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, eofStaysEof
-    arm64.b ifcont#19
+    arm64.b.eq ifcont#19
   eofStaysEof:
     arm64.movImm x19, 6
     arm64.movRegReg x0, x20

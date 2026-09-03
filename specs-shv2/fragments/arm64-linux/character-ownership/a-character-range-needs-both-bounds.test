@@ -34,12 +34,9 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 97
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x19, 101
-    arm64.cset x0, le
-    arm64.cbnz x0, chars
-    arm64.b forexit#4
+    arm64.b.gt forexit#4
   chars:
     arm64.movRegReg x0, x19
     arm64.bl __char_from_cp
@@ -68,22 +65,17 @@ func @main {
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.b forstep#3
   forstep#3:
     arm64.add x19, x19, 1
     arm64.b forhdr#1
   forexit#4:
     arm64.movImm x19, 0
     arm64.movImm x0, 97
-    arm64.b forhdr#5
   forhdr#5:
     arm64.cmp x0, 99
-    arm64.cset x1, le
-    arm64.cbnz x1, codepoints
-    arm64.b forexit#8
+    arm64.b.gt forexit#8
   codepoints:
     arm64.add x19, x19, x0
-    arm64.b forstep#7
   forstep#7:
     arm64.add x0, x0, 1
     arm64.b forhdr#5

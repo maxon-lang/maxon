@@ -39,8 +39,7 @@ data {
 func @makeStr {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -59,9 +58,7 @@ func @runIt {
     arm64.prologue 16
     arm64.bl makeStr
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -82,9 +79,7 @@ func @main {
     arm64.bl runIt
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -94,19 +89,13 @@ func @main {
     arm64.movImm x0, 1
     arm64.bl runIt
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_chk#7
+    arm64.b.lt __rc_panic#6
   __rc_chk#7:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_ok#5
+    arm64.b.le __rc_ok#5
   __rc_panic#6:
     arm64.leaRdata x0, __str_blob_2  ; "panic at error.discard-managed-result.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -121,14 +110,10 @@ func @main {
     arm64.ret
   tryok#3:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#9
-    arm64.b __rc_chk#10
+    arm64.b.lt __rc_panic#9
   __rc_chk#10:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#9
-    arm64.b __rc_ok#8
+    arm64.b.le __rc_ok#8
   __rc_panic#9:
     arm64.leaRdata x0, __str_blob_3  ; "panic at error.discard-managed-result.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

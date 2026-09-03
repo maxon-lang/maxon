@@ -41,9 +41,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movRegReg x0, x19
     arm64.bl String.endIndex
@@ -51,7 +49,6 @@ func @main {
     arm64.b trycont
   tryok:
     arm64.movRegReg x21, x0
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -59,13 +56,10 @@ func @main {
     arm64.bl String.slice
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b forexit
+    arm64.b.ge forexit
   loop:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -109,7 +103,6 @@ func @main {
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.loadRegSlot x0, slot0
     arm64.movRegReg x20, x0

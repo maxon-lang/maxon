@@ -242,9 +242,7 @@ func @describe {
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
@@ -258,9 +256,7 @@ func @describe {
     arm64.b matchcont
   matchnext#5:
     arm64.cmp x1, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#2
-    arm64.b matchnext#6
+    arm64.b.ne matchnext#6
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
@@ -274,12 +270,9 @@ func @describe {
     arm64.b matchcont
   matchnext#6:
     arm64.cmp x1, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#3:
     arm64.movImm x0, 0
-    arm64.b matchcont
   matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -308,48 +301,34 @@ func @matrix_total {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x2, x3
-    arm64.cset x4, lt
-    arm64.cbnz x4, iter#2
-    arm64.b forexit#4
+    arm64.b.ge forexit
   iter#2:
     arm64.arm64AddLsl x4, x0, x2, lsl #3
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.b __im_cont#5
-  __im_cont#5:
-    arm64.b __il_body
   __il_body:
     arm64.movImm x5, 0
     arm64.movImm x6, 0
     arm64.loadRegBaseDisp.word64 x7, [x4 + 8]
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.b forhdr#8
   forhdr#8:
     arm64.cmp x6, x7
-    arm64.cset x8, lt
-    arm64.cbnz x8, iter#9
-    arm64.b forexit#11
+    arm64.b.ge __il_cont
   iter#9:
     arm64.arm64AddLsl x8, x4, x6, lsl #3
     arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
-    arm64.b __im_cont#12
-  __im_cont#12:
+  __im_cont:
     arm64.add x5, x5, x8
-    arm64.b forstep#10
   forstep#10:
     arm64.add x6, x6, 1
     arm64.b forhdr#8
-  forexit#11:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x1, x1, x5
-    arm64.b forstep#3
   forstep#3:
     arm64.add x2, x2, 1
     arm64.b forhdr#1
-  forexit#4:
+  forexit:
     arm64.movRegReg x0, x1
     arm64.epilogue 16
     arm64.ret
@@ -381,12 +360,10 @@ func @main {
     arm64.leaRegSlot x3, slot2
     arm64.storeBaseDispReg.word64 [x3 + 0], x1
     arm64.storeBaseDispReg.word64 [x3 + 8], x2
-    arm64.b __il_body#19
   __il_body#19:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x3 + 8]
     arm64.add x1, x1, x2
-    arm64.b __il_cont#18
   __il_cont#18:
     arm64.add x0, x0, x1
     arm64.movImm x1, 5
@@ -394,12 +371,10 @@ func @main {
     arm64.leaRegSlot x3, slot4
     arm64.storeBaseDispReg.word64 [x3 + 0], x1
     arm64.storeBaseDispReg.word64 [x3 + 8], x2
-    arm64.b __il_body#20
   __il_body#20:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x3 + 8]
     arm64.add x1, x1, x2
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.add x19, x0, x1
     arm64.movImm x0, 8
@@ -408,12 +383,9 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot8, x20
     arm64.movImm x21, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x21, 5
-    arm64.cset x0, lt
-    arm64.cbnz x0, names_loop
-    arm64.b forexit#4
+    arm64.b.ge __il_body#25
   names_loop:
     arm64.leaRdata x0, __str_rec_11  ; "name_"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
@@ -453,15 +425,11 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x27
     arm64.bl __managed_push
-    arm64.b forstep#3
   forstep#3:
     arm64.add x21, x21, 1
     arm64.b forhdr#1
-  forexit#4:
-    arm64.b __il_body#25
   __il_body#25:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-    arm64.b __il_cont#24
   __il_cont#24:
     arm64.add x19, x19, x0
     arm64.movImm x0, 8
@@ -509,20 +477,16 @@ func @main {
     arm64.leaRegSlot x3, slot6
     arm64.storeBaseDispReg.word64 [x3 + 0], x1
     arm64.storeBaseDispReg.word64 [x3 + 8], x2
-    arm64.b __il_body#26
   __il_body#26:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x3 + 8]
     arm64.add x1, x1, x2
-    arm64.b __il_cont#23
   __il_cont#23:
     arm64.add x0, x0, x1
-    arm64.b __il_body#27
   __il_body#27:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x3 + 8]
     arm64.add x1, x1, x2
-    arm64.b __il_cont#22
   __il_cont#22:
     arm64.add x19, x0, x1
     arm64.movImm x0, 10
@@ -647,31 +611,23 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x25
     arm64.bl __managed_push
-    arm64.b __il_body#28
   __il_body#28:
     arm64.movImm x0, 0
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x25 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x25 + 0]
-    arm64.b forhdr#29
   forhdr#29:
     arm64.cmp x1, x2
-    arm64.cset x4, lt
-    arm64.cbnz x4, iter
-    arm64.b forexit#32
+    arm64.b.ge __il_cont#21
   iter:
     arm64.arm64AddLsl x4, x3, x1, lsl #3
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.b __im_cont#33
   __im_cont#33:
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x0, x0, x4
-    arm64.b forstep#31
   forstep#31:
     arm64.add x1, x1, 1
     arm64.b forhdr#29
-  forexit#32:
-    arm64.b __il_cont#21
   __il_cont#21:
     arm64.add x19, x19, x0
     arm64.movImm x0, 8
@@ -697,18 +653,13 @@ func @main {
     arm64.movRegReg x0, x26
     arm64.bl __managed_push
     arm64.movImm x28, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.cmp x28, 3
-    arm64.cset x0, lt
-    arm64.cbnz x0, alias_loop
-    arm64.b forexit#8
+    arm64.b.ge forexit
   alias_loop:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 8]
     arm64.cmp x28, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 0]
     arm64.arm64AddLsl x0, x0, x28, lsl #3
@@ -716,14 +667,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x26 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#36
+    arm64.b.eq critsplit#36
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#37
+    arm64.b.ne critsplit#37
   __im_slow:
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x28
@@ -734,12 +681,9 @@ func @main {
     arm64.b __im_cont#13
   critsplit#36:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont#13
   __im_cont#13:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq __il_body#35
   tryerr:
     arm64.leaRdata x0, __str_rec_18  ; "panic at refcount-baseline-whole-program.test:165: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -823,24 +767,18 @@ func @main {
     arm64.loadRegSlot x28, slot24
     arm64.epilogue 224
     arm64.ret
-  tryok:
-    arm64.b __il_body#35
   __il_body#35:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.add x0, x1, x0
-    arm64.b __il_cont#34
   __il_cont#34:
     arm64.add x19, x19, x0
-    arm64.b forstep#7
   forstep#7:
     arm64.add x28, x28, 1
     arm64.b forhdr#5
-  forexit#8:
+  forexit:
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, guard
-    arm64.b ifcont
+    arm64.b.ge ifcont
   guard:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x26

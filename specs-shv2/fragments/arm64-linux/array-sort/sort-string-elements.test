@@ -40,26 +40,20 @@ func @byLength {
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
     arm64.bl String.count
-    arm64.b __il_body
   __il_body:
     arm64.cmp x20, x0
-    arm64.cset x1, lt
-    arm64.cbnz x1, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x20, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -114,18 +108,14 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Array.sort#Array.SortComparator
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, p
-    arm64.b forexit
+    arm64.b.ge forexit
   p:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x20, lsl #3
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
@@ -158,7 +148,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.add x20, x20, 1
     arm64.b forhdr

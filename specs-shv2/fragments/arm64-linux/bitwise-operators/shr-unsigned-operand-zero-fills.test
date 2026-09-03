@@ -45,43 +45,29 @@ ExitCode: 42
 func @main {
   entry:
     arm64.prologue 16
-    arm64.b __il_body#12
   __il_body#12:
     arm64.movImm x0, 15
-    arm64.b __il_cont#11
   __il_cont#11:
     arm64.cmp x0, 15
-    arm64.cset x0, ne
-    arm64.cbnz x0, foldedCount
-    arm64.b ifcont#2
+    arm64.b.eq __il_body#14
   foldedCount:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont#2:
-    arm64.b __il_body#14
   __il_body#14:
     arm64.movImm x0, 15
-    arm64.b __il_cont#13
   __il_cont#13:
     arm64.cmp x0, 15
-    arm64.cset x0, ne
-    arm64.cbnz x0, dynamicCount
-    arm64.b ifcont#4
+    arm64.b.eq __il_body#16
   dynamicCount:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont#4:
-    arm64.b __il_body#16
   __il_body#16:
     arm64.movImm x0, 0
-    arm64.b __il_cont#15
   __il_cont#15:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, foldedPastWidth
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   foldedPastWidth:
     arm64.movImm x0, 3
     arm64.epilogue 16
@@ -89,31 +75,22 @@ func @main {
   ifcont#6:
     arm64.movImm x0, 18446744073709551615
     arm64.movImm x1, 100
-    arm64.b __il_body#18
   __il_body#18:
     arm64.lsrv x0, x0, x1
     arm64.movImm x16, 0
     arm64.and x0, x0, x16
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, dynamicPastWidth
-    arm64.b ifcont#8
+    arm64.b.eq __il_body#20
   dynamicPastWidth:
     arm64.movImm x0, 4
     arm64.epilogue 16
     arm64.ret
-  ifcont#8:
-    arm64.b __il_body#20
   __il_body#20:
     arm64.movImm x0, 18446744073709551615
-    arm64.b __il_cont#19
   __il_cont#19:
     arm64.cmp x0, -1
-    arm64.cset x0, ne
-    arm64.cbnz x0, zeroCount
-    arm64.b ifcont#10
+    arm64.b.eq ifcont#10
   zeroCount:
     arm64.movImm x0, 5
     arm64.epilogue 16

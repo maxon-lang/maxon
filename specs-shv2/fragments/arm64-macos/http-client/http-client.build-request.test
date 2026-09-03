@@ -38,9 +38,7 @@ func @main {
     arm64.bl HttpRequest.create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -57,9 +55,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl URL.host
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_rec_17  ; ""
     arm64.bl __str_retain
@@ -67,14 +63,12 @@ func @main {
     arm64.b trycont
   tryok#3:
     arm64.movRegReg x21, x0
-    arm64.b trycont
   trycont:
     arm64.leaRdata x1, __str_rec_18  ; "example.com"
     arm64.movRegReg x0, x21
     arm64.bl __str_eq
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, badHost
-    arm64.b ifcont#7
+    arm64.cbz x0, ifcont#7
   badHost:
     arm64.movImm x22, 2
     arm64.movRegReg x0, x21
@@ -99,8 +93,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __str_eq
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, badPath
-    arm64.b ifcont#9
+    arm64.cbz x0, ifcont#9
   badPath:
     arm64.movImm x23, 3
     arm64.movRegReg x0, x22

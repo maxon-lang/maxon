@@ -518,7 +518,7 @@ r=5 steals=0
 ```
 
 <!-- test: sched-runqueue.ring-overflow-runs-every-spawned-service -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 **THE OVERFLOW, AND THE PROOF THAT NOTHING IS LOST IN IT.** Three hundred `spawn`s run back to back with
 nothing between them that yields, so all 300 green threads are published before the first one runs. The ring
@@ -616,7 +616,7 @@ ran=300
 ```
 
 <!-- test: sched-runqueue.the-ring-index-wraps-past-its-capacity -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 **THE WRAP.** `runqhead`/`runqtail` are monotonic counters, not indices. One service takes six thousand
 messages one at a time, each drained before the next is sent, so the service is woken and re-published
@@ -699,7 +699,7 @@ sum=6000
 ```
 
 <!-- test: sched-runqueue.the-global-queue-is-consulted-within-sixty-one-schedules -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 **THE FAIRNESS CHECK, AND THE ONE SHAPE THAT CAN SEE IT.** The overflow above moves the OLDEST half of
 the ring to the global queue, so service #1 — the first ever spawned — ends up at the global head while
@@ -823,7 +823,7 @@ runCount=300 oldest=early
 ```
 
 <!-- test: sched-runqueue.a-yield-goes-behind-the-global-queue -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 **THE BACK OF THE QUEUE, AND THE ONLY SHAPE AT ONE PROCESSOR THAT CAN SEE IT.** A drained yielder goes to
 the GLOBAL queue's tail; the scheduler consults its RING first, so anything pushed to the ring AFTER the
@@ -965,7 +965,7 @@ sPos=1 yPos=2
 ```
 
 <!-- test: sched-runqueue.nothing-is-stolen-on-one-processor -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 **THE STEAL COUNTER, AND THE ONE ANSWER A SPEC CAN PIN — the SERVICE twin of
 `no-coroutine-is-ever-stolen` above, and the reason the two are different cases.** That one reads 0

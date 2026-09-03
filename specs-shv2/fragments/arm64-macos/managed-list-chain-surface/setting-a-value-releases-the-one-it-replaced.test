@@ -51,19 +51,15 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mm_incref
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x21, 16
-    arm64.cset x0, lt
-    arm64.cbnz x0, churn
-    arm64.b forexit
+    arm64.b.ge forexit
   churn:
     arm64.leaRdata x0, __str_rec_4  ; "a replacement element, long enough to be a real allocation"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
     arm64.bl __list_node_set_value
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr
@@ -110,9 +106,7 @@ func @main {
     arm64.bl __list_head_checked
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x21, 1
     arm64.movRegReg x0, x20

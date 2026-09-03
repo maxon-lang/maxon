@@ -49,13 +49,10 @@ func @build {
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -73,7 +70,6 @@ func @build {
     arm64.bl __managed_push
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x21, x22
     arm64.b forhdr
@@ -102,12 +98,9 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, rep
-    arm64.b whileexit
+    arm64.b.ge whileexit
   rep:
     arm64.leaRdata x0, __str_rec_4  ; "h\xc3\xa9ll\xc3\xb6"
     arm64.bl build

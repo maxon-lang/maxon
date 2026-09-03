@@ -49,9 +49,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @sleeper {
@@ -72,12 +73,9 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 50
-    arm64.cset x0, lt
-    arm64.cbnz x0, l
-    arm64.b whileexit
+    arm64.b.ge whileexit
   l:
     arm64.leaFuncAddr x0, sleeper
     arm64.bl __gt_spawn
@@ -91,14 +89,10 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at async-sleep.spawn-loop.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

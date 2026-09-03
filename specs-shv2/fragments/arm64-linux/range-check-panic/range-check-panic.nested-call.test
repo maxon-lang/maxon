@@ -1,0 +1,74 @@
+// Test: range-check-panic.nested-call
+typealias Score = int(0 to 100)
+
+function validate(s Score) returns Score
+  return s
+end 'validate'
+
+function process(x Score) returns Score
+  return validate(x * 3)
+end 'process'
+
+function main() returns ExitCode
+  return process(50)
+end 'main'
+---
+ExitCode: 1
+---
+func @validate {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at range-check-panic.nested-call.test:4: Range check failed: value outside typealias 'Score'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @process {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk#3:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at range-check-panic.nested-call.test:8: Range check failed: value outside typealias 'Score'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x16, 3
+    arm64.mul x0, x0, x16
+  __il_body:
+    arm64.cmp x0, 0
+    arm64.b.lt __il_slow
+  __rc_chk#7:
+    arm64.cmp x0, 100
+    arm64.b.le __il_cont
+  __il_slow:
+    arm64.bl validate
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 50
+    arm64.bl process
+    arm64.epilogue 16
+    arm64.ret
+}

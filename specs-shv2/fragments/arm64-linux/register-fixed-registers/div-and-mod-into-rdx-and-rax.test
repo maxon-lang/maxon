@@ -20,23 +20,28 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 97
-    arm64.movImm x1, 5
-    arm64.sdiv x2, x0, x1
-    arm64.sdiv x16, x0, x1
-    arm64.msub x0, x16, x1, x0
-    arm64.b __il_body
+    arm64.movImm x1, 7378697629483820647
+    arm64.smulh x1, x1, x0
+    arm64.asr x1, x1, 1
+    arm64.lsr x2, x1, 63
+    arm64.add x1, x1, x2
+    arm64.movImm x2, 7378697629483820647
+    arm64.smulh x2, x2, x0
+    arm64.asr x2, x2, 1
+    arm64.lsr x3, x2, 63
+    arm64.add x2, x2, x3
+    arm64.movImm x16, 5
+    arm64.mul x2, x2, x16
+    arm64.sub x0, x0, x2
   __il_body:
     arm64.movImm x16, 100
-    arm64.mul x1, x2, x16
+    arm64.mul x1, x1, x16
     arm64.add x1, x1, 10000
     arm64.add x0, x1, x0
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x16, 11902
     arm64.cmp x0, x16
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

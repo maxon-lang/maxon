@@ -1,30 +1,28 @@
-// X64BranchCleanup — the Target-tier CFG cleanup (EC11), on FULLY REGISTER-ALLOCATED PHYSICAL OPS.
+// BranchCleanup — the Target-tier CFG cleanup (EC11), on FULLY REGISTER-ALLOCATED PHYSICAL OPS.
+// Shared by every backend that allocates registers (x64 and arm64); wasm consumes Std directly and
+// never reaches this tier.
 //
 // Four transforms, all of them local to one function's block layout:
 //
-//   1. JUMP ELISION       — a block whose terminator is `jmp T` where T is the block laid down
-//                           immediately after it loses the `jmp`. Control reaches T by falling off
-//                           the end.
-//   2. CONDITIONAL INVERSION — `jcc cond,T` + `jmp E` where T is the next block becomes
-//                           `jcc !cond,E` + a fall-through into T. Two instructions become one.
-//   3. JUMP THREADING     — a block whose ONLY op is `jmp U` is bypassed: every branch that named it
-//                           is re-pointed at U.
+//   1. JUMP ELISION       — a block whose terminator is the ISA's unconditional branch to the block
+//                           laid down immediately after it loses that branch. Control reaches the
+//                           target by falling off the end.
+//   2. CONDITIONAL INVERSION — a conditional branch to the NEXT block followed by an unconditional
+//                           branch to the else target becomes the COMPLEMENTED condition to the else
+//                           target plus a fall-through. Two instructions become one.
+//   3. JUMP THREADING     — a block whose ONLY op is an unconditional branch is bypassed: every
+//                           branch that named it is re-pointed at its target.
 //   4. UNREACHABLE-BLOCK ELIMINATION — the blocks the threading (or the parser's `dead`
 //                           continuations) left with no path from the entry are dropped.
 //
-// MEASURED before this pass existed (`scripts/emitted-code-count.py`, committed corpus, 2026-08-28):
-// **709 of 1,555 unconditional jumps — 46% — jumped to the block physically after them**, and 147
-// blocks held nothing but a `jmp`. Every one of those was a taken branch that did nothing. The C#
-// bootstrap emits zero of them on the same sources.
-//
-// ⭐⭐ WHY IT RUNS HERE — AFTER `applyAllocation`, AND NOT ONE PASS EARLIER. THIS IS THE WHOLE
-// CORRECTNESS ARGUMENT FOR TRANSFORM 3.
+// ⭐⭐ WHY IT RUNS WHERE IT DOES — AFTER `applyAllocation`, AND NOT ONE PASS EARLIER. THIS IS THE
+// WHOLE CORRECTNESS ARGUMENT FOR TRANSFORM 3.
 //
 // SSA destruction places a phi edge's parallel copies ON THE EDGE, which for a critical edge means
 // inside the `critsplit` block that was spliced onto it. BEFORE that runs, a block whose only op is
-// a `jmp` is not empty — it is an edge that is ABOUT TO RECEIVE COPIES, and threading it away would
+// a branch is not empty — it is an edge that is ABOUT TO RECEIVE COPIES, and threading it away would
 // delete moves that had not been written yet. After `applyAllocation`, "the block's only op is a
-// `jmp`" is literally true and permanent: a `critsplit` that received edge copies holds `mov`s and
+// branch" is literally true and permanent: a `critsplit` that received edge copies holds `mov`s and
 // is correctly left alone, and one that received none is genuinely empty and is correctly threaded
 // away. That asymmetry is the reason for the placement, and it is not visible from the pass itself.
 //
@@ -32,42 +30,41 @@
 // every block's `blockArgs` and `branchEdges` are already EMPTY here. There is no phi metadata for
 // this pass to keep consistent — the ops are the only remaining statement of the CFG.
 //
-// ⚠ x64 ONLY, and that is a scope decision rather than a structural one. Transforms 1, 3 and 4 are
-// ISA-neutral (`retargetControlOp` already covers the arm64 branches and both jump tables, and
-// `Terminator.fallthrough` is a layout fact, not an encoding). Transform 2 is the x64-specific half:
-// it needs a condition-code complement, which is `invertX64Cond` below and would need an
-// `Arm64CondCode` twin. arm64 and wasm are deliberately untouched by this rung; adopting it there is
-// a separate change with its own goldens on a lane this host cannot run.
-//
 // ⛔ AND IT DOES NOT REORDER BLOCKS. It only DELETES — a branch, or a block nothing can reach — so
 // every surviving block keeps its position relative to every other. That matters because a block
 // with no terminator op (a parser `dead` continuation) reaches the backend relying on physically
 // falling into its neighbour, and the ops-derived CFG cannot see that edge. See
 // `dropUnreachableBlocks`, which is the one place that hole is closed.
+//
+// ISA-neutrality is not an accident of the transforms: every question this pass asks is answered by
+// a shared roster. `unconditionalBranchTargetOf` classifies both ISAs' terminators, `retargetControlOp`
+// covers both ISAs' conditional branches and both jump tables, `Terminator.fallthrough` is a layout
+// fact rather than an encoding, and the single per-ISA fact — a condition code's complement — is
+// `invertX64Cond` / `invertArm64Cond` beside the enums they read (see `invertedCondBranchOnto`).
 
-// The pass, over every function in the module. Called from `buildX64Backend` between
-// `allocateRegisters` and `insertPrologueEpilogue`: the frame pass then sees the SURVIVING blocks,
-// so a callee-saved register or a `call` that only unreachable code used stops being preserved.
-export function cleanUpX64Branches(module TargetModule, project Project)
+// The pass, over every function in the module. Called from `buildX64Backend` and `buildArm64Backend`
+// between `allocateRegisters` and the frame pass: the frame pass then sees the SURVIVING blocks, so
+// a callee-saved register or a `call` that only unreachable code used stops being preserved.
+export function cleanUpBranches(module TargetModule, project Project)
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.branchCleanup)
-	logDebug(LogCategory.codegen, message: function() gives "Branch cleanup (x64): {module.funcCount()} function(s)")
+	logDebug(LogCategory.codegen, message: function() gives "Branch cleanup: {module.funcCount()} function(s)")
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage — the discipline `insertPrologueEpilogue` states.
 	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		cleanUpFunctionBranches(module, func: try module.functions.get(fnIndex) otherwise panic("cleanUpX64Branches: fnIndex {fnIndex} is below module.functions.count()"))
+		cleanUpFunctionBranches(module, func: try module.functions.get(fnIndex) otherwise panic("cleanUpBranches: fnIndex {fnIndex} is below module.functions.count()"))
 	end 'eachFunc'
 
 	recordPhase(project, phase: CompilePhase.branchCleanup, probe: probe)
-end 'cleanUpX64Branches'
+end 'cleanUpBranches'
 
 // ⭐ THE ORDER OF THE FOUR IS LOAD-BEARING, and it splits at one line.
 //
 // Threading and reachability both need a CFG, and the CFG is derived FROM THE OPS — a block's second
-// successor is its `jcc`'s target and its first is its `jmp` terminator's. Transforms 1 and 2 DELETE
-// that `jmp`, which makes the else-edge unreadable from the ops (it becomes a layout fact instead).
-// So every question that needs the CFG is asked first, and the elision is last — after which nothing
-// in the compiler builds a CFG for this function again.
+// successor is its conditional branch's target and its first is its terminator's. Transforms 1 and 2
+// DELETE that terminator, which makes the else-edge unreadable from the ops (it becomes a layout fact
+// instead). So every question that needs the CFG is asked first, and the elision is last — after
+// which nothing in the compiler builds a CFG for this function again.
 function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	// The skeleton read off the ops, exactly as the allocator builds it — this pass derives no CFG of
 	// its own. Locals are LAYOUT positions (`buildFuncTopology` numbers them in `func.blockRefs`
@@ -88,7 +85,7 @@ end 'cleanUpFunctionBranches'
 // ==========================================================================
 
 // `resolved[L]` — the block a branch naming local `L` must be re-pointed at. `L` itself for every
-// block that stays; the far end of a chain of empty `jmp`-only blocks otherwise.
+// block that stays; the far end of a chain of empty branch-only blocks otherwise.
 //
 // Resolved with PATH COMPRESSION over an explicit path stack rather than a repeat-until-stable
 // sweep: a chain of K forwarding blocks converges in K rounds of the naive form, which is quadratic
@@ -101,11 +98,10 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 	forwards.resize(blockCount)
 	var forwardTargetOf = zeroColumn(blockCount)
 
-	// ⭐ LOCAL 0 — THE ENTRY — IS NEVER FORWARDED THROUGH, whatever its ops. It is the block
-	// `insertPrologueEpilogue` puts the prologue in, so a predecessor re-pointed PAST it would enter
-	// the function without a frame. (The parser gives a loop its own header rather than branching
-	// back to the entry, so this costs nothing today; it is the fact that must not have to be
-	// re-derived if that ever changes.)
+	// ⭐ LOCAL 0 — THE ENTRY — IS NEVER FORWARDED THROUGH, whatever its ops. It is the block the frame
+	// pass puts the prologue in, so a predecessor re-pointed PAST it would enter the function without a
+	// frame. (The parser gives a loop its own header rather than branching back to the entry, so this
+	// costs nothing today; it is the fact that must not have to be re-derived if that ever changes.)
 	for local in 1 upto blockCount 'eachBlock'
 		let target = emptyJumpTargetOf(module, topo: topo, local: local)
 		if target == local 'staysPut'
@@ -143,7 +139,7 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 			end 'chainEnds' else if answerHere != unresolved 'answerKnown'
 				answer = answerHere
 			end 'answerKnown' else if onPathHere 'cycle'
-				// A CYCLE of empty `jmp` blocks is an infinite loop with no exit, so there is nothing to
+				// A CYCLE of empty branch blocks is an infinite loop with no exit, so there is nothing to
 				// forward it to. It resolves to the block the walk RE-ENTERED, which therefore stays —
 				// threading the whole cycle away would delete the loop.
 				answer = cur
@@ -168,9 +164,9 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 	return resolved
 end 'resolveJumpChains'
 
-// The local a block forwards control to when it is an EMPTY unconditional jump — no body ops at all,
-// no conditional branch, just a `jmp`. Answers `local` itself for every other block, and for a `jmp`
-// to ITSELF (an empty infinite loop, which has nothing to forward to).
+// The local a block forwards control to when it is an EMPTY unconditional branch — no body ops at
+// all, no conditional branch, just the terminator. Answers `local` itself for every other block, and
+// for a branch to ITSELF (an empty infinite loop, which has nothing to forward to).
 //
 // "No body ops" is the whole test, and after `applyAllocation` it means what it says: a `critsplit`
 // block that received this edge's parallel copies holds them as body ops and is refused here, while
@@ -201,11 +197,11 @@ function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved Cf
 	var newTargets = BlockIdArray.create()
 
 	// ⚠ A SUCCESSOR MAY APPEAR TWICE IN ONE BLOCK'S LIST. `collectBlockSuccessorIds` pushes the
-	// `jcc`'s then-target and the `jmp`'s else-target without deduping, so a two-way branch whose two
-	// arms name one block lists it twice — and the SECOND redirect would find no edge left to move
-	// and hit `retargetControlOp`'s no-match panic. Marked and cleared per block rather than scanned:
-	// a dense jump table's successor list is long, and a membership scan over it would make this
-	// quadratic in the arm count.
+	// conditional branch's then-target and the terminator's else-target without deduping, so a two-way
+	// branch whose two arms name one block lists it twice — and the SECOND redirect would find no edge
+	// left to move and hit `retargetControlOp`'s no-match panic. Marked and cleared per block rather
+	// than scanned: a dense jump table's successor list is long, and a membership scan over it would
+	// make this quadratic in the arm count.
 	var seen = BoolArray.create()
 	seen.resize(topo.numBlocks)
 
@@ -242,7 +238,7 @@ end 'threadResolvedEdges'
 // Transform 4 — unreachable-block elimination
 // ==========================================================================
 
-// Drop every block with no path from the entry — the empty `jmp` blocks the threading above just
+// Drop every block with no path from the entry — the empty branch blocks the threading above just
 // orphaned, plus whatever the parser's `dead` continuations already were. Survivors keep their
 // relative order, so nothing that depends on layout moves.
 //
@@ -328,8 +324,9 @@ end 'elideBranchInto'
 // The two transforms, with the terminator's target in hand.
 function elideAgainstNext(module TargetModule, blockRef BlockRef, elseTarget BlockId, nextId BlockId)
 	if elseTarget == nextId 'fallsIntoElse'
-		// TRANSFORM 1. Whether or not the block also has a `jcc`: the `jcc` names the then-edge and is
-		// untouched, and the else-edge is now the fall-through it always was in the emitted layout.
+		// TRANSFORM 1. Whether or not the block also has a conditional branch: that branch names the
+		// then-edge and is untouched, and the else-edge is now the fall-through it always was in the
+		// emitted layout.
 		elideTerminatorIn(module, blockRef: blockRef)
 		return
 	end 'fallsIntoElse'
@@ -341,17 +338,17 @@ function elideAgainstNext(module TargetModule, blockRef BlockRef, elseTarget Blo
 	end 'condSlot'
 end 'elideAgainstNext'
 
-// The `jcc` op index of a block whose conditional half is a candidate for inversion, or `none`. Two
+// The op index of a block whose conditional half is a candidate for inversion, or `none`. Two
 // STRUCTURAL things must hold, and the second is the one that is not obvious:
 //
 //   • the block has a conditional branch at all;
-//   • ⚠ that `jcc` is the block's LAST BODY OP. An op sitting BETWEEN the `jcc` and the `jmp` runs
-//     only when the `jcc` is NOT taken, so inverting the pair would move it onto the other path —
-//     a silent wrong answer. `IrModule.appendOp` refuses to append past a recorded conditional
-//     branch, but the live-range splitter mints its ops through its own append and bypasses that
-//     guard (see `assertCondBranchIndicesComplete`), so this is CHECKED, never assumed.
+//   • ⚠ that branch is the block's LAST BODY OP. An op sitting BETWEEN it and the terminator runs
+//     only when the conditional branch is NOT taken, so inverting the pair would move it onto the
+//     other path — a silent wrong answer. `IrModule.appendOp` refuses to append past a recorded
+//     conditional branch, but the live-range splitter mints its ops through its own append and
+//     bypasses that guard (see `assertCondBranchIndicesComplete`), so this is CHECKED, never assumed.
 //
-// Whether it TARGETS the next block is decided where the op is read, so the `jcc` is dereferenced
+// Whether it TARGETS the next block is decided where the op is read, so the branch is dereferenced
 // exactly once — see `invertCondBranchOntoElse`.
 function invertibleCondBranchIn(module TargetModule, blockRef BlockRef) returns CondBranch
 	let block = try module.blocks.get(blockRef) otherwise panic("invertibleCondBranchIn: blockRef {blockRef} not in module.blocks")
@@ -365,68 +362,62 @@ function invertibleCondBranchIn(module TargetModule, blockRef BlockRef) returns 
 	return CondBranch.opIndex(condOpIndex) if condOpIndex == lastBodyOp else CondBranch.none
 end 'invertibleCondBranchIn'
 
-// Invert the block's `jcc` onto the else target, and delete the `jmp` if it did.
+// Invert the block's conditional branch onto the else target, and delete the terminator if it did.
 function invertBranchAndElide(module TargetModule, blockRef BlockRef, condOpIndex OpIndex, nextId BlockId, elseTarget BlockId)
 	if invertCondBranchOntoElse(module, blockRef: blockRef, condOpIndex: condOpIndex, nextId: nextId, elseTarget: elseTarget) 'inverted'
 		elideTerminatorIn(module, blockRef: blockRef)
 	end 'inverted'
 end 'invertBranchAndElide'
 
-// THE ONE PLACE THE `jcc` IS READ — the test and the rewrite together, so the op roster and its
-// staleness panic are written once. False when the `jcc` names anything but the physically next
-// block, which is the case where there is no fall-through to trade the `jmp` for.
+// THE ONE PLACE THE CONDITIONAL BRANCH IS REWRITTEN. False when it names anything but the physically
+// next block, which is the case where there is no fall-through to trade the terminator for.
+//
+// The block is read for the target and let go before the write: `module.blocks.get` hands back a
+// borrow of `module`, and `module.ops.set` writes that same storage (E3070).
 function invertCondBranchOntoElse(module TargetModule, blockRef BlockRef, condOpIndex OpIndex, nextId BlockId, elseTarget BlockId) returns bool
 	let op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
-	// The arm's work is a CALL because a `match` arm takes ONE statement — `retargetControlOp`'s
-	// reason for the same shape.
-	return match op 'cond'
-		jcc(cond, thenTarget) gives invertJccIfThenIsNext(module, condOpIndex: condOpIndex, cond: cond, thenTarget: thenTarget, nextId: nextId, elseTarget: elseTarget)
-		default panic("invertCondBranchOntoElse: block ref {blockRef} records its conditional branch at op {condOpIndex}, but that op is not a `jcc` — this pass runs on x64 only")
-	end 'cond'
-end 'invertCondBranchOntoElse'
-
-// `jcc cond,next` becomes `jcc !cond,else`. A `jcc` naming anything else is left exactly as it is.
-function invertJccIfThenIsNext(module TargetModule, condOpIndex OpIndex, cond X64CondCode, thenTarget BlockId, nextId BlockId, elseTarget BlockId) returns bool
+	let thenTarget = condBranchTargetOf(op, block: try module.blocks.get(blockRef) otherwise panic("invertCondBranchOntoElse: blockRef {blockRef} not in module.blocks"))
 	if thenTarget != nextId 'thenIsNotNext'
 		return false
 	end 'thenIsNotNext'
 
-	try module.ops.set(condOpIndex, value: TargetOp.jcc(invertX64Cond(cond), targetBlockId: elseTarget)) otherwise panic("invertJccIfThenIsNext: ops.set OOB at {condOpIndex}")
+	try module.ops.set(condOpIndex, value: invertedCondBranchOnto(op, targetBlockId: elseTarget, condOpIndex: condOpIndex)) otherwise panic("invertCondBranchOntoElse: ops.set OOB at {condOpIndex}")
 	return true
-end 'invertJccIfThenIsNext'
+end 'invertCondBranchOntoElse'
+
+// The conditional branch that is TAKEN exactly when `op` is NOT, aimed at `targetBlockId`.
+//
+// ⭐ EVERY PAIR HERE IS AN EXACT FLAG-LEVEL COMPLEMENT, WHICH IS WHAT MAKES THE INVERSION SAFE FOR
+// THE FLOAT COMPARES. A condition code is a predicate over one flag state; `invertX64Cond` and
+// `invertArm64Cond` each map a code to the code that is true on exactly the flag states it is false
+// on, so for ANY flags — arm64's `fcmp` NZCV=0b0011 on an unordered pair included — exactly one of
+// the pair is taken. Swapping which target is branched to and which is fallen into therefore cannot
+// change which arm a NaN reaches. It is NOT a "logical opposite" of the source-level predicate:
+// `mi`'s complement is `pl`, which reads TRUE on NaN, and that is exactly right, because `mi`
+// (float `<`) reads FALSE on NaN. `arm64Cbz`/`arm64Cbnz` complement each other on a register's
+// zeroness and never read the flags at all.
+//
+// ⚠ ON arm64 THE INVERSION MOVES THE ELSE-EDGE ONTO THE 19-BIT `b.cond` (±1 MiB) AND THE THEN-EDGE
+// ONTO A FALL-THROUGH. Either edge could already exceed that reach before this pass — the then-edge
+// rode the same field — so the exposure is swapped rather than widened, and `arm64PatchBranch19`
+// still refuses an out-of-reach displacement loudly.
+function invertedCondBranchOnto(op TargetOp, targetBlockId BlockId, condOpIndex OpIndex) returns TargetOp
+	return match op 'cond'
+		jcc(cond, _) gives TargetOp.jcc(invertX64Cond(cond), targetBlockId: targetBlockId)
+		arm64CondBranch(cond, _) gives TargetOp.arm64CondBranch(invertArm64Cond(cond), targetBlockId: targetBlockId)
+		arm64Cbz(reg, _) gives TargetOp.arm64Cbnz(reg, targetBlockId: targetBlockId)
+		arm64Cbnz(reg, _) gives TargetOp.arm64Cbz(reg, targetBlockId: targetBlockId)
+		default panic("invertedCondBranchOnto: op {condOpIndex} is recorded as a conditional branch but is not a `jcc`/`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`")
+	end 'cond'
+end 'invertedCondBranchOnto'
 
 // Delete a block's terminator branch. `Terminator.fallthrough` is the slot's declared state for
 // exactly this — *"terminator was deliberately elided at the target phase because the block falls
-// straight through to the next block in layout order"* — and this pass is its first producer;
-// `emitFunctionChunk` and the Target printer both already emit nothing for a block that has no
-// terminator OP. The `jmp` itself is left where it lies in `module.ops`: nothing walks that array
+// straight through to the next block in layout order"* — and this pass is its only producer; both
+// function-chunk emitters and the Target printer already emit nothing for a block that has no
+// terminator OP. The branch itself is left where it lies in `module.ops`: nothing walks that array
 // linearly, and rewriting every later op index to close the hole would cost far more than the word.
 function elideTerminatorIn(module TargetModule, blockRef BlockRef)
 	var block = try module.blocks.get(blockRef) otherwise panic("elideTerminatorIn: blockRef {blockRef} not in module.blocks")
 	block.terminator = Terminator.fallthrough
 end 'elideTerminatorIn'
-
-// The condition code that is TRUE exactly when `cond` is FALSE.
-//
-// ⭐ AN EXACT FLAG-LEVEL COMPLEMENT, NOT A "LOGICAL OPPOSITE", AND THE DIFFERENCE IS THE NaN EDGE.
-// Every x64 condition code is one of a pair testing the same flags for opposite values — JB/JAE on
-// CF, JE/JNE on ZF, JP/JNP on PF, JL/JGE on SF≠OF — so for any flag state exactly one of a pair is
-// taken. That is what makes the inversion safe for the float compares, where `ucomisd` reports an
-// unordered pair as ZF=PF=CF=1: swapping which target is the fall-through cannot change which of
-// `equal`/`notEqual` a NaN takes, because both still read the same ZF the compare set.
-function invertX64Cond(cond X64CondCode) returns X64CondCode
-	return match cond 'invert'
-		below gives X64CondCode.aboveEqual
-		aboveEqual gives X64CondCode.below
-		equal gives X64CondCode.notEqual
-		notEqual gives X64CondCode.equal
-		belowEqual gives X64CondCode.above
-		above gives X64CondCode.belowEqual
-		parity gives X64CondCode.noParity
-		noParity gives X64CondCode.parity
-		less gives X64CondCode.greaterEqual
-		greaterEqual gives X64CondCode.less
-		lessEqual gives X64CondCode.greater
-		greater gives X64CondCode.lessEqual
-	end 'invert'
-end 'invertX64Cond'

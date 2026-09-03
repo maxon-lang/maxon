@@ -52,54 +52,40 @@ func @pick {
     arm64.prologue 16
     arm64.loadRegBaseDisp.byte x1, [x0 + 0]
     arm64.movImm x2, 1
-    arm64.cbnz x1, critsplit#14
-    arm64.b orrhs
-  critsplit#14:
-    arm64.b scmerge#2
+    arm64.cbnz x1, scmerge#2
   orrhs:
     arm64.loadRegBaseDisp.byte x1, [x0 + 8]
     arm64.movRegReg x2, x1
-    arm64.b scmerge#2
   scmerge#2:
     arm64.loadRegBaseDisp.byte x1, [x0 + 0]
     arm64.movImm x3, 0
-    arm64.cbnz x1, andrhs
-    arm64.b critsplit#15
+    arm64.cbz x1, critsplit
   andrhs:
     arm64.loadRegBaseDisp.byte x0, [x0 + 8]
     arm64.b scmerge#4
-  critsplit#15:
+  critsplit:
     arm64.movRegReg x0, x3
-    arm64.b scmerge#4
   scmerge#4:
-    arm64.cbnz x2, ternarytrue#5
-    arm64.b ternaryfalse#6
+    arm64.cbz x2, ternaryfalse#6
   ternarytrue#5:
     arm64.movImm x1, 4
     arm64.b matchcont#7
   ternaryfalse#6:
     arm64.movImm x1, 0
-    arm64.b matchcont#7
   matchcont#7:
-    arm64.cbnz x0, ternarytrue#8
-    arm64.b ternaryfalse#9
+    arm64.cbz x0, ternaryfalse#9
   ternarytrue#8:
     arm64.movImm x0, 1
     arm64.b matchcont#10
   ternaryfalse#9:
     arm64.movImm x0, 0
-    arm64.b matchcont#10
   matchcont#10:
     arm64.add x0, x1, x0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at ternary-expression.logical-op-condition.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -29,9 +29,10 @@ func @divPermute {
     arm64.add x6, x6, x3
     arm64.add x6, x6, x4
     arm64.add x6, x6, x5
-    arm64.movImm x7, 2
-    arm64.sdiv x6, x6, x7
-    arm64.b __il_body
+    arm64.asr x7, x6, 63
+    arm64.lsr x7, x7, 63
+    arm64.add x6, x6, x7
+    arm64.asr x6, x6, 1
   __il_body:
     arm64.movImm x16, 100000
     arm64.mul x5, x5, x16
@@ -48,7 +49,6 @@ func @divPermute {
     arm64.mul x1, x1, x16
     arm64.add x1, x2, x1
     arm64.add x0, x1, x0
-    arm64.b __il_cont
   __il_cont:
     arm64.add x0, x0, x6
     arm64.epilogue 16
@@ -67,9 +67,7 @@ func @main {
     arm64.bl divPermute
     arm64.movImm x16, 654331
     arm64.cmp x0, x16
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

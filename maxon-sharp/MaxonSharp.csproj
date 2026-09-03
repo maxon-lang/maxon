@@ -194,4 +194,21 @@
     <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; fmt-selftest" />
   </Target>
 
+  <!-- THE SEVENTH GUARD. AArch64 reads encoding 31 as SP in the ADD/SUB immediate and extended-register
+       forms and as XZR in the shifted-register form, so `sub sp, sp, x16` built from the wrong one
+       assembles, disassembles, and moves nothing - the function's locals are then written over its
+       caller's frame. Measured 2026-09-02: one function in an 18 MB self-compile had a 4096-byte locals
+       area, one byte past what the immediate form can carry, and the compiler it built faulted on every
+       program it was given.
+
+       No spec case can pin it, and one that seemed to would be worse than none: the compiler picks
+       frame sizes, so a case can only ask for one indirectly, and a case tuned to land on the boundary
+       stops landing on it the moment anything upstream changes a slot - then passes forever while
+       testing nothing. It compiles nothing and launches nothing (it emits twelve prologues in memory
+       and decodes them), so it costs one process. Chained AFTER the formatter guard, keeping the seven a
+       defined sequence rather than two sharing an anchor. -->
+  <Target Name="CheckArm64StackPointerEncoding" AfterTargets="CheckFormatterPreservesComments">
+    <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; arm64-sp-selftest" />
+  </Target>
+
 </Project>

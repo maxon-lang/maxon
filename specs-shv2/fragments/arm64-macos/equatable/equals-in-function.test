@@ -43,13 +43,11 @@ data {
 func @areEqual {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x0, x1
     arm64.cset x0, eq
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -71,14 +69,12 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 0], x0
     arm64.movRegReg x0, x19
     arm64.bl areEqual
-    arm64.cbnz x0, eq
-    arm64.b ifcont#4
+    arm64.cbz x0, ifcont#4
   eq:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl areEqual
-    arm64.cbnz x0, neq
-    arm64.b ifcont#3
+    arm64.cbz x0, ifcont#3
   neq:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot3

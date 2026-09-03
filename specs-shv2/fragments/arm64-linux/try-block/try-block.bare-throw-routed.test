@@ -42,55 +42,37 @@ func @dispatch {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#2:
     arm64.movImm x0, 1
-    arm64.b matchcont#6
-  matchcont#6:
     arm64.b tryblkcont
   matchnext#5:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdefault
+    arm64.b.ne matchdefault
   matcharm#3:
     arm64.movImm x0, 2
     arm64.b tryblkerr
   matchdefault:
     arm64.movImm x0, 1
-    arm64.b tryblkerr
   tryblkerr:
     arm64.sub x0, x0, 1
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#7
-    arm64.b matchnext#10
+    arm64.b.ne matchnext#10
   matcharm#7:
     arm64.movImm x0, 40
-    arm64.b matchcont#11
+    arm64.b tryblkcont
   matchnext#10:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#8
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#8:
     arm64.movImm x0, 80
-    arm64.b matchcont#11
-  matchcont#11:
-    arm64.b tryblkcont
   tryblkcont:
     arm64.movImm x9, 0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at try-block.bare-throw-routed.test:29: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
@@ -113,9 +95,7 @@ func @main {
     arm64.bl dispatch
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at try-block.bare-throw-routed.test:33: alpha escaped\x0a"
     arm64.bl mrt_panic
@@ -129,9 +109,7 @@ func @main {
     arm64.bl dispatch
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_1  ; "panic at try-block.bare-throw-routed.test:34: beta escaped\x0a"
     arm64.bl mrt_panic
@@ -144,9 +122,7 @@ func @main {
     arm64.movImm x0, 2
     arm64.bl dispatch
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.leaRdata x0, __str_blob_2  ; "panic at try-block.bare-throw-routed.test:35: gamma escaped\x0a"
     arm64.bl mrt_panic
@@ -159,14 +135,10 @@ func @main {
     arm64.add x1, x19, x20
     arm64.add x0, x1, x0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at try-block.bare-throw-routed.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

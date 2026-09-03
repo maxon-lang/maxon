@@ -215,10 +215,13 @@ typealias RuntimeStringBytesArray = Array with ByteArray
 // body is one call with a constant swapped, which is the same objection X64Backend already
 // makes to a `encodeMov`/`encodeSub`/`encodeCmp` family. What lives here is only what
 // needs STATE: labels, the string pool, and the frame.
-type X64RuntimeAsm
+export type X64RuntimeAsm
 	export var code as ByteArray
 	export var callFixups as CallFixupArray
 	export var iatRelocs as RelocationArray
+	// `.data` references: the Linux host surface reaches its errno word through `lea reg, [rip + disp32]`,
+	// whose displacement only the executable writer can fill in.
+	export var rdataRelocs as RdataRelocationArray
 	export var rel32Fixups as ChunkRel32FixupArray
 	export var labelOffsets as BlockOffsetTable
 	export var nextLabel as BlockId
@@ -256,6 +259,7 @@ type X64RuntimeAsm
 			code: code,
 			callFixups: CallFixupArray.create(),
 			iatRelocs: RelocationArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
 			rel32Fixups: ChunkRel32FixupArray.create(),
 			labelOffsets: BlockOffsetTable.create(),
 			nextLabel: 0,
@@ -289,7 +293,7 @@ type X64RuntimeAsm
 
 		resolveChunkRel32Fixups(self.code, labelOffsets: self.labelOffsets, rel32Fixups: self.rel32Fixups)
 
-		return FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: self.iatRelocs, rdataConstants: GlobalDataTable.create())
+		return FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs, rdataConstants: GlobalDataTable.create())
 	end 'finishFunction'
 
 	// Mint a fresh chunk-local label id.
@@ -337,12 +341,14 @@ end 'X64RuntimeAsm'
 // `cmp reg, imm` — the zero/constant test every guard below is written in terms of. x64's
 // group-1 immediate is SIGN-extended to 64 bits, which is what makes `cmp rax, -1` (the
 // "no symbol found" marker) compare against the full-width value and not 0x00000000FFFFFFFF.
-function emitCmpRegImm(asm X64RuntimeAsm, reg X64Register, imm Imm32)
+export function emitCmpRegImm(asm X64RuntimeAsm, reg X64Register, imm Imm32)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: reg, imm: imm)
 end 'emitCmpRegImm'
 
 // `lea dest, [rip + <string>]` — load the address of a chunk-local string constant.
-function emitLeaString(asm X64RuntimeAsm, dest X64Register, bytes ByteArray)
+// Exported: the Linux host surface takes the address of its own chunk-local constants the same way — the
+// `/proc/self/exe` path it hands `readlinkat`, and every panic message a green-thread chunk names.
+export function emitLeaString(asm X64RuntimeAsm, dest X64Register, bytes ByteArray)
 	encodeLeaRegLabel(asm.code, rel32Fixups: asm.rel32Fixups, dest: dest, targetLabel: asm.stringLabel(bytes), site: PatchSite.x64RuntimeLabelDisp32)
 end 'emitLeaString'
 
@@ -369,7 +375,10 @@ end 'emitLeaTextBase'
 // of them is a truncated or over-long diagnostic from the other, not a compile error.
 //
 // Clobbers rdx (the byte under test).
-function emitCstrLenIntoRax(asm X64RuntimeAsm, cstrReg X64Register)
+//
+// Exported: the Linux host surface measures an environment variable's value the same way, for the same
+// reason — a `char*` out of the `envp` vector carries no length either.
+export function emitCstrLenIntoRax(asm X64RuntimeAsm, cstrReg X64Register)
 	let lenLoop = asm.newLabel()
 	let lenDone = asm.newLabel()
 
@@ -1104,11 +1113,11 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(3)
 
 	// Stash the faulting RIP/RBP/RSP from the ucontext (rdx) BEFORE any call clobbers rdx.
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: UContextRipOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRipOffset, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), srcReg: X64Register.rax)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: UContextRbpOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRbpOffset, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), srcReg: X64Register.rax)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: UContextRspOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRspOffset, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rax)
 
 	// The panic line — through the SAME prefix builder the Windows thunk picks from, so the two OSes
@@ -1137,7 +1146,7 @@ function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
 
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: LinuxFaultHandlerName)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxSigactionFlags)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxSigactionFlags)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.rax)
 	// sa_restorer = &mrt_rt_sigreturn — MANDATORY on x86-64: the kernel builds the signal return frame from
 	// it, and a missing/NULL restorer is a KERNEL SIGSEGV during delivery (measured), before the handler.
@@ -1152,7 +1161,7 @@ function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxSignalFpe)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler))
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxRtSigsetSize)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSigsetBytes)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallRtSigaction)
 
 	return asm.finishFunction(RuntimeInitName)

@@ -363,20 +363,48 @@ let ShimDoneLabel = 1 as BlockId
 // ⚠ **THE rbp/r13 ENCODING TRAP IS CLOSED BY THE ENCODER, NOT BY A REGISTER CHOICE HERE.** `[rbp]`/`[r13]`
 // with mod=00 means RIP-RELATIVE, so a hand-assembled ModR/M would read a constant out of the code stream
 // instead of the thread's slot — v1 PANICS rather than emit it and the C# bootstrap pins R11 unconditionally,
-// which its own comment records as a bug. `encodeMovRegGsBase` routes through the shared `encodeModRmBaseDisp`,
-// which emits the zero-`disp8` form for exactly those two bases, so either register may be anything.
-function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, mDest X64Register, gtDest X64Register, bail BlockId)
-	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: mDest, label: SchedTlsTebOffsetLabel)
-	encodeLoadRegBaseDisp(code, destReg: mDest, base: mDest, disp: 0, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: mDest, src: mDest, wide: true)
-	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
-	encodeMovRegGsBase(code, dest: mDest, base: mDest)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: mDest, src: mDest, wide: true)
-	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
+// which its own comment records as a bug. `encodeMovRegSegBase` routes through the shared
+// `encodeModRmBaseDisp`, which emits the zero-`disp8` form for exactly those two bases, so either register may
+// be anything.
+function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, mDest X64Register, gtDest X64Register, bail BlockId, os Os)
+	emitLoadCurrentMOrBail(code, rdataRelocs: rdataRelocs, fixups: fixups, dest: mDest, bail: bail, os: os)
 	encodeLoadRegBaseDisp(code, destReg: gtDest, base: mDest, disp: MOffCurrentGt as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: gtDest, src: gtDest, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
 end 'emitLoadCurrentGtOrBail'
+
+// The M alone with both of ITS nulls tested — split out because the shim wants the M AFTER it has the GT and
+// the two answers cannot share a register.
+function emitLoadCurrentMOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, dest X64Register, bail BlockId, os Os)
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: dest, label: SchedTlsTebOffsetLabel)
+	encodeLoadRegBaseDisp(code, destReg: dest, base: dest, disp: 0, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: dest, src: dest, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
+	encodeMovRegSegBase(code, dest: dest, base: dest, segment: x64ThreadPointerSegment(os))
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: dest, src: dest, wide: true)
+	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
+end 'emitLoadCurrentMOrBail'
+
+// ⭐⭐ **THE arm64-LINUX TWIN HAS A FOURTH NULL TEST HERE AND THIS LANE DELIBERATELY HAS NONE — the
+// difference is that x86-64 CANNOT READ ITS THREAD POINTER AS A VALUE.** `TPIDR_EL0` is an ordinary system
+// register, so the other lane spends one free `cbz` on "does this thread have a slot block?". Here FS base is
+// not addressable in user mode at all: the only reads are `arch_prctl(ARCH_GET_FS)` — a SYSCALL, which is
+// unthinkable in a prologue guard — or a load THROUGH the segment, which is the wild load the test exists to
+// prevent.
+//
+// ⭐ **IT IS ALSO UNREACHABLE, WHICH IS WHY THE ABSENCE IS AN ARGUMENT AND NOT A GAP.** Only two kinds of OS
+// thread run Maxon code on this lane and both have a block:
+//   * the MAIN thread, which gets one from `mrt_host_tls_alloc` inside `__sched_init_procs` — the same
+//     bring-up that publishes the offset word the FIRST test above reads, so "before the block exists" and
+//     "before the offset exists" are the same instant and that test already covers it;
+//   * a WORKER M, which gets one through `CLONE_SETTLS` before it executes an instruction.
+// There is no third: `ioCompletionShape(linux)` is `inlineCompletion`, so this lane starts no IOCP
+// completion-drain thread — which is exactly the thread the Windows arm's second null test exists for.
+//
+// ⚠ **AND IF THAT ARGUMENT WERE EVER FALSIFIED, THE FAILURE IS DIAGNOSABLE RATHER THAN SILENT.** A slot read
+// with FS base 0 is a load at `key * 8` — inside the unmapped null page — so it faults at the instruction
+// that did it, exactly as the guard page under a worker M's stack does. The other lane buys a named bail for
+// one instruction; this one would have to buy it with a syscall, and gets a SIGSEGV for free.
 
 // ⭐ The M alone, where the caller has already PROVEN it exists and therefore has no branch to take.
 //
@@ -387,10 +415,10 @@ end 'emitLoadCurrentGtOrBail'
 // STRONGER than the one it replaced at W213-C1**, which had to argue that no P had been released in between —
 // a claim a handoff would have falsified, on the very path (a thread inside a kernel call) a handoff targets.
 // A test here would need a branch target that has no correct destination.
-function emitLoadCurrentMOrBailless(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register)
+function emitLoadCurrentMOrBailless(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, os Os)
 	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: dest, label: SchedTlsTebOffsetLabel)
 	encodeLoadRegBaseDisp(code, destReg: dest, base: dest, disp: 0, wide: true)
-	encodeMovRegGsBase(code, dest: dest, base: dest)
+	encodeMovRegSegBase(code, dest: dest, base: dest, segment: x64ThreadPointerSegment(os))
 end 'emitLoadCurrentMOrBailless'
 
 // The count of true Win64 stack arguments (args 5+) a shimmed import takes — the words the shim copies from the
@@ -572,14 +600,14 @@ end 'gtShimStackArgWordsOf'
 // `CreateFileA` a frame too small and let the kernel read whatever was on the stack; a `default gives
 // schedulerBound` here would be the same defect wearing a `match`'s clothes — a new blocking import would
 // silently keep costing its processor, and nothing would say so.
-enum SyscallClass
-	// May block for an unbounded time on something OUTSIDE the scheduler — a device, a peer, a child, a user.
-	// BRACKETED: `__sysmon` may take this machine's processor away while the call is in flight.
-	blocking
-	// Blocks only on the scheduler's own machinery, or is bounded and short. NOT bracketed.
-	schedulerBound
-end 'SyscallClass'
-
+//
+// ⛔⛔ **THE `SyscallClass` VOCABULARY IS `StdDialect`'s, AND `StdDialect.stdOpSyscallClassOf` IS THE SOURCE
+// OF TRUTH FOR THE RULE THIS TABLE APPLIES.** The two tables are not one fact written twice: that one keys on
+// a Std OP, this one on an IAT SLOT — a Win32 entry point — because this lane's bracket sits BELOW the StdOp
+// level, inline in the import shim, where the only thing left to classify is the slot. Moving this lane's
+// bracket up to the StdOp door would delete this table; it needs a Windows host to re-mint its goldens, so it
+// is not this change.
+//
 // The syscall class of ONE import, exhaustive over `IatSlot`. See the header above.
 function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 	return match slot 'k'
@@ -724,7 +752,7 @@ end 'gtShimSyscallClassOf'
 // repoint destroyed it. It cannot be null and it cannot bail: `emitLoadCurrentMOrBailless` carries the proof,
 // which is the shim's own guard three loads above.
 function emitGtEnterSyscall(code ByteArray, rdataRelocs RdataRelocationArray)
-	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax)
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: Os.windows)
 	encodeMovRegImm32(code, dest: ShimGtReg, value: MSyscallEnterDelta as MachineWord)
 	encodeLockedRmwBaseDispReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, base: X64Register.rax, disp: MOffSyscallState as Imm32, reg: ShimGtReg)
 end 'emitGtEnterSyscall'
@@ -759,7 +787,7 @@ end 'emitGtEnterSyscall'
 // `call`** — shv2's frame invariant at every call site, which the shim's own entry comment states and which
 // the `sub` here must not break.
 function emitGtExitSyscall(code ByteArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, fixups ChunkRel32FixupArray)
-	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg)
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, os: Os.windows)
 	// `mov reg, imm64` and not the 32-bit form: `-MSyscallInCall` is NEGATIVE, and `mov ecx, imm32`
 	// ZERO-extends — it would add 0x00000000FFFFFFFF to the word rather than subtracting one from it.
 	encodeMovRegImm64(code, dest: ShimTibScratchReg, value: (0 - MSyscallInCall) as MachineWord)
@@ -783,6 +811,7 @@ end 'emitGtExitSyscall'
 function exitSyscallSlowFrameBytes() returns StackSize
 	return alignUp(ShadowSpaceBytes + SpillSlotBytes, alignment: StackFrameAlignment)
 end 'exitSyscallSlowFrameBytes'
+
 // Where in that frame the result waits — immediately above the shadow space, which is the first byte the
 // callee may not touch.
 let ExitSyscallSavedResultDisp = ShadowSpaceBytes as Imm32
@@ -848,7 +877,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// ⭐ **rax HOLDS THE M ACROSS THE GUARD**, because the system-stack top is read out of it AFTER the two
 	// pushes below and re-reading TLS there would spend the sequence twice. rax is caller-saved and the coming
 	// call clobbers it anyway, and nothing between here and the `mov rsp` reads it.
-	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: shimFixups, mDest: X64Register.rax, gtDest: ShimGtReg, bail: ShimDirectLabel)
+	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: shimFixups, mDest: X64Register.rax, gtDest: ShimGtReg, bail: ShimDirectLabel, os: Os.windows)
 	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
 	encodeJcc(code, rel32Fixups: shimFixups, cond: X64CondCode.equal, targetBlockId: ShimDirectLabel)
@@ -906,7 +935,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// blocked for an arbitrarily long time — precisely the window a handoff takes a P in — so answering it
 	// through the P would have handed this M whatever green thread the P's NEW M had since published. Through
 	// the M it is this thread's own answer by construction.
-	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg)
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, os: Os.windows)
 	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: MOffCurrentGt as Imm32, wide: true)
 	emitLoadTibFromGt(code, gtReg: ShimGtReg, scratch: ShimTibScratchReg)
 
@@ -1260,13 +1289,13 @@ end 'emitGtMorestackChainWalk'
 // of instructions that fall through. A no-op for GT0/main (stackGuard 0 ⇒ `jae` always taken) and off a GT
 // entirely (currentGt 0 ⇒ `jz` taken). Clobbers ONLY r10/r11 (volatile, non-arg), so the incoming argument
 // registers (rcx/rdx/rax/r9/rsi/rdi) are untouched, and `__gt_morestack` preserves everything.
-export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt)
+export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, os Os)
 	var guardFixups = ChunkRel32FixupArray.create()
 	var guardLabels = BlockOffsetTable.create()
 
 	// r11 = this OS thread's green thread; no scheduler, no M and no current GT all mean "not on a green
 	// thread" → skip. The M is dead the moment it has answered, so it shares r11 with the GT.
-	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: guardFixups, mDest: ShimGtReg, gtDest: ShimGtReg, bail: GuardSkipLabel)
+	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: guardFixups, mDest: ShimGtReg, gtDest: ShimGtReg, bail: GuardSkipLabel, os: os)
 
 	// projectedRsp (r10) = rsp - (frameBytes + margin) ; enough room (>= stackGuard) → skip.
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
@@ -1278,7 +1307,7 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	// ⚠ The M is re-read rather than kept from the guard above, because r11 has since been repurposed to hold
 	// the current GT — which IS `__gt_morestack`'s entry contract and must not be disturbed — and the guard's
 	// hot path must not spend a second register to save a load on its cold one.
-	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtRspReg)
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtRspReg, os: os)
 	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtRspReg, disp: MOffSystemStackSP as Imm32, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 

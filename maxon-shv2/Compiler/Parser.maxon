@@ -5789,6 +5789,7 @@ let BuiltinsSubprocessReadStderrLineName = b"__Builtins.subprocessReadStderrLine
 let BuiltinsSubprocessCloseStdinName = b"__Builtins.subprocessCloseStdin"
 let BuiltinsSubprocessWaitExitName = b"__Builtins.subprocessWaitExit"
 let BuiltinsManagedIsNullName = b"__Builtins.managedIsNull"
+
 // ⭐ **THE ENVIRONMENT READER, WHICH IS IN THIS BAND BECAUSE ITS ONLY CALLER IS.** It is not a subprocess
 // entry any more than `managedIsNull` is, and it is here for that member's stated reason: this is where its
 // one caller lives. `stdlib/Subprocess.maxon` walks it to assemble the block an `Environment.inheritUpdating`
@@ -49045,7 +49046,7 @@ export type Parser
 		// the POSITION, and no reading of the value could recover it. ⛔ It is deliberately not folded into the
 		// five: `applyCast` passes `false`, which is what keeps a plain `x as Byte` a no-op — see
 		// `castChangesTheElementPacking`'s ⛔⛔ block for the two programs that broke when every cast retagged.
-		if mustCarryTargetType or self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) or self.castChangesTheDivisionSignedness(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
+		if mustCarryTargetType or self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) or self.castChangesTheDivisionSignedness(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
 			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, range: SourceRange.ofToken(opTok)), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
@@ -49354,20 +49355,25 @@ export type Parser
 	// `field-default-then-guarded-casts` spell exactly that and were green before A1; `specs/arithmetic-operators.md:37`
 	// documents it as THE way out. A rung that broke the spelling of its own exemption would be no exemption.
 	//
-	// ⚠ **THE SAFETY ARGUMENT IS `aliasChangesTheShiftFill`'s, VERBATIM, BECAUSE THE GATE IS THE SAME GATE** —
-	// a DECLARED RANGED INT alias and nothing else. Inside it a value's other tag-dispatched answers are
-	// provably fixed: the alias is unmanaged (so `decrefCalleeFor` cannot start routing a drop), it reduces to
-	// `integer` for `builtinConformerOfType` exactly as a bare `int` does, and it is not float (a float alias
-	// is refused below, because its bounds are f64 BIT PATTERNS and — the sharper reason here — a
-	// `named`-tagged float would be given `StdType.i64` and land in a GPR).
+	// ⚠ **THE SAFETY ARGUMENT IS `aliasChangesTheShiftFill`'s, VERBATIM, FOR AN INT TARGET** — a DECLARED
+	// RANGED INT alias and nothing else. Inside that gate a value's other tag-dispatched answers are provably
+	// fixed: the alias is unmanaged (so `decrefCalleeFor` cannot start routing a drop), and it reduces to
+	// `integer` for `builtinConformerOfType` exactly as a bare `int` does.
+	//
+	// ⭐⭐ **A RANGED FLOAT TARGET IS IN, AND IT MINTS A `float`-TAGGED VALUE RATHER THAN A `named` ONE.** The
+	// two shift-fill siblings refuse a float because their question is about a fill an f64 has not got; this
+	// question is `safety.md`'s escape hatch, which `specs/arithmetic-operators.md` states "for both integer
+	// and float division". A float alias cannot ride the TAG — a `named`-tagged double would be given
+	// `StdType.i64` and land in a GPR — so `emitRetaggedFloatCastValue` types the mint `float` and the alias
+	// travels in `ValueDeclaredAliasMap`, which is the column that exists for exactly that.
 	//
 	// ⚠ **AND IT ASKS WHETHER THE PROOF CAN MOVE, NOT MERELY WHETHER THE TARGET EXCLUDES ZERO.** A source
 	// already provably non-zero (a non-zero literal) gains nothing from the retag, and a target that ADMITS
 	// zero can only ever weaken the answer — so neither mints. That is what keeps `x as Byte`, `x as Percent`
 	// and `x as AsciiCode` the byte-for-byte no-ops they have always been while `z as NonZero` is not.
-	function castChangesTheDivisionProof(value ValueId, targetAlias DeclaredAlias) returns bool
+	function castChangesTheDivisionProof(value ValueId, targetAlias DeclaredAlias, sourceIsBareLocal bool) returns bool
 		return match targetAlias 'a'
-			declared(alias) gives self.aliasChangesTheDivisionProof(value, alias: alias)
+			declared(alias) gives self.aliasChangesTheDivisionProof(value, alias: alias, sourceIsBareLocal: sourceIsBareLocal)
 			undeclared gives false
 		end 'a'
 	end 'castChangesTheDivisionProof'
@@ -49530,6 +49536,13 @@ export type Parser
 	// The half of the question above that is about the ALIAS, split out exactly as
 	// `aliasChangesTheShiftFill` is and for the same reason: the arms read as the sentences they are.
 	//
+	// ⭐ **THE FLOAT ARM FIRES ONLY FOR A BARE-LOCAL SOURCE, WHICH IS `aliasChangesTheDivisionSignedness`'s
+	// GATE AND ITS REASON.** Every other float source carries the target alias in the record `finishCast`
+	// writes, and `divisorProof` reads it there through `valueDenotedAlias` — no new value and no new op.
+	// A bare local is the one shape that record is WITHHELD for (one value under two names), so a fresh
+	// identity is the only place the proof can live. ⚠ The INT arm mints for every source, and narrowing it
+	// to match would move a golden at every `z as NonZero` in the corpus.
+	//
 	// ⚠⚠ **IT ASKS ONLY THE ZERO HALF OF THE PROOF, AND THAT IS DELIBERATE AFTER A1x.** A cast target can now
 	// move the OTHER hazard too — `z as SmallCount` for an `int(0 to 100)` would tell a `mod` its divisor is
 	// never `-1` and save it the overflow guard — and this predicate answers `false` for it, because the
@@ -49538,24 +49551,26 @@ export type Parser
 	// Widening it would cost far more than it saves — every zero-admitting narrowing cast in the language
 	// (`x as Byte`, `x as Percent`, `x as AsciiCode`) would start MINTING a value where it is a byte-for-byte
 	// no-op today, which is the property the header above exists to protect.
-	function aliasChangesTheDivisionProof(value ValueId, alias RangedTypeAlias) returns bool
-		if aliasIsFloat(alias) 'floatAlias'
-			return false
-		end 'floatAlias'
+	function aliasChangesTheDivisionProof(value ValueId, alias RangedTypeAlias, sourceIsBareLocal bool) returns bool
+		let isFloat = aliasIsFloat(alias)
 
-		if not rangeExcludesZero(alias.low, high: alias.high, isFloat: false) 'admitsZero'
+		if isFloat and not sourceIsBareLocal 'theRecordCanCarryIt'
+			return false
+		end 'theRecordCanCarryIt'
+
+		if not rangeExcludesZero(alias.low, high: alias.high, isFloat: isFloat) 'admitsZero'
 			return false
 		end 'admitsZero'
 
 		return divisorProofZeroVerdict(self.divisorProof(value)) != DivisorZeroVerdict.neverZero
 	end 'aliasChangesTheDivisionProof'
 
-	// ⭐ **EMIT A REPRESENTATIONALLY-NO-OP CAST AS A DISTINCT VALUE.** The conversion moves no bits
-	// (int→int), so its RESULT is `value + 0` — one op, minted with a FRESH ValueId typed as the target —
-	// which leaves the source ValueId's identity untouched (an in-place re-tag would corrupt `aTag` when a
+	// ⭐ **EMIT A REPRESENTATIONALLY-NO-OP CAST AS A DISTINCT VALUE.** The conversion moves no bits, so its
+	// RESULT is the arithmetic identity — one op, minted with a FRESH ValueId typed as the target — which
+	// leaves the source ValueId's identity untouched (an in-place re-tag would corrupt `aTag` when a
 	// later use reads it as `WA.Idx`, and would make `x` unsigned after `let w = x as Word`). ONE emitter
-	// for both reasons a cast mints: a per-instance IDENTITY and a changed SHIFT FILL. Both directions of
-	// the per-instance case ride it — STAMP (`x as StrWrapper.Idx`, result typed the per-instance alias,
+	// for every reason a cast mints, in both domains. Both directions of the per-instance case ride it —
+	// STAMP (`x as StrWrapper.Idx`, result typed the per-instance alias,
 	// sidestepping the bootstrap's E3010 "unneeded cast" quirk) and STRIP (`idx as ExitCode`, result the
 	// plain target, so a per-instance Idx decays to the numeric it is). `foldConstOperands` folds the op
 	// to a single `binOpImm add 0`.
@@ -49584,6 +49599,10 @@ export type Parser
 	// low/high) is inert at this rung — every inner alias is `int(0 to u64.max)` — and its diagnostic form is
 	// deferred with the first narrower inner range.
 	function emitRetaggedCastValue(value ValueId, targetType MaxonType, range SourceRange) returns ValueId
+		if self.typeIsFloatDomain(targetType) 'floatDomain'
+			return self.emitRetaggedFloatCastValue(value, range: range)
+		end 'floatDomain'
+
 		let result = self.mintValueOfType(targetType)
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: range)
@@ -49594,6 +49613,26 @@ export type Parser
 
 		return result
 	end 'emitRetaggedCastValue'
+
+	// ⭐⭐ **THE FLOAT DOMAIN'S FORM OF THE SAME MINT — `x - 0.0`, AND THE SUBTRACTION IS NOT THE ADDITION.**
+	// IEEE-754 makes `x - (+0.0)` the identity for every input INCLUDING `-0.0`, where `x + 0.0` would answer
+	// `+0.0` and lose a sign the language can print — the same distinction `MaxonUnaryOp.fneg` records from
+	// the other side.
+	//
+	// ⚠ **THE MINT IS TYPED `float`, NEVER THE TARGET'S `named` ALIAS.** A value's register class comes from
+	// its tag, and a `named`-tagged double would be given `StdType.i64` and land in a GPR; the alias travels
+	// in `ValueDeclaredAliasMap` instead, which `finishCast` writes because this result is not the source.
+	function emitRetaggedFloatCastValue(value ValueId, range SourceRange) returns ValueId
+		let result = self.mintValueOfType(MaxonType.float)
+		let zero = self.emitLiteral(0, valueType: MaxonType.float, range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.sub), range: range)
+
+		if self.floatConstIsKnown(value) 'constantSource'
+			self.recordFloatConst(result, bits: self.floatConstBitsOf(value))
+		end 'constantSource'
+
+		return result
+	end 'emitRetaggedFloatCastValue'
 
 	// ⭐ **THE ONE PLACE A RANGE-CHECK SITE IS APPENDED** for a position whose declared alias the parser
 	// already holds — an `as` cast, a struct-literal field, a field store, a self-field store, a field's

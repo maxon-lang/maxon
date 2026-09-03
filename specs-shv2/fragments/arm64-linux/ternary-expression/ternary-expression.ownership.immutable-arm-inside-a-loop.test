@@ -83,24 +83,19 @@ func @main {
     arm64.bl __mm_decref
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.storeSlotReg slot4, x1
     arm64.storeSlotReg slot1, x0
     arm64.cmp x0, 3
-    arm64.cset x1, lt
-    arm64.cbnz x1, l
-    arm64.b whileexit
+    arm64.b.ge whileexit
   l:
     arm64.cmp x0, 0
-    arm64.cset x0, gt
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
+    arm64.b.le ternaryfalse
   ternarytrue:
     arm64.movRegReg x0, x26
     arm64.bl __mm_incref
     arm64.movRegReg x19, x26
-    arm64.b matchcont
+    arm64.b __il_body
   ternaryfalse:
     arm64.leaRdata x0, __str_rec_9  ; "alt "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -148,21 +143,13 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
     arm64.movRegReg x19, x27
-    arm64.b matchcont
-  matchcont:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.loadRegSlot x1, slot4
     arm64.add x20, x1, x0

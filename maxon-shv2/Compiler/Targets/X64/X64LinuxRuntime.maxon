@@ -38,6 +38,44 @@ export function x64OsCallKind(os Os) returns X64OsCallKind
 	end 'os'
 end 'x64OsCallKind'
 
+// ⭐⭐ **WHICH SEGMENT REGISTER ADDRESSES THIS OS'S PER-OS-THREAD BLOCK — the second fact that splits the
+// two x64 OSes, and the reason it is a separate question from `x64OsCallKind`.** That one asks how the
+// backend reaches the KERNEL; this one asks nothing of the kernel at all. `fs:`/`gs:` are the ISA's segment
+// overrides, and each OS simply chose a different one: Windows points GS at the Thread Information Block
+// (whose TLS slots `gs:[0x1480 + key*8]` ARE `TlsGetValue`), while the SysV ABI reserves FS for thread-local
+// storage and leaves GS to the kernel.
+//
+// ⛔⛔ **x86-64 HAS NO WRITABLE THREAD-POINTER INSTRUCTION, WHICH IS THE WHOLE OF WHY LINUX NEEDS A CALL
+// WHERE AArch64 NEEDS NONE.** `TPIDR_EL0` is an ordinary system register an `msr` writes; FS base is not
+// addressable at all in user mode without `FSGSBASE`, so it is set through `arch_prctl(ARCH_SET_FS)` on the
+// main thread and through `CLONE_SETTLS` on a worker M. Reading it back is free — the segment override on an
+// ordinary `mov` — which is what keeps the current-P read cheap enough to sit in a prologue guard on both
+// lanes.
+//
+// ⚠ **MEASURED UNDER ROSETTA, which is how the x64-linux lane executes on an arm64 host**: a hand-assembled
+// static ELF set FS base by `arch_prctl` (158), read the value back with `ARCH_GET_FS`, and read a magic word
+// through BOTH addressing forms — `mov rax, fs:[disp32]` and `mov rax, fs:[reg]`. All four steps answered
+// correctly, so the translation layer models the segment base rather than ignoring it.
+export enum X64ThreadPointerSegment
+	// Windows: GS is the TIB.
+	gs
+	// Linux: FS is the SysV thread pointer, which on this lane is the scheduler's own slot block
+	// (`mrt_host_tls_alloc` maps it and `arch_prctl` publishes it — nothing else on a static image reads FS).
+	fs
+end 'X64ThreadPointerSegment'
+
+// Exported: the ONE door both tiers ask — the isel has no say (a segment override is not an OS call), so the
+// question is answered where the bytes are chosen (`X64Backend.emitTargetOp`) and where the runtime chunks
+// spell their own reads (`X64GtRuntime`). The macho/wasi arms panic for `x64OsCallKind`'s reasons.
+export function x64ThreadPointerSegment(os Os) returns X64ThreadPointerSegment
+	return match os 'os'
+		windows gives X64ThreadPointerSegment.gs
+		linux gives X64ThreadPointerSegment.fs
+		macos panic("x64ThreadPointerSegment: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose thread pointer is `Arm64ThreadPointerSource`")
+		wasi panic("x64ThreadPointerSegment: wasm32-wasi is not an x64 target — a WASI component has no OS-thread concept for a segment to address")
+	end 'os'
+end 'x64ThreadPointerSegment'
+
 // --- Linux syscall numbers (x86-64) ---
 //
 // The x86-64 table, NOT AArch64's: `write` is 1 here and 64 there, `mmap` 9 and 222. Named because a
@@ -74,6 +112,46 @@ export let X64LinuxSyscallMadvise = 28
 // 178 on AArch64 (`Arm64Runtime`'s twin), which is exactly why these numbers wear the arch prefix.
 export let X64LinuxSyscallGettid = 186
 
+// --- L3/L4: the clocks, the identity, the machine query and the green-thread floor ---
+//
+// ⚠⚠ **MEASURED ON THIS LANE, not transcribed.** Each was invoked BY NUMBER from a hand-assembled static
+// x86-64 ELF run under Rosetta inside the aarch64 guest, and checked against the behaviour it is supposed to
+// have: both `clock_gettime` ids against a real calendar and a real uptime, `clock_nanosleep` against a 20 ms
+// park that advanced the monotonic clock, `sched_getaffinity`'s popcount against a non-empty mask,
+// `readlinkat` against a `/proc/self/exe` answering an absolute path, `gettid` against `getpid` on the main
+// thread, `mprotect`/`munmap` against pages this same probe had mapped, and `arch_prctl`/`clone`/`futex`
+// against the worker-M bring-up described at each of their blocks below.
+//
+// ⚠ **EVERY NUMBER DIFFERS FROM AArch64's AND THE PREFIX IS WHAT SAYS SO** — `clock_gettime` is 228 here and
+// 113 there, `futex` 202 and 98, `clone` 56 and 220. Commit `a60543c9f1` is the incident where two tables
+// shared unprefixed names and one backend emitted the other's numbers.
+let X64LinuxSyscallClockGettime = 228
+let X64LinuxSyscallSchedGetaffinity = 204
+let X64LinuxSyscallReadlinkat = 267
+
+// ⭐ **`getpid` NEEDS NO CHUNK AND SO NEEDS NO GATE** — no operands, no out-param, one `syscall` lowered
+// inline (`StdToX64Conversion.lowerOsGetPidLinux`). Exported for that isel; 39 here and 172 on AArch64.
+export let X64LinuxSyscallGetPid = 39
+
+// ⚠ **16 HERE AND 29 ON AArch64.** VERIFIED by invoking it: 16 with `TCGETS` answered 0 on a pty and
+// `-ENOTTY` on a pipe, a regular file and `/dev/null`, while syscall 17 with the identical arguments
+// answered `-ESPIPE` (`pread`), which is the control that says 16 is really `ioctl`.
+let X64LinuxSyscallIoctl = 16
+
+// ⛔ **THE GREEN-THREAD FLOOR'S OWN NUMBERS ARE NOT DECLARED HERE, BECAUSE NOTHING SPENDS THEM YET.**
+// `targetProvidesFacility` denies `greenThreads` on this lane (that row carries the measurement of why the
+// whole floor plus the child-process band is one indivisible landing), so `arch_prctl`, `clone`, `futex`,
+// `mprotect`, `clock_nanosleep` and the thread-scoped `exit` have no caller — and a syscall number nothing
+// emits is a table entry nothing can keep honest. They arrive with the bodies that issue them.
+//
+// ⚠ Two traps for whoever writes those bodies, both MEASURED on the guest rather than transcribed:
+// `clock_nanosleep` (230) and NOT `nanosleep` (35) — the two are the same call for a RELATIVE request
+// except that `nanosleep` is defined against `CLOCK_REALTIME`, so a settime during the sleep moves a park
+// the scheduler measured against `CLOCK_MONOTONIC`; and `clone`'s argument order here is
+// `(flags, stack, ptid, ctid, tls)` where AArch64's is `(flags, stack, ptid, tls, ctid)` — the last two are
+// SWAPPED, and a probe using the AArch64 order on x86-64 HUNG rather than failing, because the kernel took
+// the TLS page as the join word and the join word as the thread pointer.
+
 // --- Linux mmap parameters ---
 //
 // The `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)` `lowerOsAllocPages`
@@ -88,7 +166,7 @@ export let X64LinuxSyscallGettid = 186
 // a second spelling of a number whose only remaining purpose was to be able to disagree with the
 // first. Removed at that rung's review. It now sits beside its stderr sibling as
 // `StdLoweringShared.PosixStdoutFd`/`StderrFd`, both POSIX facts rather than x64-Linux ones for the
-// reason the note below `LinuxRtSigsetSize` gives.
+// reason the note below `X64LinuxSyscallRtSigaction` gives.
 
 // --- Linux fault runtime (the SIGFPE handler for a divide-by-zero) ---
 //
@@ -100,8 +178,8 @@ export let X64LinuxSyscallGettid = 186
 // These two are ROWS OF THE SAME x86-64 syscall table as `X64LinuxSyscall{Write,Mmap,ExitGroup}` above
 // and carry the arch prefix for the same reason — they are 134 and 139 on AArch64, so an arm64 fault
 // runtime would declare its own, and an unprefixed name here is the collision that already miscompiled
-// this backend once. `LinuxSignalFpe` and `LinuxRtSigsetSize` are NOT prefixed alike on purpose: SIGFPE
-// is 8 and sigset_t is 8 bytes on every Linux arch, so there is only one fact to name.
+// this backend once. `LinuxSignalFpe` is NOT prefixed alike on purpose: SIGFPE is 8 on every Linux
+// arch, so there is only one fact to name. `LinuxSigsetBytes` is the same case and lives in `LinuxRuntime`.
 export let X64LinuxSyscallRtSigaction = 13  // rt_sigaction(signum, act, oldact, sigsetsize).
 export let X64LinuxSyscallRtSigreturn = 15  // rt_sigreturn — the sa_restorer trampoline returns through it.
 export let LinuxSignalFpe = 8  // SIGFPE — the signal an integer #DE fault is delivered as.
@@ -110,8 +188,7 @@ export let LinuxSignalFpe = 8  // SIGFPE — the signal an integer #DE fault is 
 // ⚠ x86-64 has NO kernel-provided signal trampoline, so SA_RESTORER + a valid `sa_restorer` are MANDATORY:
 // without them the kernel raises a KERNEL SIGSEGV building the signal return frame — BEFORE the handler
 // runs, and even for a handler that never returns (measured: strace showed SIGFPE then SI_KERNEL SIGSEGV).
-export let LinuxSigactionFlags = 0x04000004
-export let LinuxRtSigsetSize = 8  // rt_sigaction's sigsetsize argument: the kernel's sigset_t is 8 bytes.
+export let X64LinuxSigactionFlags = 0x04000004
 
 // STDERR_FILENO — where the panic diagnostic goes — is `Targets/Shared/StdLoweringShared.StderrFd`. It
 // is not an x64-Linux fact: arm64's two OSes name the same descriptor from their own panic runtime.
@@ -125,6 +202,1716 @@ let SigactionOffMask = 24  // sa_mask (8-byte sigset)
 // x86-64 `ucontext_t` offsets to the general registers a backtrace needs. `uc_mcontext` sits at offset 40
 // (past uc_flags/uc_link/uc_stack) and its `gregs[]` array starts there; the greg indices are REG_RBP=10,
 // REG_RSP=15, REG_RIP=16, i.e. `40 + index*8` into the ucontext the handler receives in rdx.
-export let UContextRipOffset = 168  // 40 + REG_RIP(16)*8 — the faulting instruction pointer.
-export let UContextRbpOffset = 120  // 40 + REG_RBP(10)*8 — the faulting frame pointer (seeds the walk).
-export let UContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulting stack pointer (bounds the walk).
+export let X64LinuxUContextRipOffset = 168  // 40 + REG_RIP(16)*8 — the faulting instruction pointer.
+export let X64LinuxUContextRbpOffset = 120  // 40 + REG_RBP(10)*8 — the faulting frame pointer (seeds the walk).
+export let X64LinuxUContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulting stack pointer (bounds the walk).
+
+// ==========================================================================
+// THE HOST SURFACE — the file, directory and standard-input bodies
+// ==========================================================================
+//
+// ⭐⭐ **THE x86-64 TWIN OF `Arm64LinuxRuntime`'s L1/L2 BANDS, AGAINST THE SAME KERNEL.** Every `mrt_host_*`
+// body below is that file's chunk with three things changed and nothing else: the SYSCALL NUMBERS (x86-64's
+// table, not AArch64's), the REGISTER ABI (`rdi/rsi/rdx/r10/r8/r9` + `syscall`, where that lane has
+// `x0..x5` + `svc`), and `struct stat`'s LAYOUT. The Win32-shaped facts these bodies produce — the
+// `dwFileAttributes` a `st_mode` becomes, the FILETIME a whole second becomes, the 320-byte
+// `WIN32_FIND_DATAA`, the errno→Win32 mapping, the glob split — are `Targets/Shared/PosixRuntime`'s and are
+// READ from there rather than restated, which is also why the symbols are the shared `mrt_host_*` names:
+// exactly one backend's chunks reach any image, so a shared name can only ever have one body. The Linux
+// facts both arches agree on — `AT_FDCWD`, the generic `open` flags, the search object and
+// `struct linux_dirent64` — are `Targets/Shared/LinuxRuntime`'s for the same reason.
+//
+// ⚠ **`syscall` CLOBBERS rcx AND r11**, which `svc` does not clobber at all. Nothing here may hold a live
+// value in either across one; every value that must survive a call goes in a frame slot, which is the same
+// discipline the arm64 bodies already keep for a different reason (an out-param must outlive the call).
+//
+// ⚠ **rsi AND rdi ARE FREE HERE AND WOULD NOT BE UNDER REAL Win64.** shv2's x64 register file makes only
+// rbx and r12–r15 callee-saved (`RegisterAllocator.calleeSavedMask`), so the syscall argument registers are
+// all caller-saved and no body below saves one.
+
+// --- The x86-64 filesystem syscall numbers ---
+//
+// ⚠ **MEASURED ON THIS LANE, not transcribed** — each was invoked BY NUMBER from a hand-assembled static
+// x86-64 ELF run on the OrbStack guest (the same Rosetta lane the spec suite runs this target under) and
+// checked against what it did: `openat` answered a live descriptor for a real path, `read` returned the
+// file's exact bytes, `getcwd` the process's real directory, `getdents64` a decodable `linux_dirent64`
+// stream, `newfstatat`/`fstat` a `st_mode` of `0100644` and the file's real size, `readlinkat` the running
+// image's path, and the `mkdirat`/`renameat`/`unlinkat`/`fsync` quartet created, renamed, synced and
+// removed a real directory and file. That is the discipline `X64LinuxOpenDirectoryFlags` below exists to
+// enforce, and it is why the arch prefix is on every name (see the F1a block above).
+let X64LinuxSyscallRead = 0
+export let X64LinuxSyscallClose = 3
+let X64LinuxSyscallFstat = 5
+let X64LinuxSyscallFsync = 74
+let X64LinuxSyscallGetcwd = 79
+let X64LinuxSyscallGetdents64 = 217
+let X64LinuxSyscallOpenat = 257
+let X64LinuxSyscallMkdirat = 258
+let X64LinuxSyscallNewfstatat = 262
+let X64LinuxSyscallUnlinkat = 263
+let X64LinuxSyscallRenameat = 264
+
+// ⛔⛔ **`O_DIRECTORY` IS THE asm-generic `0o200000` HERE, NOT THE `0o40000` AArch64 USES.**
+// `arch/arm64/include/uapi/asm/fcntl.h` overrides four flags before including the generic header and
+// shifts them all down, so the two lanes disagree about this one bit pattern and about no other flag in
+// this file. ⚠ **MEASURED, both ways, on the x86-64 lane**: `openat(AT_FDCWD, <a directory>, 0o200000)`
+// answered a live descriptor and `openat(…, 0o40000)` answered **-EINVAL** — an errno with no Win32 twin,
+// which would make every `Directory.list` report the catch-all `openSearchFailed` while `__mf_exists`, which
+// never opens a directory, kept passing. `LinuxOpenReadOnlyFlags` and `LinuxOpenCreateTruncateFlags` are
+// `Targets/Shared/LinuxRuntime`'s because those three arms really are one asm-generic fact.
+let X64LinuxOpenDirectoryFlags = 0o200000
+
+// ⭐ **THE `.data` WORD THE HOST SURFACE STASHES INTO** (`LinuxErrnoLabel`). Gated on the FACILITIES that
+// touch it rather than on the target alone: a Linux program that opens no file, lists no directory and reads
+// no standard input never writes it, so it does not carry it.
+//
+// ⭐ **ONE PROCESS-WIDE WORD IS THE WHOLE ANSWER HERE, WHERE arm64-linux NEEDS A PER-M SLOT.** That lane runs
+// worker Ms through a real `clone`, so two threads stashing into one word is a wrong `FileError`; this lane's
+// `greenThreads` row is `false` and `osThreadCreate` refuses, so there is exactly one thread to serve.
+// ⚠ **THE OBLIGATION IS RE-POINTED, NOT DISCHARGED**: the day this lane grows an OS thread the word must go
+// per-thread, and `StdToX64Conversion.lowerOsThreadCreate`'s refusal is what will announce it.
+//
+// ⚠ **NO OUTER BIT TEST AT THE CALL SITE** (`Compiler.maxon`), exactly as its arm64 twin arranges: the
+// answer depends on the TARGET as well as on the bits, and asking that pair anywhere else would copy it.
+export function x64LinuxRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if target.cpu != CpuArch.x64 or target.os != Os.linux or not x64LinuxUsesHostSurface(usage) 'notThisLane'
+		return out
+	end 'notThisLane'
+
+	pushRuntimeGlobal(out, label: LinuxErrnoLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	return out
+end 'x64LinuxRuntimeGlobals'
+
+// Who reads or writes the errno word — the union of the facilities whose bodies emit `StdOp.osLastError`
+// or stash into it, and therefore the gate on `mrt_host_last_error` itself.
+function x64LinuxUsesHostSurface(usage RuntimeUsage) returns bool
+	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesConsoleStdin
+end 'x64LinuxUsesHostSurface'
+
+// ==========================================================================
+// struct stat (x86-64)
+// ==========================================================================
+
+// ⭐ **144 BYTES, AND `st_mode` IS AT 24 WHERE AArch64 PUTS IT AT 16.** x86-64 has its own
+// `arch/x86/include/uapi/asm/stat.h` rather than the asm-generic one, and it widens `st_nlink` to a full
+// word and pads before `st_rdev`; the three timestamps and `st_size` happen to land at the same offsets,
+// which is exactly the kind of partial agreement that makes copying the other lane's numbers survive
+// testing until a `File.info()` reports a mode read out of `st_uid`.
+//
+// ⚠ **MEASURED, not transcribed**: `fstat` on a 22-byte `0644` file owned by uid 502 answered `0x81a4` in
+// the low half of the word at 24 and `502` in its high half (`st_mode` then `st_uid`), `22` at 48, and
+// three plausible epoch seconds at 72/88/104 with sub-second halves beside them. v1's own repack writes
+// `st_mode` at 24 for AArch64, where it is `st_uid` — which is why every offset here was read off the
+// running kernel rather than off the reference.
+//
+// ⚠ **THERE IS NO BIRTH TIME**: a creation time is `statx`'s `stx_btime`, a different syscall and a
+// different structure, so `File.info().createdTime` reports `st_ctime` here exactly as it does on the
+// other Linux lane.
+let X64LinuxStatBytes = 144
+let X64LinuxStatModeOffset = 24
+let X64LinuxStatSizeOffset = 48
+let X64LinuxStatAccessTimeOffset = 72
+let X64LinuxStatModifyTimeOffset = 88
+let X64LinuxStatStatusChangeTimeOffset = 104
+
+function x64LinuxStatLayout() returns PosixStatLayout
+	return PosixStatLayout.create(X64LinuxStatBytes, modeOffset: X64LinuxStatModeOffset, sizeOffset: X64LinuxStatSizeOffset, creationTimeOffset: X64LinuxStatStatusChangeTimeOffset, accessTimeOffset: X64LinuxStatAccessTimeOffset, modifyTimeOffset: X64LinuxStatModifyTimeOffset)
+end 'x64LinuxStatLayout'
+
+// ==========================================================================
+// Shared emit fragments
+// ==========================================================================
+
+// The `[rbp + disp]` base of a MULTI-SLOT buffer that occupies `slotCount` consecutive slots starting at
+// `firstSlot`. Slots grow DOWNWARD from rbp, so a structure's lowest address is its LAST slot's — the same
+// arrangement `buildLinuxRuntimeInitChunk` lays its `struct sigaction` out in, stated once here because
+// three chunks below place a `struct stat` or a path buffer this way.
+function x64LinuxBufferDisp(asm X64RuntimeAsm, firstSlot StackSize, slotCount StackSize) returns Imm32
+	return asm.slotDisp(firstSlot + slotCount - 1)
+end 'x64LinuxBufferDisp'
+
+// rax holds a FAILED syscall's `-errno`. Stash the POSITIVE errno where `mrt_host_last_error` reads it and
+// leave that positive value in rsi for a caller that must also test it (`mrt_host_dir_current_path` does).
+// rax is untouched, so the caller still has the kernel's own answer.
+function x64LinuxEmitStashErrno(asm X64RuntimeAsm)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rsi)
+end 'x64LinuxEmitStashErrno'
+
+// Publish a KNOWN errno rather than one a syscall just answered — the walk's clear before each step
+// (`PosixErrnoCleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the two places a
+// reason has to be invented because no call failed.
+function x64LinuxEmitPublishErrno(asm X64RuntimeAsm, value ParsedInt)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: value as MachineWord)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rsi)
+end 'x64LinuxEmitPublishErrno'
+
+// ⭐ **THE TAIL OF EVERY SYSCALL IN THIS FILE: a negative answer is a failure, and the reason goes in the
+// word.** rax is left exactly as the kernel wrote it, so a caller that wants a count, a descriptor or a
+// sentinel decides that for itself immediately after.
+function x64LinuxEmitStashIfFailed(asm X64RuntimeAsm)
+	let succeeded = asm.newLabel()
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: succeeded)
+	x64LinuxEmitStashErrno(asm)
+
+	asm.placeLabel(succeeded)
+end 'x64LinuxEmitStashIfFailed'
+
+// Leave `Win32True` in rax when the flags say the last compare was equal-to-zero, `Win32False` otherwise.
+// x64 has `setcc`, but every consumer of this fragment wants a full 64-bit 0/1 and a branch pair says so
+// without a second opinion about the upper half.
+function x64LinuxEmitWin32BoolFromFlags(asm X64RuntimeAsm, cond X64CondCode)
+	let succeeded = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: cond, targetBlockId: succeeded)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(succeeded)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+
+	asm.placeLabel(answered)
+end 'x64LinuxEmitWin32BoolFromFlags'
+
+// The syscall's `0`/`-errno` status becoming the Win32 BOOL the Std tier tests, with the reason stashed on
+// the way. NO narrowing: a `syscall` answers a full 64-bit word.
+function x64LinuxEmitWin32BoolFromSyscall(asm X64RuntimeAsm)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	x64LinuxEmitWin32BoolFromFlags(asm, cond: X64CondCode.equal)
+end 'x64LinuxEmitWin32BoolFromSyscall'
+
+// Replace a negative rax with `sentinel`. The Std tier tests for EXACT sentinels — `InvalidHandleValue` is
+// -1 and `INVALID_FILE_ATTRIBUTES` is 0xFFFFFFFF — and a raw `-errno` is `-2` for a missing file, which
+// would read as a live descriptor.
+function x64LinuxEmitFailureSentinel(asm X64RuntimeAsm, sentinel MachineWord)
+	let kept = asm.newLabel()
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: kept)
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: sentinel)
+
+	asm.placeLabel(kept)
+end 'x64LinuxEmitFailureSentinel'
+
+// `newfstatat(dirFd, path, statBuf, AT_SYMLINK_NOFOLLOW=0)` with the PATH ALREADY IN r8 AND THE DIRECTORY
+// DESCRIPTOR IN r9 — a fixed entry contract rather than two register parameters, because the three sites
+// that describe a path all have their operands somewhere else anyway and a parameterised version would
+// carry an aliasing rule (`r8`/`r9` must not be a syscall argument register) that nothing could check.
+function x64LinuxEmitFstatat(asm X64RuntimeAsm, statDisp Imm32)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.r8, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: statDisp)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixFollowSymlinks as MachineWord)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.r9, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallNewfstatat)
+end 'x64LinuxEmitFstatat'
+
+// Copy a NUL-terminated string, writing at most `limit` bytes plus the terminator. Clobbers all four
+// registers it is given; the terminator is written unconditionally, so a truncated copy is still a string.
+function x64LinuxEmitCopyCStringBounded(asm X64RuntimeAsm, src X64Register, dest X64Register, limit X64Register, scratch X64Register)
+	let step = asm.newLabel()
+	let terminate = asm.newLabel()
+
+	asm.placeLabel(step)
+	emitCmpRegImm(asm, reg: limit, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: terminate)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: scratch, base: src, disp: 0)
+	emitCmpRegImm(asm, reg: scratch, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: terminate)
+	encodeStoreBaseDispReg8(asm.code, base: dest, disp: 0, srcReg: scratch)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: src, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: dest, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: limit, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
+
+	asm.placeLabel(terminate)
+	encodeMovRegImm32(asm.code, dest: scratch, value: NulByte as MachineWord)
+	encodeStoreBaseDispReg8(asm.code, base: dest, disp: 0, srcReg: scratch)
+end 'x64LinuxEmitCopyCStringBounded'
+
+// ⭐ **ZERO `slotCount` CONSECUTIVE FRAME SLOTS.** The walk zeroes its `struct stat` before an `fstatat`
+// whose verdict may be DISCARDED (a dangling symbolic link is a real directory entry that Win32 reports),
+// so the PREVIOUS entry's size and timestamps cannot be published for it. Clobbers rax, rsi and rdi.
+function x64LinuxEmitZeroSlots(asm X64RuntimeAsm, firstSlot StackSize, slotCount StackSize)
+	let step = asm.newLabel()
+	let zeroed = asm.newLabel()
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: x64LinuxBufferDisp(asm, firstSlot: firstSlot, slotCount: slotCount))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: slotCount)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+
+	asm.placeLabel(step)
+	emitCmpRegImm(asm, reg: X64Register.rdi, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: zeroed)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsi, disp: 0, srcReg: X64Register.rax)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: SpillSlotBytes as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdi, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
+
+	asm.placeLabel(zeroed)
+end 'x64LinuxEmitZeroSlots'
+
+// ⭐ **AN errno IN rax BECOMING THE Win32 CODE THE Std TIER CLASSIFIES** — the whole body of
+// `mrt_host_last_error` except for where the errno came FROM. The five errno values and the four Win32
+// codes are `Targets/Shared/PosixRuntime`'s and `ManagedFileRuntime`'s; only the branch shape is x64's.
+//
+// ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
+// both 2. ⚠ **A CLEARED errno ANSWERS `ERROR_NO_MORE_FILES`** — see `PosixErrnoCleared`.
+function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
+	let notFound = asm.newLabel()
+	let pathNotFound = asm.newLabel()
+	let denied = asm.newLabel()
+	let noMoreFiles = asm.newLabel()
+	let answered = asm.newLabel()
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noMoreFiles)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNoSuchFileOrDirectory as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notFound)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNotADirectory as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: pathNotFound)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoPermissionDenied as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoOperationNotPermitted as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorGenericFailure as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(notFound)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorFileNotFound as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(pathNotFound)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorPathNotFound as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(denied)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorAccessDenied as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(noMoreFiles)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorNoMoreFiles as MachineWord)
+
+	asm.placeLabel(answered)
+end 'x64LinuxEmitErrnoToWin32'
+
+// Whole SECONDS since the Unix epoch becoming the FILETIME `WIN32_FIND_DATAA` carries. It reads
+// `ClockRuntime`'s own two constants rather than a producer-side copy, so the record's producer and the Std
+// graph that decodes it (`ManagedFileRuntime.emitFileTimeToUnixSeconds`) are one fact.
+function x64LinuxEmitSecondsToFileTime(asm X64RuntimeAsm, reg X64Register, scratch X64Register)
+	encodeImulRegRegImm32(asm.code, dest: reg, src: reg, imm: FileTimeTicksPerSecond as Imm32)
+	encodeMovRegImm64(asm.code, dest: scratch, value: FileTimeTicksFrom1601To1970 as MachineWord)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: reg, src: scratch, wide: true)
+end 'x64LinuxEmitSecondsToFileTime'
+
+// ==========================================================================
+// L3 — the `timespec`, the two non-scheduler clocks, the image path and the machine query
+// ==========================================================================
+
+// `struct timespec` — `tv_sec` then `tv_nsec`, two 64-bit words on x86-64, which is exactly two of this
+// assembler's 8-byte frame slots side by side.
+//
+// ⚠ **THE SLOT IS FIXED HERE, NOT PER CHUNK, BECAUSE `x64LinuxReadClockTimespec` ADDRESSES IT.** Every clock
+// chunk holds its out-param pointer in slot 0 and reserves these two above it, so the fragment can form the
+// address without being told where. A chunk that reserved fewer is not subtly wrong: `X64RuntimeAsm.slotDisp`
+// PANICS on a slot outside the frame it opened.
+//
+// ⛔⛔ **THE TWO FIELDS ARE ADDRESSED BY BYTE OFFSET FROM THE STRUCT'S BASE, NEVER BY SLOT INDEX, AND THAT IS
+// THE WHOLE REASON THIS IS SHAPED AS IT IS.** Slots grow DOWNWARD from rbp, so a higher slot index is a LOWER
+// address — which means the struct's FIRST field lives in its LAST slot and a pair of `slotDisp` reads named
+// `…SecSlot`/`…NsecSlot` reads them backwards while still compiling, still running, and still answering a
+// plausible time. (MEASURED as exactly that: `clock.wall-clock-is-a-calendar-time` failed with a calendar
+// built from the nanoseconds half.) The arm64 twin CAN index by slot because its frame grows the other way;
+// this one derives every field from the base, so the direction is stated once.
+let LinuxTimespecFirstSlot = 1 as StackSize
+let LinuxTimespecSecOffset = 0 as Imm32
+let LinuxTimespecNsecOffset = SpillSlotBytes as Imm32
+
+// `clock_gettime(clockId, &ts)` with the `timespec` in this chunk's own frame — the call every clock chunk
+// opens with, and the reason each is a chunk at all: the caller's out-param pointer must survive a call that
+// writes somewhere ELSE, so a frame has to hold both.
+//
+// ⚠ **NO STATUS TEST, AND THAT IS NOT THE OMISSION IT LOOKS LIKE.** `clock_gettime` fails only for an unknown
+// `clockid_t` (`EINVAL`) or an unreadable buffer (`EFAULT`); the id is a compile-time constant this file owns
+// and the buffer is this frame. Neither is reachable, and an out-param-shaped op with no failure channel
+// would have nothing to report if they were.
+function x64LinuxReadClockTimespec(asm X64RuntimeAsm, clockId MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: clockId)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm))
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockGettime)
+end 'x64LinuxReadClockTimespec'
+
+// The `[rbp + disp]` address of one FIELD of the frame's `timespec`, off the struct's own base — the single
+// place the downward slot direction is accounted for.
+function x64LinuxTimespecDisp(asm X64RuntimeAsm, byteOffset Imm32 = 0) returns Imm32
+	return x64LinuxBufferDisp(asm, firstSlot: LinuxTimespecFirstSlot, slotCount: LinuxTimespecSlots) + byteOffset
+end 'x64LinuxTimespecDisp'
+
+// `rax = sec * 1e9 + nsec` — the two halves of the frame's `timespec` combined into the ONE scalar both
+// scheduler-facing clock chunks answer with. The WALL clock does not use it: a FILETIME converts each half
+// separately, and recombining first would cost five centuries of range for an identical answer.
+function x64LinuxEmitTimespecToNanos(asm X64RuntimeAsm)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecSecOffset), wide: true)
+	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: PosixNanosPerSecond as MachineWord)
+	encodeImulRegReg(asm.code, dest: X64Register.rax, src: X64Register.rcx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecNsecOffset), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+end 'x64LinuxEmitTimespecToNanos'
+
+// ==========================================================================
+// mrt_host_wall_clock(rcx = ftPtr)
+// ==========================================================================
+
+// Write the host's CALENDAR through `ftPtr`, as a Win32 FILETIME — 100-nanosecond ticks since 1601. The
+// FILETIME encoding is the OP's contract rather than a Windows detail leaking onto a POSIX lane.
+//
+// The two halves are converted where they already are rather than recombined into nanoseconds first: that
+// intermediate would buy nothing (`1e9 / 100` IS `1e7`, so the answer is identical) and would overflow a
+// 64-bit word some five centuries sooner than the FILETIME it is on its way to.
+function buildX64LinuxWallClockChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx)
+	x64LinuxReadClockTimespec(asm, clockId: LinuxClockRealtime)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecSecOffset), wide: true)
+	x64LinuxEmitSecondsToFileTime(asm, reg: X64Register.rax, scratch: X64Register.rcx)
+
+	// The nanoseconds half divides down to FILETIME ticks. `div` reads RDX:RAX, so the dividend moves into
+	// rax and rdx is cleared — a stale high half faults (#DE) rather than answering wrongly.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: LinuxTimespecNsecOffset), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: posixNanosPerFileTimeTick())
+	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.r8, wide: true)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+
+	return asm.finishFunction(HostWallClockName)
+end 'buildX64LinuxWallClockChunk'
+
+// ==========================================================================
+// mrt_host_thread_cpu(rcx = outPtr)
+// ==========================================================================
+
+// Write THIS THREAD's consumed CPU time through `outPtr`, in the host's own unit — NANOSECONDS on every POSIX
+// lane and TSC ticks on Windows, with nothing converting between them. That is `ClockRuntime`'s stated
+// contract rather than this chunk's omission: `__thread_cpu_ticks` promises only that two readings may be
+// SUBTRACTED, and scaling here to look like Windows would be a guess wearing a unit's name.
+function buildX64LinuxThreadCpuChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx)
+	x64LinuxReadClockTimespec(asm, clockId: LinuxClockThreadCpuTime)
+	x64LinuxEmitTimespecToNanos(asm)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax)
+
+	return asm.finishFunction(HostThreadCpuName)
+end 'buildX64LinuxThreadCpuChunk'
+
+// ==========================================================================
+// mrt_host_exe_path(rcx = bufPtr, rdx = bufLen) -> rax = bytes written
+// ==========================================================================
+
+// ⭐⭐ **THE RUNNING IMAGE'S PATH, WHICH ON THIS LANE IS NOT A CALL BUT A SYMLINK.** `GetModuleFileNameA` has
+// no Linux counterpart; the kernel publishes `/proc/self/exe`, a symbolic link whose TARGET is the path, so
+// this chunk is one `readlinkat(AT_FDCWD, "/proc/self/exe", buf, bufLen)`.
+//
+// ⛔⛔ **`readlinkat` DOES NOT NUL-TERMINATE AND DOES NOT REPORT TRUNCATION**, and those are the two facts
+// this chunk exists for. It answers the byte count it wrote, writes no terminator, and — when the link does
+// not fit — SILENTLY TRUNCATES and answers exactly `bufLen`. Both are handled in the vocabulary
+// `osExecutablePath` already speaks (`ManagedDirectoryRuntime.emitFilledBufferVerdict`):
+//
+//   * `n < 0` ⇒ answer **0**, which the Std verdict reads as "refused" and `__proc_exe_path` turns into
+//     `pathUnavailable`. ⚠ No errno is stashed, deliberately: nothing consumes an `osLastError` after this
+//     op, and stashing would put the `.data` word behind a facility bit that does not lay it out.
+//   * `n >= bufLen` ⇒ answer **n unchanged**, which is NOT `< capacity`, so the Std loop doubles its buffer
+//     and asks again. That is precisely why the terminator is written only on the fitting path: a `buf[n]`
+//     store at `n == bufLen` is a one-byte overrun of a buffer the caller is about to throw away.
+//   * otherwise ⇒ terminate at `buf[n]` and answer `n`.
+function buildX64LinuxExePathChunk() returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotBufLen = 1 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2)
+
+	let unavailable = asm.newLabel()
+	let finish = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx)
+
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	emitLeaString(asm, dest: X64Register.rsi, bytes: LinuxProcSelfExe)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rcx, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallReadlinkat)
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: unavailable)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: finish)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: NulByte as MachineWord)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rdx)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
+
+	asm.placeLabel(unavailable)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+
+	asm.placeLabel(finish)
+	return asm.finishFunction(HostExePathName)
+end 'buildX64LinuxExePathChunk'
+
+// ==========================================================================
+// mrt_host_cpu_count() -> rax = usable processors | -1
+// ==========================================================================
+
+// ⭐⭐ **`sched_getaffinity` AND A POPCOUNT, BECAUSE `sysconf` IS A LIBC FUNCTION AND THIS IMAGE LINKS NO
+// LIBC.** It needs no filesystem — `managedFile` is a separate facility precisely so a machine query does not
+// drag one in — and it reports the CPUs THIS PROCESS MAY ACTUALLY USE rather than the CPUs the machine has,
+// which is what a parallelism hint wants and what `nproc` itself answers.
+//
+// ⚠ **THE COUNT IS KERNIGHAN'S `x &= x - 1` RATHER THAN `popcnt`.** `popcnt` needs SSE4.2, which nothing else
+// this backend emits requires, so using it here would raise the whole lane's baseline ISA for one
+// instruction; the loop's iteration count is the number of SET bits, which on a real machine is the processor
+// count itself. The arm64 twin reaches the same loop from the opposite direction (its `CNT` is a NEON op over
+// a vector register).
+//
+// ⚠ **THE ANSWER IS NOT CLAMPED HERE.** A failed syscall reports `LinuxCpuCountUnavailable` (-1), which is
+// `sysconf`'s own failure spelling and what `CpuParallelRuntime.buildCpuCount`'s signed `< 1 ⇒ 1` clamp
+// already reads — the clamp must stay in exactly one place.
+function buildX64LinuxCpuCountChunk() returns FunctionCodeChunk
+	let SlotMask = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxCpuSetBytes))
+
+	let count = asm.newLabel()
+	let wordStep = asm.newLabel()
+	let bitStep = asm.newLabel()
+	let nextWord = asm.newLabel()
+	let finish = asm.newLabel()
+
+	x64LinuxEmitZeroSlots(asm, firstSlot: SlotMask, slotCount: runtimeFrameSlots(LinuxCpuSetBytes))
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxAffinityWhoIsSelf)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxCpuSetBytes as MachineWord)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxBufferDisp(asm, firstSlot: SlotMask, slotCount: runtimeFrameSlots(LinuxCpuSetBytes)))
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallSchedGetaffinity)
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: count)
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: LinuxCpuCountUnavailable)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
+
+	// rax = the running count, rcx = the cursor, rdx = words left, rsi = the word being drained, rdi = scratch.
+	asm.placeLabel(count)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: x64LinuxBufferDisp(asm, firstSlot: SlotMask, slotCount: runtimeFrameSlots(LinuxCpuSetBytes)))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: runtimeFrameSlots(LinuxCpuSetBytes))
+
+	asm.placeLabel(wordStep)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finish)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rcx, disp: 0, wide: true)
+
+	asm.placeLabel(bitStep)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: nextWord)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rsi, disp: -1)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAndRmReg, dest: X64Register.rsi, src: X64Register.rdi, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: bitStep)
+
+	asm.placeLabel(nextWord)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: SpillSlotBytes as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: wordStep)
+
+	asm.placeLabel(finish)
+	return asm.finishFunction(HostCpuCountName)
+end 'buildX64LinuxCpuCountChunk'
+
+// ==========================================================================
+// mrt_host_last_error() -> rax = a Win32 error code
+// ==========================================================================
+
+// `GetLastError()` on a lane with no `errno`: read the word every chunk here stashes into, and translate.
+function buildX64LinuxLastErrorChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdi, disp: 0, wide: true)
+	x64LinuxEmitErrnoToWin32(asm)
+
+	return asm.finishFunction(HostLastErrorName)
+end 'buildX64LinuxLastErrorChunk'
+
+// ==========================================================================
+// mrt_host_base_name(rcx = path) -> rax = the byte after the last '/'
+// mrt_host_has_wildcard(rcx = cstr) -> rax = 1 | 0
+// ==========================================================================
+
+// ⭐⭐ **WHY `FindFirstFileA` NEEDS AN EMULATION AT ALL.** It takes a GLOB — `"temp/things/*.txt"` — and
+// POSIX has no call that does: a directory is OPENED by name and a name is matched against a pattern one
+// at a time. So the pattern is split at its last `/`, the prefix is opened and the suffix is matched
+// against every entry. The pattern is written in USER SOURCE, so the split is the backend's work.
+function buildX64LinuxBaseNameChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let step = asm.newLabel()
+	let notSeparator = asm.newLabel()
+	let scanned = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rcx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+
+	asm.placeLabel(step)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rdx, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.r8, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: scanned)
+	emitCmpRegImm(asm, reg: X64Register.r8, imm: PosixPathSeparatorByte as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notSeparator)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rdx, disp: 1)
+
+	asm.placeLabel(notSeparator)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
+
+	asm.placeLabel(scanned)
+	return asm.finishFunction(HostBaseNameName)
+end 'buildX64LinuxBaseNameChunk'
+
+// Does this base name carry a wildcard? A pattern with neither `*` nor `?` names ONE path, and answering
+// it with a single `stat` rather than a directory walk is both faster and MORE FAITHFUL: `FindFirstFileA`
+// matches a literal name the way the FILESYSTEM does, while the pattern matcher below is case-sensitive.
+function buildX64LinuxHasWildcardChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let step = asm.newLabel()
+	let found = asm.newLabel()
+	let plain = asm.newLabel()
+	let answered = asm.newLabel()
+
+	asm.placeLabel(step)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: plain)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixGlobStarByte as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: found)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixGlobQuestionByte as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: found)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
+
+	asm.placeLabel(found)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(plain)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostHasWildcardName)
+end 'buildX64LinuxHasWildcardChunk'
+
+// ==========================================================================
+// mrt_host_attrs_from_mode(rcx = statBufPtr) -> rax = dwFileAttributes
+// ==========================================================================
+
+// Only the two bits the corpus can observe are produced — `__mf_exists` reads DIRECTORY, `__mf_stat`
+// publishes DIRECTORY and READ-ONLY — and an ordinary file gets `FILE_ATTRIBUTE_NORMAL` rather than 0,
+// because 0 is not a mask Win32 ever answers.
+//
+// ⚠ **READ-ONLY IS THE OWNER'S WRITE BIT AND NOTHING FINER.** POSIX has three write bits and Win32 has one
+// flag; the owner's is the one that decides whether the process that just created the file can write it.
+function buildX64LinuxAttrsFromModeChunk(layout PosixStatLayout) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let isDirectory = asm.newLabel()
+	let haveType = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: layout.modeOffset as Imm32, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rdx, imm: PosixModeMask as Imm32)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rdx, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.r8, imm: PosixFileTypeMask as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.r8, imm: PosixFileTypeDirectory as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: isDirectory)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: FileAttributeNormal as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: haveType)
+
+	asm.placeLabel(isDirectory)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: FileAttributeDirectory as MachineWord)
+
+	asm.placeLabel(haveType)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rdx, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.r8, imm: PosixOwnerWriteBit as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.r8, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: answered)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtOr, reg: X64Register.rax, imm: FileAttributeReadOnly as Imm32)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostAttrsFromModeName)
+end 'buildX64LinuxAttrsFromModeChunk'
+
+// ==========================================================================
+// mrt_host_fill_find_data(rcx = findDataPtr, rdx = statBufPtr, r8 = namePtr)
+// ==========================================================================
+
+// ⭐⭐ **SYNTHESIZE THE 320-BYTE `WIN32_FIND_DATAA` FROM A `struct stat` AND A NAME.** Windows fills this
+// record itself; every field here has to be produced, and the offsets come from `ManagedFileRuntime` — the
+// file that READS them back — rather than being transcribed.
+//
+// ⚠ **THE ATTRIBUTE STORE COMES FIRST AND THE ORDER IS LOAD-BEARING.** The mask is a DWORD at offset 0 and
+// the narrowest store used here writes eight bytes, so it also clears 4..7 — the low half of
+// `ftCreationTime`. Writing the creation time SECOND repairs that by construction.
+//
+// ⚠ **THE TWO SIZE DWORDS ARE ONE UNALIGNED 64-BIT STORE**, and the halves are swapped to get there:
+// `nFileSizeHigh` sits at 28 and `nFileSizeLow` at 32, so on a little-endian machine the word that lands
+// correctly is `(low << 32) | high` — a 64-bit rotate of the size by 32. x86-64 permits the unaligned
+// store outright, where AArch64's twin has to route it through a scratch register.
+function buildX64LinuxFillFindDataChunk(layout PosixStatLayout) returns FunctionCodeChunk
+	let SlotFindData = 0 as StackSize
+	let SlotStat = 1 as StackSize
+	let SlotName = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.r8)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostAttrsFromModeName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: FindDataAttributesOffset as Imm32, srcReg: X64Register.rax)
+
+	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.creationTimeOffset as Imm32, findOffset: FindDataCreationTimeOffset)
+	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.accessTimeOffset as Imm32, findOffset: FindDataLastAccessTimeOffset)
+	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.modifyTimeOffset as Imm32, findOffset: FindDataLastWriteTimeOffset)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: layout.sizeOffset as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: X64Register.rsi, count: X64SizeHalfShift)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rax, count: X64SizeHalfShift)
+	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rax, src: X64Register.rsi, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: FindDataSizeHighOffset as Imm32, srcReg: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotName), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdi, imm: FindDataFileNameOffset as Imm32)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixPathStringCapacity as MachineWord)
+	x64LinuxEmitCopyCStringBounded(asm, src: X64Register.rsi, dest: X64Register.rdi, limit: X64Register.r10, scratch: X64Register.rax)
+
+	return asm.finishFunction(HostFillFindDataName)
+end 'buildX64LinuxFillFindDataChunk'
+
+// How far a 64-bit size rotates to swap its halves — `nFileSizeHigh` precedes `nFileSizeLow` in the record.
+let X64SizeHalfShift = 32 as ShiftCount
+
+// One `struct stat` timestamp into one `WIN32_FIND_DATAA` FILETIME field.
+function x64LinuxFillFindDataTime(asm X64RuntimeAsm, statSlot StackSize, findSlot StackSize, statOffset Imm32, findOffset Imm32)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(statSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: statOffset, wide: true)
+	x64LinuxEmitSecondsToFileTime(asm, reg: X64Register.rax, scratch: X64Register.rsi)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(findSlot), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: findOffset, srcReg: X64Register.rax)
+end 'x64LinuxFillFindDataTime'
+
+// ==========================================================================
+// mrt_host_file_open(rcx = path, rdx = flags, r8 = mode) -> rax = fd | -1
+// ==========================================================================
+
+// `openat(AT_FDCWD, path, flags, mode)`. It is a CHUNK rather than an inline isel sequence for two
+// reasons: the kernel answers `-errno` where the Std tier tests for exactly `-1`, and the reason has to be
+// stashed for the `osLastError` that follows.
+function buildX64LinuxFileOpenChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.r8, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
+
+	x64LinuxEmitStashIfFailed(asm)
+	x64LinuxEmitFailureSentinel(asm, sentinel: PosixInvalidHandle)
+
+	return asm.finishFunction(HostFileOpenName)
+end 'buildX64LinuxFileOpenChunk'
+
+// ==========================================================================
+// mrt_host_read_file / mrt_host_write_file
+//   (rcx = fd, rdx = buf, r8 = len, r9 = bytesOutPtr) -> rax = BOOL
+// ==========================================================================
+
+// ⭐⭐ **`ReadFile`/`WriteFile`'s SHAPE OVER A CALL THAT ANSWERS THE COUNT IN rax.** The Win32 pair return a
+// BOOL and write the transferred count through a pointer; `read`/`write` return the count (or `-errno`)
+// and write nothing. So the pointer has to OUTLIVE the syscall and the two answers separated afterwards.
+//
+// ⛔⛔ **A FAILURE STORES `0` THROUGH THE OUT-PARAM AND NEVER THE NEGATIVE.** `ConsoleRuntime`'s
+// `__con_read_stdin` publishes that word directly as an `Array`'s LENGTH, and a negative length is a
+// corrupt array rather than a failed read.
+//
+// ⚠ **ONE BUILDER, TWO CHUNKS**: read and write differ in a syscall number and in nothing else.
+function buildX64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord) returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let transferred = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.r9)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+	encodeX64Syscall(asm.code, number: syscallNumber)
+
+	x64LinuxEmitStashIfFailed(asm)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: transferred)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rsi)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(transferred)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(name)
+end 'buildX64LinuxTransferChunk'
+
+// ==========================================================================
+// mrt_host_file_size(rcx = fd, rdx = sizeOutPtr) -> rax = BOOL
+// ==========================================================================
+
+// `GetFileSizeEx` — a BOOL plus a 64-bit size through a pointer, which is `fstat` plus one field read.
+//
+// ⚠ **NOTHING IS WRITTEN THROUGH THE POINTER ON FAILURE, AND THE CALLER ALREADY RELIES ON THAT.** The
+// scratch word comes from `ManagedFileRuntime.emitWin32OutWord`, i.e. from `__mm_alloc`, which hands out
+// ZEROED memory as a stated guarantee — and `emitWin32BoolOutcome` reads the word on both paths.
+function buildX64LinuxFileSizeChunk() returns FunctionCodeChunk
+	let SlotOutPtr = 0 as StackSize
+	let SlotStat = 1 as StackSize
+	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
+	var asm = X64RuntimeAsm.beginFunction(1 + statSlots)
+	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
+
+	let measured = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rdx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: statDisp)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallFstat)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: measured)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(measured)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: statDisp)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rsi, disp: X64LinuxStatSizeOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsi, disp: 0, srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostFileSizeName)
+end 'buildX64LinuxFileSizeChunk'
+
+// ==========================================================================
+// mrt_host_file_delete(rcx = pathPtr) -> rax = BOOL
+// mrt_host_dir_create(rcx = pathPtr) -> rax = BOOL
+// ==========================================================================
+
+// `DeleteFileA` ⇒ `unlinkat(AT_FDCWD, path, 0)` and `CreateDirectoryA(path, NULL)` ⇒
+// `mkdirat(AT_FDCWD, path, 0777)`. ONE BUILDER: both take a path and a third word — a flag word that must
+// be zero for the unlink, a permission mask for the mkdir — and answer a verdict the same way.
+//
+// The Win32 directory create carries no permissions at all (a new directory inherits its parent's ACL), so
+// the POSIX side hands the widest mask over and lets the process umask narrow it.
+function buildX64LinuxPathOpChunk(name ByteArray, syscallNumber MachineWord, thirdArgument MachineWord) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: thirdArgument)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeX64Syscall(asm.code, number: syscallNumber)
+	x64LinuxEmitWin32BoolFromSyscall(asm)
+
+	return asm.finishFunction(name)
+end 'buildX64LinuxPathOpChunk'
+
+// ==========================================================================
+// mrt_host_file_rename(rcx = oldPathPtr, rdx = newPathPtr) -> rax = BOOL
+// ==========================================================================
+
+// ⭐⭐ **`MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
+// `renameat` KEEPS ONLY ONE.** The REPLACE is free: POSIX `rename` replaces an existing destination
+// atomically. The WRITE-THROUGH is not: POSIX records a rename's durability in the DESTINATION
+// DIRECTORY's metadata, so keeping the second promise means opening that directory and `fsync`ing it.
+//
+// ⚠ **THE DURABILITY STEP IS BEST-EFFORT AND ITS FAILURES ARE DELIBERATELY NOT REPORTED.** The rename has
+// already happened and is already visible; a caller told "the rename failed" because the parent directory
+// could not be opened would delete or retry something that is in fact in place.
+//
+// ⚠ **AND NOTHING BELOW THE RENAME MAY STASH AN errno**, for the same reason: the word is read by an
+// `osLastError` the Std tier emits immediately after this call, and a `fsync` that failed would be blamed
+// for a rename that succeeded.
+function buildX64LinuxFileRenameChunk() returns FunctionCodeChunk
+	let SlotNewPath = 0 as StackSize
+	let SlotDirFd = 1 as StackSize
+	let SlotPrefix = 2 as StackSize
+	let prefixSlots = runtimeFrameSlots(MaxPathBytes)
+	var asm = X64RuntimeAsm.beginFunction(2 + prefixSlots)
+	let prefixDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPrefix, slotCount: prefixSlots)
+
+	let renamed = asm.newLabel()
+	let released = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), srcReg: X64Register.rdx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdx, value: LinuxAtFdCwd)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallRenameat)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: renamed)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(renamed)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: prefixDisp)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxDirPrefixName)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: released)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: prefixDisp)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxOpenReadOnlyFlags)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDirFd), srcReg: X64Register.rax)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: released)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallFsync)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotDirFd), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+
+	asm.placeLabel(released)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostFileRenameName)
+end 'buildX64LinuxFileRenameChunk'
+
+// ==========================================================================
+// mrt_host_file_attributes(rcx = pathPtr) -> rax = dwFileAttributes
+// ==========================================================================
+
+// `GetFileAttributesA` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a
+// `stat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
+// `__mf_stat` publishes derived from ONE reading of `st_mode`.
+function buildX64LinuxFileAttributesChunk() returns FunctionCodeChunk
+	let SlotStat = 0 as StackSize
+	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
+	var asm = X64RuntimeAsm.beginFunction(statSlots)
+	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
+
+	let described = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rcx, wide: true)
+	encodeMovRegImm64(asm.code, dest: X64Register.r9, value: LinuxAtFdCwd)
+	x64LinuxEmitFstatat(asm, statDisp: statDisp)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: described)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: InvalidFileAttributes as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(described)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: statDisp)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostAttrsFromModeName)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostFileAttributesName)
+end 'buildX64LinuxFileAttributesChunk'
+
+// ==========================================================================
+// mrt_host_dir_current_path(rcx = bufPtr, rdx = bufLen) -> rax = bytes written
+// ==========================================================================
+
+// ⭐⭐ **`GetCurrentDirectoryA`'s THREE-WAY ANSWER.** The op's contract
+// (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it fits, NUL
+// included" and anything else as "too small". Linux's `getcwd` SYSCALL answers the byte LENGTH INCLUDING
+// the terminator, or `-errno`, so the fit case is one subtraction and the classification one compare
+// against `ERANGE`.
+//
+// ⚠ **THE SUBTRACTION IS NOT COSMETIC.** Answering the kernel's count would report `capacity` for a path
+// that exactly fills the buffer — which the contract reads as "too small" — and would send
+// `__md_current_path` round its doubling loop for a path that had in fact fitted.
+//
+// ⛔ **REPORTING "TOO SMALL" FOR A REAL FAILURE WOULD SPIN THE CALLER'S DOUBLING LOOP FOREVER**, and
+// reporting a failure for a too-small buffer would throw on a long path.
+function buildX64LinuxDirCurrentPathChunk() returns FunctionCodeChunk
+	let SlotBufLen = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let refused = asm.newLabel()
+	let tooSmall = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetcwd)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: refused)
+
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	// `x64LinuxEmitStashErrno` leaves the POSITIVE errno in rsi, which is exactly the value the `ERANGE`
+	// test needs — so the reason is published and classified from one negation.
+	asm.placeLabel(refused)
+	x64LinuxEmitStashErrno(asm)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: PosixErrnoResultTooLarge as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooSmall)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	// The "too small" answer is the CAPACITY ITSELF and not a required size, because POSIX has no call that
+	// reports the length of a working directory — `__md_current_path` therefore DOUBLES rather than
+	// retrying at a named size.
+	asm.placeLabel(tooSmall)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), wide: true)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostDirCurrentPathName)
+end 'buildX64LinuxDirCurrentPathChunk'
+
+// ==========================================================================
+// mrt_linux_glob_match(rcx = pattern, rdx = name) -> rax = 1 | 0
+// ==========================================================================
+
+// ⭐⭐ **`fnmatch(pattern, string, 0)`, WRITTEN OUT, BECAUSE A STATIC IMAGE LINKS NO libc.** The classic
+// backtracking matcher over `*` and `?` — the only two wildcards `FindFirstFileA` honours and the only two
+// the corpus writes.
+//
+// ⚠ **IT REPRODUCES `fnmatch`'s FLAG-ZERO BEHAVIOUR, NOT `FNM_PATHNAME`'s.** A `*` matches a leading dot
+// (so `*` yields `.` and `..`, exactly as `FindFirstFileA` does, and the Std tier's dot filter removes
+// them) and nothing here treats `/` specially — which costs nothing, because the pattern reaching it is
+// always a BASE NAME.
+//
+// ⭐ **THE BACKTRACK IS A SAVED PAIR, NOT RECURSION.** `star` remembers the pattern position just past the
+// last `*` and `resume` the name position it was first tried at; a mismatch rewinds to those and advances
+// `resume` by one, which is what lets one `*` absorb any number of characters without a stack.
+function buildX64LinuxGlobMatchChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let pattern = X64Register.rcx
+	let name = X64Register.rdx
+	let star = X64Register.r8
+	let resume = X64Register.r9
+	let patternByte = X64Register.r10
+	let nameByte = X64Register.rax
+
+	let step = asm.newLabel()
+	let notStar = asm.newLabel()
+	let advance = asm.newLabel()
+	let backtrack = asm.newLabel()
+	let nameSpent = asm.newLabel()
+	let matched = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: star, value: 0)
+	encodeMovRegImm32(asm.code, dest: resume, value: 0)
+
+	asm.placeLabel(step)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: nameByte, base: name, disp: 0)
+	emitCmpRegImm(asm, reg: nameByte, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: nameSpent)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: patternByte, base: pattern, disp: 0)
+
+	emitCmpRegImm(asm, reg: patternByte, imm: PosixGlobQuestionByte as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: advance)
+
+	emitCmpRegImm(asm, reg: patternByte, imm: PosixGlobStarByte as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notStar)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: pattern, imm: 1)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: star, src: pattern, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: resume, src: name, wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
+
+	// A literal byte. It cannot be the pattern's NUL here — the name still has a byte, and a NUL never
+	// equals it — so the equal case really is a match and the unequal case really is a mismatch.
+	asm.placeLabel(notStar)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: patternByte, src: nameByte, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: backtrack)
+
+	asm.placeLabel(advance)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: pattern, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: name, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
+
+	asm.placeLabel(backtrack)
+	emitCmpRegImm(asm, reg: star, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: refused)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: pattern, src: star, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: resume, imm: 1)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: name, src: resume, wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: step)
+
+	// The name is spent: what is left of the pattern must be `*`s and nothing else.
+	asm.placeLabel(nameSpent)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: patternByte, base: pattern, disp: 0)
+	emitCmpRegImm(asm, reg: patternByte, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: matched)
+	emitCmpRegImm(asm, reg: patternByte, imm: PosixGlobStarByte as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: refused)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: pattern, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nameSpent)
+
+	asm.placeLabel(matched)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(refused)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(LinuxGlobMatchName)
+end 'buildX64LinuxGlobMatchChunk'
+
+// ==========================================================================
+// mrt_linux_dir_prefix(rcx = path, rdx = destBuf) -> rax = 1 | 0
+// ==========================================================================
+
+// The DIRECTORY half of a path, written into a caller-supplied `MAX_PATH` buffer. Three shapes, and each
+// is a real one the corpus writes:
+//
+//   `"temp/x/*.txt"` ⇒ `"temp/x"`   — the prefix without its trailing separator
+//   `"/x"`           ⇒ `"/"`        — the root, which is the ONE case where the separator IS the directory
+//   `"*.txt"`        ⇒ `"."`        — no separator at all means the CURRENT directory
+//
+// ⛔⛔ **A PREFIX THAT DOES NOT FIT IS A REFUSAL, NEVER A TRUNCATION.** A truncated directory path is not a
+// path that fails to open — it can NAME A DIFFERENT DIRECTORY THAT EXISTS, and the walk would then list
+// the wrong one and report success.
+function buildX64LinuxDirPrefixChunk() returns FunctionCodeChunk
+	let SlotPath = 0 as StackSize
+	let SlotDest = 1 as StackSize
+	let SlotLength = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	let currentDirectory = asm.newLabel()
+	let haveLength = asm.newLabel()
+	let tooLong = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDest), srcReg: X64Register.rdx)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostBaseNameName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: currentDirectory)
+
+	// The prefix INCLUDES the separator, so the directory is one byte shorter — except at the root, where
+	// dropping it would leave the empty string and an `openat("")` fails with ENOENT.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: haveLength)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 1)
+
+	asm.placeLabel(haveLength)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: PosixPathStringCapacity as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: tooLong)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotDest), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), wide: true)
+	x64LinuxEmitCopyCStringBounded(asm, src: X64Register.rsi, dest: X64Register.rdi, limit: X64Register.r10, scratch: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	// No separator: the two bytes `"."` — written directly rather than copied out of a constant, because a
+	// two-byte string is shorter than the code that would address one.
+	asm.placeLabel(currentDirectory)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotDest), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: DotByte as MachineWord)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: NulByte as MachineWord)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdx, disp: 1, srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(tooLong)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(LinuxDirPrefixName)
+end 'buildX64LinuxDirPrefixChunk'
+
+// ==========================================================================
+// mrt_host_dir_find_next(rcx = search, rdx = findDataPtr) -> rax = BOOL
+// ==========================================================================
+
+// ⭐⭐ **`FindNextFileA` — AND ALSO THE WHOLE OF `FindFirstFileA`'s FIRST ENTRY**, which is why
+// `find_first` below calls this rather than carrying a second copy of the walk. Win32's first and
+// subsequent entries come from one enumeration; so do these.
+//
+// The loop: clear the errno word, take the next directory entry, match it against the pattern, and
+// describe the first one that matches. An exhausted enumeration leaves the word CLEAR, which the caller
+// reads as `ERROR_NO_MORE_FILES` (`PosixErrnoCleared`), and a `getdents64` that FAILS stashes its own
+// reason — so the same FALSE carries both answers exactly as Win32's does.
+//
+// ⚠ **`getdents64` REFILLS A BUFFER, WHERE `readdir` ANSWERS ONE ENTRY.** The search carries a cursor and
+// a filled count, and the syscall runs only when the cursor has caught up. A `0` from it is
+// end-of-directory; a negative is a failure.
+//
+// ⚠ **A SEARCH WITH A NEGATIVE `dirfd` IS EXHAUSTED, NOT BROKEN** — the single-`stat` route already
+// reported its one entry. The guard is INSIDE the loop head, after the errno clear, so that exit reports
+// end-of-iteration rather than a stale failure.
+//
+// ⚠ **`fstatat`'s VERDICT IS DELIBERATELY DISCARDED AND THE BUFFER IS ZEROED FIRST.** A dangling symbolic
+// link is a real directory entry that Win32 reports; skipping it would silently shorten a listing, and
+// reading a stat buffer the call did not fill would report the PREVIOUS entry's size and timestamps.
+function buildX64LinuxDirFindNextChunk() returns FunctionCodeChunk
+	let SlotSearch = 0 as StackSize
+	let SlotFindData = 1 as StackSize
+	let SlotName = 2 as StackSize
+	let SlotStat = 3 as StackSize
+	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
+	var asm = X64RuntimeAsm.beginFunction(3 + statSlots)
+	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
+
+	let nextEntry = asm.newLabel()
+	let haveEntry = asm.newLabel()
+	let exhausted = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rdx)
+
+	asm.placeLabel(nextEntry)
+	x64LinuxEmitPublishErrno(asm, value: PosixErrnoCleared)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.r8, disp: LinuxSearchDirFdOffset, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.r9, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: exhausted)
+
+	// Is there an entry left in the buffer? Cursor and filled are both byte counts into the entries region.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.r8, disp: LinuxSearchCursorOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r8, disp: LinuxSearchFilledOffset, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r10, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: haveEntry)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.r9, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.r8, disp: LinuxSearchEntriesOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxSearchEntriesBytes as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetdents64)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: exhausted)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchFilledOffset, srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchCursorOffset, srcReg: X64Register.rdx)
+
+	// `entry = search + entriesOffset + cursor`, and the cursor steps by the entry's own `d_reclen`.
+	asm.placeLabel(haveEntry)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.r8, disp: LinuxSearchCursorOffset, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.r8, disp: LinuxSearchEntriesOffset)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r9, src: X64Register.r10, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r9, disp: LinuxDirentRecordLengthOffset, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rdx, imm: LinuxDirentRecordLengthMask)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r10, src: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchCursorOffset, srcReg: X64Register.r10)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r9, imm: LinuxDirentNameOffset)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.r9)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.r8, disp: LinuxSearchPatternOffset)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r9, wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxGlobMatchName)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: nextEntry)
+
+	// Describe it, RELATIVE to the open directory — which is why this walk never builds a path and never
+	// owns a path buffer.
+	x64LinuxEmitZeroSlots(asm, firstSlot: SlotStat, slotCount: statSlots)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.r9, disp: LinuxSearchDirFdOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotName), wide: true)
+	x64LinuxEmitFstatat(asm, statDisp: statDisp)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: statDisp)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotName), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostFillFindDataName)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(exhausted)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostDirFindNextName)
+end 'buildX64LinuxDirFindNextChunk'
+
+// ==========================================================================
+// mrt_host_dir_find_first(rcx = patternPtr, rdx = findDataPtr) -> rax = search | -1
+// ==========================================================================
+
+// `FindFirstFileA` — open the enumeration a glob names and report its first entry, or answer
+// `INVALID_HANDLE_VALUE` with the errno word telling the caller why.
+//
+// ⭐ **TWO ROUTES, AND WHICH ONE IS TAKEN IS A PROPERTY OF THE PATTERN**: a base name with no `*` or `?`
+// names one path and is answered by one `stat`; anything else opens the directory and walks it.
+//
+// ⚠ **AN EMPTY MATCH IS `ERROR_FILE_NOT_FOUND`, WHICH IS Win32's ANSWER AND NOT THIS LANE'S INVENTION.** A
+// walk that ended because `getdents64` FAILED keeps its own errno instead, so a real IO error is not
+// reported as a missing file.
+function buildX64LinuxDirFindFirstChunk() returns FunctionCodeChunk
+	let SlotPattern = 0 as StackSize
+	let SlotFindData = 1 as StackSize
+	let SlotGlob = 2 as StackSize
+	let SlotSearch = 3 as StackSize
+	let SlotStat = 4 as StackSize
+	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
+	var asm = X64RuntimeAsm.beginFunction(4 + statSlots)
+	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
+
+	let walk = asm.newLabel()
+	let matched = asm.newLabel()
+	let nameTooLong = asm.newLabel()
+	let releaseAndRefuse = asm.newLabel()
+	let publishReason = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPattern), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rdx)
+
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostBaseNameName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGlob), srcReg: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostHasWildcardName)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: walk)
+
+	// One path: `stat` it, and hand back a search that is already exhausted.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotPattern), wide: true)
+	encodeMovRegImm64(asm.code, dest: X64Register.r9, value: LinuxAtFdCwd)
+	x64LinuxEmitFstatat(asm, statDisp: statDisp)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: refused)
+	x64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: refused)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: statDisp)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotGlob), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostFillFindDataName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	// A glob: the page comes FIRST, because it is also where the directory prefix is built — this lane has
+	// no `malloc` to borrow a scratch buffer from.
+	asm.placeLabel(walk)
+	x64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: refused)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotPattern), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.r8, disp: LinuxSearchPrefixOffset)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxDirPrefixName)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: nameTooLong)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.r8, disp: LinuxSearchPrefixOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: X64LinuxOpenDirectoryFlags)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: releaseAndRefuse)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchDirFdOffset, srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotGlob), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.r8, disp: LinuxSearchPatternOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixPathStringCapacity as MachineWord)
+	x64LinuxEmitCopyCStringBounded(asm, src: X64Register.rsi, dest: X64Register.rdi, limit: X64Register.r10, scratch: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostDirFindNextName)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: matched)
+
+	// Nothing matched. An exhausted walk left the word CLEAR; a failed one left its own reason there.
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxErrnoLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rdi, disp: 0, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: publishReason)
+	x64LinuxEmitPublishErrno(asm, value: PosixErrnoNoSuchFileOrDirectory)
+
+	asm.placeLabel(publishReason)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: releaseAndRefuse)
+
+	asm.placeLabel(nameTooLong)
+	x64LinuxEmitPublishErrno(asm, value: LinuxErrnoNameTooLong)
+
+	asm.placeLabel(releaseAndRefuse)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostDirFindCloseName)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: refused)
+
+	asm.placeLabel(matched)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(refused)
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: PosixInvalidHandle)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostDirFindFirstName)
+end 'buildX64LinuxDirFindFirstChunk'
+
+// Map one page for a search, leaving it in rax AND in `searchSlot`, or 0 in both. `MAP_ANON` zeroes it, so
+// the cursor, the filled count and the pattern's first byte are already right; only the descriptor is
+// written, and it is written to the "no directory" sentinel so that a caller which never opens one still
+// hands back an object `find_next` reads correctly.
+//
+// ⚠ **A REFUSED `mmap` ANSWERS A SMALL NEGATIVE, NOT NULL**, so the test is a sign test and the answer is
+// normalised to 0 for the zero test every caller writes.
+function x64LinuxEmitAllocateSearch(asm X64RuntimeAsm, searchSlot StackSize)
+	let mapped = asm.newLabel()
+	let recorded = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: MmapKernelChoosesBase)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSearchBytes as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: MmapProtReadWrite)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: MmapAnonPrivateLinux)
+	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: MmapAnonFd)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: MmapNoOffset)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallMmap)
+	x64LinuxEmitStashIfFailed(asm)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: mapped)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(searchSlot), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: recorded)
+
+	asm.placeLabel(mapped)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(searchSlot), srcReg: X64Register.rax)
+	encodeMovRegImm64(asm.code, dest: X64Register.rsi, value: LinuxNoDirectory)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: LinuxSearchDirFdOffset, srcReg: X64Register.rsi)
+
+	asm.placeLabel(recorded)
+end 'x64LinuxEmitAllocateSearch'
+
+// ==========================================================================
+// mrt_host_dir_find_close(rcx = search)
+// ==========================================================================
+
+// `FindClose` — release the enumeration and everything it owns, which on this lane is one descriptor and
+// one mapping. Idempotence is the Std tier's (`__md_close` stamps its closed sentinel and never calls
+// twice); what is here is that a search opened by the single-`stat` route has NO directory, so the `close`
+// is guarded while the `munmap` is not.
+//
+// ⚠ **NEITHER SYSCALL STASHES.** `find_first`'s empty-match path reads the errno word AFTER calling this,
+// and a `close` that failed would overwrite the reason it is about to publish.
+function buildX64LinuxDirFindCloseChunk() returns FunctionCodeChunk
+	let SlotSearch = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let unmap = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), srcReg: X64Register.rcx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: LinuxSearchDirFdOffset, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rdi, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: unmap)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+
+	asm.placeLabel(unmap)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSearchBytes as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallMunmap)
+
+	return asm.finishFunction(HostDirFindCloseName)
+end 'buildX64LinuxDirFindCloseChunk'
+
+// ==========================================================================
+// mrt_host_handle_file_type(rcx = fd) -> rax = the GetFileType word
+// ==========================================================================
+
+// `GetFileType` on a lane whose descriptors carry no such enumeration, and whose static image links no libc
+// to ask `isatty` with. `ioctl(fd, TCGETS, &termios)` IS what `isatty` is made of: it succeeds exactly on a
+// terminal, so the kernel's status is the whole answer and the 36 bytes it writes are all discarded.
+//
+// ⚠ **THE FRAME EXISTS BECAUSE THE KERNEL WRITES THROUGH THE POINTER** — the buffer must be real memory the
+// call may scribble on, which is what a chunk has and an inline `syscall` does not. The two words the
+// caller compares against are `TerminalRuntime`'s, exactly as the errno map above answers in Win32's codes.
+function buildX64LinuxHandleFileTypeChunk() returns FunctionCodeChunk
+	let SlotTermios = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxTermiosBytes))
+
+	let terminal = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxIoctlTcGets as MachineWord)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxBufferDisp(asm, firstSlot: SlotTermios, slotCount: runtimeFrameSlots(LinuxTermiosBytes)))
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallIoctl)
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: terminal)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: FileTypeDisk as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(terminal)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: FileTypeChar as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostHandleFileTypeName)
+end 'buildX64LinuxHandleFileTypeChunk'
+
+// ==========================================================================
+// mrt_host_env_read(rcx = namePtr, rdx = bufPtr, r8 = bufLen) -> rax = bytes written
+// ==========================================================================
+
+// `GetEnvironmentVariableA` — copy an environment variable's value into the caller's buffer and answer the
+// byte count, NOT counting the NUL.
+//
+// ⭐⭐ **THERE IS NO `getenv` ON THIS LANE, SO THE VECTOR IS WALKED.** A static image links no libc, and the
+// kernel hands the environment to `mrt_start` on the stack rather than through any call — so the entry stub
+// captures the vector's base (`BackendDispatch.appendLinuxEnvpCapture`) and this chunk walks it. Each entry
+// is a `NAME=VALUE` C string, and a match is the name followed by `LinuxEnvSeparatorByte`.
+//
+// ⚠ **THE COUNT IS THE ANSWER ON BOTH EXITS.** On a fit it is what was written; on a too-small buffer it is
+// what WOULD have been written, which is `GetEnvironmentVariableA`'s convention and what both callers decode.
+// An unset variable answers the `PosixEnvUnset` the walk seeded, with no arm of its own.
+function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotBufLen = 1 as StackSize
+	let SlotValue = 2 as StackSize
+	let SlotWritten = 3 as StackSize
+	let SlotCursor = 4 as StackSize
+	let SlotName = 5 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(6)
+
+	let scan = asm.newLabel()
+	let compare = asm.newLabel()
+	let nameEnded = asm.newLabel()
+	let nextEntry = asm.newLabel()
+	let copyLoop = asm.newLabel()
+	let finish = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotName), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.r8)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixEnvUnset as MachineWord)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax)
+
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxEnvpLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdi, disp: 0, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finish)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rax)
+
+	// `rax = *cursor`, the next `NAME=VALUE` string, or NULL at the vector's terminator.
+	asm.placeLabel(scan)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finish)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotName), wide: true)
+
+	asm.placeLabel(compare)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rsi, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rdi, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: nameEnded)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rax, disp: 0)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdi, src: X64Register.r9, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nextEntry)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rsi, disp: 1)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: compare)
+
+	// The name ran out: this is a match only if the entry's next byte is the separator. A NUL here — an entry
+	// that IS the name with no `=` — is not a match either.
+	asm.placeLabel(nameEnded)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rax, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.r9, imm: LinuxEnvSeparatorByte)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nextEntry)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rax)
+
+	// The measure-and-copy tail — Windows's contract rather than this lane's: answer `strlen(value)`, and copy
+	// only when it fits STRICTLY inside the capacity, because the NUL needs the last byte.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), wide: true)
+	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: finish)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), wide: true)
+
+	asm.placeLabel(copyLoop)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rsi, disp: 0)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.r9)
+	emitCmpRegImm(asm, reg: X64Register.r9, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finish)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rsi, disp: 1)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rdi, disp: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyLoop)
+
+	asm.placeLabel(nextEntry)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: SpillSlotBytes as Imm32)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rcx)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scan)
+
+	asm.placeLabel(finish)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten), wide: true)
+	return asm.finishFunction(HostEnvReadName)
+end 'buildX64LinuxEnvReadChunk'
+
+// ==========================================================================
+// Assembly
+// ==========================================================================
+
+// ⭐ **ONE BIT, TWO TIERS.** Every gate below is the SAME `RuntimeUsage` bit the Std-tier installer that
+// emits the calls was gated on, so a `call` into an absent chunk is unreachable rather than merely
+// unlikely — the arrangement `appendArm64LinuxRuntimeChunks` states at length.
+//
+// ⚠ **THE SUBPROCESS AND GREEN-THREAD PRODUCERS THAT WIDEN THE arm64-LINUX GATES ARE ABSENT HERE**, so the
+// unions that file carries (`usesIocp` on the open, the write and the read) collapse to the file bit
+// alone: `TargetFacilities` still answers `false` for `subprocess` and `greenThreads` on this lane, and
+// E3104 refuses such a program at its own span long before this list is built.
+export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage)
+	assertLinuxSearchGeometry()
+
+	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
+
+	// ⭐ **L3 — FOUR CHUNKS ON FOUR INDEPENDENT BITS, EACH THE Std TIER'S OWN.** `installClockRuntime` builds
+	// `__clock_now_unix_s` under `usesWallClock` and `__thread_cpu_ticks` under `usesThreadCpuTicks`;
+	// `installProcessRuntime` builds `__proc_exe_path` under `usesExecutablePath`; `CpuParallelRuntime` builds
+	// `__cpu_count` under `usesCpuCount`. One bit, two tiers — so a `call` into an absent chunk is
+	// unreachable rather than merely unlikely (`concatX64FunctionChunks` PANICS on an unresolved CallFixup).
+	if usage.usesWallClock 'wallClock'
+		chunks.push(buildX64LinuxWallClockChunk())
+	end 'wallClock'
+
+	if usage.usesThreadCpuTicks 'threadCpu'
+		chunks.push(buildX64LinuxThreadCpuChunk())
+	end 'threadCpu'
+
+	if usage.usesExecutablePath 'executablePath'
+		chunks.push(buildX64LinuxExePathChunk())
+	end 'executablePath'
+
+	// ⚠ **THE PROCESSOR COUNT RIDES A UNION.** Every green-thread program reads `MAXON_MAX_PROCS` and clamps
+	// it against the machine (`SchedRuntime.emitResolveMaxProcs`), so `usesGt` is a second producer of
+	// `osCpuCount` behind `usesCpuCount`'s back — the arm64 lane measured that as an unresolved-symbol panic
+	// on its first green-thread program.
+	if usage.usesCpuCount or usage.usesGt 'cpuCount'
+		chunks.push(buildX64LinuxCpuCountChunk())
+	end 'cpuCount'
+
+	if x64LinuxUsesHostSurface(usage) 'lastError'
+		chunks.push(buildX64LinuxLastErrorChunk())
+	end 'lastError'
+
+	// The terminal test, on `installTerminalRuntime`'s own bit — the detecting body it builds under exactly
+	// this condition is the only producer of `osHandleFileType`.
+	if usage.usesTerminalDetection 'terminalDetection'
+		chunks.push(buildX64LinuxHandleFileTypeChunk())
+	end 'terminalDetection'
+
+	// The environment read rides the UNION of `osEnvRead`'s two producers (`posixReadsEnvironment`). On this
+	// lane `usesGt` cannot be set — `greenThreads` is `false` here — so it is the terminal detector alone that
+	// makes it, and the union is what keeps the gate true when the scheduler lands.
+	if posixReadsEnvironment(usage) 'envRead'
+		chunks.push(buildX64LinuxEnvReadChunk())
+	end 'envRead'
+
+	if usesFilesystem 'filesystem'
+		chunks.push(buildX64LinuxBaseNameChunk())
+		chunks.push(buildX64LinuxHasWildcardChunk())
+		chunks.push(buildX64LinuxFillFindDataChunk(x64LinuxStatLayout()))
+		chunks.push(buildX64LinuxGlobMatchChunk())
+		chunks.push(buildX64LinuxDirPrefixChunk())
+		chunks.push(buildX64LinuxDirFindFirstChunk())
+		chunks.push(buildX64LinuxDirFindNextChunk())
+		chunks.push(buildX64LinuxDirFindCloseChunk())
+		chunks.push(buildX64LinuxAttrsFromModeChunk(x64LinuxStatLayout()))
+	end 'filesystem'
+
+	if usage.usesManagedFile 'managedFile'
+		chunks.push(buildX64LinuxFileOpenChunk())
+		chunks.push(buildX64LinuxFileSizeChunk())
+		chunks.push(buildX64LinuxPathOpChunk(HostFileDeleteName, syscallNumber: X64LinuxSyscallUnlinkat, thirdArgument: LinuxUnlinkFileFlags))
+		chunks.push(buildX64LinuxFileRenameChunk())
+		chunks.push(buildX64LinuxTransferChunk(HostWriteFileName, syscallNumber: X64LinuxSyscallWrite))
+	end 'managedFile'
+
+	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS TWO PRODUCERS.** `__mf_read` and
+	// `__con_read_stdin` emit the identical op — standard input is a descriptor like any other here — so
+	// gating it on `usesManagedFile` alone would leave a stdin-only program calling a symbol nothing
+	// emitted, and pushing it under both bits would lay the same symbol out twice.
+	if usage.usesManagedFile or usage.usesConsoleStdin 'transferIn'
+		chunks.push(buildX64LinuxTransferChunk(HostReadFileName, syscallNumber: X64LinuxSyscallRead))
+	end 'transferIn'
+
+	if usage.usesManagedDirectory 'managedDirectory'
+		chunks.push(buildX64LinuxPathOpChunk(HostDirCreateName, syscallNumber: X64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord))
+		chunks.push(buildX64LinuxDirCurrentPathChunk())
+		chunks.push(buildX64LinuxFileAttributesChunk())
+	end 'managedDirectory'
+end 'appendX64LinuxHostSurfaceChunks'

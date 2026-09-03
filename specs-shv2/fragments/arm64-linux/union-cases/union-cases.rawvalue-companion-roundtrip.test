@@ -185,9 +185,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __enum_from_raw_Instr.unionCases
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x19, 42
     arm64.loadRegSlot x0, slot0
@@ -207,22 +205,17 @@ func @main {
     arm64.ret
   tryok:
     arm64.cmp x0, 5
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#3
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#3:
     arm64.leaRdata x0, __str_rec_10  ; "add\x0a"
     arm64.bl print
     arm64.b matchcont
   matchnext:
     arm64.cmp x0, 7
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#4
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#4:
     arm64.leaRdata x0, __str_rec_11  ; "nop\x0a"
     arm64.bl print
-    arm64.b matchcont
   matchcont:
     arm64.movImm x19, 0
     arm64.loadRegSlot x0, slot0

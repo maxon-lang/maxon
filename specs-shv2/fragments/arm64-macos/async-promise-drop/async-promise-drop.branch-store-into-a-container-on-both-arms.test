@@ -84,9 +84,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @value {
@@ -119,9 +120,7 @@ func @arm {
     arm64.bl __gt_ready
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, eq
-    arm64.cbnz x0, firstUse
-    arm64.b ifelse
+    arm64.b.ne ifelse
   firstUse:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
@@ -129,9 +128,7 @@ func @arm {
     arm64.b ifcont
   ifelse:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:18: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -144,34 +141,24 @@ func @arm {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_owned
+    arm64.b.ne __im_slow
   __im_owned:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_bounds
+    arm64.b.lt __im_slow
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_buffer
+    arm64.b.hs __im_slow
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow
-    arm64.b __im_viewed
+    arm64.b.eq __im_slow
   __im_viewed:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow
-    arm64.b __im_store
+    arm64.b.eq __im_store
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -183,12 +170,9 @@ func @arm {
     arm64.storeBaseDispReg.word64 [x0 + 0], x22
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq ifcont
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:18: the slot exists \xe2\x80\x94 this arm is only taken when it does\x0a"
     arm64.bl mrt_panic
@@ -198,8 +182,6 @@ func @arm {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
-    arm64.b ifcont
   ifcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -216,34 +198,25 @@ func @completesUnderTheDrive {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, drive
-    arm64.b whileexit
+    arm64.b.ge whileexit
   drive:
     arm64.bl Runtime.yield
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#12
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#13
+    arm64.b.ne critsplit#13
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -253,12 +226,9 @@ func @completesUnderTheDrive {
     arm64.b __im_cont
   critsplit#12:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:26: slot 0 was armed before the drive\x0a"
     arm64.bl mrt_panic
@@ -270,9 +240,7 @@ func @completesUnderTheDrive {
   tryok:
     arm64.bl __gt_is_complete
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, complete
-    arm64.b ifcont
+    arm64.b.eq ifcont
   complete:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -308,8 +276,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl completesUnderTheDrive
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, pushedThreadCancelled
-    arm64.b ifcont#2
+    arm64.cbz x0, ifcont#2
   pushedThreadCancelled:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -325,23 +292,17 @@ func @main {
     arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#13
-    arm64.b __im_load#14
+    arm64.b.ls __im_slow#13
   __im_load#14:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty#15
-    arm64.b critsplit#20
+    arm64.b.eq critsplit#20
   __im_empty#15:
     arm64.cmp x21, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#13
-    arm64.b critsplit#21
+    arm64.b.ne critsplit#21
   __im_slow#13:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -353,12 +314,9 @@ func @main {
     arm64.b __im_cont#12
   critsplit#20:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#12
   __im_cont#12:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_2  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:42: slot 0 was just armed\x0a"
     arm64.bl mrt_panic
@@ -383,8 +341,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl completesUnderTheDrive
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, setThreadCancelled
-    arm64.b ifcont#6
+    arm64.cbz x0, ifcont#6
   setThreadCancelled:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -400,23 +357,17 @@ func @main {
     arm64.movImm x21, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#17
-    arm64.b __im_load#18
+    arm64.b.ls __im_slow#17
   __im_load#18:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty#19
-    arm64.b critsplit#22
+    arm64.b.eq critsplit#22
   __im_empty#19:
     arm64.cmp x22, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#17
-    arm64.b critsplit#23
+    arm64.b.ne critsplit#23
   __im_slow#17:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -428,12 +379,9 @@ func @main {
     arm64.b __im_cont#16
   critsplit#22:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#16
   __im_cont#16:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_blob_3  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:49: slot 0 was just re-armed\x0a"
     arm64.bl mrt_panic
@@ -452,14 +400,10 @@ func @main {
     arm64.bl __gt_await
     arm64.add x20, x20, x0
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_5  ; "panic at async-promise-drop.branch-store-into-a-container-on-both-arms.test:52: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

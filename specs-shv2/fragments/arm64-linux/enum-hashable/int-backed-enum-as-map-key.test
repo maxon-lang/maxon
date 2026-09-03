@@ -68,13 +68,7 @@ func @main {
     arm64.movRegReg x2, x23
     arm64.bl Map.insert
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
-  tryerr#2:
-    arm64.b trycont#3
-  tryok#1:
-    arm64.b trycont#3
+    arm64.b.ne trycont#3
   trycont#3:
     arm64.movImm x20, 404
     arm64.leaRdata x0, __str_rec_3  ; "Not Found"
@@ -104,13 +98,7 @@ func @main {
     arm64.movRegReg x2, x23
     arm64.bl Map.insert
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#5
-    arm64.b tryok#4
-  tryerr#5:
-    arm64.b trycont#6
-  tryok#4:
-    arm64.b trycont#6
+    arm64.b.ne trycont#6
   trycont#6:
     arm64.movImm x1, 404
     arm64.leaRdata x2, __layout_Map_HttpStatus_String
@@ -118,8 +106,7 @@ func @main {
     arm64.leaRdata x4, __witness_HttpStatus.Equatable
     arm64.movRegReg x0, x19
     arm64.bl Map.contains
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   check:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19

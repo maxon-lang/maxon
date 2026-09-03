@@ -158,7 +158,7 @@ none: it is a `.data` load and lowers wherever shv2 emits.
 ## Tests
 
 <!-- test: the-default-is-every-processor -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐⭐ **THE FLIP ITSELF, AND ITS SUBJECT IS THE ABSENCE OF A MARKER.** Every other case in this file names a
 count; this one names none, so it reads whatever `emitResolveMaxProcs` resolves with `MAXON_MAX_PROCS`
 absent — and asserts that this is the machine's own processor count. It is the one case that goes red if
@@ -255,7 +255,7 @@ aggregate=479997
 ```
 
 <!-- test: the-procs-marker-pins-one-processor -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 **THE MARKER'S OWN GATE, AND IT IS LOAD-BEARING ONLY AFTER THE FLIP.** The same program pinned to one
 processor, and the one count here that can be asserted as a BARE NUMBER on any machine: `min(1, cpuCount)`
@@ -335,7 +335,7 @@ aggregate=479997
 ```
 
 <!-- test: the-answer-does-not-depend-on-the-processor-count -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 4 -->
 ⭐⭐ **THE INVARIANCE, WHICH IS THE ONE PROPERTY THE WHOLE FLIP MUST PRESERVE.** Four processors, and the
 program must answer the number its two siblings answer at one and at the machine's count. Nothing else in
@@ -412,7 +412,7 @@ aggregate=479997
 ```
 
 <!-- test: the-procs-marker-raises-the-processor-count -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 4 -->
 ⭐⭐ **THE MARKER'S OWN GATE IN THE OTHER DIRECTION, AND THE ONLY CASE HERE THAT COULD SEE AN INERT
 `procs:` TODAY.** Its two `procs:`-marked siblings above cannot: one names the count the default already

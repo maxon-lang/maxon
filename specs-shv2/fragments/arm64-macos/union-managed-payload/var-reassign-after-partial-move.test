@@ -46,9 +46,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#1
-    arm64.b matchnext#4
+    arm64.b.ne matchnext#4
   matcharm#1:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
@@ -61,9 +59,7 @@ func @main {
     arm64.ret
   matchnext#4:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#2
-    arm64.b matchdead#3
+    arm64.b.ne matchdead#3
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movImm x0, 0
@@ -72,7 +68,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
-    arm64.b matchcont#5
   matchcont#5:
     arm64.leaRdata x19, __str_rec_3  ; "reassign second payload string long enough to be a real heap allocation"
     arm64.movImm x0, 16
@@ -88,9 +83,7 @@ func @main {
     arm64.bl __destruct_Message
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#6
-    arm64.b matchnext#9
+    arm64.b.ne matchnext#9
   matcharm#6:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x21
@@ -103,9 +96,7 @@ func @main {
     arm64.ret
   matchnext#9:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#7
-    arm64.b matchdead#8
+    arm64.b.ne matchdead#8
   matcharm#7:
     arm64.loadRegBaseDisp.word64 x19, [x21 + 8]
     arm64.movImm x0, 0
@@ -114,7 +105,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
-    arm64.b matchcont#10
   matchcont#10:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x21

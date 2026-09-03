@@ -109,21 +109,12 @@ func @main {
     arm64.bl __destruct_CodepointView
     arm64.movImm x0, 0
     arm64.cmp x23, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forjoin
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop
-    arm64.b forexit
-  loop:
-    arm64.b __il_body
+    arm64.b.ne forexit
   __il_body:
     arm64.loadRegBaseDisp.word64 x21, [x22 + 16]
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_CodepointIterator
@@ -132,14 +123,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __destruct_SingleChar
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_11  ; "panic at character-element-type.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -163,9 +150,6 @@ func @main {
   forexit:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_CodepointIterator
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x20
@@ -180,9 +164,4 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  forstep:
-    arm64.movRegReg x0, x22
-    arm64.bl CodepointIterator.advance
-    arm64.movRegReg x0, x9
-    arm64.b forhdr
 }

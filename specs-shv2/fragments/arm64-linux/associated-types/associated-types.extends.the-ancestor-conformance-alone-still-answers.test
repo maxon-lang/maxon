@@ -47,14 +47,10 @@ func @Walker.create {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 100
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at associated-types.extends.the-ancestor-conformance-alone-still-answers.test:15: Range check failed: value outside typealias 'Pos'\x0a"
     arm64.bl mrt_panic
@@ -78,14 +74,10 @@ func @Walker.retreat {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.sub x1, x1, 1
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, 100
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at associated-types.extends.the-ancestor-conformance-alone-still-answers.test:24: Range check failed: value outside typealias 'Pos'\x0a"
     arm64.bl mrt_panic
@@ -113,10 +105,8 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x19
     arm64.bl Walker.retreat
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x0, 20
     arm64.movImm x1, 0

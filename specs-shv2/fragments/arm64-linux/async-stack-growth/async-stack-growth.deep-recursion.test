@@ -47,12 +47,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @deepRecurse {
@@ -62,9 +63,7 @@ func @deepRecurse {
     arm64.movRegReg x19, x0
     arm64.bl Runtime.yield
     arm64.cmp x19, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, base
-    arm64.b ifcont
+    arm64.b.ne ifcont
   base:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -94,14 +93,10 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __gt_await
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at async-stack-growth.deep-recursion.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -43,17 +43,13 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x20, 512
-    arm64.cset x0, lt
-    arm64.cbnz x0, push
-    arm64.b forexit
+    arm64.b.ge forexit
   push:
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x20, x20, 1
     arm64.b forhdr
@@ -63,35 +59,23 @@ func @main {
     arm64.bl __mm_counter_raw_alloc_total
     arm64.movImm x1, 0
     arm64.cmp x20, 0
-    arm64.cset x2, gt
-    arm64.cbnz x2, trackedMoved
-    arm64.b critsplit#12
+    arm64.b.le ifcont#6
   trackedMoved:
     arm64.movImm x1, 2
-    arm64.b ifcont#6
-  critsplit#12:
-    arm64.b ifcont#6
   ifcont#6:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, rawDidNot
-    arm64.b critsplit#13
+    arm64.b.ne critsplit
   rawDidNot:
     arm64.add x20, x1, 5
     arm64.b ifcont#8
-  critsplit#13:
+  critsplit:
     arm64.movRegReg x20, x1
-    arm64.b ifcont#8
   ifcont#8:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-mm-counters.the-two-layers-are-disjoint.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

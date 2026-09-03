@@ -20,59 +20,43 @@ func @main {
     arm64.fpLoadRdata d0, [rdata + __fconst_0x7ff0000000000000]
     arm64.fsub d0, d0, d0
     arm64.fpLoadRdata d1, [rdata + __fconst_42]
-    arm64.b __il_body
-  __il_body:
-    arm64.b ifcont#13
   ifcont#13:
     arm64.fcmp d0, d0
-    arm64.cset x0, ne
-    arm64.cbnz x0, other_nan
-    arm64.b ifcont#15
+    arm64.b.eq ifcont#15
   other_nan:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#15:
     arm64.fcmp d1, d0
-    arm64.cset x0, mi
-    arm64.cbnz x0, lt
-    arm64.b ifcont#17
+    arm64.b.pl ifcont#17
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#17:
     arm64.fcmp d1, d0
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#19
+    arm64.b.le ifcont#19
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#19:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#1
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#1:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
   matchnext#5:
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext#6
+    arm64.b.ne matchnext#6
   matcharm#2:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
   matchnext#6:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#3:
     arm64.movImm x0, 0
     arm64.epilogue 16

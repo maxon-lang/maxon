@@ -61,15 +61,11 @@ func @Array.at {
     arm64.movRegReg x19, x2
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load#9
+    arm64.b.hs __im_slow
   __im_load#9:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.arm64AddLsl x2, x2, x1, lsl #3
@@ -77,32 +73,23 @@ func @Array.at {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load#10
+    arm64.b.hs __im_slow
   __im_load#10:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#12
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow
-    arm64.b critsplit#13
+    arm64.b.eq __im_slow
   critsplit#13:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
@@ -113,12 +100,9 @@ func @Array.at {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -149,9 +133,7 @@ func @Array.contains {
     arm64.bl Array.at
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -198,8 +180,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Array.contains
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, missing
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   missing:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -214,14 +195,10 @@ func @main {
     arm64.bl print
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_13  ; "panic at a-self-is-its-own-instance-record-keeps-its-parameter-opaque.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

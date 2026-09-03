@@ -21,7 +21,6 @@ ExitCode: 0
 func @shuffle6 {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.movImm x16, 100000
     arm64.mul x0, x0, x16
@@ -38,7 +37,6 @@ func @shuffle6 {
     arm64.mul x1, x4, x16
     arm64.add x0, x0, x1
     arm64.add x0, x0, x2
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -56,9 +54,7 @@ func @main {
     arm64.bl shuffle6
     arm64.movImm x16, 142653
     arm64.cmp x0, x16
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

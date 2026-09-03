@@ -62,9 +62,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x19
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.storeSlotReg slot2, x19
@@ -88,23 +86,17 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#13
+    arm64.b.eq critsplit#13
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#14
+    arm64.b.ne critsplit#14
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -114,18 +106,14 @@ func @main {
     arm64.b __im_cont
   critsplit#13:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x19, 0
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
-    arm64.b trycont
   trycont:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -196,13 +184,10 @@ func @main {
     arm64.b matchcont
   matchnext:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#1
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#1:
     arm64.leaRdata x0, __str_rec_4  ; "none\x0a"
     arm64.bl print
-    arm64.b matchcont
   matchcont:
     arm64.movImm x19, 0
     arm64.loadRegSlot x0, slot1

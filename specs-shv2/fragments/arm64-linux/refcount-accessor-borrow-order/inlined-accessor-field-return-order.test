@@ -87,9 +87,7 @@ func @exprType {
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
@@ -98,9 +96,7 @@ func @exprType {
     arm64.b matchcont
   matchnext#5:
     arm64.cmp x1, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#2
-    arm64.b matchnext#6
+    arm64.b.ne matchnext#6
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
@@ -109,9 +105,7 @@ func @exprType {
     arm64.b matchcont
   matchnext#6:
     arm64.cmp x1, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#3:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -120,7 +114,6 @@ func @exprType {
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.b matchcont
   matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -159,9 +152,7 @@ func @tyLen {
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
@@ -173,12 +164,9 @@ func @tyLen {
     arm64.b matchcont
   matchnext:
     arm64.cmp x1, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#2
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#2:
     arm64.movImm x0, 0
-    arm64.b matchcont
   matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -193,9 +181,7 @@ func @makeFresh {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, z
-    arm64.b ifcont
+    arm64.b.ne ifcont
   z:
     arm64.movImm x0, 24
     arm64.movImm x1, 0
@@ -259,20 +245,15 @@ func @walk {
     arm64.movImm x21, 1
     arm64.movRegReg x22, x20
     arm64.movRegReg x20, x0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x21, x19
-    arm64.cset x0, le
-    arm64.cbnz x0, loop
-    arm64.b forexit
+    arm64.b.gt forexit
   loop:
     arm64.movRegReg x0, x21
     arm64.bl makeFresh
     arm64.movRegReg x23, x0
     arm64.cmp x22, 888
-    arm64.cset x0, eq
-    arm64.cbnz x0, ret
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ret:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Expr
@@ -302,7 +283,6 @@ func @walk {
     arm64.bl __destruct_Ty
     arm64.movRegReg x0, x23
     arm64.bl __destruct_Expr
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.movRegReg x20, x25
@@ -340,14 +320,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Expr
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at inlined-accessor-field-return-order.test:72: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -1,0 +1,91 @@
+// Test: managed-directory.next-after-close-throws-closed
+function main() returns ExitCode
+	var dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
+	dir.close()
+	try dir.next() otherwise (e) 'handler'
+		match e 'kind'
+			closed then return 42
+			default panic("expected closed")
+		end 'kind'
+	end 'handler'
+	return 2
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "./*"
+    x64.callDirect String.toByteArray
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __md_open_search
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __md_close
+    x64.movRegReg rcx, r12
+    x64.callDirect __md_next
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 7
+    x64.jcc notEqual, matchdefault
+  matcharm:
+    x64.movRegImm32 rbx, 42
+    x64.movRegReg rcx, r12
+    x64.callDirect __md_destruct
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdefault:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at managed-directory.next-after-close-throws-closed.test:8: expected closed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __md_destruct
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

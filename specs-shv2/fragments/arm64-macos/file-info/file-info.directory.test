@@ -48,9 +48,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @main {
@@ -68,9 +69,7 @@ func @main {
     arm64.bl File.info
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_rec_21  ; "info failed"
     arm64.bl print
@@ -86,9 +85,7 @@ func @main {
   tryok:
     arm64.loadRegBaseDisp.byte x0, [x20 + 32]
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, dc
-    arm64.b ifcont
+    arm64.b.ne ifcont
   dc:
     arm64.leaRdata x0, __str_rec_22  ; "expected directory"
     arm64.bl print

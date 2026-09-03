@@ -35,14 +35,10 @@ func @Meter.record {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, 100
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-leaf-with-a-store-and-a-panic-stays-a-call.test:12: Range check failed: value outside typealias 'Percent'\x0a"
     arm64.bl mrt_panic
@@ -76,14 +72,10 @@ func @main {
     arm64.sub x0, x0, x20
     arm64.add x0, x0, 40
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-leaf-with-a-store-and-a-panic-stays-a-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

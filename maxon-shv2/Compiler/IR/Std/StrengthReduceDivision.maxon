@@ -34,12 +34,12 @@
 //   • `loopInvariantCodeMotion` can hoist a reduced quotient out of a loop. An `idiv` never left one.
 //
 // ⚠ **THE TARGET GATE.** The general sequence needs a 64×64 → 128 multiply, of which it reads the HIGH
-// half (`StdBinOpcode.mulHighSigned`). x64 has one (`imul r/m64`); **wasm32 has NONE** — emulating it
-// costs four 32×32 products and their carries, ~20 instructions against the ONE `i64.div_s` the
-// reduction would be replacing — and arm64's `SMULH` exists but is not in the Target dialect yet. So
-// the pass asks `targetLowersMulHighSigned` and rewrites NOTHING on a target that cannot spell the
-// opcode. `PromoteStackRecords` is the precedent for a target-conditional Std pass, and the gate is
-// what keeps every arm64 and wasm golden byte-identical for this row.
+// half (`StdBinOpcode.mulHighSigned`). x64 has one (`imul r/m64`) and arm64 has one (`SMULH`);
+// **wasm32 has NONE** — emulating it costs four 32×32 products and their carries, ~20 instructions
+// against the ONE `i64.div_s` the reduction would be replacing. So the pass asks
+// `targetLowersMulHighSigned` and rewrites NOTHING on a target that cannot spell the opcode.
+// `PromoteStackRecords` is the precedent for a target-conditional Std pass, and the gate is what keeps
+// every wasm golden byte-identical for this row.
 //
 // ⛔⛔ **THE DIVISORS THIS PASS REFUSES, AND EACH REFUSAL IS A CORRECTNESS ARGUMENT RATHER THAN A
 // MISSING FEATURE.** `StdOp.div`/`mod` carry `isPure: false` because x64's `idiv` FAULTS, and
@@ -113,18 +113,17 @@ typealias PositiveModulus = int(1 to i64.max)
 
 // Whether this CPU's instruction selection lowers `StdBinOpcode.mulHighSigned`.
 //
-// ⚠ **IT IS A QUESTION ABOUT THE LOWERING, NOT ABOUT THE HARDWARE, and the arm64 answer is the one
-// that shows why.** AArch64 HAS the instruction (`SMULH Xd, Xn, Xm`, a plain three-address form that is
-// strictly nicer than x64's fixed-register `imul r/m64`); what it does not have is a `TargetOp` for it
-// or an isel arm that emits one, so the honest answer here is `false` until that lands. wasm32's `false`
-// is the hardware's: there is no `i64.mul_high_s` and there is no cheap way to build one.
+// ⚠ **IT IS A QUESTION ABOUT THE LOWERING, NOT ABOUT THE HARDWARE, and wasm32 is the one that shows
+// why.** Both CPUs have the instruction — x64's fixed-register `imul r/m64` and AArch64's three-address
+// `SMULH Xd, Xn, Xm` — and each has a `TargetOp` and an isel arm for its own spelling. wasm32's `false`
+// is the hardware's: there is no `i64.mul_high_s`, and building one costs four 32×32 products and their
+// carries against the single `i64.div_s` the reduction would replace.
 //
-// The three isels each PANIC on the opcode they cannot lower, so a wrong answer here is a loud compiler
-// failure on the first reduced division rather than a silent miscompile.
+// wasm's isel PANICS on the opcode it cannot lower, so a wrong answer here is a loud compiler failure on
+// the first reduced division rather than a silent miscompile.
 function targetLowersMulHighSigned(cpu CpuArch) returns bool
 	return match cpu 'c'
-		x64 gives true
-		arm64 gives false
+		x64 or arm64 gives true
 		wasm32 gives false
 	end 'c'
 end 'targetLowersMulHighSigned'

@@ -21,14 +21,10 @@ func @pick {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#10
-    arm64.b __rc_chk#11
+    arm64.b.lt __rc_panic#10
   __rc_chk#11:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#10
-    arm64.b __rc_ok#9
+    arm64.b.le __rc_ok#9
   __rc_panic#10:
     arm64.leaRdata x0, __str_blob_0  ; "panic at match-break.every-arm-breaks.test:4: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
@@ -38,31 +34,17 @@ func @pick {
   __rc_ok#9:
     arm64.movImm x1, 7
     arm64.cmp x0, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext
-  matcharm#1:
-    arm64.b matchcont
+    arm64.b.eq matchcont
   matchnext:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdefault
-  matcharm#3:
-    arm64.b matchcont
-  matchdefault:
-    arm64.b matchcont
+    arm64.b.eq matchcont
   matchcont:
     arm64.add x0, x1, 1
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#13
-    arm64.b __rc_chk#14
+    arm64.b.lt __rc_panic#13
   __rc_chk#14:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#13
-    arm64.b __rc_ok#12
+    arm64.b.le __rc_ok#12
   __rc_panic#13:
     arm64.leaRdata x0, __str_blob_1  ; "panic at match-break.every-arm-breaks.test:11: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
@@ -72,9 +54,6 @@ func @pick {
   __rc_ok#12:
     arm64.epilogue 16
     arm64.ret
-  afterbreak#2:
-  afterbreak#4:
-  afterbreak#6:
 }
 
 func @main {
@@ -92,14 +71,10 @@ func @main {
     arm64.add x0, x19, x0
     arm64.sub x0, x0, 16
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at match-break.every-arm-breaks.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -65,12 +65,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @Step.create {
@@ -111,13 +112,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
     arm64.movImm x19, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.movImm x16, 6000
     arm64.cmp x21, x16
-    arm64.cset x0, lt
-    arm64.cbnz x0, rounds
-    arm64.b whileexit
+    arm64.b.ge whileexit
   rounds:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -144,14 +142,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x0, 0
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.add x21, x21, 1
     arm64.movRegReg x19, x0
@@ -221,34 +214,27 @@ func @Step.__loop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.b serve
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, stopping
-    arm64.b dispatch
+    arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=tick, [2]=total] @__jumptable_2
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=__il_body#11, [2]=total] @__jumptable_2
   __shutdown:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
     arm64.bl __mm_decref
-    arm64.b stopping
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
-    arm64.b drain
   drain:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x1, x0
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, finished
-    arm64.b abandon
+    arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -264,22 +250,17 @@ func @Step.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_abandon
     arm64.b drain
-  tick:
-    arm64.b __il_body#11
   __il_body#11:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.add x1, x1, 1
     arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.b __il_cont#10
   __il_cont#10:
     arm64.bl __mm_decref
     arm64.b serve
   total:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.b __il_body#13
   __il_body#13:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
-    arm64.b __il_cont#12
   __il_cont#12:
     arm64.bl __mm_decref
     arm64.movImm x2, 0
@@ -295,21 +276,18 @@ func @Step.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=tick, [2]=total] @__jumptable_3
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=total] @__jumptable_3
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
     arm64.b abandondrop
-  tick:
-    arm64.b abandondrop
   total:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref

@@ -52,25 +52,14 @@ func @breakUnderPressure {
     arm64.add x0, x0, 12
     arm64.movImm x12, 0
     arm64.movImm x13, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x13, 100
-    arm64.cset x14, lt
-    arm64.cbnz x14, loop
-    arm64.b critsplit
+    arm64.b.ge whileexit
   loop:
     arm64.add x12, x12, x13
     arm64.add x13, x13, 1
     arm64.cmp x12, 6
-    arm64.cset x14, gt
-    arm64.cbnz x14, stop
-    arm64.b ifcont
-  stop:
-    arm64.b whileexit
-  ifcont:
-    arm64.b whilehdr
-  critsplit:
-    arm64.b whileexit
+    arm64.b.le whilehdr
   whileexit:
     arm64.add x1, x12, x1
     arm64.add x1, x1, x2
@@ -94,9 +83,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl breakUnderPressure
     arm64.cmp x0, 88
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

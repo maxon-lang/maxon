@@ -39,9 +39,7 @@ func @main {
     arm64.bl __managed_mem_create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -58,12 +56,9 @@ func @main {
     arm64.bl __mm_retain
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x22, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b whileexit
+    arm64.b.ge whileexit
   fill:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x20
@@ -73,9 +68,7 @@ func @main {
   whileexit:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 200
-    arm64.cset x0, ne
-    arm64.cbnz x0, notShared
-    arm64.b ifcont
+    arm64.b.eq ifcont
   notShared:
     arm64.movImm x22, 2
     arm64.movRegReg x0, x21
@@ -95,15 +88,11 @@ func @main {
     arm64.movImm x1, 199
     arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 199
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#19
+    arm64.b.ls __im_slow
   __im_load#19:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 1592
@@ -111,46 +100,30 @@ func @main {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 199
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#20
+    arm64.b.ls __im_slow
   __im_load#20:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 199
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#22
+    arm64.b.eq __im_cont
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#23
-  critsplit#23:
-    arm64.b __im_cont
-  critsplit#22:
-    arm64.b __im_cont
+    arm64.b.ne __im_cont
   __im_slow:
     arm64.movRegReg x0, x21
     arm64.bl __managed_get
     arm64.movRegReg x2, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x2, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#9
-    arm64.b tryok#8
+    arm64.b.eq tryok#8
   tryerr#9:
     arm64.movImm x22, 3
     arm64.movRegReg x0, x21
@@ -171,14 +144,10 @@ func @main {
     arm64.add x0, x0, x1
     arm64.sub x22, x0, 200
     arm64.cmp x22, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x22, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-reallocating-grow-is-visible-through-every-adoption.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

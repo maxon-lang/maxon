@@ -50,12 +50,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @dbl {
@@ -79,12 +80,9 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 1
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 5
-    arm64.cset x0, le
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.gt whileexit
   loop:
     arm64.leaFuncAddr x0, dbl
     arm64.bl __gt_spawn
@@ -99,14 +97,10 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at async-scheduler.struct-reuse.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -101,14 +101,10 @@ func @cursorOnTheSecondOfTwo {
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#2
-    arm64.b __rc_chk#3
+    arm64.b.lt __rc_panic#2
   __rc_chk#3:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#2
-    arm64.b __rc_ok#1
+    arm64.b.le __rc_ok#1
   __rc_panic#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-handle-field-reassigned-releases-the-one-it-replaced.test:22: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -120,14 +116,10 @@ func @cursorOnTheSecondOfTwo {
     arm64.ret
   __rc_ok#1:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#5
-    arm64.b __rc_chk#6
+    arm64.b.lt __rc_panic#5
   __rc_chk#6:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#5
-    arm64.b __rc_ok#4
+    arm64.b.le __rc_ok#4
   __rc_panic#5:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-handle-field-reassigned-releases-the-one-it-replaced.test:22: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic

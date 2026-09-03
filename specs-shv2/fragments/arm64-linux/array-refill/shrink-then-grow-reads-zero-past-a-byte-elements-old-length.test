@@ -37,12 +37,9 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x20, 5
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   fill:
     arm64.movImm x1, 9
     arm64.movRegReg x0, x19
@@ -58,17 +55,12 @@ func @main {
     arm64.bl __managed_resize
     arm64.movImm x20, 0
     arm64.movImm x21, 2
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.cmp x21, 5
-    arm64.cset x0, lt
-    arm64.cbnz x0, sum
-    arm64.b whileexit#6
+    arm64.b.ge whileexit#6
   sum:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#11
-    arm64.b __rc_ok#10
+    arm64.b.ge __rc_ok#10
   __rc_panic#11:
     arm64.leaRdata x0, __str_blob_0  ; "panic at shrink-then-grow-reads-zero-past-a-byte-elements-old-length.test:14: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -81,15 +73,11 @@ func @main {
   __rc_ok#10:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#21
+    arm64.b.hs __im_slow
   __im_load#21:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
@@ -97,66 +85,43 @@ func @main {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#22
+    arm64.b.hs __im_slow
   __im_load#22:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x21
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#24
+    arm64.b.eq __im_cont
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#25
-  critsplit#25:
-    arm64.b __im_cont
-  critsplit#24:
-    arm64.b __im_cont
+    arm64.b.ne __im_cont
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
     arm64.movRegReg x1, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x0, 99
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.add x20, x20, x0
     arm64.add x21, x21, 1
     arm64.b whilehdr#4
   whileexit#6:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#13
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic#13
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#13
-    arm64.b __rc_ok#12
+    arm64.b.le __rc_ok#12
   __rc_panic#13:
     arm64.leaRdata x0, __str_blob_1  ; "panic at shrink-then-grow-reads-zero-past-a-byte-elements-old-length.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

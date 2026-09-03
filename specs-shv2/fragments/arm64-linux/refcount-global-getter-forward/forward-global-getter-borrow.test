@@ -141,14 +141,10 @@ func @Box.size {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_8  ; "panic at forward-global-getter-borrow.test:26: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
@@ -170,8 +166,7 @@ func @loadBase {
     arm64.storeSlotReg slot0, x19
     arm64.leaGlobal x0, __data_baseLoaded
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.cbnz x0, hit
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   hit:
     arm64.leaGlobal x0, __data_cachedBase
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -301,8 +296,7 @@ func @buildFor {
     arm64.bl loadBase
     arm64.movRegReg x20, x0
     arm64.eor x0, x19, 1
-    arm64.cbnz x0, native
-    arm64.b ifcont#2
+    arm64.cbz x0, ifcont#2
   native:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
@@ -316,8 +310,7 @@ func @buildFor {
   ifcont#2:
     arm64.leaGlobal x0, __data_mergedDone
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.cbnz x0, cached
-    arm64.b ifcont#4
+    arm64.cbz x0, ifcont#4
   cached:
     arm64.leaGlobal x0, __data_cachedMerged
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -399,26 +392,18 @@ func @augment {
     arm64.storeSlotReg slot0, x19
     arm64.bl buildFor
     arm64.movRegReg x19, x0
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_chk
+    arm64.b.lt __il_slow
   __rc_chk:
     arm64.cmp x20, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.le __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl Box.size
     arm64.movRegReg x20, x0
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Box_Item
@@ -435,14 +420,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl augment
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_9  ; "panic at forward-global-getter-borrow.test:76: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

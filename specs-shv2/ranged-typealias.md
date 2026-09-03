@@ -274,7 +274,7 @@ end 'main'
 ### Float range check: runtime guard on a non-literal
 
 <!-- test: float-runtime-range-panic -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY — a PANIC-RUNTIME restriction, and this file's CANONICAL statement of it (every other panic-text case here points back at this one rather than restating it): the case pins the panic MESSAGE and the BACKTRACE, which only a panic runtime prints. **Both x64 lanes have one** — `mrt_panic` in `X64Runtime.maxon`, one hand-assembled chunk over whichever stderr writer and process-exit route the OS uses — so both are pinned. arm64 and wasm have NONE: their range verdict is a bare exit with EMPTY stderr, at `StdToArm64Conversion.lowerRangePanic` and `StdToWasm.emitRangePanic` — both over the one `PanicExitCode` in `Targets/Shared/PanicExitCode.maxon` that x64's `mrt_panic` also exits with (rung A1y; it was three declarations of that number, in three files under two names). Measured 2026-07-26 for arm64-macos and wasm32-wasi; x64-linux was measured silent then too and joined the message side on 2026-07-31 (rung A1j), which is why the exclusion now names the two backends that lack the runtime rather than the one OS that had it. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when an arm64 or wasm panic runtime lands. -->
 ```maxon
 typealias Pct = float(0.0 to 100.0)
@@ -301,7 +301,7 @@ Stack trace:
 ```
 
 <!-- test: float-runtime-negative-bound-panic -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Neg = float(-100.0 to -1.0)
@@ -352,7 +352,7 @@ The narrowing an `f32`-bounded alias promises, checked at run time — a value a
 f64 holds comfortably but an f32 cannot.
 
 <!-- test: float-narrow-f64-to-f32 -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Wide = float(f64.min to f64.max)
@@ -524,7 +524,7 @@ end 'main'
 ### Runtime range check fails (panic)
 
 <!-- test: runtime-check-fail -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1043,7 +1043,7 @@ end 'main'
 ### Return value range check: runtime panic
 
 <!-- test: return-runtime-check-fail -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Score = int(0 to 100)
@@ -1878,7 +1878,7 @@ DECLARED range: `int(-100 to -1)` excludes `0` (so `/` earns a bare `idiv`) and 
 excludes `-1` as well (so `mod` earns one too). Both consequences are pinned there.
 
 <!-- test: negative-upper-bound-cast-is-checked -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 #### A runtime cast into a wholly-negative range tests its upper bound
 `0` is above `-1`, so the cast is the violation and the guard must fire at the cast's own line — as it
 does for the positive `int(0 to 150)` in `runtime-check-fail` above. Before the fix `a` simply became
@@ -1912,7 +1912,7 @@ Stack trace:
 ```
 
 <!-- test: negative-upper-bound-return-is-checked -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 #### The ranged-RETURN door tests it too, and `low == i64.min` is what left it with no check at all
 `int(i64.min to -2)` needs NO lower compare (`i64.min` cannot be violated), so eliding the upper as well
 left the range with an EMPTY check list — the one shape where the bug was total rather than partial.
@@ -2139,7 +2139,7 @@ The half a literal cannot reach. `grow(5)` is a call result, so nothing folds it
 where the value does, at the store.
 
 <!-- test: field-store-runtime-panic -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. The CHECK is target-neutral and the compile-time cases beside this one cover it on every target. -->
 ```maxon
 typealias Wide = int(0 to 1000)
@@ -2183,7 +2183,7 @@ still believed. The guard goes at the STORE, in the caller, where the element ty
 panic names the `push` that wrote it.
 
 <!-- test: array-element-runtime-panic -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. -->
 ```maxon
 typealias Wide = int(0 to 1000)
@@ -2239,7 +2239,7 @@ error E3005: <fragment>:8:8: Value 500 is outside the range of 'Percent' (int(0 
 ```
 
 <!-- test: array-set-runtime-panic -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for the reason above. -->
 ```maxon
 typealias Wide = int(0 to 1000)
@@ -2297,7 +2297,7 @@ error E3005: <fragment>:8:4: Value 500 is outside the range of 'Percent' (int(0 
 ```
 
 <!-- test: array-insert-runtime-panic -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for the reason above. -->
 ```maxon
 typealias Wide = int(0 to 1000)
@@ -2405,7 +2405,7 @@ Every other position owes both halves (`RangeCheckGuard`); this one has no exemp
 the exemption a call argument does have is precisely the callee entry guard a shared body cannot hold.
 
 <!-- test: type-parameter-argument-runtime-panic -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. The CHECK is target-neutral and the compile-time cases beside this one cover it on every target. -->
 ```maxon
 typealias Wide = int(0 to 1000)
@@ -2767,7 +2767,7 @@ already fails. (The compiled fragment carries a `// test:` line ahead of the sou
 its line 12 and `let y` its line 13 — the number below names the FIRST of the two.)
 
 <!-- test: guards-run-in-source-order -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. On arm64 and wasm the bare exit 1 cannot tell the two lines apart, so the ORDER this case exists to pin is observable only on x64. -->
 ```maxon
 typealias Small = int(0 to 10)
@@ -2815,7 +2815,7 @@ slot cannot legally hold, observed by the program that owns it. There is no ```s
 itself the assertion (`SpecParser.SpecStdout`): an unpinned stdout asserts the program printed NOTHING.
 
 <!-- test: store-guard-fires-before-the-store -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 typealias Percent = int(0 to 100)
 typealias Wide = int(0 to 100000)
@@ -2858,7 +2858,7 @@ DIVISION ran first and the program died `integer divide by zero` — the same ex
 diagnostic, and the check the language promises never ran at all.
 
 <!-- test: cast-guard-fires-before-the-division -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 typealias NonZero = int(1 to 1000)
 typealias Wide = int(0 to 100000)
@@ -2894,7 +2894,7 @@ after a guard must have printed and the third must not — which is the whole cl
 to an exit code.
 
 <!-- test: guards-fire-at-their-own-site-in-source-order -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 typealias Small = int(0 to 10)
 typealias Wide = int(0 to 100000)
@@ -3233,7 +3233,7 @@ end 'main'
 ```
 
 <!-- test: closure-body-out-of-range-cast-panics-in-the-closure -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. The FRAME NAME is the whole point of this case, and arm64/wasm's bare exit 1 carries none; the check itself is target-neutral and the in-range case above covers it everywhere. -->
 The frame the trace names is the load-bearing part: the guard runs inside the lifted closure, so
 `main$closure_0` is on the stack when it fires. `maxon-sharp` names its own spelling of the same frame.
@@ -3333,7 +3333,7 @@ earlier `ret` and one of the three earlier lines never prints; pair an earlier s
 540 is returned unchecked, through a `Small`.
 
 <!-- test: fourth-guarded-return-site-fires-at-its-own-site -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE, and `mrt_panic` is appended to the two x64 lanes and to neither of the others, where a range verdict is a bare exit 1 with EMPTY stderr. The in-range control above covers the mechanism on every target. -->
 ```maxon
 typealias Small = int(0 to 100)
@@ -3393,7 +3393,7 @@ three `ret`s, a permutation that gets both the second and the third right has no
 first wrong with.
 
 <!-- test: repeated-return-value-guards-the-site-it-leaves-through -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for the reason given two cases up: it pins the panic MESSAGE. -->
 ```maxon
 typealias Small = int(0 to 100)
@@ -3439,7 +3439,7 @@ REVERSE — the guard would carry the first site's line — which is a live risk
 by walking the blocks BACK TO FRONT so that each one prepends onto its value's chain.
 
 <!-- test: last-repeated-return-site-fires-with-its-own-line -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for the reason given three cases up: it pins the panic MESSAGE. -->
 ```maxon
 typealias Narrow = int(10 to 100)
@@ -3494,7 +3494,7 @@ admits its value, and `pick(400)` must then name the LOOP's line, which is the o
 refused ever passed through.
 
 <!-- test: return-in-a-loop-body-guards-its-own-line -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for `float-runtime-range-panic`'s reason: this case pins the panic MESSAGE, and `mrt_panic` is appended to the two x64 lanes and to neither of the others, where a range verdict is a bare exit 1 with EMPTY stderr. -->
 ```maxon
 typealias Small = int(0 to 100)
@@ -3542,7 +3542,7 @@ becomes the LAST one in block order. The printed `c=5` is what proves the cast's
 admitted its value, so the panic that follows can only be the `return` on the next line.
 
 <!-- test: return-guarded-behind-a-cast-in-the-same-branch -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 <!-- x64 ONLY, for the reason given one case up: it pins the panic MESSAGE. -->
 ```maxon
 typealias Small = int(0 to 100)

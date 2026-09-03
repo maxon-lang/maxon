@@ -80,7 +80,7 @@ the peek. `rejected-on-wasm` pins that attribution rather than assuming it, and 
 ## Tests
 
 <!-- test: promise-peek.completes-under-the-drive -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐ **THE DISCRIMINATING CASE.** A freshly spawned thread has not run, so the peek is `0`; driving the
 scheduler runs it to completion, so the same peek becomes `1`; and the promise is still awaitable
 afterwards. It is the `0 -> 1` TRANSITION that pins the mechanism rather than either reading alone —
@@ -129,7 +129,7 @@ end 'main'
 ```
 
 <!-- test: promise-peek.does-not-consume-the-promise -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 Three peeks and the promise is untouched: `await` still hands over the value, `await`'s linearity
 (E3100) counts none of them, and the run is leak-clean. A peek that retired the promise would take the
 whole harness with it — `findReadyDrain` serves on this predicate and `abortOnWedgedPool` reports on
@@ -166,7 +166,7 @@ end 'main'
 ```
 
 <!-- test: promise-peek.two-promises-name-two-threads -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 `inner` distinguishes green threads: two spawns are two handles, and neither is null. This is the
 property a dispatcher holding N slots leans on — it peeks each slot in turn, and a handle that named
 the same thread for every slot would serve the first answer to every job.
@@ -214,7 +214,7 @@ end 'main'
 ```
 
 <!-- test: promise-peek.the-handle-survives-a-field-chain -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐ **A SECOND DOOR, PINNED SEPARATELY AND ANCHORED ON ITS OWN.** `h.p.inner` is a TWO-HOP chain, and the
 parser resolves a chain through its own walk rather than through the single-hop member dispatch — so
 "the promise arm fires for `p.inner`" is no evidence at all about `h.p.inner`. Agreement between the two

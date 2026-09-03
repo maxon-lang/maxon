@@ -93,9 +93,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_8  ; "panic at top-level-literal.struct-value-column.test:16: the file-scope literal lost a key\x0a"
     arm64.bl mrt_panic
@@ -142,19 +140,14 @@ func @main {
     arm64.storeSlotReg slot1, x0
     arm64.leaRdata x1, __witness_Array_Byte.Hashable
     arm64.leaRdata x2, __witness_Array_Byte.Equatable
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x28, [x27 + 32]
     arm64.cmp x28, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_chk
+    arm64.b.lt __il_slow
   __rc_chk:
     arm64.movImm x0, 4611686018427387904
     arm64.cmp x28, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __il_slow:
     arm64.movRegReg x0, x27
     arm64.bl Map.count
@@ -162,7 +155,6 @@ func @main {
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x27, x28
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x0, 20
     arm64.movImm x1, 0

@@ -78,12 +78,10 @@ func @main {
     arm64.leaRdata x3, __witness_int.Equatable
     arm64.movRegReg x0, x19
     arm64.bl Pair.firstIs
-    arm64.cbnz x0, a
-    arm64.b ifcont#2
+    arm64.cbz x0, ifcont#2
   a:
     arm64.leaRdata x0, __str_rec_3  ; "a=true\x0a"
     arm64.bl print
-    arm64.b ifcont#2
   ifcont#2:
     arm64.leaRdata x1, __layout_Pair_Num_Num
     arm64.leaRdata x2, __witness_int.Equatable
@@ -91,13 +89,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Pair.firstCopy
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, c
-    arm64.b ifcont#4
+    arm64.b.ne ifcont#4
   c:
     arm64.leaRdata x0, __str_rec_4  ; "copy=true\x0a"
     arm64.bl print
-    arm64.b ifcont#4
   ifcont#4:
     arm64.leaRdata x0, __str_rec_5  ; "done\x0a"
     arm64.bl print

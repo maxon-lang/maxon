@@ -53,9 +53,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at clone.test:9: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -70,60 +68,42 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x21, 0
     arm64.b trycont#5
   tryok#3:
     arm64.movRegReg x21, x0
-    arm64.b trycont#5
   trycont#5:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq trycont#8
   tryerr#7:
     arm64.movImm x0, 1
-    arm64.b trycont#8
-  tryok#6:
-    arm64.b trycont#8
   trycont#8:
     arm64.movImm x1, 0
-    arm64.cbnz x21, o
-    arm64.b critsplit#16
+    arm64.cbz x21, ifcont#10
   o:
     arm64.movImm x1, 1
-    arm64.b ifcont#10
-  critsplit#16:
-    arm64.b ifcont#10
   ifcont#10:
-    arm64.cbnz x0, c
-    arm64.b critsplit#17
+    arm64.cbz x0, critsplit
   c:
     arm64.add x21, x1, 10
     arm64.b ifcont#12
-  critsplit#17:
+  critsplit:
     arm64.movRegReg x21, x1
-    arm64.b ifcont#12
   ifcont#12:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at clone.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

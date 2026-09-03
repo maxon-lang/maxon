@@ -48,19 +48,20 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __io_iocp@256 = i64 0
-  __io_done_event@264 = i64 0
-  __io_init_done@272 = i64 0
-  __io_pending@280 = i64 0
-  __io_pipe_seq@288 = i64 0
-  __subp_table@296 = i64 0
-  __subp_last_error@304 = i64 0
-  __slab_arena_list@312 = i64 0
-  __slab_arena_map_l1@320 = i64 0
-  __slab_state@328 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __io_iocp@264 = i64 0
+  __io_done_event@272 = i64 0
+  __io_init_done@280 = i64 0
+  __io_pending@288 = i64 0
+  __io_pipe_seq@296 = i64 0
+  __subp_table@304 = i64 0
+  __subp_last_error@312 = i64 0
+  __slab_arena_list@320 = i64 0
+  __slab_arena_map_l1@328 = i64 0
+  __slab_state@336 = i64 0
 }
 
 func @main {
@@ -133,100 +134,61 @@ func @main {
     arm64.bl __gt_subp_release
     arm64.movImm x19, 0
     arm64.cmp x20, 0
-    arm64.cset x0, eq
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs#1
-    arm64.b critsplit#24
-  andrhs#1:
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge#2
+  andrhs:
     arm64.cmp x21, 0
     arm64.cset x0, eq
-    arm64.b scmerge#2
-  critsplit#24:
-    arm64.movRegReg x0, x1
-    arm64.b scmerge#2
   scmerge#2:
     arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs#3
-    arm64.b critsplit#25
-  andrhs#3:
-    arm64.b __il_body#13
+    arm64.cbz x0, critsplit#25
   __il_body#13:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#15
-    arm64.b __rc_ok#14
+    arm64.b.ge __il_cont#12
   __il_slow#15:
     arm64.movRegReg x0, x22
     arm64.bl String.byteLength
-    arm64.b __il_cont#12
-  __rc_ok#14:
-    arm64.b __il_cont#12
   __il_cont#12:
     arm64.cmp x0, 0
     arm64.cset x0, gt
     arm64.b scmerge#4
   critsplit#25:
     arm64.movRegReg x0, x1
-    arm64.b scmerge#4
   scmerge#4:
     arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs#5
-    arm64.b critsplit#26
-  andrhs#5:
-    arm64.b __il_body#18
+    arm64.cbz x0, critsplit#26
   __il_body#18:
     arm64.loadRegBaseDisp.word64 x20, [x22 + 8]
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow#20
-    arm64.b __rc_ok#19
+    arm64.b.ge __il_body#21
   __il_slow#20:
     arm64.movRegReg x0, x22
     arm64.bl String.byteLength
     arm64.movRegReg x20, x0
-    arm64.b __il_cont#17
-  __rc_ok#19:
-    arm64.b __il_cont#17
-  __il_cont#17:
-    arm64.b __il_body#21
   __il_body#21:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#23
-    arm64.b __rc_ok#22
+    arm64.b.ge __il_cont#16
   __il_slow#23:
     arm64.movRegReg x0, x23
     arm64.bl String.byteLength
-    arm64.b __il_cont#16
-  __rc_ok#22:
-    arm64.b __il_cont#16
   __il_cont#16:
     arm64.cmp x20, x0
     arm64.cset x0, lt
     arm64.b scmerge#6
   critsplit#26:
     arm64.movRegReg x0, x1
-    arm64.b scmerge#6
   scmerge#6:
-    arm64.cbnz x0, roundtrip
-    arm64.b critsplit#27
+    arm64.cbz x0, ifcont
   roundtrip:
     arm64.movImm x19, 23
-    arm64.b ifcont
-  critsplit#27:
-    arm64.b ifcont
   ifcont:
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#9
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_6  ; "panic at streaming-subprocess.posix-write-echo.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -242,7 +204,7 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  __rc_ok#9:
+  __rc_ok:
     arm64.movRegReg x0, x23
     arm64.bl __str_decref
     arm64.movRegReg x0, x22

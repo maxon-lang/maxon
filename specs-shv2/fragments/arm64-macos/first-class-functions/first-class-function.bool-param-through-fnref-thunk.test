@@ -19,14 +19,12 @@ ExitCode: 7
 func @takesBool {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
+    arm64.cbz x0, ternaryfalse
   ternarytrue:
     arm64.movImm x0, 7
     arm64.b matchcont
   ternaryfalse:
     arm64.movImm x0, 3
-    arm64.b matchcont
   matchcont:
     arm64.epilogue 16
     arm64.ret
@@ -51,14 +49,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.bl apply
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.bool-param-through-fnref-thunk.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

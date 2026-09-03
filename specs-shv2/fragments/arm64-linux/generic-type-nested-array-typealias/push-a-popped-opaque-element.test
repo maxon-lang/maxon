@@ -83,9 +83,7 @@ func @Container.rotate {
     arm64.bl Array.pop
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at push-a-popped-opaque-element.test:23: rotate on an empty container\x0a"
     arm64.bl mrt_panic
@@ -137,16 +135,12 @@ func @main {
     arm64.leaRdata x1, __layout_Container_String
     arm64.movRegReg x0, x19
     arm64.bl Container.rotate
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.ne ifcont
   check:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19

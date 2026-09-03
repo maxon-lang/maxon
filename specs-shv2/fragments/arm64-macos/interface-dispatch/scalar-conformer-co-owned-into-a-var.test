@@ -36,8 +36,7 @@ func @use {
     arm64.movRegReg x1, x19
     arm64.bl __retain_existential
     arm64.movRegReg x22, x0
-    arm64.cbnz x20, maybe
-    arm64.b critsplit
+    arm64.cbz x20, critsplit
   maybe:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
@@ -47,15 +46,11 @@ func @use {
     arm64.movRegReg x1, x22
     arm64.bl __drop_existential
     arm64.movRegReg x1, x19
-    arm64.b ifcont
+    arm64.b ternarytrue
   critsplit:
     arm64.movRegReg x1, x22
-    arm64.b ifcont
-  ifcont:
-    arm64.b ternarytrue
   ternarytrue:
     arm64.movImm x19, 11
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x21
     arm64.bl __drop_existential
@@ -76,14 +71,10 @@ func @main {
     arm64.leaRdata x2, __witness_int.Comparable
     arm64.bl use
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at scalar-conformer-co-owned-into-a-var.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

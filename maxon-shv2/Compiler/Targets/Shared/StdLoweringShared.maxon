@@ -1141,3 +1141,438 @@ export type ScaledIndexFolds
 		return try self.defBlockColumn.get(valueId) otherwise panic("ScaledIndexFolds.blockOf: defBlockColumn.get OOB at {valueId} — every recorded id sized the column to itself")
 	end 'blockOf'
 end 'ScaledIndexFolds'
+
+// ==========================================================================
+// Compare/branch fusion — which compares keep their boolean in the CONDITION
+// FLAGS, and which must write it to a REGISTER
+// ==========================================================================
+
+// Maps a BRANCHING BLOCK to the predicate the `cmp` fused into its terminator compared with.
+// Populated when a fusable `cmp` is lowered and consumed at the `condBranch` terminating that
+// block — the two become `cmp` + `jcc`, and no boolean is written to a register. Keyed by
+// `BlockRef`, which is function-local, so the map is reset per function. **Why the key is the
+// block and not the compare's value is the ⛔⛔ block below**, and it is a correctness argument
+// rather than a style choice.
+//
+// A cmp that is NOT fusable is deliberately ABSENT here, which is what makes
+// `lowerCondBranch`'s lookup the single source of truth: a hit means "the flags this branch
+// reads were set by the compare that defined its condition", and that fact is established at
+// exactly one place (`computeFusedCmps`).
+//
+// ⛔⛔ **KEYED BY THE BRANCHING BLOCK, NOT BY THE COMPARE'S VALUE, AND THAT IS THE WHOLE
+// CORRECTNESS ARGUMENT.** Fusion is a fact about a *(compare, branch)* PAIR — "the flags this
+// `jcc` reads are the ones that `cmp` set" — and a compare's value can feed MORE THAN ONE
+// branch (`let sub = e < -1022` tested once here and again fifty ops later). Keyed by ValueId,
+// the entry recorded for the first branch answered for the second one too: the later `jcc` was
+// emitted BARE, reading whatever flags the intervening calls and compares had left, and
+// `computeValuesReadFromRegisters` — which excludes a fused branch's condition — excluded BOTH
+// uses, so no `setcc` was emitted anywhere and the boolean existed in no register at all.
+// MEASURED as a silent wrong answer: `stdlib/Builtins.maxon`'s `__float_bitsFromDecimal` took
+// its `isSubnormal` branch on a false condition and `0.5` printed as `4503599627370496`.
+// A block has exactly ONE terminator, so keyed by the block the fact is exact.
+typealias CmpPredMap = Map with (BlockRef, StdCmpPred)
+
+// Record `condId` as fusable, but only when `pred`'s compare is the one that DEFINES it.
+//
+// NO `Optional`-shaped return anywhere in this analysis, and that is a MEASURED constraint
+// rather than a style preference. A payload-carrying union is HEAP-BOXED in Maxon (see
+// StdDialect's header), and the natural spelling of the two questions this analysis asks —
+// "what value does this compare define?" and "what predicate does it carry?" — asks them
+// ONCE PER STD OP, which puts a fresh heap object on every op of every function the backend
+// lowers. The first cut of this pass did exactly that, and `scale-test` charged it ~3,500
+// allocations on the SMALLEST rung. So every classifier here either returns a `bool` or
+// writes its answer through an accumulator it is handed, and allocates nothing.
+// Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
+// predicate and the float-ness of the compare carrying it can never disagree, because nothing
+// can write one without the other.
+function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
+	if defId != condId 'someOtherCompare'
+		return
+	end 'someOtherCompare'
+	// The PREDICATE is recorded against the branching BLOCK (see `CmpPredMap`); the FLOAT-NESS
+	// stays against the compare's VALUE, and the asymmetry is exact rather than convenient. "Which
+	// flags does this jcc read?" is a question about a pair, so only a block can answer it; "is the
+	// compare defining v a float compare?" is a property of v's one defining op and cannot differ
+	// between readers. Every reader of the second column reaches it through a hit in the first.
+	//
+	// ⭐ **THE SIGNEDNESS IS THE THIRD COLUMN AND IT IS THE VALUE's FOR THE SAME REASON THE FLOAT-NESS
+	// IS.** Both are projections of the ONE `operandType` the defining op carries, taken here because
+	// this is the one place that op is in hand; both are read only after a `cmpPreds` hit; and both are
+	// dense bool columns rather than a stored `StdType` for `fusedFloatCmps`' measured reason — a
+	// program with no unsigned ordering compare inserts nothing and allocates no backing array.
+	//
+	// ⚠ THE TWO ARE DISJOINT BY CONSTRUCTION, not by a rule anyone maintains: `stdTypeIsUnsigned` is
+	// false for every float `StdType`, and `comparisonSignedness` never routes a float here at all.
+	fused.upsert(blockRef, value: pred)
+	if stdTypeIsFloat(operandType) 'float'
+		floatCmps.insert(condId)
+	end 'float'
+	if stdTypeIsUnsigned(operandType) 'unsigned'
+		unsignedCmps.insert(condId)
+	end 'unsigned'
+end 'fuseIfDefines'
+
+// ⭐⭐ **THE COMPARE/BRANCH FUSION CENSUS — ONE ANALYSIS, BOTH NATIVE ISELS.** It answers two questions
+// about a Std function, and neither of them names an ISA: *"are the flags this block's conditional branch
+// reads exactly the ones the compare defining its condition set?"* and *"does anything read that compare's
+// boolean out of a REGISTER?"*. Each backend then supplies only its own spelling — `cmp` + `jcc` on x64,
+// `cmp` + `b.cond` on arm64 — and the compare materialises its boolean (`setcc` / `cset`) iff something
+// reads it as a value. The two are INDEPENDENT: a compare that is both fused and read emits all three
+// instructions, which is correct because `setcc` and `cset` READ the flags rather than writing them.
+//
+// ⛔⛔ **THE ONE PRECONDITION, AND IT BINDS EVERY BACKEND THAT READS THIS: A LOWERING THAT WRITES THE
+// CONDITION FLAGS MUST SIT ON A STD OP DECLARING `clobbersFlags: true`.** The backward scan below stops at
+// the first flag-clobbering op it meets and fuses only if that op IS the compare — so an op that writes
+// flags while declaring it does not is INVISIBLE here, and the branch would read flags that op had since
+// destroyed. The declaration is a UNION over the backends (see `StdOpMeta.clobbersFlags`), which is what
+// lets one census serve two ISAs whose instructions clobber differently: over-declaring costs a missed
+// fusion, under-declaring is a silent wrong answer.
+//
+// ⚠ Both isels also depend on every op a POST-ISEL pass can splice into the fused window being
+// flag-neutral — see `computeFusedCmps` for the x64 list and `lowerCondBranch` in `StdToArm64Conversion`
+// for arm64's.
+export type CompareFusionCensus
+	// The blocks whose terminating conditional branch reads a compare's flags → that compare's predicate.
+	var fusedPreds as CmpPredMap
+	// ⭐ THE FUSED COMPARES WHOSE OPERANDS ARE FLOATS — `fusedPreds`' second column, written at the
+	// same instant by the same call (`fuseIfDefines`).
+	//
+	// It stores the QUESTION ITS READERS ACTUALLY ASK, and that is the whole design. Both of them
+	// — the condition-code family and x64's parity split — need to know only whether the compare is
+	// a float one; nobody asks f32-vs-f64 or i8-vs-i64. A `Map with (ValueId, StdType)` here would
+	// store a full type per compare so that every reader could immediately throw all but one bit
+	// of it away, and MEASURED it cost ~4.7 allocations PER FUSED COMPARE — ~1,300 of a +1,528
+	// rung-0 delta — on a corpus that contains no float at all. A column nobody reads is not free.
+	//
+	// A dense bool column (`StdValueUseSet`), so an all-integer function inserts NOTHING and the
+	// backing array is never allocated: the cost is zero for programs that use no floats, rather
+	// than proportional to their compares.
+	//
+	// ⚠ IT IS A SUBSET OF `fusedPreds`' KEYS AND IS ONLY EVER CONSULTED AFTER A `blockFusesCompare`
+	// HIT. That is what makes `dropFusion` safe without removing from it (there is no `remove` on a
+	// dense set): dropping the `fusedPreds` entry makes the entry here unreachable.
+	var fusedFloatCmps as StdValueUseSet
+	// ⭐ THE FUSED COMPARES WHOSE ORDERING IS UNSIGNED — `fusedPreds`' THIRD column, written at the same
+	// instant by the same call (`fuseIfDefines`), and a dense bool column for `fusedFloatCmps`' measured
+	// reason. A program whose every ordering compare is signed inserts nothing into it.
+	var fusedUnsignedCmps as StdValueUseSet
+	// Every value this function reads AS A VALUE — out of a REGISTER, rather than as the flags a
+	// fused branch tests. A compare whose result lands in here needs a `setcc`/`cset` to write its
+	// boolean into a register; one that does not stays in the flags.
+	//
+	// It is deliberately NOT narrowed to just the compare results. The only thing that ever
+	// asks is a compare, about ITSELF, so narrowing it could not change a single answer — and
+	// would cost a second full walk over every op of every function to do it.
+	//
+	// Computed once per function, BEFORE the op walk, because a compare is lowered long before
+	// the phi edge or the later `if` that reads it is reached. INDEPENDENT of `fusedPreds`: a
+	// compare can be both fused and read as a value (a `let` binds it).
+	var valuesReadFromRegisters as StdValueUseSet
+
+	export static function create() returns CompareFusionCensus
+		return Self{fusedPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), fusedUnsignedCmps: StdValueUseSet.create(), valuesReadFromRegisters: StdValueUseSet.create()}
+	end 'create'
+
+	// Fresh tables each time: a `cmp`'s ValueId and a `BlockRef` only mean anything inside their own
+	// function, and both the fused branch and the value uses that consume a compare are in that function.
+	export function computeForFunction(module StdModule, func IrFunction)
+		self.fusedPreds = CmpPredMap.create()
+		self.fusedFloatCmps = StdValueUseSet.create()
+		self.fusedUnsignedCmps = StdValueUseSet.create()
+		self.computeFusedCmps(module, func: func, fused: self.fusedPreds, floatCmps: self.fusedFloatCmps, unsignedCmps: self.fusedUnsignedCmps)
+		self.valuesReadFromRegisters = self.computeValuesReadFromRegisters(module, func: func, fused: self.fusedPreds)
+	end 'computeForFunction'
+
+	// --- What the ISEL asks ---
+
+	// Whether this block's conditional branch reads the flags of the compare defining its condition.
+	export function blockFusesCompare(blockRef BlockRef) returns bool
+		return self.fusedPreds.contains(blockRef)
+	end 'blockFusesCompare'
+
+	// … and which predicate that branch must therefore test. Guarded by the question above for the
+	// reason every accessor here is: a miss is a real answer ("nothing fused"), not a value to invent.
+	export function fusedPredicateOf(blockRef BlockRef) returns StdCmpPred
+		return try self.fusedPreds.get(blockRef) otherwise panic("CompareFusionCensus.fusedPredicateOf: block ref {blockRef} fuses no compare — ask `blockFusesCompare` first")
+	end 'fusedPredicateOf'
+
+	// Whether the fused compare defining `valueId` compared FLOATS, which selects the NaN-safe condition
+	// family. Only ever asked after a `blockFusesCompare` hit — see `floatCmps`.
+	export function fusedCompareIsFloat(valueId ValueId) returns bool
+		return self.fusedFloatCmps.contains(valueId)
+	end 'fusedCompareIsFloat'
+
+	// … and whether its ordering is UNSIGNED, which selects the carry-reading family. Same gating.
+	export function fusedCompareIsUnsigned(valueId ValueId) returns bool
+		return self.fusedUnsignedCmps.contains(valueId)
+	end 'fusedCompareIsUnsigned'
+
+	// Whether anything reads `valueId` out of a register — a compare answering `false` here needs no
+	// `setcc`/`cset` at all.
+	export function valueIsReadFromRegister(valueId ValueId) returns bool
+		return self.valuesReadFromRegisters.contains(valueId)
+	end 'valueIsReadFromRegister'
+
+	// Un-fuse one block, for a backend that discovers at lowering time that the pair cannot ride the
+	// flags after all (x64's float equality, whose second condition needs a block the census cannot mint).
+	// Only `fusedPreds` is unwound: every reader of the other two columns gates on `blockFusesCompare`,
+	// so dropping the key makes their entries unreachable.
+	export function dropFusion(blockRef BlockRef)
+		_ = self.fusedPreds.remove(blockRef)
+	end 'dropFusion'
+
+	// --- The walks ---
+
+	// Record, for every block terminating in a `condBranch`, whether that branch reads the flags of the
+	// compare defining its condition — and if so, which predicate it must test.
+	//
+	// PURELY LOCAL, and that is precisely what makes it sound: the condition flags survive neither a
+	// block boundary nor an intervening flag-writing instruction on either ISA, so the flags a
+	// conditional branch reads are ALWAYS those of the LAST flag-clobbering op before it. Fusion is
+	// legal exactly when that op is the compare whose result the branch is testing — no more, no less.
+	// Nothing about how many OTHER things read the compare enters into it.
+	//
+	// A boolean condition that is a call result, a parameter or a merge phi has no flags to fuse and is
+	// simply absent here; the backend truth-tests it in a register instead.
+	//
+	// ⚠ THE PRECONDITION THE WHOLE THING RESTS ON: this scan runs on STD ops, but the REGISTER
+	// ALLOCATOR later inserts TARGET ops into the very window it just proved safe — the gap between a
+	// fused compare and its branch. The fusion survives only because **every op the allocator can insert
+	// there is flag-neutral**:
+	//
+	//     storeSlotReg · loadRegSlot (spill/reload) · movRegReg (phi copies, reuse copies) ·
+	//     xchgRegReg (permutation cycles) · a REMATERIALIZED `const` (`constMaterializationOp`)
+	//
+	// Every one is a move- or load/store-class instruction: `mov`/`lea`/`movzx` on x64, and on arm64
+	// `ORR Xd, XZR, Xn`, `LDR`/`STR`, the vector `EOR` swap and the `movz`/`movk` ladder — the S-suffixed
+	// arm64 forms that would write NZCV appear in none of them. (`prologue`/`epilogue` DO write flags on
+	// x64 — they are a `sub`/`add rsp` — but they land at a function's entry and exit blocks, never
+	// inside a compare/branch window.)
+	//
+	// ⇒ **IF A FLAG-WRITING OP IS EVER ADDED TO WHAT THE ALLOCATOR CAN INSERT, THIS FUSION BECOMES A
+	// SILENT MISCOMPILE** — the branch would read flags that op had already destroyed, and the Std-tier
+	// scan cannot see it coming, because the op does not exist at Std tier. The likeliest candidate is a
+	// spill/reload growing an address computation, or a memzero (whose size ladder compares — see
+	// ARCHITECTURE.md). Re-check this list then.
+	//
+	// Fills ALL THREE fusion columns in one walk — see `fusedFloatCmps` for why the float-ness (and, beside
+	// it, the signedness) is a column rather than a field inside the predicate. They are handed in
+	// rather than returned so the three can only be created together.
+	function computeFusedCmps(module StdModule, func IrFunction, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("computeFusedCmps: blockRef from func.blockRefs not in stdModule.blocks")
+			if not block.hasTerminatorOp() 'noTerm'
+				continue
+			end 'noTerm'
+			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("computeFusedCmps: terminatorIndex not in stdModule.ops")
+			match term 'term'
+				condBranch(condId, _, _) then self.recordFusableCompare(module, block: block, blockRef: blockRef, condId: condId, fused: fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps)
+				const to mod then break 'term'
+				branch to rdataAddr then break 'term'
+				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
+				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
+				tryCall to osFreePages then break 'term'
+				// The jump table does its OWN `cmp` against the bounds count — it fuses no preceding compare.
+				switch then break 'term'
+				// A witness call is a call — like `tryCall` it is not the compare, so it fuses nothing. The
+				// throwing form is a call for the identical reason.
+				witnessCall then break 'term'
+				witnessTryCall then break 'term'
+				// P1.5 dogfood slice 1a: the IOCP ops are value-consuming/void body ops, never terminators.
+				osPipeCreate to osWriteFile then break 'term'
+				// The wall-clock read is a void body op, never a terminator.
+				osReadWallClock then break 'term'
+				// R4.1 + R4.2: every file op is a value-producing or void body op, never a terminator.
+				osFileOpenRead to osFileAttributes then break 'term'
+				// A panic is a body op, never a terminator, under either spelling.
+				osPanicValue then break 'term'
+				// A command-line read is a value-producing body op, never a terminator.
+				osCommandLine then break 'term'
+				// W5: a handle read and a path fill are value-producing body ops, never terminators.
+				osStdHandle then break 'term'
+				osExecutablePath then break 'term'
+				// W35: a stream write is a value-producing body op, never a terminator.
+				osWriteStderr then break 'term'
+				// A frame address is a value-producing body op, never a terminator.
+				stackRecordAddr then break 'term'
+				osOpenNamedSegment to osTickCountMs then break 'term'
+				osHandleSetInherit to osThreadCpuTicks then break 'term'
+				// F1a: a decommit is a body op, never a terminator — nothing to fuse.
+				osDecommitPages then break 'term'
+				// F1b: a byte fill is a body op, never a terminator — nothing to fuse.
+				memFill then break 'term'
+				// F1c: a reserve and a commit are body ops, never terminators — nothing to fuse.
+				osCommitPages to osReservePages then break 'term'
+				// F2: the two atomics and the thread token are value-producing body ops, never terminators.
+				atomicCas to currentThreadToken then break 'term'
+				// G1: the TLS ops and the event signal are body ops, never terminators — nothing to fuse.
+				tlsAlloc to osEnterBackgroundPriority then break 'term'
+				osFileOpenWriteExecutable then break 'term'
+				osEnvBlock to osEnvBlockFree then break 'term'
+				loadAcquire or storeRelease then break 'term'
+				osHandleFileType then break 'term'
+			end 'term'
+		end 'eachBlock'
+	end 'computeFusedCmps'
+
+	// Record `condId` as fusable iff the LAST flag-clobbering body op of `block` is a
+	// compare that DEFINES it. Walked backward from the end of the body, because that is
+	// the order the flags are overwritten in.
+	function recordFusableCompare(module StdModule, block IrBlock, blockRef BlockRef, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
+		var i = block.opRefs.count()
+		while i > 0 'scanBackward'
+			i = i - 1
+			let opIdx = try block.opRefs.get(i) otherwise panic("recordFusableCompare: opRefs.get OOB at {i}")
+			let op = try module.ops.get(opIdx) otherwise panic("recordFusableCompare: opIdx {opIdx} not in stdModule.ops")
+			if not op.rawValue.clobbersFlags 'flagsPreserved'
+				continue
+			end 'flagsPreserved'
+
+			// The first flag-clobbering op found walking backward IS the one whose flags the
+			// branch will read. If it is not the compare being tested, nothing is fusable —
+			// and the scan stops HERE rather than looking further back, because whatever was
+			// there had its flags overwritten by this very op. The two compare variants answer
+			// identically: `foldConstOperands` moved the right operand into an immediate, which
+			// changed the instruction, not what the compare means.
+			match op 'isTheCompare'
+				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				// `cmpImm` is INTEGER BY CONSTRUCTION — no SSE form takes an immediate, so
+				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
+				// variant. The width is still ASKED of the op's own `operandType` rather than assumed
+				// from that: naming a type here would be a second answer to a question the op carries.
+				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				const to unaryOp then break 'isTheCompare'
+				binOpImm then break 'isTheCompare'
+				// Extended past `retVoid` to take in the memory band, and past `storeIndirect` to take in
+				// the system band. It is reached only for an op that already answered `clobbersFlags:
+				// true`, and no memory op does — so the memory arms are unreachable in practice and must
+				// still be NAMED rather than swallowed: the day a flag-writing memory op exists, "is it
+				// the compare?" is a question to answer here.
+				//
+				// ⚠ `osAllocPages`/`osWriteStdout` are NOT in that unreachable set — they declare
+				// `clobbersFlags: true`, so either genuinely lands here as the last flag-writer before a
+				// branch, exactly as `call` already does. `break` is the right answer for the same reason
+				// it is for a call: it is not the compare, so the scan stops and no fusion is recorded.
+				// Declining a fusion is always safe. (`rdataAddr` never reaches here — the loop guards on
+				// `clobbersFlags` and it sets none — but it is named rather than swallowed.)
+				div to rdataAddr then break 'isTheCompare'
+				// `callIndirect` declares `clobbersFlags: true` (it is a call), so it CAN genuinely land here
+				// as the last flag-writer before a branch, exactly as `call`/`tryCall` do — and like them it
+				// is not the compare, so the scan stops and no fusion is recorded (declining is always safe).
+				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
+				// is named rather than swallowed. (P1.5-A1)
+				tryCall to osFreePages then break 'isTheCompare'
+				switch then break 'isTheCompare'
+				// A witness call is a call, not the compare — the scan stops and records no fusion (safe). The
+				// throwing form is a call for the identical reason.
+				witnessCall then break 'isTheCompare'
+				witnessTryCall then break 'isTheCompare'
+				// P1.5 dogfood slice 1a: the IOCP ops declare `clobbersFlags: true` (they lower to calls), so one
+				// CAN land here as the last flag-writer before a branch; like a `call`, it is not the compare, so
+				// the scan stops and no fusion is recorded (declining is always safe).
+				osPipeCreate to osWriteFile then break 'isTheCompare'
+				// The wall-clock read declares `clobbersFlags: true` (it lowers to a call), so it CAN be the
+				// last flag-writer before a branch; like a `call` it is not the compare, so the scan stops.
+				osReadWallClock then break 'isTheCompare'
+				// R4.1 + R4.2: every file op declares `clobbersFlags: true` (each lowers to a call), so like the
+				// wall-clock read one can be the last flag-writer before a branch — and, like a `call`, it is
+				// not the compare, so the scan stops.
+				osFileOpenRead to osFileAttributes then break 'isTheCompare'
+				// A call, not the compare — the scan stops, exactly as it does at `osPanic`.
+				osPanicValue then break 'isTheCompare'
+				// An import call, not the compare — the scan stops.
+				osCommandLine then break 'isTheCompare'
+				// W5: import calls too, and not the compare — the scan stops.
+				osStdHandle then break 'isTheCompare'
+				osExecutablePath then break 'isTheCompare'
+				// W35: an import call or a syscall, not the compare — the scan stops.
+				osWriteStderr then break 'isTheCompare'
+				// A frame address, not the compare — the scan stops.
+				stackRecordAddr then break 'isTheCompare'
+				osOpenNamedSegment to osTickCountMs then break 'isTheCompare'
+				osHandleSetInherit to osThreadCpuTicks then break 'isTheCompare'
+				// F1a: a decommit declares `clobbersFlags: true` (it lowers to a call or a syscall), so it CAN
+				// land here as the last flag-writer before a branch; like a `call`, it is not the compare, so the
+				// scan stops and records no fusion (declining is always safe).
+				osDecommitPages then break 'isTheCompare'
+				// ⛔ F1b: the fill ladder `cmp`s the length to pick its arm, so it declares `clobbersFlags: true`
+				// and CAN land here as the last flag-writer before a branch — which is precisely the hazard that
+				// declaration exists to prevent. It is not the compare, so the scan stops and fuses nothing.
+				memFill then break 'isTheCompare'
+				// F1c: the reserve and the commit are calls or syscalls, so either can be the last flag-writer
+				// before a branch; like a `call`, neither is the compare, so the scan stops.
+				osCommitPages to osReservePages then break 'isTheCompare'
+				// ⛔ F2: all three declare `clobbersFlags: true` and every one of them CAN be the last
+				// flag-writer before a branch — `lock cmpxchg` sets ZF (that IS its answer), `lock xadd` sets the
+				// arithmetic flags, and the Linux thread token is a syscall. None is the compare, so the scan
+				// stops and fuses nothing; declining is always safe, and fusing across any of them would read
+				// flags the atomic has since overwritten.
+				atomicCas to currentThreadToken then break 'isTheCompare'
+				// G1: all four declare `clobbersFlags: true` and any of them can be the last flag-writer before a
+				// branch — the three import calls because they are calls, and `tlsSlotLoad` because arm64 gates
+				// its uninitialised-offset case with a `cmp`/`cset` (see its variant in StdDialect). None is the
+				// compare, so the scan stops — declining to fuse is always safe.
+				tlsAlloc to osEnterBackgroundPriority then break 'isTheCompare'
+				osFileOpenWriteExecutable then break 'isTheCompare'
+				osEnvBlock to osEnvBlockFree then break 'isTheCompare'
+				// G3: `mov` writes no flags, so neither ordered access can be the last flag-writer.
+				loadAcquire or storeRelease then break 'isTheCompare'
+				osHandleFileType then break 'isTheCompare'
+			end 'isTheCompare'
+			return
+		end 'scanBackward'
+	end 'recordFusableCompare'
+
+	// The compare results this function reads as a VALUE — each needs a `setcc` to put its
+	// boolean in a register. A value use is any operand of any op, or any phi branch-edge
+	// argument, EXCEPT the condition of a branch that `computeFusedCmps` already resolved to
+	// read that compare's FLAGS (which is a use of the flags, not of a register).
+	//
+	// The exception is per-BLOCK, not per-value, and it has to be: one compare's result can
+	// feed the `condBranch` of its own block (fused, no register needed) AND the `condBranch`
+	// of a LATER block (`if r … end / if r … end`), where the flags are long gone and the
+	// value must be in a register. Skipping every `condBranch` use unconditionally would miss
+	// that second one and leave the branch reading a value nothing ever wrote.
+	function computeValuesReadFromRegisters(module StdModule, func IrFunction, fused CmpPredMap) returns StdValueUseSet
+		var readAsValue = StdValueUseSet.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("computeValuesReadFromRegisters: blockRef from func.blockRefs not in stdModule.blocks")
+
+			for opIdx in block.opRefs 'eachBodyOp'
+				let op = try module.ops.get(opIdx) otherwise panic("computeValuesReadFromRegisters: opIdx {opIdx} not in stdModule.ops")
+				collectStdOpUses(op, referenced: readAsValue)
+			end 'eachBodyOp'
+
+			// A phi operand is a genuine register read: SSA destruction turns it into a `mov`
+			// on the edge, and a compare feeding one (the RHS of a short-circuit `and`/`or`)
+			// must therefore have been materialized.
+			for edge in block.branchEdges 'eachEdge'
+				for argId in edge.argIds 'eachArg'
+					readAsValue.insert(argId)
+				end 'eachArg'
+			end 'eachEdge'
+
+			self.collectTerminatorValueUses(module, block: block, blockRef: blockRef, readAsValue: readAsValue, fused: fused)
+		end 'eachBlock'
+
+		return readAsValue
+	end 'computeValuesReadFromRegisters'
+
+	// Add the terminator's value uses to `readAsValue` — unless it is a `condBranch` whose
+	// condition this block FUSES, in which case it consumes EFLAGS and not a register.
+	//
+	// ⭐ **THE MEMBERSHIP TEST IS THE WHOLE QUESTION, because the map is keyed by BLOCK** (see
+	// `CmpPredMap`): an entry exists for exactly those blocks whose terminator is a `condBranch`
+	// that `recordFusableCompare` PROVED reads its compare's flags. A `match` over every `StdOp`
+	// variant would answer the same question by re-deriving what this lookup already knows.
+	function collectTerminatorValueUses(module StdModule, block IrBlock, blockRef BlockRef, readAsValue StdValueUseSet, fused CmpPredMap)
+		if not block.hasTerminatorOp() 'noTerm'
+			return
+		end 'noTerm'
+		if fused.contains(blockRef) 'flagsOnly'
+			return
+		end 'flagsOnly'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("collectTerminatorValueUses: terminatorIndex not in stdModule.ops")
+		collectStdOpUses(term, referenced: readAsValue)
+	end 'collectTerminatorValueUses'
+end 'CompareFusionCensus'

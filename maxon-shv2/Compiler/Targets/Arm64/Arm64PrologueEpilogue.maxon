@@ -161,6 +161,8 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				arm64Fneg then break 'o'
 				// G3: an ordered access names no frame fact — a coloured base, a coloured value, no displacement.
 				arm64LoadAcquire or arm64StoreRelease then break 'o'
+				// EC18: the arm64 high multiply names no frame fact — three ordinary coloured registers.
+				arm64Smulh then break 'o'
 			end 'o'
 		end 'eachOp'
 
@@ -327,6 +329,9 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// `fneg`'s two FP operands, through the same shared derivation as every other register op.
 		arm64Fneg gives arm64MaskFromOperands(op, buf: buf)
 		arm64LoadAcquire or arm64StoreRelease gives arm64MaskFromOperands(op, buf: buf)
+		// EC18: `SMULH`'s three operands can each be coloured into a callee-saved register, so all three
+		// MUST be counted — through the shared derivation like every other arm here.
+		arm64Smulh gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -405,5 +410,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		arm64Fneg gives false
 		// G3: an ordered access is a body op, never an `arm64Ret`.
 		arm64LoadAcquire or arm64StoreRelease gives false
+		// EC18: the high multiply is a body op, never an `arm64Ret`.
+		arm64Smulh gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

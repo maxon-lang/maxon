@@ -113,9 +113,7 @@ func @main {
     arm64.movRegReg x2, x23
     arm64.bl List.insert
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok
   tryerr#2:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -133,21 +131,16 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  tryok#1:
+  tryok:
     arm64.movImm x1, 1
     arm64.leaRdata x2, __layout_List_String
     arm64.movRegReg x0, x19
     arm64.bl List.get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq trycont
   tryerr#4:
     arm64.leaRdata x0, __str_rec_9  ; "?"
     arm64.bl __str_retain
-    arm64.b trycont
-  tryok#3:
-    arm64.b trycont
   trycont:
     arm64.storeSlotReg slot0, x0
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]

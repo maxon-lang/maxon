@@ -65,14 +65,10 @@ func @main {
     arm64.blr x20
     arm64.sub x0, x19, x0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at function-backing.two-args.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

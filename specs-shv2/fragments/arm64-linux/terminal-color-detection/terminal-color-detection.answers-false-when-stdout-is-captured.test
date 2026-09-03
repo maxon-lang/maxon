@@ -1,0 +1,33 @@
+// Test: terminal-color-detection.answers-false-when-stdout-is-captured
+function main() returns ExitCode
+	if __Builtins.stdoutWantsAnsiColor() 'wantsColor'
+		return 1
+	end 'wantsColor'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_envp@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl __tty_stdout_wants_color
+    arm64.cbz x0, ifcont
+  wantsColor:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

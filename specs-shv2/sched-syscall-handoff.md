@@ -102,17 +102,21 @@ each of those is a **hang** here — which the harness reports as a clean per-te
 
 ### Targets
 
-Both cases carry `<!-- targets: x64-windows -->` alone. That is a property of the SUBSTRATE and not of
-the rule: overlapped file IO on this lane is `ReadFile` with an `OVERLAPPED` and an IOCP completion, and
-the child wait is a `WaitForMultipleObjects` on process handles — neither has an arm64-macOS
-implementation at this rung, where the equivalent is `kqueue` plus `posix_spawn`'s `waitpid`. **The
-arm64-macOS equivalent rides the same rung** and these two cases widen to
-`x64-windows, arm64-macos` when it lands; nothing about the assertions changes when they do.
+Four of the five cases run on **`x64-windows, arm64-macos, arm64-linux`** — every lane that provides a
+green-thread substrate, and therefore every lane that has a processor to hand off. The three differ only in
+WHERE the bracket around a blocking call is emitted: x64-windows puts both steps inline inside its import
+shim, and the arm64 lanes call `__sched_enter_syscall` / `__sched_exit_syscall` from the instruction
+selector's one dispatch door. Neither placement is visible from a program, which is why the assertions below
+are written once and read the same on all three.
+
+`a-blocking-subprocess-wait-does-not-stall-a-sibling` is the exception and carries `x64-windows` alone. That
+is a property of its PROGRAM and not of the rule: it spawns `cmd /c exit 0`, which exists on no other lane.
+A POSIX twin of that program would run everywhere the other four do.
 
 ## Tests
 
 <!-- test: more-blocking-file-reads-than-processors-still-finish -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 2 -->
 **EIGHT CONCURRENT FILE ROUND-TRIPS ON TWO PROCESSORS.** Every send is posted before any reply is awaited,
 so all eight reads are outstanding at once and there are four times as many of them as there are Ms to
@@ -316,7 +320,7 @@ aggregate=8 last=1
 ```
 
 <!-- test: a-blocking-kernel-call-does-not-starve-an-unrelated-green-thread -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 <!-- stdin: delayed -->
 ⭐⭐ **THIS IS THE CASE THE FILE'S OPENING CLAIM WAS ALWAYS ABOUT, AND IT ASSERTS AN ORDER RATHER THAN A
@@ -409,7 +413,7 @@ done sibling=1 read=5
 ```
 
 <!-- test: a-spare-processor-already-carries-the-sibling -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 4 -->
 <!-- stdin: delayed -->
 ⚠ **THIS CASE WAS ALREADY GREEN BEFORE THE CHANGE THAT GREENS THE ONE ABOVE, AND IT IS HERE TO SAY WHY
@@ -482,7 +486,7 @@ done sibling=1 read=5
 ```
 
 <!-- test: sysmon-retakes-a-processor-from-a-blocking-call -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 <!-- stdin: delayed -->
 ⭐ **THIS CASE PINS THE MECHANISM, BECAUSE THE CASE ABOVE CAN BE GREENED BY THE WRONG CURE.** Routing

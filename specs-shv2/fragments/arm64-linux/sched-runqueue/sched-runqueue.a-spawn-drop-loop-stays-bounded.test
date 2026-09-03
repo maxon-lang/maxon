@@ -62,12 +62,13 @@ data {
   __sched_lock@256 = i64 0
   __sched_nmspinning@264 = i64 0
   __sched_parked_drivers@272 = i64 0
-  __mrt_errno@280 = i64 0
-  __mrt_envp@288 = i64 0
-  __mrt_tls_next_key@296 = i64 0
-  __slab_arena_list@304 = i64 0
-  __slab_arena_map_l1@312 = i64 0
-  __slab_state@320 = i64 0
+  __sched_sysmon_started@280 = i64 0
+  __mrt_errno@288 = i64 0
+  __mrt_envp@296 = i64 0
+  __mrt_tls_next_key@304 = i64 0
+  __slab_arena_list@312 = i64 0
+  __slab_arena_map_l1@320 = i64 0
+  __slab_state@328 = i64 0
 }
 
 func @neverRuns {
@@ -97,13 +98,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.movImm x16, 5000
     arm64.cmp x19, x16
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.leaFuncAddr x0, neverRuns
     arm64.bl __gt_spawn
@@ -117,9 +115,7 @@ func @main {
   whileexit:
     arm64.bl __mm_counter_raw_alloc_live
     arm64.cmp x0, 100
-    arm64.cset x0, lt
-    arm64.cbnz x0, bounded
-    arm64.b ifelse
+    arm64.b.ge ifelse
   bounded:
     arm64.leaRdata x0, __str_rec_3  ; "ran="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -223,7 +219,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
-    arm64.b ifcont
   ifcont:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

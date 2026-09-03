@@ -59,31 +59,23 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Array.remove
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 18446744073709551615
     arm64.b trycont#3
   tryok#1:
     arm64.movRegReg x20, x0
-    arm64.b trycont#3
   trycont#3:
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
     arm64.bl __managed_resize
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x21, 3
-    arm64.cset x0, lt
-    arm64.cbnz x0, read
-    arm64.b whileexit
+    arm64.b.ge whileexit
   read:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#11
-    arm64.b __rc_ok#10
+    arm64.b.ge __rc_ok#10
   __rc_panic#11:
     arm64.leaRdata x0, __str_blob_2  ; "panic at remove-then-resize-scalar-reads-zero.test:15: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -103,9 +95,7 @@ func @main {
   __rc_ok#10:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
@@ -113,14 +103,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#19
+    arm64.b.eq critsplit#19
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#20
+    arm64.b.ne critsplit#20
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -131,18 +117,14 @@ func @main {
     arm64.b __im_cont
   critsplit#19:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.movImm x22, 18446744073709551615
     arm64.b trycont#9
   tryok#7:
     arm64.movRegReg x22, x0
-    arm64.b trycont#9
   trycont#9:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -187,14 +169,10 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#13
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic#13
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#13
-    arm64.b __rc_ok#12
+    arm64.b.le __rc_ok#12
   __rc_panic#13:
     arm64.leaRdata x0, __str_blob_3  ; "panic at remove-then-resize-scalar-reads-zero.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

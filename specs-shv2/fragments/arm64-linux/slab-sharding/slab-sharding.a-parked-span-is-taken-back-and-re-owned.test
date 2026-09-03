@@ -96,12 +96,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @build {
@@ -112,14 +113,10 @@ func @build {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_chk#7
+    arm64.b.lt __rc_panic#6
   __rc_chk#7:
     arm64.cmp x19, 65536
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#6
-    arm64.b __rc_ok#5
+    arm64.b.le __rc_ok#5
   __rc_panic#6:
     arm64.leaRdata x0, __str_blob_1  ; "panic at slab-sharding.a-parked-span-is-taken-back-and-re-owned.test:7: Range check failed: value outside typealias 'Seed'\x0a"
     arm64.bl mrt_panic
@@ -138,26 +135,24 @@ func @build {
     arm64.movRegReg x0, x20
     arm64.bl Array.reserve
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x21, 80
-    arm64.cset x0, lt
-    arm64.cbnz x0, fill
-    arm64.b forexit
+    arm64.b.ge forexit
   fill:
     arm64.add x0, x19, x21
-    arm64.movImm x1, 251
-    arm64.sdiv x16, x0, x1
-    arm64.msub x1, x16, x1, x0
+    arm64.movImm x1, 2351776136887273513
+    arm64.smulh x1, x1, x0
+    arm64.asr x1, x1, 5
+    arm64.lsr x2, x1, 63
+    arm64.add x1, x1, x2
+    arm64.movImm x16, 251
+    arm64.mul x1, x1, x16
+    arm64.sub x1, x0, x1
     arm64.cmp x1, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_chk#10
+    arm64.b.lt __rc_panic#9
   __rc_chk#10:
     arm64.cmp x1, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#9
-    arm64.b __rc_ok#8
+    arm64.b.le __rc_ok#8
   __rc_panic#9:
     arm64.leaRdata x0, __str_blob_2  ; "panic at slab-sharding.a-parked-span-is-taken-back-and-re-owned.test:11: Range check failed: value outside typealias 'Byte'\x0a"
     arm64.bl mrt_panic
@@ -170,7 +165,6 @@ func @build {
   __rc_ok#8:
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr
@@ -193,14 +187,10 @@ func @cycle {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#10
-    arm64.b __rc_chk#11
+    arm64.b.lt __rc_panic#10
   __rc_chk#11:
     arm64.cmp x19, 65536
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#10
-    arm64.b __rc_ok#9
+    arm64.b.le __rc_ok#9
   __rc_panic#10:
     arm64.leaRdata x0, __str_blob_3  ; "panic at slab-sharding.a-parked-span-is-taken-back-and-re-owned.test:16: Range check failed: value outside typealias 'Seed'\x0a"
     arm64.bl mrt_panic
@@ -215,37 +205,27 @@ func @cycle {
   __rc_ok#9:
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x21, x19
-    arm64.cset x0, lt
-    arm64.cbnz x0, round
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   round:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __managed_decref
     arm64.bl __managed_create
     arm64.movRegReg x22, x0
     arm64.movImm x23, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.cmp x23, 4000
-    arm64.cset x0, lt
-    arm64.cbnz x0, alloc
-    arm64.b forexit#8
+    arm64.b.ge forexit#8
   alloc:
     arm64.movImm x16, 4000
     arm64.mul x0, x21, x16
     arm64.add x0, x0, x23
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#13
-    arm64.b __rc_chk#14
+    arm64.b.lt __rc_panic#13
   __rc_chk#14:
     arm64.cmp x0, 65536
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#13
-    arm64.b __rc_ok#12
+    arm64.b.le __rc_ok#12
   __rc_panic#13:
     arm64.leaRdata x0, __str_blob_4  ; "panic at slab-sharding.a-parked-span-is-taken-back-and-re-owned.test:21: Range check failed: value outside typealias 'Seed'\x0a"
     arm64.bl mrt_panic
@@ -262,7 +242,6 @@ func @cycle {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
-    arm64.b forstep#7
   forstep#7:
     arm64.add x23, x23, 1
     arm64.b forhdr#5
@@ -270,14 +249,10 @@ func @cycle {
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.add x20, x20, x0
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#16
-    arm64.b __rc_chk#17
+    arm64.b.lt __rc_panic#16
   __rc_chk#17:
     arm64.cmp x20, 65536
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#16
-    arm64.b __rc_ok#15
+    arm64.b.le __rc_ok#15
   __rc_panic#16:
     arm64.leaRdata x0, __str_blob_5  ; "panic at slab-sharding.a-parked-span-is-taken-back-and-re-owned.test:23: Range check failed: value outside typealias 'Seed'\x0a"
     arm64.bl mrt_panic
@@ -298,20 +273,15 @@ func @cycle {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x23
     arm64.bl __managed_decref
-    arm64.b forstep#3
   forstep#3:
     arm64.add x21, x21, 1
     arm64.b forhdr#1
   forexit#4:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#19
-    arm64.b __rc_chk#20
+    arm64.b.lt __rc_panic#19
   __rc_chk#20:
     arm64.cmp x20, 65536
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#19
-    arm64.b __rc_ok#18
+    arm64.b.le __rc_ok#18
   __rc_panic#19:
     arm64.leaRdata x0, __str_blob_6  ; "panic at slab-sharding.a-parked-span-is-taken-back-and-re-owned.test:28: Range check failed: value outside typealias 'Seed'\x0a"
     arm64.bl mrt_panic
@@ -355,9 +325,7 @@ func @main {
     arm64.bl __gt_await
     arm64.movImm x16, 12000
     arm64.cmp x0, x16
-    arm64.cset x0, ne
-    arm64.cbnz x0, lostBuffers
-    arm64.b ifcont#2
+    arm64.b.eq ifcont#2
   lostBuffers:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -375,23 +343,16 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr#3
   forhdr#3:
     arm64.cmp x20, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, survivors
-    arm64.b forexit#6
+    arm64.b.ge forexit#6
   survivors:
     arm64.add x0, x20, 900
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 65536
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_7  ; "panic at slab-sharding.a-parked-span-is-taken-back-and-re-owned.test:43: Range check failed: value outside typealias 'Seed'\x0a"
     arm64.bl mrt_panic
@@ -410,7 +371,6 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b forstep#5
   forstep#5:
     arm64.add x20, x20, 1
     arm64.b forhdr#3
@@ -421,16 +381,10 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#37
-    arm64.b forempty
-  critsplit#37:
-    arm64.b forhdr#7
+    arm64.b.ne forempty
   forhdr#7:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b forexit#11
+    arm64.b.ne forexit#11
   check:
     arm64.leaRdata x1, __layout_WithIterIterator_ArrayIterator_ByteArray_ByteArray
     arm64.leaRdata x2, __witness_ArrayIterator_ByteArray.Iterator
@@ -443,36 +397,26 @@ func @main {
     arm64.add x24, x0, 900
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x0, 80
-    arm64.cset x0, ne
-    arm64.cbnz x0, length
-    arm64.b critsplit#38
+    arm64.b.eq critsplit#38
   length:
     arm64.add x0, x20, 1
     arm64.b ifcont#13
   critsplit#38:
     arm64.movRegReg x0, x20
-    arm64.b ifcont#13
   ifcont#13:
     arm64.movImm x20, 0
     arm64.movRegReg x25, x0
-    arm64.b forhdr#14
   forhdr#14:
     arm64.cmp x20, 80
-    arm64.cset x0, lt
-    arm64.cbnz x0, bytes
-    arm64.b forexit#17
+    arm64.b.ge forexit#17
   bytes:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#34
+    arm64.b.hs __im_slow
   __im_load#34:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.arm64AddLsl x0, x0, x20, lsl #3
@@ -480,47 +424,31 @@ func @main {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#35
+    arm64.b.hs __im_slow
   __im_load#35:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.add x0, x0, x20
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x23 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#40
+    arm64.b.eq __im_cont
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#41
-  critsplit#41:
-    arm64.b __im_cont
-  critsplit#40:
-    arm64.b __im_cont
+    arm64.b.ne __im_cont
   __im_slow:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x20
     arm64.bl __managed_get
     arm64.movRegReg x1, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x22
@@ -541,21 +469,21 @@ func @main {
     arm64.ret
   tryok:
     arm64.add x1, x24, x20
-    arm64.movImm x2, 251
-    arm64.sdiv x16, x1, x2
-    arm64.msub x1, x16, x2, x1
+    arm64.movImm x2, 2351776136887273513
+    arm64.smulh x2, x2, x1
+    arm64.asr x2, x2, 5
+    arm64.lsr x3, x2, 63
+    arm64.add x2, x2, x3
+    arm64.movImm x16, 251
+    arm64.mul x2, x2, x16
+    arm64.sub x1, x1, x2
     arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, value
-    arm64.b critsplit#39
+    arm64.b.eq critsplit#39
   value:
     arm64.add x0, x25, 1
-    arm64.b ifcont#21
+    arm64.b forstep#16
   critsplit#39:
     arm64.movRegReg x0, x25
-    arm64.b ifcont#21
-  ifcont#21:
-    arm64.b forstep#16
   forstep#16:
     arm64.add x20, x20, 1
     arm64.movRegReg x25, x0
@@ -563,7 +491,6 @@ func @main {
   forexit#17:
     arm64.movRegReg x0, x22
     arm64.bl __destruct___Tuple2.ArrayIterator_ByteArray.Array_Byte
-    arm64.b forstep#10
   forstep#10:
     arm64.leaRdata x1, __witness_ArrayIterator_ByteArray.Iterator
     arm64.movRegReg x0, x21
@@ -578,12 +505,9 @@ func @main {
     arm64.b forjoin
   forempty:
     arm64.movRegReg x0, x20
-    arm64.b forjoin
   forjoin:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, corrupted
-    arm64.b ifcont#24
+    arm64.b.eq ifcont#24
   corrupted:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19

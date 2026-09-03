@@ -105,16 +105,10 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forjoin
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop
-    arm64.b forexit
+    arm64.b.ne forexit
   loop:
     arm64.leaRdata x1, __layout_ListIterator_Entry
     arm64.movRegReg x0, x19
@@ -122,7 +116,6 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.add x23, x23, x1
     arm64.bl __mm_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x19
     arm64.bl ListIterator.advance
@@ -131,9 +124,6 @@ func @main {
   forexit:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_ListIterator_Entry
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movImm x0, 21
     arm64.movImm x1, 0

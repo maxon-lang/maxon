@@ -41,12 +41,9 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 9
-    arm64.cset x0, lt
-    arm64.cbnz x0, push
-    arm64.b whileexit
+    arm64.b.ge whileexit
   push:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
@@ -59,9 +56,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#5
-    arm64.b tryok#4
+    arm64.b.eq tryok#4
   tryerr#5:
     arm64.leaRdata x0, __str_blob_0  ; "panic at cross-byte-boundary.test:11: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -76,9 +71,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq tryok#6
   tryerr#7:
     arm64.leaRdata x0, __str_blob_1  ; "panic at cross-byte-boundary.test:12: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -92,58 +85,40 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#9
-    arm64.b tryok#8
+    arm64.b.eq tryok#8
   tryerr#9:
     arm64.movImm x20, 0
     arm64.b trycont#10
   tryok#8:
     arm64.movRegReg x20, x0
-    arm64.b trycont#10
   trycont#10:
     arm64.movImm x1, 8
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq trycont#13
   tryerr#12:
     arm64.movImm x0, 0
-    arm64.b trycont#13
-  tryok#11:
-    arm64.b trycont#13
   trycont#13:
     arm64.movImm x1, 0
-    arm64.cbnz x20, c7
-    arm64.b critsplit#21
+    arm64.cbz x20, ifcont#15
   c7:
     arm64.movImm x1, 1
-    arm64.b ifcont#15
-  critsplit#21:
-    arm64.b ifcont#15
   ifcont#15:
-    arm64.cbnz x0, c8
-    arm64.b critsplit#22
+    arm64.cbz x0, critsplit
   c8:
     arm64.add x20, x1, 1
     arm64.b ifcont#17
-  critsplit#22:
+  critsplit:
     arm64.movRegReg x20, x1
-    arm64.b ifcont#17
   ifcont#17:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at cross-byte-boundary.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

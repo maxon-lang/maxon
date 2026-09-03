@@ -772,6 +772,13 @@ export type StdOpMeta
 	//
 	// `const` is the one that is NOT an over-approximation and must stay exact — see its
 	// variant below.
+	//
+	// ⛔ **IT IS A UNION OVER THE BACKENDS, NOT A STATEMENT ABOUT x64.** One census
+	// (`CompareFusionCensus`) serves both native isels off this field, and the two ISAs clobber
+	// differently — so an op whose lowering writes the flags on EITHER target declares `true` here,
+	// and `tlsSlotLoad` is the one that does so for arm64's sake alone. Over-declaring costs a
+	// backend a missed fusion on the other target; under-declaring is a silent wrong answer, because
+	// the flags a fused branch reads would already have been destroyed by an op the scan never saw.
 	export let clobbersFlags as bool
 	// A compare feeding a branch — the backends pair the two, so the classification
 	// must survive as metadata rather than being re-derived per target.
@@ -2365,7 +2372,14 @@ export union StdOp
 	// and the C# bootstrap records a live bug from pinning R11 unconditionally. shv2's `encodeModRmBaseDisp`
 	// already emits the zero-`disp8` form for exactly those two registers (its own comment says so), so the
 	// x64 lowering routes through it and the allocator may colour the operand anywhere.
-	tlsSlotLoad(resultId ValueId, tebOffsetId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	//
+	// ⚠⚠ **`clobbersFlags: true` IS arm64's, AND IT IS THE ONE PLACE THE FIELD'S UNION RULE EARNS ITS
+	// KEEP.** x64 lowers this to a single `mov r, gs:[off]` and writes no flag at all. arm64 has no
+	// `gs:` segment and no non-zero TEB base, so an uninitialised slot offset of ZERO must be gated
+	// out — and `lowerTlsSlotLoad` spells that gate `cmp`/`cset`, which writes NZCV. Declared `false`,
+	// this op would sit INVISIBLY between an arm64 compare and its fused `b.cond` and the branch would
+	// read the gate's flags instead of the compare's.
+	tlsSlotLoad(resultId ValueId, tebOffsetId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 	// **`osSetEvent(handle)`** = `SetEvent(handle)` — signal an auto-reset event. The wake half of the
 	// worker park's Dekker pair, and the twin of the `osWaitHandle` a parked worker blocks in.
 	//
@@ -2554,6 +2568,172 @@ export union StdOp
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
+
+// ==========================================================================
+// ⭐⭐⭐ THE SYSCALL BRACKET'S CLASSIFICATION — WHICH OPS MAY COST A MACHINE ITS PROCESSOR
+// ==========================================================================
+
+// ⛔⛔ **THE RULE IS *"`blocking` MEANS IT CAN WAIT AN UNBOUNDED TIME ON SOMETHING OUTSIDE THE SCHEDULER"*,
+// AND ITS CONTRAPOSITIVE IS A REQUIREMENT ON THE RUNTIME: a `blocking` op may never be emitted with
+// `__sched_lock` HELD.** A bracketed call may lose its processor to `__sysmon`, and the road back
+// (`SchedRuntime.buildSchedSyscallRegain`) waits for another one — under the run-queue lock that is a
+// whole-scheduler deadlock, because the machine that must release the lock is the machine that is waiting.
+// Every op the scheduler reaches under that lock — the park waits, the machine births, the page calls the
+// slab makes — is `schedulerBound` below, which is what makes the requirement checkable by reading one table
+// rather than by tracing every lock bracket.
+//
+// ⚠ **THE `match` IS TOTAL OVER `StdOp` AND HAS NO `default` ARM.** A `default gives schedulerBound` would
+// make a newly added blocking op silently keep costing its processor, with nothing to say so. The RANGE arms
+// cover only the pure-IR bands — arithmetic, control flow, calls, memory and addresses — which reach no
+// kernel at all; every op that names an OS primitive answers for itself.
+export enum SyscallClass
+	// May block for an unbounded time on something OUTSIDE the scheduler — a device, a peer, a child, a user.
+	// BRACKETED: `__sysmon` may take this machine's processor away while the call is in flight.
+	blocking
+	// Blocks only on the scheduler's own machinery, or is bounded and short. NOT bracketed.
+	schedulerBound
+end 'SyscallClass'
+
+// The syscall class of ONE Std op. See the header above.
+export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
+	return match op 'k'
+		// The pure-IR bands. Arithmetic, control flow, a call to another Maxon function, a memory access and
+		// an address materialization each stay inside this process, so none of them can hold an OS thread in
+		// the kernel — a callee's OWN blocking op is bracketed at the callee's site, not at the call.
+		const to param gives SyscallClass.schedulerBound
+		call to storeIndirect gives SyscallClass.schedulerBound
+		rdataAddr to errorReturn gives SyscallClass.schedulerBound
+		funcAddr to callIndirect gives SyscallClass.schedulerBound
+		switch to witnessCall gives SyscallClass.schedulerBound
+		witnessTryCall gives SyscallClass.schedulerBound
+		stackRecordAddr gives SyscallClass.schedulerBound
+		memFill gives SyscallClass.schedulerBound
+		atomicCas to currentThreadToken gives SyscallClass.schedulerBound
+		loadAcquire or storeRelease gives SyscallClass.schedulerBound
+
+		// --- `blocking`: the ops a green thread can sit inside for an unbounded time ---
+		//
+		// ⭐ **THE THREE WRITES ARE THE HOTTEST BRACKETED OPS THERE ARE — every `print` from a green thread —
+		// which is why the bracket has to stay at one atomic each way and must not touch `__sched_lock`.**
+		// They are here rather than with the bounded family because a write to a pipe whose reader has stopped
+		// reading blocks exactly as long as the reader takes, which is a property of the far end.
+		osWriteStdout gives SyscallClass.blocking
+		osWriteStderr gives SyscallClass.blocking
+		osWriteFile gives SyscallClass.blocking
+		// ⭐⭐ **THE READS ARE THIS BRACKET'S SUBJECT.** `__con_read_stdin` is a plain synchronous read of
+		// standard input with no park (`ConsoleRuntime`), so a green thread inside it holds its OS thread in
+		// the kernel until the user presses return — which is what `specs-shv2/sched-syscall-handoff.md`'s
+		// ordering case measures. The overlapped spelling completes synchronously on every POSIX lane.
+		osReadFile gives SyscallClass.blocking
+		osReadOverlapped gives SyscallClass.blocking
+		// The file-system family. Every one of them can reach a cold disk, a network share or a stalled device.
+		osFileOpenRead gives SyscallClass.blocking
+		osFileOpenWrite gives SyscallClass.blocking
+		osFileOpenWriteExecutable gives SyscallClass.blocking
+		osFileSize gives SyscallClass.blocking
+		osFileDelete gives SyscallClass.blocking
+		osFileRename gives SyscallClass.blocking
+		osFileFindFirst gives SyscallClass.blocking
+		osFileFindNext gives SyscallClass.blocking
+		osDirCreate gives SyscallClass.blocking
+		osDirCurrentPath gives SyscallClass.blocking
+		osFileAttributes gives SyscallClass.blocking
+		// The file-MAPPING pair, which fault pages in from the same devices.
+		osOpenNamedSegment gives SyscallClass.blocking
+		osMapNamedSegment gives SyscallClass.blocking
+		// Spawning a child image, making a pipe and peeking a child's pipe all wait on another process.
+		osProcessSpawn gives SyscallClass.blocking
+		osProcessSpawnInherit gives SyscallClass.blocking
+		osPipeCreate gives SyscallClass.blocking
+		osPipeCreateOutbound gives SyscallClass.blocking
+		osPipePeek gives SyscallClass.blocking
+		// The socket family. Resolution waits on DNS, `connect`/`send`/`recv` on a peer, the close on whatever
+		// linger was set to, and the startup loads and initialises the provider stack.
+		osSocketStartup gives SyscallClass.blocking
+		osSocketResolve gives SyscallClass.blocking
+		osSocketCreate gives SyscallClass.blocking
+		osSocketConnect gives SyscallClass.blocking
+		osSocketSend gives SyscallClass.blocking
+		osSocketRecv gives SyscallClass.blocking
+		osSocketClose gives SyscallClass.blocking
+
+		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
+		//
+		// ⛔ The lock pair is the deadlock this header sets out. Do not move them.
+		osLockInit gives SyscallClass.schedulerBound
+		osLockEnter gives SyscallClass.schedulerBound
+		osLockLeave gives SyscallClass.schedulerBound
+		// ⛔⛔ **THE THREE WAITS ARE A SECOND DEADLOCK, NOT AN OPTIMISATION LEFT ON THE TABLE.** They are
+		// reached ONLY through the drive loop — `__gt_await` / `__gt_await_any` on a green thread, and the
+		// worker's park — which is the scheduler WAITING FOR ITS OWN WORK. A processor taken from them is a
+		// processor taken from the very thing that would have used it, and the wait is already bounded by
+		// `__gt_timer_earliest` and by the park timeouts.
+		//
+		// ⛔⛔ **AND A SECOND, INDEPENDENT REASON THAT LIVES IN ANOTHER FILE: THE DEADLOCK CENSUS'S ARGUMENT
+		// FOR HAVING NO RETAKE BRACKET IS *"a machine in a bracketed call is never `MQuiescedWaiting`"*, AND
+		// THESE THREE ARMS ARE THE WHOLE OF WHY THAT IS TRUE.** A machine publishes `MQuiescedWaiting`
+		// immediately before parking, and it parks by emitting one of these three. Move any of them to
+		// `blocking` and `__sysmon` can take a processor from a machine that already advertises quiescence, at
+		// which point `__sched_any_executing` sees nothing executing mid-handoff and aborts a live program with
+		// exit 92 — with no compile error between the two files. The argument itself is stated once, at
+		// `SchedRuntime.buildSchedRetake`'s census note; these arms name it so they cannot be moved without
+		// meeting it.
+		osWaitHandle gives SyscallClass.schedulerBound
+		osWaitHandles gives SyscallClass.schedulerBound
+		osSleepMs gives SyscallClass.schedulerBound
+		// The PAGE band: bounded, and every one of them is reachable under `__slab_lock`.
+		osAllocPages gives SyscallClass.schedulerBound
+		osFreePages gives SyscallClass.schedulerBound
+		osCommitPages gives SyscallClass.schedulerBound
+		osReservePages gives SyscallClass.schedulerBound
+		osDecommitPages gives SyscallClass.schedulerBound
+		// Process teardown and the two panics: they do not return, so there is nothing to hand a processor back
+		// to.
+		osExit gives SyscallClass.schedulerBound
+		osPanic gives SyscallClass.schedulerBound
+		osPanicValue gives SyscallClass.schedulerBound
+		// The clocks, the handles, the events and the machine queries: bounded and short, every one.
+		osReadClock gives SyscallClass.schedulerBound
+		osReadWallClock gives SyscallClass.schedulerBound
+		osTickCountMs gives SyscallClass.schedulerBound
+		osThreadCpuTicks gives SyscallClass.schedulerBound
+		osCpuCount gives SyscallClass.schedulerBound
+		osGetPid gives SyscallClass.schedulerBound
+		osStdHandle gives SyscallClass.schedulerBound
+		// ⚠ A "file" op that is NOT in the blocking family above, and the distinction is the ARGUMENT: the
+		// path-taking `osFileAttributes` can reach a cold disk, while this one answers the type of an
+		// ALREADY-OPEN handle out of the file object the kernel is holding.
+		osHandleFileType gives SyscallClass.schedulerBound
+		osHandleSetInherit gives SyscallClass.schedulerBound
+		osCloseHandle gives SyscallClass.schedulerBound
+		osFileClose gives SyscallClass.schedulerBound
+		osFileFindClose gives SyscallClass.schedulerBound
+		osIocpCreate gives SyscallClass.schedulerBound
+		osCancelIo gives SyscallClass.schedulerBound
+		osLastError gives SyscallClass.schedulerBound
+		osEventCreate gives SyscallClass.schedulerBound
+		osSetEvent gives SyscallClass.schedulerBound
+		// ⚠ **`osThreadCreate` IS THE ONE THAT LOOKS LIKE IT BELONGS ABOVE AND DOES NOT.** Its only emitter is
+		// `__sched_startm`'s spawn arm, which runs INSIDE `__sched_lock` — so bracketing it would be this
+		// header's deadlock reached by a second road. It is bounded in any case: creating a thread commits a
+		// stack and returns, and nothing about it waits on another party.
+		osThreadCreate gives SyscallClass.schedulerBound
+		osProcessExitCode gives SyscallClass.schedulerBound
+		osProcessTerminate gives SyscallClass.schedulerBound
+		// ⚠ Freeing an address-info list walks a structure this process already holds; the RESOLUTION that
+		// filled it is the blocking half, and it is classified as such above.
+		osSocketFreeAddrInfo gives SyscallClass.schedulerBound
+		osCommandLine gives SyscallClass.schedulerBound
+		osExecutablePath gives SyscallClass.schedulerBound
+		osEnvRead gives SyscallClass.schedulerBound
+		osEnvBlock gives SyscallClass.schedulerBound
+		osEnvBlockFree gives SyscallClass.schedulerBound
+		osEnterBackgroundPriority gives SyscallClass.schedulerBound
+		tlsAlloc gives SyscallClass.schedulerBound
+		tlsSetValue gives SyscallClass.schedulerBound
+		tlsSlotLoad gives SyscallClass.schedulerBound
+	end 'k'
+end 'stdOpSyscallClassOf'
 
 // ⭐⭐ **WHICH ARITHMETIC SHAPE AN OP CARRIES — ONE ROSTER, READ BY ALL THREE ARITHMETIC PASSES.**
 // `foldConstOperands` (move a const OPERAND into an immediate), `foldConstants` (EVALUATE

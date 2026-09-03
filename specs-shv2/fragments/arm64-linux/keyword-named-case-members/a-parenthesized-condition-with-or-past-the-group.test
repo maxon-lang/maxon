@@ -21,70 +21,46 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x0, 2
-    arm64.cset x2, lt
-    arm64.movImm x3, 1
-    arm64.cbnz x2, critsplit#16
-    arm64.b orrhs#2
-  critsplit#16:
-    arm64.b scmerge#3
+    arm64.movImm x2, 1
+    arm64.b.lt scmerge#3
   orrhs#2:
     arm64.cmp x0, 0
     arm64.cset x2, lt
-    arm64.movRegReg x3, x2
-    arm64.b scmerge#3
   scmerge#3:
-    arm64.movImm x2, 1
-    arm64.cbnz x3, critsplit#17
-    arm64.b orrhs#4
-  critsplit#17:
-    arm64.b scmerge#5
+    arm64.movImm x3, 1
+    arm64.cbnz x2, scmerge#5
   orrhs#4:
     arm64.movImm x2, 0
-    arm64.b scmerge#5
+    arm64.movRegReg x3, x2
   scmerge#5:
-    arm64.cbnz x2, spin
-    arm64.b whileexit
+    arm64.cbz x3, whileexit
   spin:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.movImm x3, 1
-    arm64.cbnz x2, critsplit#18
-    arm64.b orrhs#8
-  critsplit#18:
-    arm64.b scmerge#9
+    arm64.movImm x2, 1
+    arm64.b.eq scmerge#9
   orrhs#8:
     arm64.cmp x0, 1
     arm64.cset x2, eq
-    arm64.movRegReg x3, x2
-    arm64.b scmerge#9
   scmerge#9:
-    arm64.movImm x2, 0
-    arm64.cbnz x3, andrhs
-    arm64.b critsplit#19
+    arm64.movImm x3, 0
+    arm64.cbz x2, critsplit
   andrhs:
     arm64.movImm x2, 1
     arm64.b scmerge#11
-  critsplit#19:
-    arm64.b scmerge#11
+  critsplit:
+    arm64.movRegReg x2, x3
   scmerge#11:
-    arm64.cbnz x2, inner
-    arm64.b critsplit#20
+    arm64.cbz x2, ifcont#13
   inner:
     arm64.add x1, x1, 21
-    arm64.b ifcont#13
-  critsplit#20:
-    arm64.b ifcont#13
   ifcont#13:
     arm64.add x0, x0, 1
     arm64.b whilehdr
   whileexit:
     arm64.cmp x1, 42
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont#15
+    arm64.b.ne ifcont#15
   ok:
     arm64.movImm x0, 42
     arm64.epilogue 16

@@ -56,8 +56,7 @@ func @Container.create {
 func @Container.pushIf {
   entry:
     arm64.prologue 16
-    arm64.cbnz x2, maybe
-    arm64.b iffalse
+    arm64.cbz x2, iffalse
   maybe:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __managed_push
@@ -65,7 +64,6 @@ func @Container.pushIf {
   iffalse:
     arm64.movRegReg x0, x3
     arm64.bl __drop_type_param
-    arm64.b ifcont
   ifcont:
     arm64.epilogue 16
     arm64.ret

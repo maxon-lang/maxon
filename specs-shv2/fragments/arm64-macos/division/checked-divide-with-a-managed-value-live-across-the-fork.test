@@ -36,9 +36,6 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 4
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
   __il_cont:
     arm64.leaRdata x0, __str_rec_3  ; "held d="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -85,11 +82,10 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
     arm64.movImm x0, 100
-    arm64.movImm x1, 4
-    arm64.sdiv x19, x0, x1
-    arm64.b tryok
-  tryok:
-    arm64.b trycont
+    arm64.asr x0, x0, 63
+    arm64.lsr x0, x0, 62
+    arm64.add x0, x0, 100
+    arm64.asr x19, x0, 2
   trycont:
     arm64.movRegReg x0, x26
     arm64.bl print

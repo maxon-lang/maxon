@@ -27,14 +27,10 @@ func @appendTo {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, 255
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-chain-passed-as-a-parameter-hands-a-handle-back.test:6: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic

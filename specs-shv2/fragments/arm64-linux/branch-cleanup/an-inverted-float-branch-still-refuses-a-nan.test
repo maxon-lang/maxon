@@ -1,0 +1,122 @@
+// Test: an-inverted-float-branch-still-refuses-a-nan
+var big = 1.0e308
+
+function main() returns ExitCode
+	let inf = big * 10.0
+	let nan = inf - inf
+	let x = 5.0
+	var hits = 0
+
+	if nan < x 'lt'
+		return 21
+	end 'lt' else 'ltElse'
+		hits = hits + 1
+	end 'ltElse'
+
+	if nan <= x 'le'
+		return 22
+	end 'le' else 'leElse'
+		hits = hits + 1
+	end 'leElse'
+
+	if nan > x 'gt'
+		return 23
+	end 'gt' else 'gtElse'
+		hits = hits + 1
+	end 'gtElse'
+
+	if nan >= x 'ge'
+		return 24
+	end 'ge' else 'geElse'
+		hits = hits + 1
+	end 'geElse'
+
+	if nan == nan 'eq'
+		return 25
+	end 'eq' else 'eqElse'
+		hits = hits + 1
+	end 'eqElse'
+
+	if nan != nan 'ne'
+		hits = hits + 1
+	end 'ne' else 'neElse'
+		return 26
+	end 'neElse'
+
+	return 0 if hits == 6 else 27
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_big@0 = f64 1E+308
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_big
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
+    arm64.fpLoadRdata d1, [rdata + __fconst_10]
+    arm64.fmul d0, d0, d1
+    arm64.fsub d0, d0, d0
+    arm64.fpLoadRdata d1, [rdata + __fconst_5]
+    arm64.fcmp d0, d1
+    arm64.b.pl ifcont#3
+  lt:
+    arm64.movImm x0, 21
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#3:
+    arm64.fcmp d0, d1
+    arm64.b.hi ifcont#6
+  le:
+    arm64.movImm x0, 22
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#6:
+    arm64.fcmp d0, d1
+    arm64.b.le ifcont#9
+  gt:
+    arm64.movImm x0, 23
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#9:
+    arm64.fcmp d0, d1
+    arm64.b.lt ifcont#12
+  ge:
+    arm64.movImm x0, 24
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#12:
+    arm64.fcmp d0, d0
+    arm64.b.ne ifcont#15
+  eq:
+    arm64.movImm x0, 25
+    arm64.epilogue 16
+    arm64.ret
+  ifcont#15:
+    arm64.fcmp d0, d0
+    arm64.b.eq ifelse
+  ternarytrue:
+    arm64.movImm x0, 0
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at an-inverted-float-branch-still-refuses-a-nan.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 26
+    arm64.epilogue 16
+    arm64.ret
+}

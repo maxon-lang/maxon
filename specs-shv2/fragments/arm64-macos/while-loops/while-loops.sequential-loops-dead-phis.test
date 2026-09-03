@@ -61,17 +61,11 @@ func @big {
     arm64.movImm x5, 5
     arm64.movImm x6, 6
     arm64.movImm x7, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x7, x0
-    arm64.cset x8, lt
-    arm64.cbnz x8, L0
-    arm64.b whileexit#3
-  L0:
-    arm64.b __il_body#8
+    arm64.b.ge whileexit#3
   __il_body#8:
     arm64.add x7, x7, 1
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.add x1, x1, x7
     arm64.add x2, x2, x7
@@ -93,17 +87,11 @@ func @big {
     arm64.movImm x6, 5
     arm64.movImm x7, 6
     arm64.movImm x8, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.cmp x8, x0
-    arm64.cset x9, lt
-    arm64.cbnz x9, L1
-    arm64.b whileexit#6
-  L1:
-    arm64.b __il_body#10
+    arm64.b.ge whileexit#6
   __il_body#10:
     arm64.add x8, x8, 1
-    arm64.b __il_cont#9
   __il_cont#9:
     arm64.add x2, x2, x8
     arm64.add x3, x3, x8
@@ -129,14 +117,10 @@ func @main {
     arm64.movImm x0, 3
     arm64.bl big
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at while-loops.sequential-loops-dead-phis.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

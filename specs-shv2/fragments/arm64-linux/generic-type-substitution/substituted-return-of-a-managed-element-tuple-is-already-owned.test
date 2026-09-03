@@ -76,46 +76,33 @@ func @Labeller.tagged {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load#9
+    arm64.b.ls __im_slow
   __im_load#9:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load#10
+    arm64.b.ls __im_slow
   __im_load#10:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#12
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow
-    arm64.b critsplit#13
+    arm64.b.eq __im_slow
   critsplit#13:
     arm64.movRegReg x21, x2
     arm64.b __im_cont
@@ -126,12 +113,9 @@ func @Labeller.tagged {
     arm64.bl __managed_get
     arm64.movRegReg x21, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_2  ; "panic at substituted-return-of-a-managed-element-tuple-is-already-owned.test:15: oob\x0a"
     arm64.bl mrt_panic
@@ -266,14 +250,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x22, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x22, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_14  ; "panic at substituted-return-of-a-managed-element-tuple-is-already-owned.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -33,18 +33,13 @@ func @main {
     arm64.bl CommandLine.args
     arm64.movRegReg x19, x0
     arm64.movImm x20, 1
-    arm64.b whilehdr
   whilehdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_5  ; "panic at iterate-args.test:7: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -56,9 +51,7 @@ func @main {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x20, lsl #3
@@ -66,14 +59,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#13
+    arm64.b.eq critsplit#13
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#14
+    arm64.b.ne critsplit#14
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -84,17 +73,11 @@ func @main {
     arm64.b __im_cont
   critsplit#13:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.leaRdata x0, __str_rec_2  ; ""
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.bl print
     arm64.leaRdata x0, __str_rec_3  ; "\x0a"

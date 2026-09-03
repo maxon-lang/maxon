@@ -142,9 +142,7 @@ func @Numbered.advance {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x1, ge
-    arm64.cbnz x1, atTheLast
-    arm64.b ifcont
+    arm64.b.lt ifcont
   atTheLast:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -176,12 +174,9 @@ func @show {
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
     arm64.movImm x0, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, walk
-    arm64.b forexit
+    arm64.b.ne forexit
   walk:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
@@ -220,7 +215,6 @@ func @show {
     arm64.bl __str_decref
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x20 + 32]

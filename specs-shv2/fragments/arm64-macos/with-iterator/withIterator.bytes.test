@@ -40,24 +40,14 @@ func @main {
     arm64.bl __destruct_ByteView
     arm64.movImm x0, 0
     arm64.cmp x22, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forjoin
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop
-    arm64.b forexit
-  loop:
-    arm64.b __il_body
+    arm64.b.ne forexit
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
-    arm64.b __il_cont
   __il_cont:
     arm64.add x19, x19, x0
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x21
     arm64.bl ByteIterator.advance
@@ -66,9 +56,6 @@ func @main {
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_ByteIterator
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movImm x0, 21
     arm64.movImm x1, 0

@@ -27,34 +27,25 @@ ExitCode: 42
 func @main {
   entry:
     arm64.prologue 16
-    arm64.b __il_body#6
   __il_body#6:
     arm64.movImm x0, 16
-    arm64.b __il_cont#5
   __il_cont#5:
     arm64.cmp x0, 16
-    arm64.cset x0, ne
-    arm64.cbnz x0, sourceKeeps
-    arm64.b ifcont#2
+    arm64.b.eq __il_body#8
   sourceKeeps:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont#2:
-    arm64.b __il_body#8
   __il_body#8:
     arm64.movImm x0, 18446744073709551615
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.cmp x0, -1
-    arm64.cset x0, ne
-    arm64.cbnz x0, toSigned
-    arm64.b ifcont#4
+    arm64.b.eq ifcont
   toSigned:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont#4:
+  ifcont:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret

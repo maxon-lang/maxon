@@ -92,7 +92,7 @@ lowering there could only be a plausible wrong answer.
 ## Tests
 
 <!-- test: process-executable-path.is-not-empty -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The canonical property, in the canonical spec's own shape
 (`/specs/command-line-args.md:executable-path`): the call succeeds and answers something.
 ```maxon
@@ -109,7 +109,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.names-a-file-that-exists -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The strongest property available without a literal: hand the answer straight back to the OS. A
 truncated path, a path with the NUL still in it, or a length taken from the buffer's CAPACITY
 rather than from `GetModuleFileNameA`'s return would all name nothing.
@@ -178,7 +178,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.is-stable-across-calls -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Two independent calls agree. Each one allocates its own buffer, asks the OS again and copies the
 answer out, so this pins the whole retry-and-copy path rather than a single lucky first call — a
 buffer reused across calls, or a length left over from the previous one, shows up here as a
@@ -198,7 +198,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.builtin-answers-a-non-empty-buffer -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The intrinsic under the module, driven directly, so a failure attributes to the runtime entry
 rather than to `FilePath` parsing above it.
 ```maxon
@@ -215,7 +215,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.builtin-result-is-owned -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Each call answers a FRESH owned `__ManagedMemory`, dropped at the end of the statement that bound
 it. Fifty of them in a loop is the leak gate's shape: a missing drop is a non-zero mm balance at
 exit, which the runtime reports as exit 101 rather than as a wrong number. The lengths are summed

@@ -70,34 +70,24 @@ func @main {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#7
-    arm64.b __im_owned
+    arm64.b.ne __im_slow#7
   __im_owned:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#7
-    arm64.b __im_bounds
+    arm64.b.lt __im_slow#7
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#7
-    arm64.b __im_buffer
+    arm64.b.ls __im_slow#7
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#7
-    arm64.b __im_viewed
+    arm64.b.eq __im_slow#7
   __im_viewed:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#7
-    arm64.b __im_store
+    arm64.b.eq __im_store
   __im_slow#7:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -107,12 +97,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#6
   __im_cont#6:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at container-overwrite-decrefs-old.test:17: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -132,23 +119,17 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#14
-    arm64.b __im_load
+    arm64.b.ls __im_slow#14
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#17
+    arm64.b.eq critsplit#17
   __im_empty:
     arm64.cmp x20, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#14
-    arm64.b critsplit#18
+    arm64.b.ne critsplit#18
   __im_slow#14:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -159,12 +140,9 @@ func @main {
     arm64.b __im_cont#13
   critsplit#17:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#13
   __im_cont#13:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x0, 18446744073709551615
     arm64.bl Item.create
@@ -173,7 +151,6 @@ func @main {
   tryok#3:
     arm64.movRegReg x0, x20
     arm64.bl __mm_incref
-    arm64.b trycont
   trycont:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.movImm x0, 21

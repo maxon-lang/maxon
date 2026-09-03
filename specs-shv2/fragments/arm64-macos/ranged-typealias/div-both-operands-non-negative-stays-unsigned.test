@@ -30,14 +30,10 @@ func @quotient {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 1
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, 8
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at div-both-operands-non-negative-stays-unsigned.test:10: Range check failed: value outside typealias 'HalfRadix'\x0a"
     arm64.bl mrt_panic
@@ -63,9 +59,6 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x19, 18446744073709551615
     arm64.movImm x1, 8
@@ -84,8 +77,7 @@ func @main {
     arm64.leaRdata x0, __str_rec_2  ; " "
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.movImm x0, 8
-    arm64.udiv x19, x19, x0
+    arm64.lsr x19, x19, 3
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc

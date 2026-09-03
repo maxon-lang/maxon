@@ -29,22 +29,16 @@ func @main {
     arm64.bl String.findLast
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, found
-    arm64.b ifelse
+    arm64.b.ne ifelse
   found:
     arm64.leaRdata x0, __str_rec_6  ; "FOUND\x0a"
     arm64.bl print
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_23  ; "panic at find-last-not-found.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -64,7 +58,6 @@ func @main {
   ifelse:
     arm64.leaRdata x0, __str_rec_7  ; "NOT_FOUND\x0a"
     arm64.bl print
-    arm64.b ifcont
   ifcont:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

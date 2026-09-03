@@ -24,8 +24,7 @@ func @main {
     arm64.leaGlobal x0, __data_flag
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs#1
-    arm64.b critsplit#7
+    arm64.cbz x0, critsplit#7
   andrhs#1:
     arm64.leaGlobal x0, __data_count
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -34,11 +33,9 @@ func @main {
     arm64.b scmerge#2
   critsplit#7:
     arm64.movRegReg x0, x1
-    arm64.b scmerge#2
   scmerge#2:
     arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs#3
-    arm64.b critsplit#8
+    arm64.cbz x0, critsplit#8
   andrhs#3:
     arm64.leaGlobal x0, __data_ratio
     arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
@@ -48,10 +45,8 @@ func @main {
     arm64.b scmerge#4
   critsplit#8:
     arm64.movRegReg x0, x1
-    arm64.b scmerge#4
   scmerge#4:
-    arm64.cbnz x0, read
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   read:
     arm64.movImm x0, 0
     arm64.epilogue 16

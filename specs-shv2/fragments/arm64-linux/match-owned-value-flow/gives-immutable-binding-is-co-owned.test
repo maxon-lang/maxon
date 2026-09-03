@@ -122,9 +122,7 @@ func @choose {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.loadRegSlot x0, slot6
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.movRegReg x0, x27
     arm64.bl __mm_incref
@@ -133,14 +131,11 @@ func @choose {
   matchnext:
     arm64.loadRegSlot x0, slot6
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#2
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#2:
     arm64.movRegReg x0, x26
     arm64.bl __mm_incref
     arm64.movRegReg x0, x26
-    arm64.b matchcont
   matchcont:
     arm64.storeSlotReg slot2, x0
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]

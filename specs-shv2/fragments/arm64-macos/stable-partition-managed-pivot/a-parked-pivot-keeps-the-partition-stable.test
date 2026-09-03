@@ -173,14 +173,10 @@ func @Array.stablePartition {
     arm64.movRegReg x25, x7
     arm64.loadRegBaseDisp.word64 x26, [x29 + 144]
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#61
-    arm64.b __rc_chk#62
+    arm64.b.lt __rc_panic#61
   __rc_chk#62:
     arm64.cmp x20, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#61
-    arm64.b __rc_ok#60
+    arm64.b.le __rc_ok#60
   __rc_panic#61:
     arm64.leaRdata x0, __str_blob_41  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:24: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -199,14 +195,10 @@ func @Array.stablePartition {
     arm64.ret
   __rc_ok#60:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#64
-    arm64.b __rc_chk#65
+    arm64.b.lt __rc_panic#64
   __rc_chk#65:
     arm64.cmp x21, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#64
-    arm64.b __rc_ok#63
+    arm64.b.le __rc_ok#63
   __rc_panic#64:
     arm64.leaRdata x0, __str_blob_41  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:24: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -225,14 +217,10 @@ func @Array.stablePartition {
     arm64.ret
   __rc_ok#63:
     arm64.cmp x3, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#67
-    arm64.b __rc_chk#68
+    arm64.b.lt __rc_panic#67
   __rc_chk#68:
     arm64.cmp x3, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#67
-    arm64.b __rc_ok#66
+    arm64.b.le __rc_ok#66
   __rc_panic#67:
     arm64.leaRdata x0, __str_blob_41  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:24: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -252,15 +240,11 @@ func @Array.stablePartition {
   __rc_ok#66:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#245
-    arm64.b __im_stride#247
+    arm64.b.ne __im_stride#247
   __im_word#245:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x3, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#244
-    arm64.b __im_load#249
+    arm64.b.hs __im_slow#244
   __im_load#249:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x3, lsl #3
@@ -268,32 +252,23 @@ func @Array.stablePartition {
     arm64.b __im_loaded#248
   __im_stride#247:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#246
-    arm64.b __im_slow#244
+    arm64.b.ne __im_slow#244
   __im_byte#246:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x3, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#244
-    arm64.b __im_load#250
+    arm64.b.hs __im_slow#244
   __im_load#250:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x3
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#248
   __im_loaded#248:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#251
-    arm64.b critsplit#267
+    arm64.b.eq critsplit#267
   __im_empty#251:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#244
-    arm64.b critsplit#268
+    arm64.b.eq __im_slow#244
   critsplit#268:
     arm64.movRegReg x27, x0
     arm64.b __im_cont#243
@@ -306,12 +281,9 @@ func @Array.stablePartition {
     arm64.bl __managed_get
     arm64.movRegReg x27, x0
     arm64.movRegReg x1, x9
-    arm64.b __im_cont#243
   __im_cont#243:
     arm64.cmp x1, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_7  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:25: get OOB at pivot\x0a"
     arm64.bl mrt_panic
@@ -340,46 +312,33 @@ func @Array.stablePartition {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word#77
-    arm64.b __im_stride#79
+    arm64.b.ne __im_stride#79
   __im_word#77:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#76
-    arm64.b __im_load#81
+    arm64.b.ls __im_slow#76
   __im_load#81:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.b __im_loaded#80
   __im_stride#79:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#78
-    arm64.b __im_slow#76
+    arm64.b.ne __im_slow#76
   __im_byte#78:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#76
-    arm64.b __im_load#82
+    arm64.b.ls __im_slow#76
   __im_load#82:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#80
   __im_loaded#80:
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x23 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#83
-    arm64.b critsplit#253
+    arm64.b.eq critsplit#253
   __im_empty#83:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#76
-    arm64.b critsplit#254
+    arm64.b.eq __im_slow#76
   critsplit#254:
     arm64.movRegReg x23, x0
     arm64.b __im_cont#75
@@ -391,12 +350,9 @@ func @Array.stablePartition {
     arm64.bl __managed_get
     arm64.movRegReg x23, x0
     arm64.movRegReg x2, x9
-    arm64.b __im_cont#75
   __im_cont#75:
     arm64.cmp x2, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_8  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:28: pivotHold empty one line after a push\x0a"
     arm64.bl mrt_panic
@@ -416,25 +372,18 @@ func @Array.stablePartition {
   tryok#3:
     arm64.movImm x27, 0
     arm64.movRegReg x28, x20
-    arm64.b whilehdr#5
   whilehdr#5:
     arm64.storeSlotReg slot0, x27
     arm64.cmp x28, x21
-    arm64.cset x0, lt
-    arm64.cbnz x0, count
-    arm64.b whileexit#7
+    arm64.b.ge whileexit#7
   count:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#86
-    arm64.b __im_stride#88
+    arm64.b.ne __im_stride#88
   __im_word#86:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x28, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#85
-    arm64.b __im_load#90
+    arm64.b.hs __im_slow#85
   __im_load#90:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x28, lsl #3
@@ -442,47 +391,31 @@ func @Array.stablePartition {
     arm64.b __im_loaded#89
   __im_stride#88:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#87
-    arm64.b __im_slow#85
+    arm64.b.ne __im_slow#85
   __im_byte#87:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x28, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#85
-    arm64.b __im_load#91
+    arm64.b.hs __im_slow#85
   __im_load#91:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x28
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#89
   __im_loaded#89:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#92
-    arm64.b critsplit#255
+    arm64.b.eq __im_cont#84
   __im_empty#92:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#85
-    arm64.b critsplit#256
-  critsplit#256:
-    arm64.b __im_cont#84
-  critsplit#255:
-    arm64.b __im_cont#84
+    arm64.b.ne __im_cont#84
   __im_slow#85:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
     arm64.bl __managed_get
     arm64.movRegReg x1, x9
-    arm64.b __im_cont#84
   __im_cont#84:
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#9
-    arm64.b tryok#8
+    arm64.b.eq tryok#8
   tryerr#9:
     arm64.leaRdata x0, __str_blob_9  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:32: get OOB during count\x0a"
     arm64.bl mrt_panic
@@ -504,15 +437,12 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x25
     arm64.blr x24
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, isLess
-    arm64.b critsplit#252
+    arm64.b.ne critsplit#252
   isLess:
     arm64.add x0, x27, 1
     arm64.b ifcont#11
   critsplit#252:
     arm64.movRegReg x0, x27
-    arm64.b ifcont#11
   ifcont#11:
     arm64.add x28, x28, 1
     arm64.movRegReg x27, x0
@@ -522,33 +452,24 @@ func @Array.stablePartition {
     arm64.sub x0, x0, x27
     arm64.storeSlotReg slot1, x0
     arm64.cmp x0, x27
-    arm64.cset x0, le
-    arm64.cbnz x0, bufferGe
-    arm64.b ifelse#32
+    arm64.b.gt ifelse#32
   bufferGe:
     arm64.movImm x28, 0
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x20
-    arm64.b whilehdr#13
   whilehdr#13:
     arm64.storeSlotReg slot5, x0
     arm64.storeSlotReg slot3, x1
     arm64.cmp x1, x21
-    arm64.cset x0, lt
-    arm64.cbnz x0, splitGe
-    arm64.b whileexit#15
+    arm64.b.ge whileexit#15
   splitGe:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word#95
-    arm64.b __im_stride#97
+    arm64.b.ne __im_stride#97
   __im_word#95:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#94
-    arm64.b __im_load#99
+    arm64.b.hs __im_slow#94
   __im_load#99:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x1, lsl #3
@@ -556,32 +477,23 @@ func @Array.stablePartition {
     arm64.b __im_loaded#98
   __im_stride#97:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#96
-    arm64.b __im_slow#94
+    arm64.b.ne __im_slow#94
   __im_byte#96:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#94
-    arm64.b __im_load#100
+    arm64.b.hs __im_slow#94
   __im_load#100:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#98
   __im_loaded#98:
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#101
-    arm64.b critsplit#257
+    arm64.b.eq critsplit#257
   __im_empty#101:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#94
-    arm64.b critsplit#258
+    arm64.b.eq __im_slow#94
   critsplit#258:
     arm64.movRegReg x20, x0
     arm64.b __im_cont#93
@@ -593,12 +505,9 @@ func @Array.stablePartition {
     arm64.bl __managed_get
     arm64.movRegReg x20, x0
     arm64.movRegReg x2, x9
-    arm64.b __im_cont#93
   __im_cont#93:
     arm64.cmp x2, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#17
-    arm64.b tryok#16
+    arm64.b.eq tryok#16
   tryerr#17:
     arm64.leaRdata x0, __str_blob_10  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:45: get OOB at i (ge)\x0a"
     arm64.bl mrt_panic
@@ -621,9 +530,7 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x25
     arm64.blr x24
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, toScratch
-    arm64.b ifelse#21
+    arm64.b.eq ifelse#21
   toScratch:
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x20
@@ -631,40 +538,28 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#104
-    arm64.b __im_stride#106
+    arm64.b.ne __im_stride#106
   __im_word#104:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#103
-    arm64.b __im_owned#107
+    arm64.b.ne __im_slow#103
   __im_owned#107:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#103
-    arm64.b __im_bounds#108
+    arm64.b.lt __im_slow#103
   __im_bounds#108:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x28, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#103
-    arm64.b __im_buffer#109
+    arm64.b.hs __im_slow#103
   __im_buffer#109:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#103
-    arm64.b __im_viewed#110
+    arm64.b.eq __im_slow#103
   __im_viewed#110:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#103
-    arm64.b __im_store#111
+    arm64.b.ne __im_slow#103
   __im_store#111:
     arm64.arm64AddLsl x0, x0, x28, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -672,40 +567,28 @@ func @Array.stablePartition {
     arm64.b __im_cont#102
   __im_stride#106:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#105
-    arm64.b __im_slow#103
+    arm64.b.ne __im_slow#103
   __im_byte#105:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#103
-    arm64.b __im_owned#112
+    arm64.b.ne __im_slow#103
   __im_owned#112:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#103
-    arm64.b __im_bounds#113
+    arm64.b.lt __im_slow#103
   __im_bounds#113:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x28, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#103
-    arm64.b __im_buffer#114
+    arm64.b.hs __im_slow#103
   __im_buffer#114:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#103
-    arm64.b __im_viewed#115
+    arm64.b.eq __im_slow#103
   __im_viewed#115:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#103
-    arm64.b __im_store#116
+    arm64.b.ne __im_slow#103
   __im_store#116:
     arm64.add x0, x0, x28
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -716,12 +599,9 @@ func @Array.stablePartition {
     arm64.movRegReg x1, x28
     arm64.bl __managed_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#102
   __im_cont#102:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#20
-    arm64.b tryok#19
+    arm64.b.eq tryok#19
   tryerr#20:
     arm64.leaRdata x0, __str_blob_11  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:47: scratch.set OOB (ge)\x0a"
     arm64.bl mrt_panic
@@ -749,41 +629,29 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#119
-    arm64.b __im_stride#121
+    arm64.b.ne __im_stride#121
   __im_word#119:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#118
-    arm64.b __im_owned#122
+    arm64.b.ne __im_slow#118
   __im_owned#122:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#118
-    arm64.b __im_bounds#123
+    arm64.b.lt __im_slow#118
   __im_bounds#123:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegSlot x1, slot5
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#118
-    arm64.b __im_buffer#124
+    arm64.b.hs __im_slow#118
   __im_buffer#124:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#118
-    arm64.b __im_viewed#125
+    arm64.b.eq __im_slow#118
   __im_viewed#125:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#118
-    arm64.b __im_store#126
+    arm64.b.ne __im_slow#118
   __im_store#126:
     arm64.loadRegSlot x1, slot5
     arm64.arm64AddLsl x0, x0, x1, lsl #3
@@ -792,41 +660,29 @@ func @Array.stablePartition {
     arm64.b __im_cont#117
   __im_stride#121:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#120
-    arm64.b __im_slow#118
+    arm64.b.ne __im_slow#118
   __im_byte#120:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#118
-    arm64.b __im_owned#127
+    arm64.b.ne __im_slow#118
   __im_owned#127:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#118
-    arm64.b __im_bounds#128
+    arm64.b.lt __im_slow#118
   __im_bounds#128:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegSlot x1, slot5
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#118
-    arm64.b __im_buffer#129
+    arm64.b.hs __im_slow#118
   __im_buffer#129:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#118
-    arm64.b __im_viewed#130
+    arm64.b.eq __im_slow#118
   __im_viewed#130:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#118
-    arm64.b __im_store#131
+    arm64.b.ne __im_slow#118
   __im_store#131:
     arm64.loadRegSlot x1, slot5
     arm64.add x0, x0, x1
@@ -838,12 +694,9 @@ func @Array.stablePartition {
     arm64.loadRegSlot x1, slot5
     arm64.bl __managed_mem_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#117
   __im_cont#117:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#23
-    arm64.b tryok#22
+    arm64.b.eq tryok#22
   tryerr#23:
     arm64.leaRdata x0, __str_blob_12  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:50: set OOB at w (ge)\x0a"
     arm64.bl mrt_panic
@@ -865,7 +718,6 @@ func @Array.stablePartition {
     arm64.add x0, x0, 1
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x28
-    arm64.b ifcont#24
   ifcont#24:
     arm64.loadRegSlot x2, slot3
     arm64.add x2, x2, 1
@@ -879,25 +731,18 @@ func @Array.stablePartition {
     arm64.movImm x21, 0
     arm64.movRegReg x23, x21
     arm64.movRegReg x21, x20
-    arm64.b whilehdr#25
   whilehdr#25:
     arm64.loadRegSlot x0, slot1
     arm64.cmp x23, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, writeGe
-    arm64.b whileexit#27
+    arm64.b.ge whileexit#27
   writeGe:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#134
-    arm64.b __im_stride#136
+    arm64.b.ne __im_stride#136
   __im_word#134:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#133
-    arm64.b __im_load#138
+    arm64.b.hs __im_slow#133
   __im_load#138:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.arm64AddLsl x0, x0, x23, lsl #3
@@ -905,32 +750,23 @@ func @Array.stablePartition {
     arm64.b __im_loaded#137
   __im_stride#136:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#135
-    arm64.b __im_slow#133
+    arm64.b.ne __im_slow#133
   __im_byte#135:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#133
-    arm64.b __im_load#139
+    arm64.b.hs __im_slow#133
   __im_load#139:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.add x0, x0, x23
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#137
   __im_loaded#137:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#140
-    arm64.b critsplit#259
+    arm64.b.eq critsplit#259
   __im_empty#140:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#133
-    arm64.b critsplit#260
+    arm64.b.eq __im_slow#133
   critsplit#260:
     arm64.xchgRegReg x1, x0
     arm64.b __im_cont#132
@@ -943,12 +779,9 @@ func @Array.stablePartition {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#132
   __im_cont#132:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#29
-    arm64.b tryok#28
+    arm64.b.eq tryok#28
   tryerr#29:
     arm64.leaRdata x0, __str_blob_13  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:58: scratch.get OOB (ge)\x0a"
     arm64.bl mrt_panic
@@ -971,40 +804,28 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#143
-    arm64.b __im_stride#145
+    arm64.b.ne __im_stride#145
   __im_word#143:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#142
-    arm64.b __im_owned#146
+    arm64.b.ne __im_slow#142
   __im_owned#146:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#142
-    arm64.b __im_bounds#147
+    arm64.b.lt __im_slow#142
   __im_bounds#147:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#142
-    arm64.b __im_buffer#148
+    arm64.b.hs __im_slow#142
   __im_buffer#148:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#142
-    arm64.b __im_viewed#149
+    arm64.b.eq __im_slow#142
   __im_viewed#149:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#142
-    arm64.b __im_store#150
+    arm64.b.ne __im_slow#142
   __im_store#150:
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -1012,40 +833,28 @@ func @Array.stablePartition {
     arm64.b __im_cont#141
   __im_stride#145:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#144
-    arm64.b __im_slow#142
+    arm64.b.ne __im_slow#142
   __im_byte#144:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#142
-    arm64.b __im_owned#151
+    arm64.b.ne __im_slow#142
   __im_owned#151:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#142
-    arm64.b __im_bounds#152
+    arm64.b.lt __im_slow#142
   __im_bounds#152:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#142
-    arm64.b __im_buffer#153
+    arm64.b.hs __im_slow#142
   __im_buffer#153:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#142
-    arm64.b __im_viewed#154
+    arm64.b.eq __im_slow#142
   __im_viewed#154:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#142
-    arm64.b __im_store#155
+    arm64.b.ne __im_slow#142
   __im_store#155:
     arm64.add x0, x0, x21
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -1056,12 +865,9 @@ func @Array.stablePartition {
     arm64.movRegReg x1, x21
     arm64.bl __managed_mem_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#141
   __im_cont#141:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#31
-    arm64.b tryok#30
+    arm64.b.eq tryok#30
   tryerr#31:
     arm64.leaRdata x0, __str_blob_14  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:59: set OOB at out (ge)\x0a"
     arm64.bl mrt_panic
@@ -1084,14 +890,10 @@ func @Array.stablePartition {
     arm64.b whilehdr#25
   whileexit#27:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#70
-    arm64.b __rc_chk#71
+    arm64.b.lt __rc_panic#70
   __rc_chk#71:
     arm64.cmp x20, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#70
-    arm64.b __rc_ok#69
+    arm64.b.le __rc_ok#69
   __rc_panic#70:
     arm64.leaRdata x0, __str_blob_42  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:63: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -1126,25 +928,18 @@ func @Array.stablePartition {
     arm64.movImm x20, 0
     arm64.loadRegSlot x27, slot2
     arm64.movRegReg x1, x27
-    arm64.b whilehdr#33
   whilehdr#33:
     arm64.storeSlotReg slot4, x1
     arm64.cmp x1, x21
-    arm64.cset x0, lt
-    arm64.cbnz x0, splitLess
-    arm64.b whileexit#35
+    arm64.b.ge whileexit#35
   splitLess:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word#158
-    arm64.b __im_stride#160
+    arm64.b.ne __im_stride#160
   __im_word#158:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#157
-    arm64.b __im_load#162
+    arm64.b.hs __im_slow#157
   __im_load#162:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x1, lsl #3
@@ -1152,32 +947,23 @@ func @Array.stablePartition {
     arm64.b __im_loaded#161
   __im_stride#160:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#159
-    arm64.b __im_slow#157
+    arm64.b.ne __im_slow#157
   __im_byte#159:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#157
-    arm64.b __im_load#163
+    arm64.b.hs __im_slow#157
   __im_load#163:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#161
   __im_loaded#161:
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#164
-    arm64.b critsplit#261
+    arm64.b.eq critsplit#261
   __im_empty#164:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#157
-    arm64.b critsplit#262
+    arm64.b.eq __im_slow#157
   critsplit#262:
     arm64.movRegReg x28, x0
     arm64.b __im_cont#156
@@ -1189,12 +975,9 @@ func @Array.stablePartition {
     arm64.bl __managed_get
     arm64.movRegReg x28, x0
     arm64.movRegReg x2, x9
-    arm64.b __im_cont#156
   __im_cont#156:
     arm64.cmp x2, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#37
-    arm64.b tryok#36
+    arm64.b.eq tryok#36
   tryerr#37:
     arm64.leaRdata x0, __str_blob_15  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:69: get OOB at i (less)\x0a"
     arm64.bl mrt_panic
@@ -1217,9 +1000,7 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x25
     arm64.blr x24
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, toScratch2
-    arm64.b ifelse#41
+    arm64.b.ne ifelse#41
   toScratch2:
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x28
@@ -1227,40 +1008,28 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#167
-    arm64.b __im_stride#169
+    arm64.b.ne __im_stride#169
   __im_word#167:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#166
-    arm64.b __im_owned#170
+    arm64.b.ne __im_slow#166
   __im_owned#170:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#166
-    arm64.b __im_bounds#171
+    arm64.b.lt __im_slow#166
   __im_bounds#171:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#166
-    arm64.b __im_buffer#172
+    arm64.b.hs __im_slow#166
   __im_buffer#172:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#166
-    arm64.b __im_viewed#173
+    arm64.b.eq __im_slow#166
   __im_viewed#173:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#166
-    arm64.b __im_store#174
+    arm64.b.ne __im_slow#166
   __im_store#174:
     arm64.arm64AddLsl x0, x0, x20, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -1268,40 +1037,28 @@ func @Array.stablePartition {
     arm64.b __im_cont#165
   __im_stride#169:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#168
-    arm64.b __im_slow#166
+    arm64.b.ne __im_slow#166
   __im_byte#168:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#166
-    arm64.b __im_owned#175
+    arm64.b.ne __im_slow#166
   __im_owned#175:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#166
-    arm64.b __im_bounds#176
+    arm64.b.lt __im_slow#166
   __im_bounds#176:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#166
-    arm64.b __im_buffer#177
+    arm64.b.hs __im_slow#166
   __im_buffer#177:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#166
-    arm64.b __im_viewed#178
+    arm64.b.eq __im_slow#166
   __im_viewed#178:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#166
-    arm64.b __im_store#179
+    arm64.b.ne __im_slow#166
   __im_store#179:
     arm64.add x0, x0, x20
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -1312,12 +1069,9 @@ func @Array.stablePartition {
     arm64.movRegReg x1, x20
     arm64.bl __managed_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#165
   __im_cont#165:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#40
-    arm64.b tryok#39
+    arm64.b.eq tryok#39
   tryerr#40:
     arm64.leaRdata x0, __str_blob_16  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:71: scratch.set OOB (less)\x0a"
     arm64.bl mrt_panic
@@ -1346,40 +1100,28 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#182
-    arm64.b __im_stride#184
+    arm64.b.ne __im_stride#184
   __im_word#182:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#181
-    arm64.b __im_owned#185
+    arm64.b.ne __im_slow#181
   __im_owned#185:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#181
-    arm64.b __im_bounds#186
+    arm64.b.lt __im_slow#181
   __im_bounds#186:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x27, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#181
-    arm64.b __im_buffer#187
+    arm64.b.hs __im_slow#181
   __im_buffer#187:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#181
-    arm64.b __im_viewed#188
+    arm64.b.eq __im_slow#181
   __im_viewed#188:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#181
-    arm64.b __im_store#189
+    arm64.b.ne __im_slow#181
   __im_store#189:
     arm64.arm64AddLsl x0, x0, x27, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -1387,40 +1129,28 @@ func @Array.stablePartition {
     arm64.b __im_cont#180
   __im_stride#184:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#183
-    arm64.b __im_slow#181
+    arm64.b.ne __im_slow#181
   __im_byte#183:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#181
-    arm64.b __im_owned#190
+    arm64.b.ne __im_slow#181
   __im_owned#190:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#181
-    arm64.b __im_bounds#191
+    arm64.b.lt __im_slow#181
   __im_bounds#191:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x27, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#181
-    arm64.b __im_buffer#192
+    arm64.b.hs __im_slow#181
   __im_buffer#192:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#181
-    arm64.b __im_viewed#193
+    arm64.b.eq __im_slow#181
   __im_viewed#193:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#181
-    arm64.b __im_store#194
+    arm64.b.ne __im_slow#181
   __im_store#194:
     arm64.add x0, x0, x27
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -1431,12 +1161,9 @@ func @Array.stablePartition {
     arm64.movRegReg x1, x27
     arm64.bl __managed_mem_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#180
   __im_cont#180:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#43
-    arm64.b tryok#42
+    arm64.b.eq tryok#42
   tryerr#43:
     arm64.leaRdata x0, __str_blob_17  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:74: set OOB at w (less)\x0a"
     arm64.bl mrt_panic
@@ -1456,7 +1183,6 @@ func @Array.stablePartition {
   tryok#42:
     arm64.add x0, x27, 1
     arm64.movRegReg x1, x20
-    arm64.b ifcont#44
   ifcont#44:
     arm64.loadRegSlot x2, slot4
     arm64.add x2, x2, 1
@@ -1468,26 +1194,19 @@ func @Array.stablePartition {
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x1, slot2
     arm64.add x20, x1, x0
-    arm64.b whilehdr#45
   whilehdr#45:
     arm64.loadRegSlot x0, slot2
     arm64.cmp x20, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, shiftGe
-    arm64.b whileexit#47
+    arm64.b.le whileexit#47
   shiftGe:
     arm64.sub x21, x20, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#197
-    arm64.b __im_stride#199
+    arm64.b.ne __im_stride#199
   __im_word#197:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#196
-    arm64.b __im_load#201
+    arm64.b.hs __im_slow#196
   __im_load#201:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
@@ -1495,32 +1214,23 @@ func @Array.stablePartition {
     arm64.b __im_loaded#200
   __im_stride#199:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#198
-    arm64.b __im_slow#196
+    arm64.b.ne __im_slow#196
   __im_byte#198:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#196
-    arm64.b __im_load#202
+    arm64.b.hs __im_slow#196
   __im_load#202:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x21
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#200
   __im_loaded#200:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#203
-    arm64.b critsplit#263
+    arm64.b.eq critsplit#263
   __im_empty#203:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#196
-    arm64.b critsplit#264
+    arm64.b.eq __im_slow#196
   critsplit#264:
     arm64.xchgRegReg x1, x0
     arm64.b __im_cont#195
@@ -1533,12 +1243,9 @@ func @Array.stablePartition {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#195
   __im_cont#195:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#49
-    arm64.b tryok#48
+    arm64.b.eq tryok#48
   tryerr#49:
     arm64.leaRdata x0, __str_blob_18  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:81: get OOB during shift\x0a"
     arm64.bl mrt_panic
@@ -1563,40 +1270,28 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#206
-    arm64.b __im_stride#208
+    arm64.b.ne __im_stride#208
   __im_word#206:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#205
-    arm64.b __im_owned#209
+    arm64.b.ne __im_slow#205
   __im_owned#209:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#205
-    arm64.b __im_bounds#210
+    arm64.b.lt __im_slow#205
   __im_bounds#210:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#205
-    arm64.b __im_buffer#211
+    arm64.b.hs __im_slow#205
   __im_buffer#211:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#205
-    arm64.b __im_viewed#212
+    arm64.b.eq __im_slow#205
   __im_viewed#212:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#205
-    arm64.b __im_store#213
+    arm64.b.ne __im_slow#205
   __im_store#213:
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -1604,40 +1299,28 @@ func @Array.stablePartition {
     arm64.b __im_cont#204
   __im_stride#208:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#207
-    arm64.b __im_slow#205
+    arm64.b.ne __im_slow#205
   __im_byte#207:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#205
-    arm64.b __im_owned#214
+    arm64.b.ne __im_slow#205
   __im_owned#214:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#205
-    arm64.b __im_bounds#215
+    arm64.b.lt __im_slow#205
   __im_bounds#215:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#205
-    arm64.b __im_buffer#216
+    arm64.b.hs __im_slow#205
   __im_buffer#216:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#205
-    arm64.b __im_viewed#217
+    arm64.b.eq __im_slow#205
   __im_viewed#217:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#205
-    arm64.b __im_store#218
+    arm64.b.ne __im_slow#205
   __im_store#218:
     arm64.add x0, x0, x21
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -1648,12 +1331,9 @@ func @Array.stablePartition {
     arm64.movRegReg x1, x21
     arm64.bl __managed_mem_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#204
   __im_cont#204:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#51
-    arm64.b tryok#50
+    arm64.b.eq tryok#50
   tryerr#51:
     arm64.leaRdata x0, __str_blob_19  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:82: set OOB during shift\x0a"
     arm64.bl mrt_panic
@@ -1676,25 +1356,18 @@ func @Array.stablePartition {
   whileexit#47:
     arm64.movImm x20, 0
     arm64.loadRegSlot x21, slot2
-    arm64.b whilehdr#52
   whilehdr#52:
     arm64.loadRegSlot x0, slot0
     arm64.cmp x20, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, writeLess
-    arm64.b whileexit#54
+    arm64.b.ge whileexit#54
   writeLess:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#221
-    arm64.b __im_stride#223
+    arm64.b.ne __im_stride#223
   __im_word#221:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#220
-    arm64.b __im_load#225
+    arm64.b.hs __im_slow#220
   __im_load#225:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.arm64AddLsl x0, x0, x20, lsl #3
@@ -1702,32 +1375,23 @@ func @Array.stablePartition {
     arm64.b __im_loaded#224
   __im_stride#223:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#222
-    arm64.b __im_slow#220
+    arm64.b.ne __im_slow#220
   __im_byte#222:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#220
-    arm64.b __im_load#226
+    arm64.b.hs __im_slow#220
   __im_load#226:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.add x0, x0, x20
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#224
   __im_loaded#224:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#227
-    arm64.b critsplit#265
+    arm64.b.eq critsplit#265
   __im_empty#227:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#220
-    arm64.b critsplit#266
+    arm64.b.eq __im_slow#220
   critsplit#266:
     arm64.xchgRegReg x1, x0
     arm64.b __im_cont#219
@@ -1740,12 +1404,9 @@ func @Array.stablePartition {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#219
   __im_cont#219:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#56
-    arm64.b tryok#55
+    arm64.b.eq tryok#55
   tryerr#56:
     arm64.leaRdata x0, __str_blob_20  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:88: scratch.get OOB (less)\x0a"
     arm64.bl mrt_panic
@@ -1768,40 +1429,28 @@ func @Array.stablePartition {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#230
-    arm64.b __im_stride#232
+    arm64.b.ne __im_stride#232
   __im_word#230:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#229
-    arm64.b __im_owned#233
+    arm64.b.ne __im_slow#229
   __im_owned#233:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#229
-    arm64.b __im_bounds#234
+    arm64.b.lt __im_slow#229
   __im_bounds#234:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#229
-    arm64.b __im_buffer#235
+    arm64.b.hs __im_slow#229
   __im_buffer#235:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#229
-    arm64.b __im_viewed#236
+    arm64.b.eq __im_slow#229
   __im_viewed#236:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#229
-    arm64.b __im_store#237
+    arm64.b.ne __im_slow#229
   __im_store#237:
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -1809,40 +1458,28 @@ func @Array.stablePartition {
     arm64.b __im_cont#228
   __im_stride#232:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#231
-    arm64.b __im_slow#229
+    arm64.b.ne __im_slow#229
   __im_byte#231:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#229
-    arm64.b __im_owned#238
+    arm64.b.ne __im_slow#229
   __im_owned#238:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#229
-    arm64.b __im_bounds#239
+    arm64.b.lt __im_slow#229
   __im_bounds#239:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x21, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#229
-    arm64.b __im_buffer#240
+    arm64.b.hs __im_slow#229
   __im_buffer#240:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#229
-    arm64.b __im_viewed#241
+    arm64.b.eq __im_slow#229
   __im_viewed#241:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#229
-    arm64.b __im_store#242
+    arm64.b.ne __im_slow#229
   __im_store#242:
     arm64.add x0, x0, x21
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -1853,12 +1490,9 @@ func @Array.stablePartition {
     arm64.movRegReg x1, x21
     arm64.bl __managed_mem_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#228
   __im_cont#228:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#58
-    arm64.b tryok#57
+    arm64.b.eq tryok#57
   tryerr#58:
     arm64.leaRdata x0, __str_blob_21  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:89: set OOB at out (less)\x0a"
     arm64.bl mrt_panic
@@ -1884,14 +1518,10 @@ func @Array.stablePartition {
     arm64.loadRegSlot x1, slot2
     arm64.add x0, x1, x0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#73
-    arm64.b __rc_chk#74
+    arm64.b.lt __rc_panic#73
   __rc_chk#74:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#73
-    arm64.b __rc_ok#72
+    arm64.b.le __rc_ok#72
   __rc_panic#73:
     arm64.leaRdata x0, __str_blob_43  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:93: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -1921,7 +1551,6 @@ func @Array.stablePartition {
     arm64.loadRegSlot x28, slot15
     arm64.epilogue 144
     arm64.ret
-  ifcont#59:
 }
 
 func @tagged {
@@ -1934,14 +1563,10 @@ func @tagged {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#5
-    arm64.b __rc_chk#6
+    arm64.b.lt __rc_panic#5
   __rc_chk#6:
     arm64.cmp x19, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#5
-    arm64.b __rc_ok#4
+    arm64.b.le __rc_ok#4
   __rc_panic#5:
     arm64.leaRdata x0, __str_blob_44  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:103: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -1955,14 +1580,10 @@ func @tagged {
     arm64.ret
   __rc_ok#4:
     arm64.cmp x1, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#8
-    arm64.b __rc_chk#9
+    arm64.b.lt __rc_panic#8
   __rc_chk#9:
     arm64.cmp x1, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#8
-    arm64.b __rc_ok#7
+    arm64.b.le __rc_ok#7
   __rc_panic#8:
     arm64.leaRdata x0, __str_blob_44  ; "panic at a-parked-pivot-keeps-the-partition-stable.test:103: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
@@ -2004,31 +1625,21 @@ func @tagged {
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.b whilehdr
-  whilehdr:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow
-    arm64.b __rc_ok#12
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x22
     arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok#12:
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, x19
-    arm64.cset x0, lt
-    arm64.cbnz x0, grow
-    arm64.b whileexit
+    arm64.b.ge whileexit
   grow:
     arm64.leaRdata x1, __str_rec_22  ; "."
     arm64.movRegReg x0, x22
     arm64.bl String.append
-    arm64.b whilehdr
+    arm64.b __il_body
   whileexit:
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
@@ -2100,12 +1711,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x21, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x21, 6
-    arm64.cset x0, lt
-    arm64.cbnz x0, fillScratch
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   fillScratch:
     arm64.movImm x0, 3
     arm64.movRegReg x1, x21
@@ -2113,7 +1721,6 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.b forstep#3
   forstep#3:
     arm64.add x21, x21, 1
     arm64.b forhdr#1
@@ -2175,19 +1782,14 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
     arm64.movImm x1, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.storeSlotReg slot13, x1
     arm64.cmp x1, 6
-    arm64.cset x0, lt
-    arm64.cbnz x0, show
-    arm64.b forexit#8
+    arm64.b.ge forexit#8
   show:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x1, lsl #3
@@ -2195,14 +1797,10 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#20
+    arm64.b.eq critsplit#20
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#21
+    arm64.b.ne critsplit#21
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -2212,18 +1810,14 @@ func @main {
     arm64.b __im_cont
   critsplit#20:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x20, __str_rec_23  ; ""
     arm64.b trycont
   tryok:
     arm64.movRegReg x20, x0
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x20
     arm64.bl String.startIndex
@@ -2263,13 +1857,10 @@ func @main {
     arm64.leaRdata x0, __str_rec_28  ; " "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x25, [x20 + 8]
     arm64.cmp x25, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl String.byteLength
@@ -2277,7 +1868,6 @@ func @main {
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x20, x25
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
@@ -2316,7 +1906,6 @@ func @main {
     arm64.bl String.append
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-    arm64.b forstep#7
   forstep#7:
     arm64.loadRegSlot x0, slot13
     arm64.add x1, x0, 1
@@ -2446,55 +2035,35 @@ func @main$closure_0 {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x1
-    arm64.b __il_body#4
   __il_body#4:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.cmp x20, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#6
-    arm64.b __rc_ok#5
+    arm64.b.ge __il_body#7
   __il_slow#6:
     arm64.bl String.byteLength
     arm64.movRegReg x20, x0
-    arm64.b __il_cont#3
-  __rc_ok#5:
-    arm64.b __il_cont#3
-  __il_cont#3:
-    arm64.b __il_body#7
   __il_body#7:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#9
-    arm64.b __rc_ok#8
+    arm64.b.ge __il_body#10
   __il_slow#9:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
-    arm64.b __il_cont#2
-  __rc_ok#8:
-    arm64.b __il_cont#2
-  __il_cont#2:
-    arm64.b __il_body#10
   __il_body#10:
     arm64.cmp x20, x0
-    arm64.cset x1, lt
-    arm64.cbnz x1, lt
-    arm64.b ifcont#12
+    arm64.b.ge ifcont#12
   lt:
     arm64.movImm x0, 0
-    arm64.b __il_cont#1
+    arm64.b __il_cont
   ifcont#12:
     arm64.cmp x20, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#14
+    arm64.b.le ifcont#14
   gt:
     arm64.movImm x0, 2
-    arm64.b __il_cont#1
+    arm64.b __il_cont
   ifcont#14:
     arm64.movImm x0, 1
-    arm64.b __il_cont#1
-  __il_cont#1:
+  __il_cont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

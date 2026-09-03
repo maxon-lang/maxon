@@ -1,0 +1,441 @@
+// Test: a-synthesized-buffer-crosses-every-declared-byte-buffer-door
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+type Holder
+	export var mem as __ManagedMemory
+
+	export static function create() returns Holder
+		return Holder{mem: try __ManagedDirectory.currentPath() otherwise panic("Holder.create: currentPath")}
+	end 'create'
+end 'Holder'
+
+type Box uses T
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias MemBox = Box with Bytes
+
+function cwd() returns __ManagedMemory
+	return try __ManagedDirectory.currentPath() otherwise panic("cwd: currentPath")
+end 'cwd'
+
+function owned() returns __ManagedMemory
+	return try __ManagedMemory.create(4, 1) otherwise panic("owned: create")
+end 'owned'
+
+function alwaysFails() returns __ManagedMemory throws FileReadError
+	throw FileReadError.notFound
+end 'alwaysFails'
+
+function sizeOf(m __ManagedMemory) returns Integer
+	return m.length()
+end 'sizeOf'
+
+function main() returns ExitCode
+	let viaReturn = cwd()
+
+	var viaReassign = try __ManagedMemory.create(4, 1) otherwise return 1
+	viaReassign = try __ManagedDirectory.currentPath() otherwise return 1
+
+	let rawForOtherwise = try __ManagedDirectory.currentPath() otherwise return 1
+	let viaOtherwise = try alwaysFails() otherwise rawForOtherwise
+
+	let rawForMatch = try __ManagedDirectory.currentPath() otherwise return 1
+	let pick = 1
+	let viaMatchArm = match pick 'arm'
+		0 gives owned()
+		default gives rawForMatch
+	end 'arm'
+
+	let viaFieldStore = Holder.create()
+
+	let rawForBox = try __ManagedDirectory.currentPath() otherwise return 1
+	let viaTypeArgument = MemBox.create(rawForBox)
+	_ = viaTypeArgument
+
+	return 0 if sizeOf(viaReturn) > 0 and sizeOf(viaReassign) > 0 and sizeOf(viaOtherwise) > 0 and sizeOf(viaMatchArm) > 0 and sizeOf(viaFieldStore.mem) > 0 else 2
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_init_done@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_proc_wait_snapshot@96 = i64 0
+  __gt_proc_poller@104 = i64 0
+  __gt_live_count@112 = i64 0
+  __sched_progress@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __sched_num_procs@192 = i64 0
+  __sched_shutdown_flag@200 = i64 0
+  __sched_lock@208 = i64 0
+  __sched_nmspinning@216 = i64 0
+  __sched_parked_drivers@224 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __md_current_path
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-synthesized-buffer-crosses-every-declared-byte-buffer-door.test:9: Holder.create: currentPath\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @cwd {
+  entry:
+    arm64.prologue 16
+    arm64.bl __md_current_path
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-synthesized-buffer-crosses-every-declared-byte-buffer-door.test:24: cwd: currentPath\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @alwaysFails {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl cwd
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 4
+    arm64.movImm x1, 1
+    arm64.bl __managed_mem_create
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryok#1:
+    arm64.bl __md_current_path
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.bl __md_current_path
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryok#5:
+    arm64.bl alwaysFails
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x22, x20
+    arm64.b trycont
+  tryok#7:
+    arm64.movRegReg x22, x0
+  trycont:
+    arm64.bl __md_current_path
+    arm64.movRegReg x23, x0
+    arm64.cmp x9, 0
+    arm64.b.eq matchdefault
+  tryerr#11:
+    arm64.movImm x23, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  matchdefault:
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_incref
+    arm64.movRegReg x24, x23
+  matchcont#14:
+    arm64.bl Holder.create
+    arm64.movRegReg x25, x0
+    arm64.bl __md_current_path
+    arm64.movRegReg x26, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#15
+  tryerr#16:
+    arm64.movImm x26, 1
+    arm64.movRegReg x0, x25
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x26
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryok#15:
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x26
+    arm64.bl Box.create
+  __il_body#32:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __il_cont#31:
+    arm64.cmp x1, 0
+    arm64.movImm x1, 0
+    arm64.b.le scmerge#18
+  __il_body#34:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
+  __il_cont#33:
+    arm64.cmp x1, 0
+    arm64.cset x1, gt
+  scmerge#18:
+    arm64.movImm x2, 0
+    arm64.cbz x1, critsplit#41
+  __il_body#36:
+    arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
+  __il_cont#35:
+    arm64.cmp x1, 0
+    arm64.cset x1, gt
+    arm64.b scmerge#20
+  critsplit#41:
+    arm64.movRegReg x1, x2
+  scmerge#20:
+    arm64.movImm x2, 0
+    arm64.cbz x1, critsplit#42
+  __il_body#38:
+    arm64.loadRegBaseDisp.word64 x1, [x24 + 8]
+  __il_cont#37:
+    arm64.cmp x1, 0
+    arm64.cset x1, gt
+    arm64.b scmerge#22
+  critsplit#42:
+    arm64.movRegReg x1, x2
+  scmerge#22:
+    arm64.movImm x2, 0
+    arm64.cbz x1, critsplit#43
+  andrhs:
+    arm64.loadRegBaseDisp.word64 x1, [x25 + 0]
+  __il_body#40:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+  __il_cont#39:
+    arm64.cmp x1, 0
+    arm64.cset x1, gt
+    arm64.b scmerge#24
+  critsplit#43:
+    arm64.movRegReg x1, x2
+  scmerge#24:
+    arm64.cbz x1, ternaryfalse
+  ternarytrue:
+    arm64.movImm x27, 0
+    arm64.b matchcont#27
+  ternaryfalse:
+    arm64.movImm x27, 2
+  matchcont#27:
+    arm64.bl __destruct_Box_Bytes
+    arm64.movRegReg x0, x26
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x25
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x27, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x27, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-synthesized-buffer-crosses-every-declared-byte-buffer-door.test:61: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x27
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}

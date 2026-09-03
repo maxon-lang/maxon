@@ -92,9 +92,7 @@ func @Container.sliceFirst {
     arm64.bl Array.slice
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_2  ; "panic at opaque-slice-managed.test:23: in bounds\x0a"
     arm64.bl mrt_panic
@@ -198,16 +196,12 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.bl buildSliced
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x19, 0
     arm64.bl __destruct_Container_String

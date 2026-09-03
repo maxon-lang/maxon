@@ -1,0 +1,56 @@
+// Test: range-check-panic.return-of-a-computed-value-is-still-guarded
+typealias SmallInt = int(0 to 10)
+
+function grow(x SmallInt) returns SmallInt
+  return x * 3
+end 'grow'
+
+function main() returns ExitCode
+  return grow(5)
+end 'main'
+---
+ExitCode: 1
+---
+func @grow {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 10
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at range-check-panic.return-of-a-computed-value-is-still-guarded.test:4: Range check failed: value outside typealias 'SmallInt'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.movImm x16, 3
+    arm64.mul x0, x0, x16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 10
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at range-check-panic.return-of-a-computed-value-is-still-guarded.test:5: Range check failed: value outside typealias 'SmallInt'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+  __il_slow:
+    arm64.bl grow
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

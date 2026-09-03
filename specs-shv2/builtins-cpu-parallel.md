@@ -197,7 +197,7 @@ stops doing so.
 ## Tests
 
 <!-- test: builtins-cpu-parallel.cpu-count-is-at-least-one -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The clamp's own contract, and the property a missing lowering fails first: the call answers a number
 at least 1 rather than whatever the result register happened to hold.
 ```maxon
@@ -214,7 +214,7 @@ end 'main'
 ```
 
 <!-- test: builtins-cpu-parallel.cpu-count-is-in-range -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Windows can report at most 64 processor groups of 64 logical processors each, so `[1, 4096]` is the
 whole space of answers the API has. A capture of the wrong register, a sign-extension of a `DWORD`
 or a high half left over from an earlier call lands outside it; a real count cannot. ⚠ The BOUND is
@@ -242,7 +242,7 @@ end 'main'
 ```
 
 <!-- test: builtins-cpu-parallel.cpu-count-is-stable-across-calls -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Three independent calls in one process agree. A machine does not grow cores mid-run, so this is what
 a lowering that read a fresh counter, or that captured a register the call had clobbered, would
 fail.

@@ -111,12 +111,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @Tally.create {
@@ -192,12 +193,9 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot2, x19
     arm64.movImm x20, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x20, 300
-    arm64.cset x0, lt
-    arm64.cbnz x0, spawnEach
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   spawnEach:
     arm64.add x0, x20, 1
     arm64.bl Leaf.create
@@ -228,17 +226,12 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.storeBaseDispReg.word64 [x21 + 0], x20
     arm64.movImm x20, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.cmp x20, 300
-    arm64.cset x0, lt
-    arm64.cbnz x0, sendEach
-    arm64.b whileexit#6
+    arm64.b.ge whileexit#6
   sendEach:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_14  ; "panic at sched-runqueue.the-global-queue-is-consulted-within-sixty-one-schedules.test:58: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -258,9 +251,7 @@ func @main {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x20, lsl #3
@@ -268,14 +259,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty
-    arm64.b critsplit#30
+    arm64.b.eq critsplit#30
   __im_empty:
     arm64.cmp x22, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow
-    arm64.b critsplit#31
+    arm64.b.ne critsplit#31
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -287,12 +274,9 @@ func @main {
     arm64.b __im_cont
   critsplit#30:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok
   tryerr#8:
     arm64.leaRdata x0, __str_rec_7  ; "panic at sched-runqueue.the-global-queue-is-consulted-within-sixty-one-schedules.test:58: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -376,7 +360,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryok#7:
+  tryok:
     arm64.movRegReg x0, x21
     arm64.bl __mbox_handle_clone_box
     arm64.movRegReg x23, x0
@@ -394,24 +378,16 @@ func @main {
   whileexit#6:
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr#9
   whilehdr#9:
     arm64.cmp x19, 300
-    arm64.cset x0, lt
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit#29
+    arm64.movImm x0, 0
+    arm64.b.ge scmerge
   andrhs:
     arm64.movImm x16, 200000
     arm64.cmp x20, x16
     arm64.cset x0, lt
-    arm64.b scmerge
-  critsplit#29:
-    arm64.movRegReg x0, x1
-    arm64.b scmerge
   scmerge:
-    arm64.cbnz x0, drain
-    arm64.b whileexit#13
+    arm64.cbz x0, whileexit#13
   drain:
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
@@ -428,14 +404,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#15
-    arm64.b tryok#14
+    arm64.b.eq trycont#16
   tryerr#15:
     arm64.movImm x0, 0
-    arm64.b trycont#16
-  tryok#14:
-    arm64.b trycont#16
   trycont#16:
     arm64.add x20, x20, 1
     arm64.movRegReg x19, x0
@@ -456,19 +427,12 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq trycont#19
   tryerr#18:
     arm64.movImm x0, 0
-    arm64.b trycont#19
-  tryok#17:
-    arm64.b trycont#19
   trycont#19:
     arm64.cmp x0, 130
-    arm64.cset x0, lt
-    arm64.cbnz x0, early
-    arm64.b ifelse
+    arm64.b.ge ifelse
   early:
     arm64.leaRdata x0, __str_rec_11  ; "runCount="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -568,7 +532,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-    arm64.b ifcont
   ifcont:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x21
@@ -599,15 +562,12 @@ func @Leaf.__loop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.b serve
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x21, x0
     arm64.cmp x21, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, stopping
-    arm64.b dispatch
+    arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_15
@@ -616,19 +576,15 @@ func @Leaf.__loop {
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.b stopping
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
-    arm64.b drain
   drain:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x1, x0
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, finished
-    arm64.b abandon
+    arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -662,15 +618,12 @@ func @Leaf.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_16
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_16
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
-  go:
-    arm64.b abandondrop
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Leaf.request
@@ -688,14 +641,11 @@ func @Tally.__loop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.b serve
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, stopping
-    arm64.b dispatch
+    arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=note, [2]=count, [3]=oldestPosition] @__jumptable_17
@@ -703,19 +653,15 @@ func @Tally.__loop {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
     arm64.bl __mm_decref
-    arm64.b stopping
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
-    arm64.b drain
   drain:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x1, x0
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, finished
-    arm64.b abandon
+    arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -733,30 +679,22 @@ func @Tally.__loop {
     arm64.b drain
   note:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.b __il_body#12
   __il_body#12:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.add x2, x2, 1
     arm64.storeBaseDispReg.word64 [x19 + 0], x2
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, oldest
-    arm64.b ifcont
+    arm64.b.ne __il_cont#11
   oldest:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.storeBaseDispReg.word64 [x19 + 8], x1
-    arm64.b ifcont
-  ifcont:
-    arm64.b __il_cont#11
   __il_cont#11:
     arm64.bl __mm_decref
     arm64.b serve
   count:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.b __il_body#16
   __il_body#16:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
-    arm64.b __il_cont#15
   __il_cont#15:
     arm64.bl __mm_decref
     arm64.movImm x2, 0
@@ -766,10 +704,8 @@ func @Tally.__loop {
     arm64.b serve
   oldestPosition:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.b __il_body#18
   __il_body#18:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.bl __mm_decref
     arm64.movImm x2, 0
@@ -785,14 +721,12 @@ func @Tally.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=note, [2]=count, [3]=oldestPosition] @__jumptable_18
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=count, [3]=oldestPosition] @__jumptable_18
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
-  note:
     arm64.b abandondrop
   count:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -805,7 +739,6 @@ func @Tally.__abandon {
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref

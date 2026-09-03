@@ -46,12 +46,13 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __mrt_errno@240 = i64 0
-  __mrt_envp@248 = i64 0
-  __mrt_tls_next_key@256 = i64 0
-  __slab_arena_list@264 = i64 0
-  __slab_arena_map_l1@272 = i64 0
-  __slab_state@280 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_errno@248 = i64 0
+  __mrt_envp@256 = i64 0
+  __mrt_tls_next_key@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
 }
 
 func @plain {
@@ -131,14 +132,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __gt_await
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_88  ; "panic at promise-typing.inner-is-the-one-unwrap.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

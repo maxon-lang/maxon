@@ -59,16 +59,10 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#26
-    arm64.b forempty#2
-  critsplit#26:
-    arm64.b forhdr#1
+    arm64.b.ne forjoin#6
   forhdr#1:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, neverPopulated
-    arm64.b forexit#5
+    arm64.b.ne forexit#5
   neverPopulated:
     arm64.leaRdata x1, __layout_MapIterator_Val_Val
     arm64.leaRdata x2, __witness_int.Hashable
@@ -80,7 +74,6 @@ func @main {
     arm64.add x2, x20, 1
     arm64.add x20, x2, x1
     arm64.bl __mm_decref
-    arm64.b forstep#4
   forstep#4:
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
@@ -91,9 +84,6 @@ func @main {
   forexit#5:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_MapIterator_Val_Val
-    arm64.b forjoin#6
-  forempty#2:
-    arm64.b forjoin#6
   forjoin#6:
     arm64.leaRdata x0, __layout_Map_Val_Val
     arm64.leaRdata x1, __witness_int.Hashable
@@ -134,16 +124,10 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#27
-    arm64.b forempty#8
-  critsplit#27:
-    arm64.b forhdr#7
+    arm64.b.ne forjoin#12
   forhdr#7:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, allRemoved
-    arm64.b forexit#11
+    arm64.b.ne forexit#11
   allRemoved:
     arm64.leaRdata x1, __layout_MapIterator_Val_Val
     arm64.leaRdata x2, __witness_int.Hashable
@@ -155,7 +139,6 @@ func @main {
     arm64.add x2, x20, 1
     arm64.add x20, x2, x1
     arm64.bl __mm_decref
-    arm64.b forstep#10
   forstep#10:
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
@@ -166,9 +149,6 @@ func @main {
   forexit#11:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_MapIterator_Val_Val
-    arm64.b forjoin#12
-  forempty#8:
-    arm64.b forjoin#12
   forjoin#12:
     arm64.storeSlotReg slot2, x20
     arm64.leaRdata x0, __str_rec_3  ; "trips "
@@ -187,19 +167,14 @@ func @main {
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
-    arm64.b __il_body#18
   __il_body#18:
     arm64.loadRegBaseDisp.word64 x27, [x19 + 32]
     arm64.cmp x27, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow#21
-    arm64.b __rc_chk#20
+    arm64.b.lt __il_slow#21
   __rc_chk#20:
     arm64.movImm x0, 4611686018427387904
     arm64.cmp x27, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __il_slow#21
-    arm64.b __rc_ok#19
+    arm64.b.le __rc_ok#19
   __il_slow#21:
     arm64.movRegReg x0, x19
     arm64.bl Map.count
@@ -207,7 +182,6 @@ func @main {
     arm64.b __il_cont#17
   __rc_ok#19:
     arm64.movRegReg x19, x27
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
@@ -223,19 +197,14 @@ func @main {
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
-    arm64.b __il_body#22
   __il_body#22:
     arm64.loadRegBaseDisp.word64 x28, [x21 + 32]
     arm64.cmp x28, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow#25
-    arm64.b __rc_chk#24
+    arm64.b.lt __il_slow#25
   __rc_chk#24:
     arm64.movImm x0, 4611686018427387904
     arm64.cmp x28, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __il_slow#25
-    arm64.b __rc_ok#23
+    arm64.b.le __rc_ok#23
   __il_slow#25:
     arm64.movRegReg x0, x21
     arm64.bl Map.count
@@ -243,7 +212,6 @@ func @main {
     arm64.b __il_cont#16
   __rc_ok#23:
     arm64.movRegReg x21, x28
-    arm64.b __il_cont#16
   __il_cont#16:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
@@ -316,15 +284,11 @@ func @main {
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot2
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk#15
+    arm64.b.lt __rc_panic
   __rc_chk#15:
     arm64.loadRegSlot x0, slot2
     arm64.cmp x0, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#13
+    arm64.b.le __rc_ok#13
   __rc_panic:
     arm64.leaRdata x0, __str_blob_28  ; "panic at corpus.empty-map-iterates-zero-trips.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

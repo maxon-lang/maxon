@@ -36,14 +36,15 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __io_iocp@232 = i64 0
-  __io_done_event@240 = i64 0
-  __io_init_done@248 = i64 0
-  __io_pending@256 = i64 0
-  __io_pipe_seq@264 = i64 0
-  __slab_arena_list@272 = i64 0
-  __slab_arena_map_l1@280 = i64 0
-  __slab_state@288 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __io_iocp@240 = i64 0
+  __io_done_event@248 = i64 0
+  __io_init_done@256 = i64 0
+  __io_pending@264 = i64 0
+  __io_pipe_seq@272 = i64 0
+  __slab_arena_list@280 = i64 0
+  __slab_arena_map_l1@288 = i64 0
+  __slab_state@296 = i64 0
 }
 
 func @main {
@@ -52,14 +53,10 @@ func @main {
     arm64.leaRdata x0, __str_rec_1  ; "echo hello"
     arm64.bl __gt_io_read
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at spawn-read-line.posix-top-level.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

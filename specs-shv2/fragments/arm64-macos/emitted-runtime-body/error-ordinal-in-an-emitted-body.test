@@ -40,34 +40,24 @@ func @main {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_owned
+    arm64.b.ne __im_slow
   __im_owned:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_bounds
+    arm64.b.lt __im_slow
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_buffer
+    arm64.b.ls __im_slow
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow
-    arm64.b __im_viewed
+    arm64.b.eq __im_slow
   __im_viewed:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow
-    arm64.b __im_store
+    arm64.b.eq __im_store
   __im_slow:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
@@ -78,12 +68,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_6  ; "panic at error-ordinal-in-an-emitted-body.test:4: set rejected a valid index\x0a"
     arm64.bl mrt_panic
@@ -118,24 +105,17 @@ func @__managed_set {
     arm64.movRegReg x21, x2
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, oob
-    arm64.b store
+    arm64.b.lo store
   oob:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 40]
     arm64.cmp x19, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, rejchk
-    arm64.b rejcont
+    arm64.b.eq rejcont
   rejchk:
     arm64.cmp x21, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, rejdrop
-    arm64.b rejcont
+    arm64.b.eq rejcont
   rejdrop:
     arm64.movRegReg x0, x21
     arm64.blr x19
-    arm64.b rejcont
   rejcont:
     arm64.movImm x0, 0
     arm64.movImm x9, 1
@@ -156,38 +136,26 @@ func @__managed_set {
     arm64.add x24, x20, 1
     arm64.loadRegBaseDisp.word64 x19, [x19 + 40]
     arm64.cmp x19, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, mwalk
-    arm64.b mcont
+    arm64.b.eq mcont
   mwalk:
     arm64.movRegReg x25, x20
-    arm64.b dtorh
   dtorh:
     arm64.cmp x25, x24
-    arm64.cset x0, ge
-    arm64.cbnz x0, dtordone
-    arm64.b dtorb
-  dtordone:
-    arm64.b mcont
+    arm64.b.ge mcont
   dtorb:
     arm64.mul x0, x25, x23
     arm64.add x0, x22, x0
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, dtordo
-    arm64.b dtorstep
+    arm64.b.eq dtorstep
   dtordo:
     arm64.blr x19
-    arm64.b dtorstep
   dtorstep:
     arm64.add x25, x25, 1
     arm64.b dtorh
   mcont:
     arm64.cmp x23, 8
-    arm64.cset x0, eq
-    arm64.cbnz x0, stword
-    arm64.b esbyte
+    arm64.b.ne esbyte
   stword:
     arm64.mul x0, x20, x23
     arm64.add x0, x22, x0
@@ -195,9 +163,7 @@ func @__managed_set {
     arm64.b stjoin
   esbyte:
     arm64.cmp x23, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, stbyte
-    arm64.b stother
+    arm64.b.ne stother
   stbyte:
     arm64.mul x0, x20, x23
     arm64.add x0, x22, x0
@@ -205,9 +171,7 @@ func @__managed_set {
     arm64.b stjoin
   stother:
     arm64.cmp x23, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, stpk
-    arm64.b stby
+    arm64.b.ge stby
   stpk:
     arm64.asr x0, x23, 63
     arm64.movImm x16, 18446744073709551615
@@ -243,14 +207,9 @@ func @__managed_set {
     arm64.mul x0, x20, x23
     arm64.add x0, x22, x0
     arm64.movImm x1, 0
-    arm64.b steh
   steh:
     arm64.cmp x1, x23
-    arm64.cset x2, ge
-    arm64.cbnz x2, sted
-    arm64.b steb
-  sted:
-    arm64.b stjoin
+    arm64.b.lt steb
   stjoin:
     arm64.movImm x0, 0
     arm64.movImm x9, 0

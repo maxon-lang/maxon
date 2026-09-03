@@ -57,12 +57,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @makeValue {
@@ -98,23 +99,17 @@ func @main {
     arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty
-    arm64.b critsplit#19
+    arm64.b.eq critsplit#19
   __im_empty:
     arm64.cmp x21, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow
-    arm64.b critsplit#20
+    arm64.b.ne critsplit#20
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -126,12 +121,9 @@ func @main {
     arm64.b __im_cont
   critsplit#19:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at promise-peek.does-not-consume-the-promise.test:14: the promise was just pushed\x0a"
     arm64.bl mrt_panic
@@ -155,26 +147,21 @@ func @main {
     arm64.bl __gt_is_complete
     arm64.movImm x24, 0
     arm64.cmp x22, x23
-    arm64.cset x1, eq
-    arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs
-    arm64.b critsplit#16
+    arm64.movImm x1, 0
+    arm64.b.ne critsplit#16
   andrhs:
     arm64.cmp x23, x0
     arm64.cset x0, eq
     arm64.b scmerge
   critsplit#16:
-    arm64.movRegReg x0, x2
-    arm64.b scmerge
+    arm64.movRegReg x0, x1
   scmerge:
-    arm64.cbnz x0, threePeeksAgree
-    arm64.b critsplit#17
+    arm64.cbz x0, critsplit#17
   threePeeksAgree:
     arm64.movImm x22, 3
     arm64.b ifcont#6
   critsplit#17:
     arm64.movRegReg x22, x24
-    arm64.b ifcont#6
   ifcont#6:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -182,25 +169,18 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __gt_await
     arm64.cmp x0, 42
-    arm64.cset x0, eq
-    arm64.cbnz x0, theResultSurvived
-    arm64.b critsplit#18
+    arm64.b.ne critsplit#18
   theResultSurvived:
     arm64.add x20, x22, 4
     arm64.b ifcont#8
   critsplit#18:
     arm64.movRegReg x20, x22
-    arm64.b ifcont#8
   ifcont#8:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at promise-peek.does-not-consume-the-promise.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

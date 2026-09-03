@@ -1,0 +1,195 @@
+// Test: scheduler-pressure
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(x Integer) returns Integer
+	return x + 0
+end 'opaque'
+
+function kernel(seed Integer) returns Integer
+	// Four "early" values, defined at the top of the source. Each is
+	// a small computation rather than a call so the scheduler can
+	// freely reorder them — calls would form a barrier chain that
+	// pins relative ordering.
+	let a = (seed xor 305419896) + 1
+	let b = (seed xor 2271560481) + 2
+	let c = (seed xor 3735928559) + 3
+	let d = (seed xor 4275878552) + 4
+
+	// Long intermediate chain that does not reference a..d. Each
+	// step has pressure delta 0 (defines one value, consumes one
+	// previous value that then dies). A pressure-aware scheduler
+	// can freely interleave these with the deferred a..d defs.
+	let i1 = (seed + 17) xor 11
+	let i2 = (i1 * 3) + 5
+	let i3 = (i2 xor 12345) + 7
+	let i4 = (i3 * 5) + 9
+	let i5 = (i4 xor 54321) + 11
+	let i6 = (i5 * 7) + 13
+	let i7 = (i6 xor 98765) + 15
+	let i8 = (i7 * 11) + 17
+	let i9 = (i8 xor 13579) + 19
+	let i10 = (i9 * 13) + 21
+	let i11 = (i10 xor 24680) + 23
+	let i12 = (i11 * 17) + 25
+
+	// Consume a..d together with the intermediate chain's final
+	// value. The naive schedule keeps a..d live across the i1..i12
+	// chain; the pressure-aware schedule defers their defs to here.
+	return a + b + c + d + i12
+end 'kernel'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let result = kernel(seed)
+	// Mask to 0..127 so the value fits both POSIX (0..255) and wasi
+	// (0..125 strict) exit-code ranges. The test gates on the
+	// deterministic value being produced, not on its specific bit width.
+	let masked = result and 127
+	return masked as ExitCode
+end 'main'
+---
+Args: 0
+ExitCode: 61
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __cl_argc@8 = i64 0
+  __cl_argv@16 = i64 0
+  __cl_empty_arg@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+}
+
+func @kernel {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.xorRegImm32 rax, rcx, 305419896
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegImm32 rdx, 2271560481
+    x64.movRegReg rsi, rcx
+    x64.xorRegReg rsi, rcx, rdx
+    x64.leaRegRegImm32 rdx, rsi, 2
+    x64.movRegImm32 rsi, 3735928559
+    x64.movRegReg rdi, rcx
+    x64.xorRegReg rdi, rcx, rsi
+    x64.leaRegRegImm32 rsi, rdi, 3
+    x64.movRegImm32 rdi, 4275878552
+    x64.movRegReg r8, rcx
+    x64.xorRegReg r8, rcx, rdi
+    x64.leaRegRegImm32 rdi, r8, 4
+    x64.leaRegRegImm32 rcx, rcx, 17
+    x64.xorRegImm32 rcx, rcx, 11
+    x64.imulRegRegImm32 rcx, rcx, 3
+    x64.leaRegRegImm32 rcx, rcx, 5
+    x64.xorRegImm32 rcx, rcx, 12345
+    x64.leaRegRegImm32 rcx, rcx, 7
+    x64.imulRegRegImm32 rcx, rcx, 5
+    x64.leaRegRegImm32 rcx, rcx, 9
+    x64.xorRegImm32 rcx, rcx, 54321
+    x64.leaRegRegImm32 rcx, rcx, 11
+    x64.imulRegRegImm32 rcx, rcx, 7
+    x64.leaRegRegImm32 rcx, rcx, 13
+    x64.xorRegImm32 rcx, rcx, 98765
+    x64.leaRegRegImm32 rcx, rcx, 15
+    x64.imulRegRegImm32 rcx, rcx, 11
+    x64.leaRegRegImm32 rcx, rcx, 17
+    x64.xorRegImm32 rcx, rcx, 13579
+    x64.leaRegRegImm32 rcx, rcx, 19
+    x64.imulRegRegImm32 rcx, rcx, 13
+    x64.leaRegRegImm32 rcx, rcx, 21
+    x64.xorRegImm32 rcx, rcx, 24680
+    x64.leaRegRegImm32 rcx, rcx, 23
+    x64.imulRegRegImm32 rcx, rcx, 17
+    x64.leaRegRegImm32 rcx, rcx, 25
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect CommandLine.args
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#14
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#15
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
+  critsplit#15:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont
+  critsplit#14:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "0"
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg rcx, r8
+  trycont#3:
+    x64.callDirect __int_fromString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegImm32 rcx, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg rcx, r8
+  trycont#6:
+    x64.callDirect kernel
+    x64.movRegReg r12, r8
+    x64.andRegImm32 r12, r8, 127
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at scheduler-pressure.test:49: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

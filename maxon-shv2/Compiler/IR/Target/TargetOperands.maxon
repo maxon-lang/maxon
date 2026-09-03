@@ -514,6 +514,9 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// `storeBaseDispReg`'s (two uses, no def).
 		arm64LoadAcquire(dest, base, _) then pushDefFromUse(buf, dest: dest, src: base)
 		arm64StoreRelease(base, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
+		// EC18's arm64 high multiply is a PLAIN 3-address op — two independent uses and a def that shares
+		// a register with neither, unlike `imulHighReg`'s implicit RAX/RDX pair.
+		arm64Smulh(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
 	end 'operands'
 end 'targetOpOperands'
 

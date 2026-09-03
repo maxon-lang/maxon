@@ -107,12 +107,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @TestFile.openWrite {
@@ -123,9 +124,7 @@ func @TestFile.openWrite {
     arm64.bl __mf_open_write
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -159,9 +158,7 @@ func @TestFile.openRead {
     arm64.bl __mf_open_read
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -207,9 +204,7 @@ func @main {
     arm64.bl TestFile.openWrite
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_rec_6  ; "write open failed"
     arm64.bl print
@@ -239,9 +234,7 @@ func @main {
     arm64.movRegReg x1, x22
     arm64.bl __mf_write
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.bl __mf_close
@@ -274,9 +267,7 @@ func @main {
     arm64.bl TestFile.openRead
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.leaRdata x0, __str_rec_7  ; "read open failed"
     arm64.bl print
@@ -304,9 +295,7 @@ func @main {
     arm64.bl __mf_size
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.movImm x19, 8
     arm64.movRegReg x0, x22
@@ -331,9 +320,7 @@ func @main {
     arm64.bl __managed_mem_create
     arm64.movRegReg x23, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#10
-    arm64.b tryok#9
+    arm64.b.eq tryok#9
   tryerr#10:
     arm64.movImm x19, 5
     arm64.movRegReg x0, x22
@@ -359,9 +346,7 @@ func @main {
     arm64.bl __mf_read
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq tryok#11
   tryerr#12:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.bl __mf_close
@@ -391,9 +376,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#14
-    arm64.b tryok#13
+    arm64.b.eq tryok#13
   tryerr#14:
     arm64.movImm x19, 6
     arm64.movRegReg x0, x23
@@ -419,9 +402,7 @@ func @main {
     arm64.movRegReg x0, x23
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.movImm x19, 6
     arm64.movRegReg x0, x23
@@ -448,9 +429,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __managed_set_byte
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq tryok#17
   tryerr#18:
     arm64.movImm x19, 7
     arm64.movRegReg x0, x23
@@ -476,9 +455,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#20
-    arm64.b tryok#19
+    arm64.b.eq tryok#19
   tryerr#20:
     arm64.movImm x19, 6
     arm64.movRegReg x0, x23
@@ -533,9 +510,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#22
-    arm64.b tryok#21
+    arm64.b.eq tryok#21
   tryerr#22:
     arm64.movImm x24, 4
     arm64.movRegReg x0, x19

@@ -73,9 +73,7 @@ func @remapKind {
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -87,9 +85,7 @@ func @remapKind {
     arm64.b matchcont
   matchnext:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.add x19, x0, 1
@@ -99,7 +95,6 @@ func @remapKind {
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.storeBaseDispReg.word64 [x0 + 8], x19
-    arm64.b matchcont
   matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -112,30 +107,21 @@ func @record {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.movImm x0, 0
     arm64.b matchcont
   matchnext:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.b matchcont
   matchcont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at ternary-expression.ownership.owned-arm-selected.test:25: Range check failed: value outside typealias 'Id'\x0a"
     arm64.bl mrt_panic
@@ -165,41 +151,28 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 8], x19
     arm64.bl Entry.create
     arm64.movRegReg x19, x0
-    arm64.b ternaryfalse
   ternaryfalse:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl remapKind
     arm64.movRegReg x20, x0
-    arm64.b matchcont#3
-  matchcont#3:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#6
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#6:
     arm64.movImm x0, 0
-    arm64.b matchcont#10
+    arm64.b matchcont
   matchnext:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#7
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#7:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-    arm64.b matchcont#10
-  matchcont#10:
+  matchcont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow
-    arm64.b __rc_chk
+    arm64.b.lt __il_slow
   __rc_chk:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __il_slow
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl record
@@ -207,7 +180,6 @@ func @main {
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x21, x0
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref

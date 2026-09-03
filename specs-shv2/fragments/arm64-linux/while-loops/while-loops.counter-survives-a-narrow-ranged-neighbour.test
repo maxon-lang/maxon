@@ -77,19 +77,14 @@ func @liveCount {
     arm64.movRegReg x0, x21
     arm64.bl __managed_push
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, walk
-    arm64.b forexit
+    arm64.b.ge forexit
   walk:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -97,9 +92,7 @@ func @liveCount {
     arm64.b __im_cont
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, x22
@@ -109,29 +102,19 @@ func @liveCount {
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl __managed_get_unchecked
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.movImm x1, 1
-    arm64.cbnz x0, critsplit#18
-    arm64.b orrhs
-  critsplit#18:
-    arm64.b scmerge
+    arm64.movImm x0, 1
+    arm64.b.eq scmerge
   orrhs:
-    arm64.movRegReg x1, x19
-    arm64.b scmerge
+    arm64.movRegReg x0, x19
   scmerge:
-    arm64.cbnz x1, live
-    arm64.b critsplit#17
+    arm64.cbz x0, critsplit
   live:
     arm64.add x0, x20, 1
-    arm64.b ifcont
-  critsplit#17:
-    arm64.movRegReg x0, x20
-    arm64.b ifcont
-  ifcont:
     arm64.b forstep
+  critsplit:
+    arm64.movRegReg x0, x20
   forstep:
     arm64.add x22, x22, 1
     arm64.movRegReg x20, x0
@@ -140,14 +123,10 @@ func @liveCount {
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 16
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at while-loops.counter-survives-a-narrow-ranged-neighbour.test:16: Range check failed: value outside typealias 'SlotTally'\x0a"
     arm64.bl mrt_panic
@@ -185,12 +164,9 @@ func @main {
     arm64.add x19, x0, 100
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x21, 2
-    arm64.cset x0, lt
-    arm64.cbnz x0, passes
-    arm64.b whileexit
+    arm64.b.ge whileexit
   passes:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
@@ -204,19 +180,14 @@ func @main {
     arm64.bl __managed_push
     arm64.movImm x23, 0
     arm64.movRegReg x24, x19
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, inner
-    arm64.b forexit
+    arm64.b.ge forexit
   inner:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.arm64AddLsl x0, x0, x23, lsl #3
@@ -224,9 +195,7 @@ func @main {
     arm64.b __im_cont
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.add x0, x0, x23
@@ -236,20 +205,14 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x23
     arm64.bl __managed_get_unchecked
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, one
-    arm64.b critsplit
+    arm64.b.ne critsplit
   one:
     arm64.add x0, x24, 1
-    arm64.b ifcont#9
+    arm64.b forstep
   critsplit:
     arm64.movRegReg x0, x24
-    arm64.b ifcont#9
-  ifcont#9:
-    arm64.b forstep
   forstep:
     arm64.add x23, x23, 1
     arm64.movRegReg x24, x0
@@ -258,9 +221,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.cmp x24, 141
-    arm64.cset x0, ne
-    arm64.cbnz x0, paddingLeakedIn
-    arm64.b ifcont#11
+    arm64.b.eq ifcont
   paddingLeakedIn:
     arm64.movImm x0, 98
     arm64.loadRegSlot x19, slot0
@@ -271,13 +232,11 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  ifcont#11:
+  ifcont:
     arm64.add x20, x20, x24
     arm64.add x21, x21, 1
     arm64.cmp x20, 2000
-    arm64.cset x0, gt
-    arm64.cbnz x0, runaway
-    arm64.b ifcont#13
+    arm64.b.le whilehdr
   runaway:
     arm64.movImm x0, 99
     arm64.loadRegSlot x19, slot0
@@ -288,18 +247,12 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  ifcont#13:
-    arm64.b whilehdr
   whileexit:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at while-loops.counter-survives-a-narrow-ranged-neighbour.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -1,0 +1,59 @@
+// Test: range-check-panic.entry-guard-covers-a-return-inside-a-branch
+typealias Integer = int(i64.min to i64.max)
+typealias SmallInt = int(0 to 10)
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function pick(x SmallInt, flag Integer) returns SmallInt
+  if flag > 0 'yes'
+    return x
+  end 'yes'
+  return 3
+end 'pick'
+
+function main() returns ExitCode
+  return pick(opaque(99), flag: 1)
+end 'main'
+---
+ExitCode: 1
+---
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 10
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at range-check-panic.entry-guard-covers-a-return-inside-a-branch.test:9: Range check failed: value outside typealias 'SmallInt'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.cmp x1, 0
+    arm64.b.le ifcont
+  yes:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 99
+  __il_cont#2:
+    arm64.movImm x1, 1
+  __il_slow:
+    arm64.bl pick
+  __il_cont#1:
+    arm64.epilogue 16
+    arm64.ret
+}

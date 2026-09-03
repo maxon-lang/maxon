@@ -105,8 +105,7 @@ func @Gizmo.create {
 func @make {
   entry:
     arm64.prologue 16
-    arm64.cbnz x0, whichConformer
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   whichConformer:
     arm64.movRegReg x0, x1
     arm64.bl Widget.create
@@ -157,14 +156,10 @@ func @main {
     arm64.bl consume
     arm64.add x23, x23, x0
     arm64.cmp x23, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x23, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at interface-return-dispatches-per-conformer.test:47: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

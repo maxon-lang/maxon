@@ -1,0 +1,136 @@
+// Test: an-inverted-float-branch-still-refuses-a-nan
+var big = 1.0e308
+
+function main() returns ExitCode
+	let inf = big * 10.0
+	let nan = inf - inf
+	let x = 5.0
+	var hits = 0
+
+	if nan < x 'lt'
+		return 21
+	end 'lt' else 'ltElse'
+		hits = hits + 1
+	end 'ltElse'
+
+	if nan <= x 'le'
+		return 22
+	end 'le' else 'leElse'
+		hits = hits + 1
+	end 'leElse'
+
+	if nan > x 'gt'
+		return 23
+	end 'gt' else 'gtElse'
+		hits = hits + 1
+	end 'gtElse'
+
+	if nan >= x 'ge'
+		return 24
+	end 'ge' else 'geElse'
+		hits = hits + 1
+	end 'geElse'
+
+	if nan == nan 'eq'
+		return 25
+	end 'eq' else 'eqElse'
+		hits = hits + 1
+	end 'eqElse'
+
+	if nan != nan 'ne'
+		hits = hits + 1
+	end 'ne' else 'neElse'
+		return 26
+	end 'neElse'
+
+	return 0 if hits == 6 else 27
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_big@0 = f64 1E+308
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_big
+    x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
+    x64.movsdRegRip xmm1, [rip + __fconst_10]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.subsdRegReg xmm0, xmm0, xmm0
+    x64.movsdRegRip xmm1, [rip + __fconst_5]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc belowEqual, ifcont#3
+  lt:
+    x64.movRegImm32 r8, 21
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#3:
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc below, ifcont#6
+  le:
+    x64.movRegImm32 r8, 22
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc belowEqual, ifcont#9
+  gt:
+    x64.movRegImm32 r8, 23
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#9:
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc below, ifcont#12
+  ge:
+    x64.movRegImm32 r8, 24
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.ucomisdRegReg xmm0, xmm0
+    x64.jcc parity, ifcont#15
+  fordered#25:
+    x64.jcc notEqual, ifcont#15
+  eq:
+    x64.movRegImm32 r8, 25
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#15:
+    x64.ucomisdRegReg xmm0, xmm0
+    x64.jcc parity, ternarytrue
+  fordered#26:
+    x64.jcc equal, ifelse
+  ternarytrue:
+    x64.movRegImm32 r8, 0
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-inverted-float-branch-still-refuses-a-nan.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 r8, 26
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -114,12 +114,9 @@ func @main {
     arm64.bl Holder.create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 5
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.leaRdata x0, __str_rec_3  ; "iter"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -153,8 +150,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaRdata x1, __str_rec_3  ; "iter"
     arm64.bl __str_eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   ok:
     arm64.movImm x20, 6
     arm64.movRegReg x0, x19

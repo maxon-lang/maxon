@@ -115,9 +115,7 @@ func @Holder.outer {
     arm64.movRegReg x0, x19
     arm64.bl Holder.inner
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 0]
     arm64.movRegReg x0, x19
@@ -145,15 +143,11 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Holder.outer
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#3
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#3:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x9
@@ -167,9 +161,7 @@ func @main {
     arm64.ret
   matchnext:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#4
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#4:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x9
@@ -191,5 +183,4 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  matchcont:
 }

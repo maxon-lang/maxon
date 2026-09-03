@@ -45,16 +45,10 @@ func @innerSum {
     arm64.movRegReg x20, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forempty
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, inner
-    arm64.b forexit
+    arm64.b.ne forexit
   inner:
     arm64.leaRdata x1, __layout_MapIterator_Integer_Integer
     arm64.leaRdata x2, __witness_int.Hashable
@@ -65,7 +59,6 @@ func @innerSum {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.add x19, x19, x1
     arm64.bl __mm_decref
-    arm64.b forstep
   forstep:
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
@@ -80,7 +73,6 @@ func @innerSum {
     arm64.b forjoin
   forempty:
     arm64.movRegReg x0, x19
-    arm64.b forjoin
   forjoin:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -131,16 +123,10 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forempty
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, outer
-    arm64.b forexit
+    arm64.b.ne forexit
   outer:
     arm64.leaRdata x1, __layout_MapIterator_int_int
     arm64.leaRdata x2, __witness_int.Hashable
@@ -156,7 +142,6 @@ func @main {
     arm64.add x19, x19, x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-    arm64.b forstep
   forstep:
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
@@ -171,12 +156,9 @@ func @main {
     arm64.b forjoin
   forempty:
     arm64.movRegReg x0, x19
-    arm64.b forjoin
   forjoin:
     arm64.cmp x0, 24
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.ne ifcont
   check:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x21

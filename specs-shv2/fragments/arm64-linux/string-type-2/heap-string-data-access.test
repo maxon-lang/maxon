@@ -56,26 +56,17 @@ func @main {
     arm64.bl __destruct_ByteView
     arm64.movImm x0, 0
     arm64.cmp x23, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#19
-    arm64.b forempty#2
+    arm64.b.ne forjoin#8
   critsplit#19:
     arm64.movRegReg x1, x20
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, read_first
-    arm64.b forexit#5
-  read_first:
-    arm64.b __il_body#16
+    arm64.b.ne forexit#5
   __il_body#16:
     arm64.loadRegBaseDisp.word64 x20, [x22 + 16]
-    arm64.b __il_cont#15
-  __il_cont#15:
+  __il_cont:
     arm64.eor x0, x1, 1
-    arm64.cbnz x0, print_first
-    arm64.b critsplit#21
+    arm64.cbz x0, critsplit#21
   print_first:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
@@ -117,12 +108,9 @@ func @main {
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x20, 1
-    arm64.b ifcont
+    arm64.b forstep#4
   critsplit#21:
     arm64.movRegReg x20, x1
-    arm64.b ifcont
-  ifcont:
-    arm64.b forstep#4
   forstep#4:
     arm64.movRegReg x0, x22
     arm64.bl ByteIterator.advance
@@ -132,9 +120,6 @@ func @main {
   forexit#5:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_ByteIterator
-    arm64.b forjoin#8
-  forempty#2:
-    arm64.b forjoin#8
   forjoin#8:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
@@ -148,23 +133,12 @@ func @main {
     arm64.bl __destruct_ByteView
     arm64.movImm x0, 0
     arm64.cmp x22, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#20
-    arm64.b forempty#10
-  critsplit#20:
-    arm64.b forhdr#9
+    arm64.b.ne forjoin#14
   forhdr#9:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, read_all
-    arm64.b forexit#13
-  read_all:
-    arm64.b __il_body#18
+    arm64.b.ne forexit#13
   __il_body#18:
     arm64.loadRegBaseDisp.word64 x20, [x21 + 16]
-    arm64.b __il_cont#17
-  __il_cont#17:
-    arm64.b forstep#12
   forstep#12:
     arm64.movRegReg x0, x21
     arm64.bl ByteIterator.advance
@@ -173,9 +147,6 @@ func @main {
   forexit#13:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_ByteIterator
-    arm64.b forjoin#14
-  forempty#10:
-    arm64.b forjoin#14
   forjoin#14:
     arm64.movImm x0, 20
     arm64.movImm x1, 0

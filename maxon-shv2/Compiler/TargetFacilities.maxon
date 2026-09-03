@@ -439,10 +439,12 @@ end 'calleeHasHostFacility'
 // slots). The rest stay `false` until their lowerings exist — see this file's header on why a premature
 // `true` is worse than a `false`.
 //
-// ⚠ **x64-LINUX PROVIDES NONE OF THESE**, which is not an oversight: it is a raw-syscall static image with
-// no libc, so every family is a fresh syscall table rather than a re-spelling of the macOS work. It is
-// `false` by the fall-through rather than by an enumerated row, so a lane that lands a family edits ONE
-// place — which is exactly what arm64-linux now does, one row at a time, in its own block below.
+// ⚠ **x64-LINUX HAS ITS OWN BLOCK NOW, AND IT IS PARTIAL.** It is a raw-syscall static image with no libc,
+// so every family really is a fresh syscall table rather than a re-spelling of the macOS work — but the
+// table is x86-64's and the Win32-shaped half of each answer is shared with the arm64 POSIX lanes, which is
+// what made argv and the filesystem a port rather than a rung. The CLOCKS, the GREEN-THREAD FLOOR and
+// everything standing on it (`sleep`, `subprocess`), the process identity and priority, the processor count
+// and the sockets are still `false` there, each for the reason its arm64-linux twin's row records.
 //
 // ⚠ **wasm32-wasi's `false`s ARE PERMANENT FOR SOME OF THESE, AND THE TABLE DOES NOT SAY WHICH.** WASI has
 // no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock` there
@@ -531,15 +533,17 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			subprocess gives true
 			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets.
 			managedSocket gives false
-			// ⚠ **NOT YET, AND WHAT IT OWES IS ONE CALL RATHER THAN A DESIGN.** `isatty(1)` answers the
-			// question and libSystem is already linked for it; what is missing is the translation into the
-			// vocabulary `StdOp.osHandleFileType` speaks — `FILE_TYPE_CHAR` when it is true, `FILE_TYPE_DISK`
-			// when it is not — which is the same shape as this lane's existing errno→Win32 mapping. Until it
-			// is written a program that asks still BUILDS and is told "not a terminal", so `--color=auto`
-			// degrades to `never` here (`docs/CLI_REFERENCE.md` says so where a user will read it). ⛔ This is
-			// the ONE row in this table whose `false` is a DEGRADATION rather than a refusal — see
-			// `HostFacility.terminalDetection` for why, and do not reach for E3104 to enforce it.
-			terminalDetection gives false
+			// ⭐ **ONE CALL RATHER THAN A DESIGN.**
+			// `Arm64DarwinRuntime.buildArm64DarwinHandleFileTypeChunk` is `isatty` on the descriptor
+			// `osStdHandle` already answers, translated into the vocabulary `StdOp.osHandleFileType` speaks
+			// (`Arm64PosixRuntime.arm64EmitFileTypeFromStatus`) — this lane's existing errno→Win32 mapping one
+			// question over. Conditions 2 and 3 are `getenv`, which the same surface already makes for
+			// `MAXON_MAX_PROCS`, so the whole facility costs one import slot and one chunk.
+			//
+			// ⚠ **`isatty` AND NOT THE `ioctl` IT IS BUILT FROM**, because Darwin's `ioctl` is VARIADIC and
+			// AAPCS64 passes a variadic argument on the STACK, which a runtime chunk here does not use. A
+			// libc-less lane has no such choice — see the arm64-linux row.
+			terminalDetection gives true
 		end 'f'
 	end 'darwinArm64'
 
@@ -669,12 +673,112 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			cpuCount gives true
 			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets, exactly as macOS is not.
 			managedSocket gives false
-			// ⚠ Not yet, and for the macOS row's reason with one extra: this lane links no libc, so it owes
-			// `ioctl(1, TCGETS, …)` where Darwin owes a call to `isatty`. Either answers the question; neither
-			// is written, so a program that asks builds and is told "not a terminal", exactly as on Darwin.
-			terminalDetection gives false
+			// ⭐⭐ **THE TERMINAL TEST IS THE `ioctl` `isatty` IS MADE OF, BECAUSE THIS LANE LINKS NO LIBC TO
+			// ASK.** `ioctl(fd, TCGETS, &termios)` succeeds exactly on a terminal; `ioctl` is syscall **29** on
+			// AArch64 and `TCGETS` is **0x5401** (`LinuxRuntime`), and the kernel writes **36** bytes, so
+			// `buildArm64LinuxHandleFileTypeChunk` is a chunk with a frame rather than an inline `svc`.
+			//
+			// ⭐⭐ **AND CONDITIONS 2 AND 3 ARE WHAT THIS ROW REALLY COST.** `NO_COLOR` and `TERM` make the
+			// detecting body emit `StdOp.osEnvRead`, which on a libc-less lane walks `__mrt_envp` — a `.data`
+			// word only the ENTRY STUB can fill. All three gates on that capture ride
+			// `PosixRuntime.posixReadsEnvironment` rather than the scheduler's bit, because a terminal-detecting
+			// program need not have a scheduler; gated on `usesGt` alone the first such program relocated
+			// against a word nothing wrote.
+			terminalDetection gives true
 		end 'f'
 	end 'linuxArm64'
+
+	if target.cpu == CpuArch.x64 and target.os == Os.linux 'linuxX64'
+		return match facility 'f'
+			// ⭐⭐ **argv — the row this lane claims with no lowering at all**, exactly as arm64-linux claims it.
+			// SysV hands the kernel's pre-split vector to `_start` on the STACK, so
+			// `CommandLineRuntime.commandLineShape` already answers `argumentVector` here and the Std graph over
+			// the two `.data` words is the one both other lanes run. What was missing was only WHO FILLS THEM:
+			// argc at `[rsp]` and the vector at `rsp+8`, captured by the frameless entry stub
+			// (`BackendDispatch.appendLinuxArgvCapture`).
+			commandLine gives true
+			// ⭐⭐ **THE FILESYSTEM, AND THE CONSOLE READ THAT RIDES IT.** Every body behind these three is a
+			// raw `syscall` against the x86-64 table in `X64LinuxRuntime`, hand-assembled there:
+			//
+			//   • `managedFile` — `openat`/`read`/`write`/`close`/`fstat`/`unlinkat`/`renameat`, with the
+			//     errno→Win32 translation reading a `.data` word each body stashes into
+			//     (`X64LinuxErrnoLabel`), because a raw static image has no libc and therefore no `errno`.
+			//   • `managedDirectory` — `FindFirstFileA`'s GLOB over `openat(O_DIRECTORY)` + `getdents64`,
+			//     with the wildcard match HAND-WRITTEN (`mrt_linux_glob_match`): `fnmatch` is a libc
+			//     function and this lane links none.
+			//   • `consoleStdin` — `osStdHandle` is one subtraction on every POSIX lane and the read is
+			//     `managedFile`'s, exactly as `ConsoleRuntime`'s header says.
+			//
+			// ⚠ **THE Win32-SHAPED HALF OF ALL THREE IS `Arm64PosixRuntime`'s AND IS READ FROM THERE** —
+			// the `dwFileAttributes` a `st_mode` becomes, the FILETIME a whole second becomes, the errno
+			// mapping and the glob split are facts neither OS nor ISA has a say in. What is genuinely x64's
+			// is the syscall table, the register ABI and `struct stat`'s layout.
+			managedFile gives true
+			managedDirectory gives true
+			consoleStdin gives true
+			// ⭐⭐ **THE TWO NON-SCHEDULER CLOCKS.** `clock_gettime` is syscall 228 here (113 on the other
+			// Linux lane) and answers a `timespec` rather than a scalar of nanoseconds — so each is a frame
+			// with two words in it (`X64LinuxRuntime.x64LinuxReadClockTimespec`) rather than a re-spelling
+			// of any other lane's body. `CLOCK_THREAD_CPUTIME_ID` reports NANOSECONDS where Windows reports
+			// TSC ticks, which `__thread_cpu_ticks`' own contract permits: it promises only that two
+			// readings may be SUBTRACTED.
+			wallClock gives true
+			threadCpuClock gives true
+			// ⭐ **THE IDENTITY: `getpid` is one inline `syscall` (39) and the executable path is
+			// `readlinkat` on `/proc/self/exe`**, because `GetModuleFileNameA` has no Linux counterpart and
+			// no call answers the question — the kernel publishes a SYMLINK instead.
+			processInfo gives true
+			// ⭐ **`sched_getaffinity` AND A POPCOUNT**, preferred to reading
+			// `/sys/devices/system/cpu/online` for two reasons: it needs no filesystem (a machine query must
+			// not drag in a whole other facility), and it reports the CPUs THIS PROCESS MAY USE rather than
+			// the CPUs the machine has — which is what a parallelism hint wants and what `nproc` answers.
+			cpuCount gives true
+			// ⛔⛔ **THE GREEN-THREAD FLOOR AND EVERYTHING ABOVE IT ARE ONE INDIVISIBLE LANDING ON THIS LANE,
+			// AND THAT IS A MEASUREMENT RATHER THAN A SCHEDULE.** These five cannot be flipped one at a time:
+			//
+			//   * `monotonicClock` and `sleep` are reached ONLY through `__gt_now_ns`/`__gt_sleep`, which are
+			//     SCHEDULER entries — so neither lands before `greenThreads` does.
+			//   * `reschedule` is `__gt_context_switch`, a hand-assembled per-CPU chunk of the same floor.
+			//   * `subprocess` cannot lag behind `greenThreads` EITHER, because `installGtRuntime` calls
+			//     `buildGtProcessRun` UNCONDITIONALLY (`GtRuntime.maxon`): every green-thread program
+			//     statically contains `__gt_process_run`, whose `osProcessSpawn`/`osWaitHandles`/
+			//     `osProcessExitCode` would reach a lowering with no Linux arm. So a `greenThreads` landing
+			//     that left `subprocess` false would not compile a single `async` program — it would panic in
+			//     the isel on a spawn no source in the program mentions.
+			//
+			// ⚠ **MEASURED, not inferred from the call graph.** The smallest possible `async` program — one
+			// `async`, one `await`, one `sleep` to make the callee yield — was compiled for x64-WINDOWS, the
+			// lane where every one of these lowerings exists, and its bound imports include `CreateProcessA`,
+			// `GetQueuedCompletionStatus` AND `CreateThread`. Dead-function elimination does not remove the
+			// child-process band from a program that spawns nothing, so the Linux twin of all three is a
+			// PRECONDITION of this row rather than a follow-on to it.
+			//
+			// ⇒ The whole set arrives together or not at all, which is what the four rows above do NOT
+			// require and is why they land first.
+			monotonicClock gives false
+			sleep gives false
+			reschedule gives false
+			greenThreads gives false
+			subprocess gives false
+			// ⚠ `setpriority` scopes a nice value to the calling THREAD on Linux, so this row owes the
+			// thread-inheritance work at `StdOp.osThreadCreate` that the arm64-linux row records — which
+			// cannot be written before this lane has worker Ms at all.
+			processPriority gives false
+			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets, exactly as macOS is not.
+			managedSocket gives false
+			// ⭐⭐ **THE SAME `ioctl(fd, TCGETS, &termios)` AS THE OTHER LINUX LANE, WITH THIS ONE'S OWN NUMBER.**
+			// `ioctl` is **16** on x86-64 where it is 29 on AArch64; `TCGETS` (0x5401) and the **36** bytes the
+			// kernel writes are shared, and live in `LinuxRuntime` for that reason.
+			//
+			// ⭐⭐ **AND THE WHOLE ENV-READ FACILITY LANDED WITH IT, BECAUSE CONDITIONS 2 AND 3 ARE NOT
+			// OPTIONAL.** This lane had no part of `StdOp.osEnvRead`: the isel now routes it to
+			// `buildX64LinuxEnvReadChunk` on the syscall route, and `BackendDispatch.appendLinuxEnvpCapture`
+			// stashes the vector the kernel left on the stack. ⭐ The env-read gate is
+			// `PosixRuntime.posixReadsEnvironment` — a union whose OTHER producer, the scheduler's
+			// `MAXON_MAX_PROCS` read, cannot fire here yet — so the day `greenThreads` lands it needs no widening.
+			terminalDetection gives true
+		end 'f'
+	end 'linuxX64'
 
 	return false
 end 'targetProvidesFacility'

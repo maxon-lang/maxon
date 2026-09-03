@@ -51,9 +51,7 @@ func @pickOr {
     arm64.movRegReg x19, x0
     arm64.movImm x16, 999999
     arm64.cmp x19, x16
-    arm64.cset x0, hi
-    arm64.cbnz x0, never
-    arm64.b ifcont#2
+    arm64.b.ls ifcont#2
   never:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -66,8 +64,7 @@ func @pickOr {
     arm64.epilogue 32
     arm64.ret
   ifcont#2:
-    arm64.cbnz x1, named
-    arm64.b ifcont#4
+    arm64.cbz x1, ifcont#4
   named:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -111,28 +108,21 @@ func @tagCode {
     arm64.bl __mm_decref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#1
-    arm64.b matchnext#5
+    arm64.b.ne matchnext#5
   matcharm#1:
     arm64.movImm x20, 1
     arm64.b matchcont
   matchnext#5:
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchnext#6
+    arm64.b.ne matchnext#6
   matcharm#2:
     arm64.movImm x20, 2
     arm64.b matchcont
   matchnext#6:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#3
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#3:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref

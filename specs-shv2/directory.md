@@ -106,7 +106,7 @@ end 'main'
 
 ## Targets
 
-⭐ Every case below carries `<!-- targets: x64-windows, arm64-macos, arm64-linux -->`, for the ONE reason stated in
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 **`file-io.md`'s "Targets — the one statement of the FILESYSTEM gate"**: `Directory.list` / `exists` /
 `isDirectory` / `create` / `currentPath` lower to the runtime entries `__md_open_search`, `__md_exists`,
 `__md_create` and `__md_current_path`, and `list-filters-dot-entries` reaches `__mf_*` on top of those.
@@ -123,7 +123,7 @@ with the wildcard match HAND-WRITTEN, because a raw static image links no `fnmat
 ## Tests
 
 <!-- test: list-directory -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
@@ -148,7 +148,7 @@ end 'main'
 ```
 
 <!-- test: list-directory-count -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
@@ -179,7 +179,7 @@ it: they assert membership and `count() >= 1`, which stay true while two bogus e
 along. **Only an exact count catches this.**
 
 <!-- test: list-filters-dot-entries -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let oneFile = FilePath from "test_dots_one"
@@ -217,7 +217,7 @@ end 'main'
 ```
 
 <!-- test: list-nonexistent-directory -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let files = try Directory.list(FilePath from "nonexistent_dir_12345") otherwise 'err'
@@ -236,7 +236,7 @@ Directory not found
 ```
 
 <!-- test: directory-exists -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	if Directory.exists(FilePath from "../bin") 'check'
@@ -250,7 +250,7 @@ end 'main'
 ```
 
 <!-- test: directory-is-directory -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	if Directory.isDirectory(FilePath from "../bin") 'check'
@@ -264,7 +264,7 @@ end 'main'
 ```
 
 <!-- test: file-is-not-directory -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	// Test that a nonexistent path is not a directory
@@ -279,7 +279,7 @@ end 'main'
 ```
 
 <!-- test: current-directory-not-empty -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let cwd = Directory.currentPath()
@@ -294,7 +294,7 @@ end 'main'
 ```
 
 <!-- test: current-directory-is-directory -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let cwd = Directory.currentPath()

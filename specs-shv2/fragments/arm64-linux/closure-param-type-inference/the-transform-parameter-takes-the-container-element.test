@@ -54,19 +54,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, x1
-    arm64.cset x3, lt
-    arm64.cbnz x3, loop
-    arm64.b forexit
+    arm64.b.ge forexit
   loop:
     arm64.arm64AddLsl x3, x2, x0, lsl #3
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.add x20, x20, x3
-    arm64.b forstep
   forstep:
     arm64.add x0, x0, 1
     arm64.b forhdr

@@ -51,9 +51,7 @@ func @main {
     arm64.bl __managed_cursor_create
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 99
     arm64.movRegReg x0, x19
@@ -107,9 +105,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __managed_cursor_advance
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x21, 98
     arm64.movRegReg x0, x20
@@ -168,14 +164,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_6  ; "panic at a-cursor-over-strings-hands-back-a-borrow.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

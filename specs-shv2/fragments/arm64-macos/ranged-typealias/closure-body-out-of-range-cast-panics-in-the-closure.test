@@ -1,0 +1,97 @@
+// Test: closure-body-out-of-range-cast-panics-in-the-closure
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 100000)
+typealias Fn1 = function(Wide) returns Wide
+
+function apply(f Fn1, x Wide) returns Wide
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(function(n Wide) gives (n + 1) as Small, x: 605)
+end 'main'
+---
+ExitCode: 1
+---
+func @apply {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x16, 100000
+    arm64.cmp x1, x16
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at closure-body-out-of-range-cast-panics-in-the-closure.test:6: Range check failed: value outside typealias 'Wide'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, main$closure_0
+    arm64.movImm x1, 605
+    arm64.movImm x2, 0
+    arm64.bl apply
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at closure-body-out-of-range-cast-panics-in-the-closure.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.movImm x16, 100000
+    arm64.cmp x0, x16
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at closure-body-out-of-range-cast-panics-in-the-closure.test:11: Range check failed: value outside typealias 'Wide'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.add x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 10
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at closure-body-out-of-range-cast-panics-in-the-closure.test:11: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -98,9 +98,7 @@ func @main {
     arm64.bl __list_head_checked
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x21, 1
     arm64.movRegReg x0, x20
@@ -125,9 +123,7 @@ func @main {
     arm64.bl __list_node_next_checked
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, try
-    arm64.b ifelse
+    arm64.b.ne ifelse
   try:
     arm64.movRegReg x0, x19
     arm64.bl __list_node_value
@@ -216,5 +212,4 @@ func @main {
     arm64.loadRegSlot x28, slot10
     arm64.epilogue 112
     arm64.ret
-  ifcont:
 }

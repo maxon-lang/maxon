@@ -1381,6 +1381,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		arm64Fneg gives false
 		// G3: an ordered access is a body op, not a branch.
 		arm64LoadAcquire or arm64StoreRelease gives false
+		// EC18: the arm64 high multiply is a body op, not a branch.
+		arm64Smulh gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1390,7 +1392,7 @@ end 'opIsCondBranch'
 // ⭐ THE ONE ROSTER FOR "IS THIS THE ISA'S UNCONDITIONAL BRANCH, AND WHERE DOES IT GO?". Two callers
 // need the two halves of that answer and neither may restate the arm list: `terminatorIsUnconditionalBranch`
 // below wants only the yes/no (it is the else-edge carrier a `condBranch` must be paired with), and
-// `X64BranchCleanup` wants the target (to compare it against the physically next block). A second
+// `BranchCleanup` wants the target (to compare it against the physically next block). A second
 // enumeration of `TargetOp` would be a copy that goes stale at the next op added to the dialect.
 export union UnconditionalBranchTarget
 	none
@@ -1437,6 +1439,7 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 		imulHighReg gives UnconditionalBranchTarget.none
 		arm64Fneg gives UnconditionalBranchTarget.none
 		arm64LoadAcquire or arm64StoreRelease gives UnconditionalBranchTarget.none
+		arm64Smulh gives UnconditionalBranchTarget.none
 	end 'check'
 end 'unconditionalBranchTargetOf'
 
@@ -1506,6 +1509,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			imulHighReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 			arm64Fneg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a float negate body op as its terminator")
 			arm64LoadAcquire or arm64StoreRelease then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an ordered load/store body op as its terminator")
+			arm64Smulh then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -1529,7 +1533,7 @@ end 'pushJumpTableSuccessors'
 // the index went stale or was set by something that is not a branch. This is the O(1) half
 // of the invariant check — it fires on every CFG build, for every block that has a
 // conditional branch, and needs no scan.
-function condBranchTargetOf(op TargetOp, block IrBlock) returns BlockId
+export function condBranchTargetOf(op TargetOp, block IrBlock) returns BlockId
 	match op 'cond'
 		jcc(_, target) then return target
 		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
@@ -3154,6 +3158,8 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			arm64Fneg then break 'capture'
 			// G3: an ordered access is not a `movRegReg`, so never an entry param capture.
 			arm64LoadAcquire or arm64StoreRelease then break 'capture'
+			// EC18: `SMULH` is not a `movRegReg`, so never an entry param capture.
+			arm64Smulh then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3883,6 +3889,8 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// G3: an ordered access addresses the heap through its base register, never a stack SLOT —
 		// `loadRegBaseDisp`/`storeBaseDispReg`'s answer exactly.
 		arm64LoadAcquire or arm64StoreRelease gives OpSlotRole.touchesNoSlot
+		// EC18: `SMULH` touches no memory at all — its operands and its result are registers.
+		arm64Smulh gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

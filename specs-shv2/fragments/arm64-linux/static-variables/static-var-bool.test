@@ -27,29 +27,24 @@ func @main {
     arm64.prologue 16
     arm64.leaGlobal x0, __data_initialized
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.cbnz x0, check1
-    arm64.b ifcont#2
+    arm64.cbz x0, __il_body
   check1:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont#2:
-    arm64.b __il_body
   __il_body:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __data_initialized
     arm64.storeBaseDispReg.byte [x1 + 0], x0
-    arm64.b __il_cont
   __il_cont:
     arm64.leaGlobal x0, __data_initialized
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.cbnz x0, check2
-    arm64.b ifcont#4
+    arm64.cbz x0, ifcont
   check2:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret
-  ifcont#4:
+  ifcont:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

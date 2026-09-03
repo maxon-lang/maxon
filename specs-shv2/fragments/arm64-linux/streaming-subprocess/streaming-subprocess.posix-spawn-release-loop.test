@@ -45,19 +45,20 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __io_iocp@256 = i64 0
-  __io_done_event@264 = i64 0
-  __io_init_done@272 = i64 0
-  __io_pending@280 = i64 0
-  __io_pipe_seq@288 = i64 0
-  __subp_table@296 = i64 0
-  __subp_last_error@304 = i64 0
-  __slab_arena_list@312 = i64 0
-  __slab_arena_map_l1@320 = i64 0
-  __slab_state@328 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __io_iocp@264 = i64 0
+  __io_done_event@272 = i64 0
+  __io_init_done@280 = i64 0
+  __io_pending@288 = i64 0
+  __io_pipe_seq@296 = i64 0
+  __subp_table@304 = i64 0
+  __subp_last_error@312 = i64 0
+  __slab_arena_list@320 = i64 0
+  __slab_arena_map_l1@328 = i64 0
+  __slab_state@336 = i64 0
 }
 
 func @main {
@@ -69,12 +70,9 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 12
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.leaRdata x0, __str_rec_1  ; "echo hello"
     arm64.bl __gt_subp_spawn
@@ -83,19 +81,13 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __gt_subp_read_line
     arm64.movRegReg x22, x0
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow
-    arm64.b __rc_ok#9
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x22
     arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok#9:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x19, x19, x0
     arm64.movRegReg x0, x21
@@ -108,14 +100,10 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#4
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at streaming-subprocess.posix-spawn-release-loop.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -126,7 +114,7 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  __rc_ok#4:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

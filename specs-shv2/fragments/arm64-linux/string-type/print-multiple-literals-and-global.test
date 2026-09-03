@@ -29,7 +29,6 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_3  ; "foo"
     arm64.bl print
-    arm64.b __il_body#6
   __il_body#6:
     arm64.leaGlobal x0, __data_total
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -38,11 +37,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.leaGlobal x0, __data_total
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.b __il_cont#5
   __il_cont#5:
     arm64.leaRdata x0, __str_rec_4  ; "bar"
     arm64.bl print
-    arm64.b __il_body#7
   __il_body#7:
     arm64.leaGlobal x0, __data_total
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -51,21 +48,16 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.leaGlobal x0, __data_total
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.b __il_cont#4
   __il_cont#4:
     arm64.leaRdata x0, __str_rec_5  ; "baz"
     arm64.bl print
     arm64.sub x0, x20, x19
     arm64.sub x0, x0, 5
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_6  ; "panic at print-multiple-literals-and-global.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

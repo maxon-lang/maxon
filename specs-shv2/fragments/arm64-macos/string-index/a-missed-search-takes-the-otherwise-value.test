@@ -29,9 +29,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movRegReg x0, x19
     arm64.bl String.endIndex
@@ -39,7 +37,6 @@ func @main {
     arm64.b trycont
   tryok:
     arm64.movRegReg x20, x0
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x19
     arm64.bl String.endIndex
@@ -48,8 +45,7 @@ func @main {
     arm64.cmp x1, x2
     arm64.cset x19, eq
     arm64.bl __mm_decref
-    arm64.cbnz x19, threw
-    arm64.b ifelse
+    arm64.cbz x19, ifelse
   threw:
     arm64.leaRdata x0, __str_rec_6  ; "threw\x0a"
     arm64.bl print
@@ -57,7 +53,6 @@ func @main {
   ifelse:
     arm64.leaRdata x0, __str_rec_7  ; "DID NOT throw\x0a"
     arm64.bl print
-    arm64.b ifcont
   ifcont:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20

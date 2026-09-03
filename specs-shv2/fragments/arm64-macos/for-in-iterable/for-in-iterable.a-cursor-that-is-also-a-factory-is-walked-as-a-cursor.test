@@ -83,9 +83,7 @@ func @Resumable.current {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at for-in-iterable.a-cursor-that-is-also-a-factory-is-walked-as-a-cursor.test:14: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -95,9 +93,7 @@ func @Resumable.current {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
     arm64.cmp x2, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
     arm64.arm64AddLsl x0, x0, x2, lsl #3
@@ -105,14 +101,10 @@ func @Resumable.current {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x1 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#9
+    arm64.b.eq critsplit#9
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow
-    arm64.b critsplit#10
+    arm64.b.ne critsplit#10
   __im_slow:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
@@ -123,12 +115,9 @@ func @Resumable.current {
     arm64.b __im_cont
   critsplit#9:
     arm64.movRegReg x9, x3
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at for-in-iterable.a-cursor-that-is-also-a-factory-is-walked-as-a-cursor.test:14: oob\x0a"
     arm64.bl mrt_panic
@@ -148,9 +137,7 @@ func @Resumable.advance {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
     arm64.cmp x1, x2
-    arm64.cset x1, ge
-    arm64.cbnz x1, atEnd
-    arm64.b ifcont
+    arm64.b.lt ifcont
   atEnd:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -196,9 +183,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl Resumable.advance
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at for-in-iterable.a-cursor-that-is-also-a-factory-is-walked-as-a-cursor.test:36: advance\x0a"
     arm64.bl mrt_panic
@@ -212,9 +197,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl Resumable.advance
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_2  ; "panic at for-in-iterable.a-cursor-that-is-also-a-factory-is-walked-as-a-cursor.test:37: advance\x0a"
     arm64.bl mrt_panic
@@ -227,17 +210,13 @@ func @main {
   tryok#3:
     arm64.movImm x21, 0
     arm64.movImm x0, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ne forexit
   each:
     arm64.movRegReg x0, x20
     arm64.bl Resumable.current
     arm64.add x21, x21, x0
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x20
     arm64.bl Resumable.advance
@@ -249,14 +228,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at for-in-iterable.a-cursor-that-is-also-a-factory-is-walked-as-a-cursor.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

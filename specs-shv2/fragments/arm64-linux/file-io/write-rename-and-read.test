@@ -87,12 +87,13 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __mrt_errno@240 = i64 0
-  __mrt_envp@248 = i64 0
-  __mrt_tls_next_key@256 = i64 0
-  __slab_arena_list@264 = i64 0
-  __slab_arena_map_l1@272 = i64 0
-  __slab_state@280 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_errno@248 = i64 0
+  __mrt_envp@256 = i64 0
+  __mrt_tls_next_key@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
 }
 
 func @main {
@@ -125,18 +126,14 @@ func @main {
     arm64.movImm x1, 71
     arm64.movRegReg x0, x21
     arm64.bl __managed_push
-    arm64.b __il_body#19
   __il_body#19:
     arm64.movImm x2, 0
-    arm64.b __il_cont#18
   __il_cont#18:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl File.writeBinary
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_rec_29  ; "Write failed"
     arm64.bl print
@@ -165,9 +162,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl File.rename
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_rec_30  ; "Rename failed"
     arm64.bl print
@@ -194,8 +189,7 @@ func @main {
   tryok#3:
     arm64.movRegReg x0, x19
     arm64.bl File.exists
-    arm64.cbnz x0, src_remains
-    arm64.b ifcont#6
+    arm64.cbz x0, ifcont
   src_remains:
     arm64.leaRdata x0, __str_rec_31  ; "Source still exists"
     arm64.bl print
@@ -219,14 +213,12 @@ func @main {
     arm64.loadRegSlot x28, slot10
     arm64.epilogue 112
     arm64.ret
-  ifcont#6:
+  ifcont:
     arm64.movRegReg x0, x20
     arm64.bl File.readBinary
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_rec_32  ; "Read failed"
     arm64.bl print
@@ -253,9 +245,7 @@ func @main {
   tryok#7:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 2
-    arm64.cset x0, ne
-    arm64.cbnz x0, count_check
-    arm64.b ifcont#10
+    arm64.b.eq __il_body#21
   count_check:
     arm64.leaRdata x0, __str_rec_33  ; "Wrong count: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -319,19 +309,14 @@ func @main {
     arm64.loadRegSlot x28, slot10
     arm64.epilogue 112
     arm64.ret
-  ifcont#10:
-    arm64.b __il_body#21
   __il_body#21:
     arm64.movImm x2, 0
-    arm64.b __il_cont#20
   __il_cont#20:
     arm64.loadRegSlot x0, slot0
     arm64.movRegReg x1, x21
     arm64.bl File.writeBinary
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq tryok#11
   tryerr#12:
     arm64.leaRdata x0, __str_rec_34  ; "Rewrite failed"
     arm64.bl print
@@ -362,9 +347,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl File.rename
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#14
-    arm64.b tryok#13
+    arm64.b.eq tryok#13
   tryerr#14:
     arm64.leaRdata x0, __str_rec_35  ; "Replace rename failed"
     arm64.bl print
@@ -394,15 +377,10 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl File.delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq trycont
   tryerr#16:
     arm64.leaRdata x0, __str_rec_36  ; "Delete failed"
     arm64.bl print
-    arm64.b trycont
-  tryok#15:
-    arm64.b trycont
   trycont:
     arm64.leaRdata x0, __str_rec_37  ; "Rename OK"
     arm64.bl print

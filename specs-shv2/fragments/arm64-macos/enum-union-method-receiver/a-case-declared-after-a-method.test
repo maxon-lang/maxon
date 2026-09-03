@@ -27,26 +27,14 @@ ExitCode: 5
 func @main {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
-  __il_body:
-    arm64.b matchnext
-  matchnext:
-    arm64.b matcharm
   matcharm:
     arm64.movImm x0, 5
-    arm64.b matchcont
-  matchcont:
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-case-declared-after-a-method.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

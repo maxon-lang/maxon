@@ -1,0 +1,98 @@
+// Test: console-stdin.repeat-reads-at-eof-are-idempotent
+function main() returns ExitCode
+	var stdin = Console.stdin()
+	var thrown = 0
+	var i = 0
+	while i < 3 'again'
+		let line = try stdin.readLine() otherwise 'atEof'
+			thrown = thrown + 1
+			i = i + 1
+			continue
+		end 'atEof'
+		print(line)
+		return 1
+	end 'again'
+	return thrown as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.callDirect Console.stdin
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+  whilehdr:
+    x64.cmpRegImm32 r13, 3
+    x64.jcc greaterEqual, whileexit
+  again:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Stdin.readLine
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.callDirect print
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  whileexit:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at console-stdin.repeat-reads-at-eof-are-idempotent.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Stdin
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

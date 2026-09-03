@@ -61,15 +61,12 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __float_fromString
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.fpLoadRdata d9, [rdata + __fconst_0]
     arm64.b trycont
   tryok:
     arm64.movRegReg d9, d0
-    arm64.b trycont
   trycont:
     arm64.loadRegBaseDisp.word64 x19, [x22 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x22 + 8]
@@ -139,9 +136,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.fcmp d8, d9
-    arm64.cset x0, eq
-    arm64.cbnz x0, exact
-    arm64.b ifcont
+    arm64.b.ne ifcont
   exact:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x22

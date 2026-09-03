@@ -55,80 +55,56 @@ func @HoldA.create {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_owned#8
+    arm64.b.ne __im_slow
   __im_owned#8:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_bounds#9
+    arm64.b.lt __im_slow
   __im_bounds#9:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_buffer#10
+    arm64.b.ls __im_slow
   __im_buffer#10:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_viewed#11
+    arm64.b.eq __im_slow
   __im_viewed#11:
     arm64.sub x2, x0, 24
     arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_store#12
+    arm64.b.ne __im_slow
   __im_store#12:
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
     arm64.movImm x0, 0
     arm64.b __im_cont
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_owned#13
+    arm64.b.ne __im_slow
   __im_owned#13:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_bounds#14
+    arm64.b.lt __im_slow
   __im_bounds#14:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_buffer#15
+    arm64.b.ls __im_slow
   __im_buffer#15:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_viewed#16
+    arm64.b.eq __im_slow
   __im_viewed#16:
     arm64.sub x2, x0, 24
     arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_store#17
+    arm64.b.ne __im_slow
   __im_store#17:
     arm64.storeBaseDispReg.byte [x0 + 0], x19
     arm64.movImm x0, 0
@@ -138,12 +114,9 @@ func @HoldA.create {
     arm64.movRegReg x2, x19
     arm64.bl __managed_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance.test:10: seeded slot 0 must exist after resize(1)\x0a"
     arm64.bl mrt_panic
@@ -207,20 +180,16 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movRegReg x0, x20
     arm64.bl HoldA.adopt
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 1
     arm64.cset x0, eq
-    arm64.b __il_cont
   __il_cont:
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   ok:
     arm64.leaRdata x0, __str_rec_2  ; "ok\x0a"
     arm64.bl print
-    arm64.b ifcont
   ifcont:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x20

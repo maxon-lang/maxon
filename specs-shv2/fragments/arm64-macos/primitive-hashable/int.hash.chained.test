@@ -22,95 +22,60 @@ func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.b __il_body#15
   __il_body#15:
     arm64.movImm x19, 42
-    arm64.b __rc_chk#17
-  __rc_chk#17:
-    arm64.b __rc_ok#16
-  __rc_ok#16:
-    arm64.b __il_cont#14
-  __il_cont#14:
-    arm64.b __il_body#19
   __il_body#19:
     arm64.movImm x0, 42
-    arm64.b __rc_chk#21
-  __rc_chk#21:
-    arm64.b __rc_ok#20
-  __rc_ok#20:
-    arm64.b __il_cont#13
-  __il_cont#13:
-    arm64.b __il_body#23
   __il_body#23:
     arm64.movImm x1, 4294967295
     arm64.and x1, x0, x1
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_chk#25
-  __rc_chk#25:
+    arm64.b.lt __il_slow
+  __rc_chk:
     arm64.movImm x2, 4294967295
     arm64.cmp x1, x2
-    arm64.cset x2, gt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok#24
+    arm64.b.le __rc_ok
   __il_slow:
     arm64.bl int.hash
     arm64.b __il_cont#12
-  __rc_ok#24:
+  __rc_ok:
     arm64.movRegReg x0, x1
-    arm64.b __il_cont#12
   __il_cont#12:
     arm64.cmp x19, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, chainDiffers
-    arm64.b ifcont#2
+    arm64.b.eq __il_body#28
   chainDiffers:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont#2:
-    arm64.b __il_body#28
   __il_body#28:
     arm64.cmp x19, 42
     arm64.cset x0, eq
-    arm64.b __il_cont#27
   __il_cont#27:
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, hashValueEquals
-    arm64.b ifcont#4
+    arm64.cbz x0, __il_body#30
   hashValueEquals:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont#4:
-    arm64.b __il_body#30
   __il_body#30:
     arm64.cmp x19, 41
-    arm64.cset x0, lt
-    arm64.cbnz x0, lt
-    arm64.b ifcont#32
+    arm64.b.ge ifcont#32
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont#29
   ifcont#32:
     arm64.cmp x19, 41
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#34
+    arm64.b.le ifcont#34
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont#29
   ifcont#34:
     arm64.movImm x0, 1
-    arm64.b __il_cont#29
   __il_cont#29:
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#5
-    arm64.b matchnext#9
+    arm64.b.ne matchnext#9
   matcharm#5:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot0
@@ -118,9 +83,7 @@ func @main {
     arm64.ret
   matchnext#9:
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#6
-    arm64.b matchnext#10
+    arm64.b.ne matchnext#10
   matcharm#6:
     arm64.movImm x0, 4
     arm64.loadRegSlot x19, slot0
@@ -128,9 +91,7 @@ func @main {
     arm64.ret
   matchnext#10:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#7
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#7:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

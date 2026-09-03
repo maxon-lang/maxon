@@ -32,10 +32,12 @@
 //     the descriptor, the pattern, the directory-prefix scratch and the `getdents64` buffer, released by one
 //     `munmap`. Darwin's is a 16-byte `malloc` plus an `opendir` handle plus a duplicated pattern.
 //
-// ⭐ **EVERYTHING ELSE IS SHARED, AND `Arm64PosixRuntime` IS WHERE.** The symbol names, the errno→Win32
+// ⭐ **EVERYTHING ELSE IS SHARED, AND THREE FILES ARE WHERE.** The symbol names and the POSIX constants are
+// `Targets/Shared/PosixRuntime`; the Linux facts both arches agree on are `Targets/Shared/LinuxRuntime`; the
+// AArch64 emit fragments and the chunks whose body is one shape on both arm64 lanes — the errno→Win32
 // mapping, the `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAA` fill and the two string walkers
-// behind the glob split are Win32-shaped facts that neither OS has a say in; only `struct stat`'s layout
-// differs, and that is a parameter.
+// behind the glob split — are `Arm64PosixRuntime`. Only `struct stat`'s layout differs, and that is a
+// parameter.
 //
 // ⚠ **EVERY CHUNK HERE IS LINUX-ONLY AND IS APPENDED ONLY FOR `Os.linux`** (`appendArm64LinuxRuntimeChunks`,
 // called from `buildArm64Backend`), under the SAME `RuntimeUsage` bits the Std-tier installers read — so a
@@ -112,7 +114,7 @@ export let Arm64LinuxSyscallGettid = 178
 // an aarch64 Ubuntu 26.04 guest and checked against the libc call it is supposed to be — `getpid` against
 // `os.getpid()`, `readlinkat` against the path it answered, both `clock_gettime` clock ids against a real
 // calendar and a real CPU cost, and `sched_getaffinity`'s popcount against `nproc`. That is the discipline
-// `LinuxOpenDirectoryFlags` below exists to enforce: v1's own table has `O_DIRECTORY` wrong for this exact
+// `Arm64LinuxOpenDirectoryFlags` below exists to enforce: v1's own table has `O_DIRECTORY` wrong for this exact
 // architecture, so an arm64 number is checked against arm64 or it is a guess.
 //
 // ⚠ **`clock_gettime` IS 113 AND IS THE SAME NUMBER FOR BOTH CLOCK IDS** — it is the `clockid_t` argument
@@ -121,6 +123,12 @@ let Arm64LinuxSyscallReadlinkat = 78
 let Arm64LinuxSyscallClockGettime = 113
 let Arm64LinuxSyscallSchedGetaffinity = 123
 export let Arm64LinuxSyscallGetPid = 172
+
+// ⚠ **29 HERE AND 16 ON x86-64** — the two Linux lanes disagree about `ioctl` as they disagree about every
+// number in this table, which is why it is declared per arch and only the REQUEST word is shared. VERIFIED
+// by invoking it: 29 with `TCGETS` answered 0 on a pty and `-ENOTTY` on a pipe, while syscall 28 with the
+// identical arguments answered `-EINVAL` (`madvise`), which is the control that says 29 is really `ioctl`.
+let Arm64LinuxSyscallIoctl = 29
 
 let Arm64LinuxSyscallGetcwd = 17
 let Arm64LinuxSyscallMkdirat = 34
@@ -138,7 +146,7 @@ let Arm64LinuxSyscallFsync = 82
 //
 // ⚠ **MEASURED ON THIS LANE, not transcribed** — each was invoked by number through `syscall(2)` on an
 // aarch64 Ubuntu guest and checked against the libc call it is supposed to be, which is the discipline
-// `LinuxOpenDirectoryFlags` above exists to enforce.
+// `Arm64LinuxOpenDirectoryFlags` above exists to enforce.
 //
 // ⭐⭐ **`clone` NOW SERVES TWO DIFFERENT REQUESTS UNDER ONE NUMBER, AND THE FLAG WORD IS THE WHOLE
 // DIFFERENCE.** L5's `clone(SIGCHLD)` (below, with the child-process band) shares NOTHING and is exactly
@@ -180,18 +188,6 @@ let Arm64LinuxSyscallClone = 220
 let Arm64LinuxSyscallExecve = 221
 let Arm64LinuxSyscallWait4 = 260
 let Arm64LinuxSyscallChdir = 49
-
-// ⭐⭐ **`CLOCK_MONOTONIC` IS 1, AND IT IS THE THIRD CLOCK ID THIS FILE NAMES.** Unlike `CLOCK_REALTIME` it
-// never steps: a deadline computed from it survives an NTP correction, which is `StdOp.osReadClock`'s whole
-// reason for existing separately from `osReadWallClock`.
-//
-// ⚠ **IT IS NOT `CLOCK_UPTIME_RAW`, WHICH IS WHAT THE DARWIN LANE READS, AND THE DIFFERENCE IS OBSERVABLE
-// ACROSS A SUSPEND.** Darwin's `CLOCK_MONOTONIC` advances while the machine sleeps and its `CLOCK_UPTIME_RAW`
-// does not, so that lane takes the raw one. LINUX INVERTS THE NAMES: `CLOCK_MONOTONIC` is the one that does
-// NOT advance across suspend and `CLOCK_BOOTTIME` (7) is the one that does — so the id that matches the
-// other lane's SEMANTICS is this one, and taking `CLOCK_BOOTTIME` "because Darwin takes the raw clock" would
-// be reading the name instead of the property.
-let LinuxClockMonotonic = 1
 
 // ⭐ **THE FUTEX OPERATIONS, IN THEIR PRIVATE FORMS.** `FUTEX_WAIT` is 0 and `FUTEX_WAKE` is 1;
 // `FUTEX_PRIVATE_FLAG` is 128 and says the word is never shared across processes, which lets the kernel key
@@ -309,7 +305,7 @@ let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF
 // program would answer NULL for ever — a scheduler that silently never runs. The counter below therefore
 // pre-increments, and the chunk asserts the result rather than trusting the arithmetic.
 // How many keys one block holds — DERIVED from the page and the slot width, and a FUNCTION rather than a
-// `let` for `linuxCpuSetWords`' language reason: a global initializer folds `/` as a float.
+// `let` for `runtimeFrameSlots`' language reason: a global initializer folds `/` as a float.
 function linuxTlsSlotCount() returns ParsedInt
 	return LinuxHostObjectPageBytes / SpillSlotBytes
 end 'linuxTlsSlotCount'
@@ -321,24 +317,6 @@ end 'linuxTlsSlotCount'
 // reader treats as *"the scheduler has not started"*, and the word that offset addresses is already spoken
 // for.
 let LinuxTlsFirstKey = 1
-
-// `AT_FDCWD`, as the two's-complement word a `mov` materialises: every `*at` call above anchors here, which
-// is what makes it the plain call it replaced. (`MachineWord` is unsigned — `MmapAnonFd` is the same
-// spelling one file over, for the same reason.)
-let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
-
-// --- `open` flags (asm-generic, which AArch64 uses) ---
-//
-// ⚠ **THESE ARE NOT DARWIN'S BIT VALUES AND THE DIFFERENCE IS SILENT.** `O_CREAT` is 0x40 here and 0x200
-// there, `O_TRUNC` 0x200 here and 0x400 there — v1 carries a whole branchless translator for exactly this
-// (`emitMacosOpenFlagXlateArm64`) and records what a wrong bit does: a write open lands `O_ASYNC` instead of
-// `O_TRUNC`. shv2 needs no translator because the macOS lane calls `creat` rather than `open` and never
-// spells a flag word at all; these are Linux's alone.
-//
-// `O_WRONLY|O_CREAT|O_TRUNC` IS `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`, which is the same trio `creat`
-// abbreviates on the other lane — so the two opens agree on semantics while spelling them differently.
-export let LinuxOpenReadOnlyFlags = 0x0
-export let LinuxOpenCreateTruncateFlags = 0x241
 
 // ⛔⛔ **`O_DIRECTORY` IS 0o40000 ON AArch64, NOT THE 0o200000 EVERY asm-generic TABLE SHOWS.**
 // `arch/arm64/include/uapi/asm/fcntl.h` OVERRIDES four flags before including the generic header — for
@@ -353,15 +331,10 @@ export let LinuxOpenCreateTruncateFlags = 0x241
 // single-`stat` route and never open a directory, passed. ⚠ v1's own flag-translation comment
 // (`emitMacosOpenFlagXlateArm64`) records `O_DIRECTORY 0x10000` for this very architecture. It is wrong, and
 // it is wrong in the one file this port reads its syscall numbers from.
-let LinuxOpenDirectoryFlags = 0o40000
-
-// `ENAMETOOLONG` — 36 on Linux and 63 on Darwin, so unlike the five in `Arm64PosixRuntime` this one really is
-// per-lane. It is what a search whose DIRECTORY PART does not fit the scratch below reports; see
-// `buildArm64LinuxDirPrefixChunk` for why that is a refusal rather than a truncation.
-let LinuxErrnoNameTooLong = 36
+let Arm64LinuxOpenDirectoryFlags = 0o40000
 
 // `ENOTSUP` (`EOPNOTSUPP`) — 95 on Linux and 45 on Darwin, so it is per-lane for `LinuxErrnoNameTooLong`'s
-// reason and cannot join the five in `Arm64PosixRuntime`. Like `Arm64DarwinRuntime`'s twin it is PUBLISHED
+// reason and cannot join the five in `Targets/Shared/PosixRuntime`. Like `Arm64DarwinRuntime`'s twin it is PUBLISHED
 // rather than read: `mrt_host_spawn` answers it for a caller-built environment block, a shape this lane has
 // no conversion for either. See that chunk's own note.
 let LinuxErrnoNotSupported = 95
@@ -395,8 +368,8 @@ let LinuxErrnoNotSupported = 95
 // `__sched_init_procs` (which allocates the scheduler's key) is the same bring-up no worker M can race.
 
 // ⭐ **THE THREE VERBS ONLY THIS LANE SPELLS AS A CHUNK, SO THEY KEEP THE LANE'S INFIX.**
-// `Arm64PosixRuntime`'s header states the rule: a name goes under the shared `mrt_host_` prefix when the
-// VERB is a shared host-surface verb served by both lanes. These three are not — on macOS `osLockEnter` and
+// `Targets/Shared/PosixRuntime`'s header states the rule: a name goes under the shared `mrt_host_` prefix
+// when the VERB is a shared host-surface verb served by every lane. These three are not — on macOS `osLockEnter` and
 // `osLockLeave` are a bare `pthread_mutex_lock`/`_unlock` import with no chunk at all, and `tlsSetValue` is
 // one `pthread_setspecific`. Only a raw static image needs a body, and a body one lane builds wears that
 // lane's name, exactly as `mrt_linux_glob_match` does.
@@ -404,15 +377,9 @@ export let LinuxLockEnterName = b"mrt_linux_lock_enter"
 export let LinuxLockLeaveName = b"mrt_linux_lock_leave"
 export let LinuxTlsSetName = b"mrt_linux_tls_set"
 
-// ⭐ **THE TWO `.data` WORDS THE GREEN-THREAD FLOOR OWNS.** `__mrt_envp` is the environment vector the entry
-// stub captured off the process stack, because a static image has no `environ` and no `getenv`;
-// `__mrt_tls_next_key` is the per-OS-thread slot counter `mrt_host_tls_alloc` hands out of.
-// ⭐ EXPORTED: the ENTRY STUB writes it (`Arm64Runtime.emitArm64EnvpFromEntryStack`, the one moment the
-// vector is reachable) and `mrt_host_env_read` below reads it. One word, one name, two files.
-export let LinuxEnvpLabel = b"__mrt_envp"
+// The per-OS-thread slot counter `mrt_host_tls_alloc` hands out of. (The environment vector's word is
+// `LinuxRuntime.LinuxEnvpLabel` — both lanes capture it, so it is not this one's to declare.)
 let LinuxTlsNextKeyLabel = b"__mrt_tls_next_key"
-
-let LinuxErrnoLabel = b"__mrt_errno"
 
 // The `.data` slot this lane lays out. Gated on the FACILITIES that stash into it rather than on the target
 // alone: a Linux program that touches no file, no directory and no standard input never writes the word, so
@@ -435,9 +402,9 @@ export function arm64LinuxRuntimeGlobals(usage RuntimeUsage, target Target) retu
 	return out
 end 'arm64LinuxRuntimeGlobals'
 
-// ⭐ **THE GREEN-THREAD FLOOR'S TWO `.data` WORDS, ON THE FLOOR'S OWN BIT.** Split from the errno word above
+// ⭐ **THE GREEN-THREAD FLOOR'S `.data` WORD, ON THE FLOOR'S OWN BIT.** Split from the errno word above
 // rather than folded into it because the two conditions are genuinely different: a program that reads a file
-// carries the errno word and no scheduler, and a pure-`async` program carries these two and no errno word.
+// carries the errno word and no scheduler, and a pure-`async` program carries this one and no errno word.
 //
 // ⚠ **NO `os` TEST INSIDE THE `usage` TEST — the target is asked FIRST**, exactly as its neighbour does it.
 export function arm64LinuxGreenThreadGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
@@ -447,9 +414,6 @@ export function arm64LinuxGreenThreadGlobals(usage RuntimeUsage, target Target) 
 		return out
 	end 'notThisLane'
 
-	// The environment vector the entry stub captured. Written ONCE, in `mrt_start`, before `main` and
-	// therefore before anything could make a second OS thread; every later access is a read.
-	pushRuntimeGlobal(out, label: LinuxEnvpLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 	// The per-OS-thread slot counter. `__sched_init_procs` is its only caller and runs during bring-up, which
 	// is what makes the plain read-modify-write in `mrt_host_tls_alloc` sound.
 	pushRuntimeGlobal(out, label: LinuxTlsNextKeyLabel, sharing: MultiMSharing.sealedBeforeWorkers)
@@ -493,84 +457,23 @@ end 'arm64LinuxTouchesErrnoWord'
 // 24 is `st_uid`. It is unobserved there because the field it repacks into is read back at the same wrong
 // offset, so the two errors cancel — which is exactly why these were read off the kernel header rather than
 // transcribed from the reference.
-let LinuxStatBytes = 128
-let LinuxStatModeOffset = 16
-let LinuxStatSizeOffset = 48
-let LinuxStatAccessTimeOffset = 72
-let LinuxStatModifyTimeOffset = 88
-let LinuxStatStatusChangeTimeOffset = 104
+let Arm64LinuxStatBytes = 128
+let Arm64LinuxStatModeOffset = 16
+let Arm64LinuxStatSizeOffset = 48
+let Arm64LinuxStatAccessTimeOffset = 72
+let Arm64LinuxStatModifyTimeOffset = 88
+let Arm64LinuxStatStatusChangeTimeOffset = 104
 
-function linuxStatLayout() returns PosixStatLayout
-	return PosixStatLayout.create(LinuxStatBytes, modeOffset: LinuxStatModeOffset, sizeOffset: LinuxStatSizeOffset, creationTimeOffset: LinuxStatStatusChangeTimeOffset, accessTimeOffset: LinuxStatAccessTimeOffset, modifyTimeOffset: LinuxStatModifyTimeOffset)
-end 'linuxStatLayout'
-
-// ==========================================================================
-// The search object
-// ==========================================================================
-
-// ⭐⭐ **ONE `mmap`'d PAGE HOLDS THE WHOLE SEARCH, AND THAT IS THE ANSWER TO HAVING NO `malloc`.** Win32's
-// `HANDLE` carries the open directory and the pattern still to be matched; Darwin pairs an `opendir` handle
-// with a duplicated pattern in a 16-byte allocation. This lane has neither call, so one page carries all four
-// things a walk needs — and one `munmap` releases all four.
-//
-// ⚠ **A NEGATIVE `dirfd` IS THE EXHAUSTED SINGLE-`stat` SEARCH, NOT AN ERROR.** A pattern with no wildcard is
-// answered by one `stat` and has exactly one entry, which `FindFirstFileA` has already reported — so the
-// object it hands back has no directory to walk and the first `FindNextFileA` must report end-of-iteration
-// rather than call `getdents64(-1)`. Darwin spells the same fact as a NULL `DIR*`; here 0 is a legal
-// descriptor, so the sentinel is -1.
-//
-// ⚠ **`MAP_ANON` PAGES ARE KERNEL-ZEROED**, which is why only `dirfd` is written at birth: the cursor, the
-// filled count and the pattern's first byte are already 0 by the mapping's own contract (the one
-// `PosixMmap`'s header states for the slab).
-let LinuxSearchDirFdOffset = 0x00 as MachineWord
-let LinuxSearchCursorOffset = 0x08 as MachineWord
-let LinuxSearchFilledOffset = 0x10 as MachineWord
-let LinuxSearchPatternOffset = 0x18 as MachineWord
-let LinuxSearchPrefixOffset = 0x200 as MachineWord
-let LinuxSearchEntriesOffset = 0x400 as MachineWord
-let LinuxSearchBytes = 0x1000
-
-// What the two variable-length regions may hold. The pattern and the directory prefix are each bounded by
-// `MAX_PATH`, which is the bound the whole surface is written to (`cFileName` is `char[MAX_PATH]`), and both
-// bounds are CHECKED against the region they sit in rather than trusted.
-let LinuxSearchEntriesBytes = LinuxSearchBytes - (LinuxSearchEntriesOffset as ParsedInt)
-
-// `struct linux_dirent64` — MEASURED against `include/linux/dirent.h`: `d_ino@0`, `d_off@8`, `d_reclen@16`
-// (u16), `d_type@18` (u8), `d_name@19`.
-//
-// ⚠ **`d_reclen` IS READ AS THE 32-BIT WORD AT 16 AND MASKED**, because this assembler has `ldr Wt` and
-// `ldrb Wt` and no halfword form. The other 16 bits of that word are `d_type` and the first byte of the name,
-// which the mask discards.
-//
-// ⚠ Only the NAME is read: `d_type` would answer "is it a directory?" one call cheaper than `fstatat`, and
-// the record needs a SIZE and three TIMESTAMPS from that call regardless, so a `d_type` fast path would be a
-// second source for one of six fields — `Arm64DarwinRuntime` makes the same argument about `readdir`'s.
-let LinuxDirentRecordLengthOffset = 16 as MachineWord
-let LinuxDirentNameOffset = 19
-let LinuxDirentRecordLengthMask = 0xFFFF
+function arm64LinuxStatLayout() returns PosixStatLayout
+	return PosixStatLayout.create(Arm64LinuxStatBytes, modeOffset: Arm64LinuxStatModeOffset, sizeOffset: Arm64LinuxStatSizeOffset, creationTimeOffset: Arm64LinuxStatStatusChangeTimeOffset, accessTimeOffset: Arm64LinuxStatAccessTimeOffset, modifyTimeOffset: Arm64LinuxStatModifyTimeOffset)
+end 'arm64LinuxStatLayout'
 
 // ==========================================================================
-// The lane-private chunk symbols
+// L3 — the `timespec` this assembler's clock chunks read into
 // ==========================================================================
 
-// ⚠ These two have NO counterpart on the Darwin lane — one exists because there is no `fnmatch` and the other
-// because there is no `malloc` — so they wear the lane infix rather than the shared `mrt_host_` prefix
-// (`Arm64PosixRuntime`'s header states that rule).
-let LinuxGlobMatchName = b"mrt_linux_glob_match"
-let LinuxDirPrefixName = b"mrt_linux_dir_prefix"
-
-// ==========================================================================
-// L3 — the clock ids, the `timespec`, and the two constants the other chunks need
-// ==========================================================================
-
-// ⭐⭐ **LINUX'S `clockid_t` VALUES, WHICH ARE NOT DARWIN'S AND FAIL SILENTLY IF CONFUSED.**
-// `CLOCK_REALTIME` is 0 on both, by coincidence rather than by standard; `CLOCK_THREAD_CPUTIME_ID` is **3**
-// here and **16** there. A wrong id does not fail — it reads a DIFFERENT CLOCK and answers a plausible wrong
-// time, which is the failure mode `Arm64DarwinRuntime`'s own clock-id block names. Both were MEASURED on an
-// aarch64 guest: id 0 answered a 2026 calendar time, id 3 answered a few tens of milliseconds in a
-// freshly-started process.
-let LinuxClockRealtime = 0
-let LinuxClockThreadCpuTime = 3
+// The clock IDS are `Targets/Shared/LinuxRuntime`'s: no architecture overrides them, so they are one fact
+// for both Linux lanes.
 
 // `struct timespec` — `tv_sec` then `tv_nsec`, two 64-bit words on AArch64, which is exactly two of this
 // assembler's 8-byte frame slots side by side. So `&slot` IS a `struct timespec *`, the same identity
@@ -583,38 +486,6 @@ let LinuxClockThreadCpuTime = 3
 // outside the frame it opened.
 let LinuxTimespecSecSlot = 1 as StackSize
 let LinuxTimespecNsecSlot = 2 as StackSize
-let LinuxTimespecSlots = 2 as StackSize
-
-// The symlink whose target IS the running image's path. ⚠ It is a Linux-only fact and there is no libc call
-// behind it: `_NSGetExecutablePath` has no counterpart here, so the path is READ rather than asked for.
-let LinuxProcSelfExe = b"/proc/self/exe"
-
-// ⭐⭐ **`cpu_set_t` IS 128 BYTES, AND `sched_getaffinity` REFUSES A SMALLER ONE.** The kernel demands a size
-// that is a multiple of a word AND large enough for every possible CPU, answering `-EINVAL` otherwise; 128
-// bytes is glibc's `cpu_set_t` and covers 1024 CPUs, which is the size every caller of this syscall passes.
-// It answers the number of BYTES it filled, not a count of CPUs — the count is a POPCOUNT over those bytes.
-//
-// ⚠ The buffer is zeroed before the call so the popcount may sweep the WHOLE 128 bytes rather than only the
-// prefix the kernel wrote. Sweeping a fixed extent is one loop with one bound; sweeping the returned prefix
-// is the same loop plus a rounding of a byte count up to a word, and the two can disagree.
-let LinuxCpuSetBytes = 128
-
-// How many 8-byte frame slots that mask occupies — DERIVED from the size above, and a function rather than a
-// `let` for `posixNanosPerFileTimeTick`'s language reason: a global initializer folds `/` as a float.
-// `posixStatSlotCount` is the same shape one file over, for the same reason.
-function linuxCpuSetWords() returns StackSize
-	return (LinuxCpuSetBytes / (SpillSlotBytes as ParsedInt)) as StackSize
-end 'linuxCpuSetWords'
-
-// What a failed `sched_getaffinity` answers, in the vocabulary the Std tier ALREADY reads.
-// `CpuParallelRuntime.buildCpuCount` clamps `< 1` to 1 with a SIGNED test written to cover both Windows's 0
-// and `sysconf`'s -1, so this lane reports its own failure as that same -1 rather than inventing a floor
-// here — which would be one contract in two places (`lowerOsCpuCount` states the rule).
-let LinuxCpuCountUnavailable = 0xFFFFFFFFFFFFFFFF
-
-// `sched_getaffinity`'s `pid` argument. 0 means the CALLING thread, which is the only process this chunk may
-// ask about — and is why the syscall needs no `getpid` ahead of it.
-let LinuxAffinityWhoIsSelf = 0
 
 // ==========================================================================
 // Shared emit fragments
@@ -897,7 +768,7 @@ end 'buildArm64LinuxExePathChunk'
 // already reads — see `lowerOsCpuCount` for why the clamp must stay in exactly one place.
 function buildArm64LinuxCpuCountChunk() returns FunctionCodeChunk
 	let SlotMask = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(linuxCpuSetWords())
+	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxCpuSetBytes))
 
 	let count = asm.newLabel()
 	let wordStep = asm.newLabel()
@@ -905,7 +776,7 @@ function buildArm64LinuxCpuCountChunk() returns FunctionCodeChunk
 	let nextWord = asm.newLabel()
 	let finish = asm.newLabel()
 
-	arm64EmitZeroSlots(asm, firstSlot: SlotMask, slotCount: linuxCpuSetWords())
+	arm64EmitZeroSlots(asm, firstSlot: SlotMask, slotCount: runtimeFrameSlots(LinuxCpuSetBytes))
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxAffinityWhoIsSelf)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxCpuSetBytes as MachineWord)
@@ -921,7 +792,7 @@ function buildArm64LinuxCpuCountChunk() returns FunctionCodeChunk
 	asm.placeLabel(count)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotMask)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: linuxCpuSetWords())
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: runtimeFrameSlots(LinuxCpuSetBytes))
 
 	asm.placeLabel(wordStep)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x2, label: finish)
@@ -1043,7 +914,7 @@ end 'buildArm64LinuxTransferChunk'
 function buildArm64LinuxFileSizeChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
 	let SlotStat = 1 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1 + posixStatSlotCount(linuxStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let measured = asm.newLabel()
 	let answered = asm.newLabel()
@@ -1060,7 +931,7 @@ function buildArm64LinuxFileSizeChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(measured)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: LinuxStatSizeOffset)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: Arm64LinuxStatSizeOffset)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
@@ -1094,10 +965,6 @@ function buildArm64LinuxPathOpChunk(name ByteArray, syscallNumber MachineWord, t
 	return asm.finishFunction(name)
 end 'buildArm64LinuxPathOpChunk'
 
-// `unlinkat`'s flag word: 0 means "remove a FILE". (`AT_REMOVEDIR` is what would make it an `rmdir`, and this
-// op is `DeleteFileA`, which refuses a directory.)
-let LinuxUnlinkFileFlags = 0
-
 // ==========================================================================
 // mrt_host_file_rename(x0 = oldPathPtr, x1 = newPathPtr) -> x0 = BOOL
 // ==========================================================================
@@ -1122,7 +989,7 @@ function buildArm64LinuxFileRenameChunk() returns FunctionCodeChunk
 	let SlotNewPath = 0 as StackSize
 	let SlotDirFd = 1 as StackSize
 	let SlotPrefix = 2 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(2 + linuxPathBufferSlots())
+	var asm = Arm64RuntimeAsm.beginFunction(2 + runtimeFrameSlots(MaxPathBytes))
 
 	let renamed = asm.newLabel()
 	let released = asm.newLabel()
@@ -1167,12 +1034,6 @@ function buildArm64LinuxFileRenameChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostFileRenameName)
 end 'buildArm64LinuxFileRenameChunk'
 
-// How many 8-byte frame slots a `MAX_PATH` buffer occupies, rounded up. Derived rather than written out, for
-// `posixStatSlotCount`'s reason.
-function linuxPathBufferSlots() returns StackSize
-	return ((MaxPathBytes + SpillSlotBytes - 1) / SpillSlotBytes) as StackSize
-end 'linuxPathBufferSlots'
-
 // ==========================================================================
 // mrt_host_file_attributes(x0 = pathPtr) -> x0 = dwFileAttributes
 // ==========================================================================
@@ -1182,7 +1043,7 @@ end 'linuxPathBufferSlots'
 // publishes derived from ONE reading of `st_mode`.
 function buildArm64LinuxFileAttributesChunk() returns FunctionCodeChunk
 	let SlotStat = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(posixStatSlotCount(linuxStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let described = asm.newLabel()
 	let answered = asm.newLabel()
@@ -1458,7 +1319,7 @@ function buildArm64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	let SlotFindData = 1 as StackSize
 	let SlotName = 2 as StackSize
 	let SlotStat = 3 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(3 + posixStatSlotCount(linuxStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(3 + runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let nextEntry = asm.newLabel()
 	let haveEntry = asm.newLabel()
@@ -1471,18 +1332,18 @@ function buildArm64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	asm.placeLabel(nextEntry)
 	arm64LinuxEmitPublishErrno(asm, value: PosixErrnoCleared)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x11, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x11, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x11, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: exhausted)
 
 	// Is there an entry left in the buffer? Cursor and filled are both byte counts into the entries region.
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x13, base: Arm64Register.x10, byteOffset: LinuxSearchFilledOffset)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset as MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x13, base: Arm64Register.x10, byteOffset: LinuxSearchFilledOffset as MachineWord)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x12, rhs: Arm64Register.x13)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: haveEntry)
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x11)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchEntriesOffset as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchEntriesOffset)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxSearchEntriesBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetdents64)
 	arm64LinuxEmitStashIfFailed(asm)
@@ -1490,34 +1351,34 @@ function buildArm64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: exhausted)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x10, byteOffset: LinuxSearchFilledOffset)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x10, byteOffset: LinuxSearchFilledOffset as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x12, value: 0)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset as MachineWord)
 
 	// `entry = search + entriesOffset + cursor`, and the cursor steps by the entry's own `d_reclen`.
 	asm.placeLabel(haveEntry)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x14, base: Arm64Register.x10, imm: LinuxSearchEntriesOffset as Imm32)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset as MachineWord)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x14, base: Arm64Register.x10, imm: LinuxSearchEntriesOffset)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x14, lhs: Arm64Register.x14, rhs: Arm64Register.x12)
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x13, base: Arm64Register.x14, byteOffset: LinuxDirentRecordLengthOffset)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: LinuxDirentRecordLengthMask)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x13, base: Arm64Register.x14, byteOffset: LinuxDirentRecordLengthOffset as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x15, value: LinuxDirentRecordLengthMask as MachineWord)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x13, lhs: Arm64Register.x13, rhs: Arm64Register.x15)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x12, lhs: Arm64Register.x12, rhs: Arm64Register.x13)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x14, base: Arm64Register.x14, imm: LinuxDirentNameOffset as Imm32)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x12, base: Arm64Register.x10, byteOffset: LinuxSearchCursorOffset as MachineWord)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x14, base: Arm64Register.x14, imm: LinuxDirentNameOffset)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x14, slot: SlotName)
 
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x10, imm: LinuxSearchPatternOffset as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x10, imm: LinuxSearchPatternOffset)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x14)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxGlobMatchName)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: nextEntry)
 
 	// Describe it, RELATIVE to the open directory — which is why this walk never builds a path and never owns
 	// a path buffer.
-	arm64EmitZeroSlots(asm, firstSlot: SlotStat, slotCount: posixStatSlotCount(linuxStatLayout()))
+	arm64EmitZeroSlots(asm, firstSlot: SlotStat, slotCount: runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x11, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x11, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x14, slot: SlotName)
 	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x11, pathReg: Arm64Register.x14, statSlot: SlotStat)
 
@@ -1561,7 +1422,7 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	let SlotGlob = 2 as StackSize
 	let SlotSearch = 3 as StackSize
 	let SlotStat = 4 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(4 + posixStatSlotCount(linuxStatLayout()))
+	var asm = Arm64RuntimeAsm.beginFunction(4 + runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let walk = asm.newLabel()
 	let matched = asm.newLabel()
@@ -1603,13 +1464,13 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPattern)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchPrefixOffset as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchPrefixOffset)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxDirPrefixName)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: nameTooLong)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchPrefixOffset as Imm32)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxOpenDirectoryFlags)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchPrefixOffset)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: Arm64LinuxOpenDirectoryFlags)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
@@ -1617,9 +1478,9 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: releaseAndRefuse)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotGlob)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x10, imm: LinuxSearchPatternOffset as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x10, imm: LinuxSearchPatternOffset)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixPathStringCapacity as MachineWord)
 	arm64EmitCopyCStringBounded(asm, src: Arm64Register.x1, dest: Arm64Register.x2, limit: Arm64Register.x3, scratch: Arm64Register.x4)
 
@@ -1686,16 +1547,10 @@ function arm64LinuxEmitAllocateSearch(asm Arm64RuntimeAsm, searchSlot StackSize)
 	asm.placeLabel(mapped)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: searchSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: LinuxNoDirectory)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x0, byteOffset: LinuxSearchDirFdOffset)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x0, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 
 	asm.placeLabel(recorded)
 end 'arm64LinuxEmitAllocateSearch'
-
-// The `dirfd` of a search that has no directory to walk — see the search-object header. DERIVED from the
-// handle sentinel rather than re-spelled, because both mean "there is nothing here" and the tests that read
-// them are in different files: this one is a signed `< 0` inside the chunks, `InvalidHandleValue` is an
-// `== -1` in the Std tier. Two literals could drift into a value only one of those two tests recognises.
-let LinuxNoDirectory = PosixInvalidHandle
 
 // ==========================================================================
 // mrt_host_dir_find_close(x0 = search)
@@ -1715,7 +1570,7 @@ function buildArm64LinuxDirFindCloseChunk() returns FunctionCodeChunk
 	let unmap = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: LinuxSearchDirFdOffset)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unmap)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
@@ -2657,6 +2512,30 @@ end 'buildArm64LinuxTlsSetChunk'
 let LinuxTlsKeyScaleBits = 3 as ShiftCount
 
 // ==========================================================================
+// mrt_host_handle_file_type(x0 = fd) -> x0 = the GetFileType word
+// ==========================================================================
+
+// `GetFileType` on a lane whose descriptors carry no such enumeration, and whose image links no libc to ask
+// `isatty` with. `ioctl(fd, TCGETS, &termios)` IS what `isatty` is made of: it succeeds exactly on a
+// terminal, and the kernel's status becomes the two words the caller compares against
+// (`Arm64PosixRuntime.arm64EmitFileTypeFromStatus`).
+//
+// ⚠ **THE FRAME EXISTS BECAUSE THE KERNEL WRITES THROUGH THE POINTER.** 36 bytes of `struct termios` are
+// filled and every one of them is discarded — only the STATUS is the answer — but the buffer must be real
+// memory the call may scribble on, which is what a chunk has and an inline `svc` does not.
+function buildArm64LinuxHandleFileTypeChunk() returns FunctionCodeChunk
+	let SlotTermios = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxTermiosBytes))
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxIoctlTcGets as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotTermios)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallIoctl)
+	arm64EmitFileTypeFromStatus(asm, terminalWhen: Arm64CondCode.eq)
+
+	return asm.finishFunction(HostHandleFileTypeName)
+end 'buildArm64LinuxHandleFileTypeChunk'
+
+// ==========================================================================
 // mrt_host_env_read(x0 = namePtr, x1 = bufPtr, x2 = bufLen) -> x0 = bytes written
 // ==========================================================================
 
@@ -2734,9 +2613,6 @@ function buildArm64LinuxEnvReadChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotWritten)
 	return asm.finishFunction(HostEnvReadName)
 end 'buildArm64LinuxEnvReadChunk'
-
-// `'='` — what separates a name from its value in every `envp` entry.
-let LinuxEnvSeparatorByte = 0x3D
 
 // ==========================================================================
 // L5 — mrt_host_spawn(x0 = argv, x1 = cwd, x2 = creationFlags, x3 = startupInfo, x4 = processInformation,
@@ -2846,7 +2722,7 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x4, slot: SlotStatusFds)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x4, byteOffset: 0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatusRead)
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x4, byteOffset: LinuxPipeWriteEndOffset)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x4, byteOffset: PosixPipeWriteEndOffset)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWrite)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxCloneExitSignalChild)
@@ -2878,7 +2754,7 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStatusFds)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxReapUntilItExits)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxReapDiscardsRusage)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallWait4)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWord)
 	arm64EmitBranchTo(asm, label: spawnFailed)
@@ -3023,11 +2899,10 @@ let LinuxCloneNoParentTidOut = 0
 let LinuxCloneNoThreadPointer = 0
 let LinuxCloneNoChildTidOut = 0
 
-// `wait4`'s two arguments beyond the pid and the status: no options (block until it exits) and no `rusage`.
-// The reap of a child whose exec failed is the one place this file waits without `WNOHANG`, and it cannot
-// hang — the child has already written the pipe and called `exit`.
+// `wait4`'s options word. The reap of a child whose exec failed is the one place this file waits without
+// `WNOHANG`, and it cannot hang — the child has already written the pipe and called `exit`. The `rusage`
+// argument beside it is `Arm64PosixRuntime.PosixReapDiscardsRusage`.
 let LinuxReapUntilItExits = 0
-let LinuxReapDiscardsRusage = 0
 
 // `dup3`'s flag word. 0 leaves the new descriptor WITHOUT close-on-exec, which is the point: these three are
 // the only descriptors that must survive the exec.
@@ -3037,17 +2912,10 @@ let LinuxDup3NoFlags = 0
 // to invert the inheritance default for the whole exec — see `Arm64PosixRuntime.buildArm64PosixPipeChunk`.
 let LinuxOpenCloseOnExec = 0o2000000
 
-// `int fds[2]` from `pipe2` — the WRITE end is the second `int`.
-let LinuxPipeWriteEndOffset = 4
-
 // What a child that could not `execve` exits with — the shell's own "command found but could not be run",
 // and what `execvp` failing inside `system()` reports. The parent does not read it: the status pipe carries
 // the real reason, and this is what a program that never asked would see.
 let LinuxExecFailedExitCode = 127
-
-// `sizeof(sigset_t)` — `ppoll`'s last argument, which the kernel checks even when the mask itself is NULL.
-// MEASURED: 8 on aarch64 Linux (64 signals, one bit each).
-let LinuxSigsetBytes = 8
 
 // ==========================================================================
 // Assembly
@@ -3102,6 +2970,18 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxCpuCountChunk())
 	end 'cpuCount'
 
+	// The terminal test, on `installTerminalRuntime`'s own bit — the detecting body it builds under exactly
+	// this condition is the only producer of `osHandleFileType`.
+	if usage.usesTerminalDetection 'terminalDetection'
+		chunks.push(buildArm64LinuxHandleFileTypeChunk())
+	end 'terminalDetection'
+
+	// The environment read rides the UNION of `osEnvRead`'s two producers rather than the scheduler's bit
+	// (`posixReadsEnvironment`), because a terminal-detecting program need not have a scheduler.
+	if posixReadsEnvironment(usage) 'envRead'
+		chunks.push(buildArm64LinuxEnvReadChunk())
+	end 'envRead'
+
 	// ⭐ **L4 — THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated
 	// on, so every body that can `bl` one of these is built under exactly the same condition — one bit, two
 	// tiers, which is what makes a `bl` into an absent chunk unreachable rather than merely unlikely. They are
@@ -3121,7 +3001,6 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxThreadCreateChunk(globalData))
 		chunks.push(buildArm64LinuxTlsAllocChunk(globalData))
 		chunks.push(buildArm64LinuxTlsSetChunk(globalData))
-		chunks.push(buildArm64LinuxEnvReadChunk())
 		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
 		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, an
 		// exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that never runs
@@ -3155,7 +3034,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	if usesFilesystem 'filesystem'
 		chunks.push(buildArm64PosixBaseNameChunk())
 		chunks.push(buildArm64PosixHasWildcardChunk())
-		chunks.push(buildArm64PosixFillFindDataChunk(linuxStatLayout()))
+		chunks.push(buildArm64PosixFillFindDataChunk(arm64LinuxStatLayout()))
 		chunks.push(buildArm64LinuxGlobMatchChunk())
 		chunks.push(buildArm64LinuxDirPrefixChunk())
 		chunks.push(buildArm64LinuxDirFindFirstChunk())
@@ -3201,7 +3080,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// `mrt_host_file_attributes` (below), so its gate is the union of theirs — which is what lifted it out of
 	// the cluster it used to sit inside.
 	if usesFilesystem or usage.usesIocp 'attrsFromMode'
-		chunks.push(buildArm64PosixAttrsFromModeChunk(linuxStatLayout()))
+		chunks.push(buildArm64PosixAttrsFromModeChunk(arm64LinuxStatLayout()))
 	end 'attrsFromMode'
 
 	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AS OF L5, AND IT IS NOT A DIRECTORY OP.**
@@ -3211,31 +3090,3 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxFileAttributesChunk())
 	end 'fileAttributes'
 end 'appendArm64LinuxRuntimeChunks'
-
-// ⭐ **THE SEARCH PAGE'S THREE REGIONS MUST EACH HOLD WHAT IS WRITTEN INTO THEM, AND NOTHING ELSE CHECKS.**
-// The pattern copy and the directory prefix are bounded by `PosixPathStringCapacity` at their copy sites, and
-// the walk hands `getdents64` the whole tail — so the OFFSETS and the bounds are a pair, in different
-// functions, with a byte-for-byte overrun of a mapped page as the failure. Checked here rather than
-// commented, which is this project's cure ladder: an offset moved without its neighbour fails the build.
-function assertLinuxSearchGeometry()
-	let patternBytes = (LinuxSearchPrefixOffset - LinuxSearchPatternOffset) as ParsedInt
-	if patternBytes < MaxPathBytes 'patternRegion'
-		panic("Arm64LinuxRuntime: the search object's pattern region is {patternBytes} bytes and a pattern copy writes up to {MaxPathBytes} (`PosixPathStringCapacity` plus its terminator) — it would run into the directory-prefix scratch above it")
-	end 'patternRegion'
-
-	let prefixBytes = (LinuxSearchEntriesOffset - LinuxSearchPrefixOffset) as ParsedInt
-	if prefixBytes < MaxPathBytes 'prefixRegion'
-		panic("Arm64LinuxRuntime: the search object's directory-prefix scratch is {prefixBytes} bytes and `mrt_linux_dir_prefix` writes up to {MaxPathBytes} — it would run into the `getdents64` buffer above it")
-	end 'prefixRegion'
-
-	if LinuxSearchEntriesBytes < LinuxSearchMinimumEntriesBytes 'entriesRegion'
-		panic("Arm64LinuxRuntime: the `getdents64` buffer is {LinuxSearchEntriesBytes} bytes, which cannot hold one worst-case `struct linux_dirent64` ({LinuxSearchMinimumEntriesBytes}) — the kernel would answer EINVAL for every refill")
-	end 'entriesRegion'
-end 'assertLinuxSearchGeometry'
-
-// A FLOOR for one `struct linux_dirent64` at its longest: the fixed header, a name at the filesystem maximum,
-// and one machine word covering the terminator and the 8-byte alignment `d_reclen` is rounded up to. It is
-// deliberately a bound rather than the exact rounded size — this is the threshold of a check, not the size of
-// an allocation, and a bound that is a few bytes generous cannot be wrong in the direction that matters.
-let LinuxDirentMaxNameBytes = 255
-let LinuxSearchMinimumEntriesBytes = LinuxDirentNameOffset + LinuxDirentMaxNameBytes + SpillSlotBytes

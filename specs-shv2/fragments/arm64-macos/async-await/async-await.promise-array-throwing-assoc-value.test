@@ -60,9 +60,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @work {
@@ -79,9 +80,7 @@ func @work {
     arm64.movRegReg x0, x20
     arm64.bl __destruct_FilePath
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, neg
-    arm64.b ifcont
+    arm64.b.ge ifcont
   neg:
     arm64.leaRdata x19, __str_rec_19  ; "negative input"
     arm64.movImm x0, 16
@@ -157,18 +156,14 @@ func @main {
     arm64.bl __managed_push
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -176,20 +171,14 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x22, 0
     arm64.movRegReg x0, x9
     arm64.bl __destruct_WorkError
     arm64.movRegReg x0, x22
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.add x20, x20, x0
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr
@@ -197,14 +186,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_88  ; "panic at async-await.promise-array-throwing-assoc-value.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

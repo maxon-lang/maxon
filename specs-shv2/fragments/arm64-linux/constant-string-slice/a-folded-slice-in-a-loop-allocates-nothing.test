@@ -48,27 +48,20 @@ func @main {
     arm64.add x19, x19, x0
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x21, 500
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.leaRdata x0, __str_rec_5  ; "hello"
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __il_slow:
     arm64.bl String.byteLength
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x0, x1
-    arm64.b __il_cont
   __il_cont:
     arm64.add x20, x20, x0
     arm64.add x21, x21, 1

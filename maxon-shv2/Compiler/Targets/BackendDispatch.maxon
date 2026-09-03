@@ -160,8 +160,8 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// A block whose only op is a `jmp` is genuinely empty only once SSA destruction has placed (or
 	// declined to place) its edge copies; before that it is an edge about to receive moves. The frame
 	// pass then sees the surviving blocks, so a callee-saved register or a `call` reachable only from
-	// dead code stops being paid for. See `X64BranchCleanup`'s header.
-	cleanUpX64Branches(targetModule, project: project)
+	// dead code stops being paid for. See `BranchCleanup`'s header.
+	cleanUpBranches(targetModule, project: project)
 
 	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
 	insertPrologueEpilogue(targetModule, target: target)
@@ -171,7 +171,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
 	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
 	// never installed does not link.
-	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, debugStream: stdModule.debugStream, entryFunction: project.entryFunctionName)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: posixReadsEnvironment(usage), debugStream: stdModule.debugStream, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -195,6 +195,14 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		windows to linux then appendX64RuntimeChunks(chunks, target: target)
 		macos to wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
+	// The x64-LINUX host surface — the `mrt_host_*` file, directory and standard-input bodies, which are
+	// raw `syscall` sequences with no TargetOp spelling for the same reason the panic runtime above has
+	// none. Each rides the `RuntimeUsage` bit its Std-tier installer was gated on, so the list is empty for
+	// a program that touches no file. Windows has no counterpart: every one of those primitives is a Win32
+	// import the isel emits inline.
+	if target.os == Os.linux 'linuxHostSurface'
+		appendX64LinuxHostSurfaceChunks(chunks, usage: usage)
+	end 'linuxHostSurface'
 	// The three hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`,
 	// `__gt_morestack`) and, under `usesIocp`, the IOCP completion-drain loop are part of the GT
 	// runtime's INSTALLATION, so they ride the same bits `installGtRuntime` was gated on rather than a
@@ -296,13 +304,13 @@ end 'refuseDuplicateChunkName'
 // `entryFunction` is `Project.entryFunctionName` — the ONE place this build's entry is written down. The
 // stub calls whatever it names, so a build that enters somewhere other than `main` needs no arm of its own
 // here; see that field.
-function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, entryFunction ByteArray)
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, entryFunction ByteArray)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, entryFunction: entryFunction)
 		// ⛔ The Linux stub takes no `debugStream`: the producer's three host primitives are x64-windows
 		// only and `--debugstream` is REFUSED at the command line on every other target (see
 		// `Main.debugStreamSupports`), so this arm can never be reached with the flag on.
-		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, entryFunction: entryFunction)
+		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, entryFunction: entryFunction)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
 	end 'os'
@@ -457,6 +465,7 @@ end 'appendExitCodePassThroughCall'
 // asserts the stub leads `.text`). The Linux twin of `prependEntryStub`, and CARRYING NO FRAME, for
 // reasons that all point the same way:
 //
+//   [argv capture]      argc from [rsp] and the vector from rsp+8 into their two .data words
 //   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
 //   [call __module_init]  fill every EAGER managed global's .data slot (P1.7 slice 2a)
 //   call main            main returns its ExitCode in R8 (custom ABI)
@@ -477,7 +486,7 @@ end 'appendExitCodePassThroughCall'
 // shadow space to reserve (raw syscalls carry no imports, and shv2 functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
-function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, entryFunction ByteArray)
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -485,6 +494,8 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	// stub calls `mrt_runtime_init` first. `RuntimeInitName` resolves to the LINUX init
 	// `appendX64LinuxRuntimeChunks` appended; it runs from the kernel's 16-aligned entry and returns with
 	// rsp restored, so the following `call main` still lands main at rsp≡8 (mod 16).
+	appendLinuxArgvCapture(module, block: block, captureArgv: captureArgv)
+	appendLinuxEnvpCapture(module, block: block, captureEnvp: captureEnvp)
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(entryFunction))
@@ -501,6 +512,59 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 
 	prependFunction(module, func: func)
 end 'prependLinuxEntryStub'
+
+// ⭐⭐ **THE LINUX KERNEL PUTS THE ARGUMENT VECTOR ON THE STACK, AND THIS IS THE ONLY MOMENT IT IS
+// REACHABLE.** `execve` enters `mrt_start` with **argc at `[rsp]` and the vector itself at `rsp+8`** (the
+// pointers, NUL-terminated, with envp following) and with every GPR but rsp architecturally UNSPECIFIED.
+// The Std graph `CommandLineRuntime` builds for this lane reads those two `.data` words
+// (`CommandLineShape.argumentVector`), so all that is missing is who fills them — and only the frameless
+// stub, before any `call` has moved rsp, still knows where they are.
+//
+// ⚠ **argc IS A LOAD AND argv IS AN `lea`**: `[rsp]` holds the COUNT, while `rsp+8` IS the vector rather
+// than a word pointing at one.
+//
+// ⚠ It rides `RuntimeUsage.usesCommandLine` because the two `.data` slots exist only when that bit is set
+// (`commandLineRuntimeGlobals`), so an unconditional capture would relocate against absent labels.
+function appendLinuxArgvCapture(module TargetModule, block IrBlock, captureArgv bool)
+	if not captureArgv 'noArgv'
+		return
+	end 'noArgv'
+
+	let argc = x64PhysReg(X64Register.rax)
+	let argv = x64PhysReg(X64Register.rcx)
+	let slot = x64PhysReg(X64Register.rdx)
+
+	module.appendOp(block, op: TargetOp.loadRegBaseDisp(argc, base: x64PhysReg(X64Register.rsp), disp: 0, width: X64AccessWidth.word64))
+	module.appendOp(block, op: TargetOp.leaRegRegImm32(argv, base: x64PhysReg(X64Register.rsp), disp: LinuxEntryArgvOffset))
+	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: CommandLineArgcLabel))
+	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: argc, width: X64AccessWidth.word64))
+	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: CommandLineArgvLabel))
+	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: argv, width: X64AccessWidth.word64))
+end 'appendLinuxArgvCapture'
+
+// ⭐⭐ **THE ENVIRONMENT VECTOR, WHICH IS REACHABLE ONLY HERE AND ONLY BY ARITHMETIC.** `envp` follows argv's
+// NUL terminator, so its base is `rsp + (argc + 2) * 8` — the count's own slot plus that terminator — and
+// nothing later in the process can recover it: a static image has no `environ` and no `getenv`.
+// `mrt_host_env_read` reads the word back out (`X64LinuxRuntime.buildX64LinuxEnvReadChunk`).
+//
+// ⚠ **IT IS INDEPENDENT OF THE argv CAPTURE ABOVE, DELIBERATELY.** The two ride different bits — a
+// terminal-detecting program that never asks for its arguments carries this and not that — so it re-reads
+// `rsp` rather than depending on a register the other left behind.
+function appendLinuxEnvpCapture(module TargetModule, block IrBlock, captureEnvp bool)
+	if not captureEnvp 'noEnvp'
+		return
+	end 'noEnvp'
+
+	let envp = x64PhysReg(X64Register.rax)
+	let slot = x64PhysReg(X64Register.rdx)
+
+	module.appendOp(block, op: TargetOp.loadRegBaseDisp(envp, base: x64PhysReg(X64Register.rsp), disp: 0, width: X64AccessWidth.word64))
+	module.appendOp(block, op: TargetOp.leaRegRegImm32(envp, base: envp, disp: LinuxEntryEnvpSkippedWords))
+	// The scale is the machine word, because what is being indexed is a vector of POINTERS.
+	module.appendOp(block, op: TargetOp.leaRegBaseIndexScale(envp, base: x64PhysReg(X64Register.rsp), index: envp, scale: MemoryIndexScale.byEight))
+	module.appendOp(block, op: TargetOp.leaRegGlobal(slot, label: LinuxEnvpLabel))
+	module.appendOp(block, op: TargetOp.storeBaseDispReg(slot, disp: 0, src: envp, width: X64AccessWidth.word64))
+end 'appendLinuxEnvpCapture'
 
 // Move `func` to the front of the module's function list so it lays out first in
 // `.text`. Block refs are flat `module.blocks` indices, so reordering the

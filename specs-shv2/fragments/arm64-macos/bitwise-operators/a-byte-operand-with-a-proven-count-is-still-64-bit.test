@@ -42,14 +42,10 @@ func @shlLowByte {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 63
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-byte-operand-with-a-proven-count-is-still-64-bit.test:6: Range check failed: value outside typealias 'Bits'\x0a"
     arm64.bl mrt_panic
@@ -67,14 +63,10 @@ func @shlTopByte {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 63
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-byte-operand-with-a-proven-count-is-still-64-bit.test:11: Range check failed: value outside typealias 'Bits'\x0a"
     arm64.bl mrt_panic
@@ -92,14 +84,10 @@ func @shrLowByte {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 63
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-byte-operand-with-a-proven-count-is-still-64-bit.test:16: Range check failed: value outside typealias 'Bits'\x0a"
     arm64.bl mrt_panic
@@ -116,118 +104,71 @@ func @shrLowByte {
 func @main {
   entry:
     arm64.prologue 16
-    arm64.b __il_body#9
-  __il_body#9:
-    arm64.b __rc_chk#11
-  __rc_chk#11:
-    arm64.b __rc_ok#10
   __rc_ok#10:
     arm64.movImm x0, 10
-    arm64.b __il_cont#8
-  __il_cont#8:
-    arm64.b __il_body#13
   __il_body#13:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#16
-    arm64.b __rc_chk#15
+    arm64.b.lt __il_slow#16
   __rc_chk#15:
     arm64.cmp x0, 63
-    arm64.cset x1, gt
-    arm64.cbnz x1, __il_slow#16
-    arm64.b __rc_ok#14
+    arm64.b.le __rc_ok#14
   __il_slow#16:
     arm64.bl shlLowByte
     arm64.b __il_cont#7
   __rc_ok#14:
     arm64.movImm x1, 200
     arm64.lslv x0, x1, x0
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.cmp x0, 204800
-    arm64.cset x0, ne
-    arm64.cbnz x0, tenBits
-    arm64.b ifcont#2
+    arm64.b.eq __rc_ok#20
   tenBits:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont#2:
-    arm64.b __il_body#19
-  __il_body#19:
-    arm64.b __rc_chk#21
-  __rc_chk#21:
-    arm64.b __rc_ok#20
   __rc_ok#20:
     arm64.movImm x0, 56
-    arm64.b __il_cont#18
-  __il_cont#18:
-    arm64.b __il_body#23
   __il_body#23:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#26
-    arm64.b __rc_chk#25
+    arm64.b.lt __il_slow#26
   __rc_chk#25:
     arm64.cmp x0, 63
-    arm64.cset x1, gt
-    arm64.cbnz x1, __il_slow#26
-    arm64.b __rc_ok#24
+    arm64.b.le __rc_ok#24
   __il_slow#26:
     arm64.bl shlTopByte
     arm64.b __il_cont#17
   __rc_ok#24:
     arm64.movImm x1, 255
     arm64.lslv x0, x1, x0
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.movImm x1, 18374686479671623680
     arm64.cmp x0, x1
-    arm64.cset x0, ne
-    arm64.cbnz x0, topByte
-    arm64.b ifcont#4
+    arm64.b.eq __rc_ok#30
   topByte:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont#4:
-    arm64.b __il_body#29
-  __il_body#29:
-    arm64.b __rc_chk#31
-  __rc_chk#31:
-    arm64.b __rc_ok#30
   __rc_ok#30:
     arm64.movImm x0, 3
-    arm64.b __il_cont#28
-  __il_cont#28:
-    arm64.b __il_body#33
   __il_body#33:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#36
-    arm64.b __rc_chk#35
+    arm64.b.lt __il_slow#36
   __rc_chk#35:
     arm64.cmp x0, 63
-    arm64.cset x1, gt
-    arm64.cbnz x1, __il_slow#36
-    arm64.b __rc_ok#34
+    arm64.b.le __rc_ok#34
   __il_slow#36:
     arm64.bl shrLowByte
     arm64.b __il_cont#27
   __rc_ok#34:
     arm64.movImm x1, 200
     arm64.lsrv x0, x1, x0
-    arm64.b __il_cont#27
   __il_cont#27:
     arm64.cmp x0, 25
-    arm64.cset x0, ne
-    arm64.cbnz x0, shrByte
-    arm64.b ifcont#6
+    arm64.b.eq ifcont
   shrByte:
     arm64.movImm x0, 3
     arm64.epilogue 16
     arm64.ret
-  ifcont#6:
+  ifcont:
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret

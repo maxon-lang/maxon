@@ -77,22 +77,15 @@ func @rewrap {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forjoin
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ne forexit
   each:
     arm64.leaRdata x1, __layout_ListIterator_Integer
     arm64.movRegReg x0, x21
     arm64.bl ListIterator.current
     arm64.add x19, x19, x0
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x21
     arm64.bl ListIterator.advance
@@ -101,9 +94,6 @@ func @rewrap {
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_ListIterator_Integer
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_List_Integer

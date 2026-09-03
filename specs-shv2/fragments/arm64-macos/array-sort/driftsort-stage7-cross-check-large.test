@@ -147,26 +147,20 @@ data {
 func @ascending {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -491,22 +485,17 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movImm x21, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, copy
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   copy:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.b __im_cont#24
   __im_cont#24:
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.b forstep#3
   forstep#3:
     arm64.add x21, x21, 1
     arm64.b forhdr#1
@@ -525,22 +514,17 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
     arm64.cmp x0, x1
     arm64.cset x21, eq
-    arm64.cbnz x21, check
-    arm64.b critsplit#33
+    arm64.b.ne critsplit#33
   check:
     arm64.movImm x22, 0
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
-    arm64.b forhdr#6
   forhdr#6:
     arm64.cmp x22, x23
-    arm64.cset x0, lt
-    arm64.cbnz x0, walk
-    arm64.b forexit#9
+    arm64.b.ge forexit#9
   walk:
     arm64.cmp x22, 0
     arm64.cset x24, lt
-    arm64.cbnz x24, __rc_panic#21
-    arm64.b __rc_ok#20
+    arm64.b.ge __rc_ok#20
   __rc_panic#21:
     arm64.leaRdata x0, __str_blob_118  ; "panic at driftsort-stage7-cross-check-large.test:121: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -557,9 +541,7 @@ func @main {
   __rc_ok#20:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#26
-    arm64.b __im_load#27
+    arm64.b.hs __im_slow#26
   __im_load#27:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -567,14 +549,10 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty#28
-    arm64.b critsplit#35
+    arm64.b.eq critsplit#35
   __im_empty#28:
     arm64.cmp x25, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#26
-    arm64.b critsplit#36
+    arm64.b.ne critsplit#36
   __im_slow#26:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
@@ -586,12 +564,9 @@ func @main {
     arm64.b __im_cont#25
   critsplit#35:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#25
   __im_cont#25:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#11
-    arm64.b tryok#10
+    arm64.b.eq tryok#10
   tryerr#11:
     arm64.movImm x21, 99
     arm64.movRegReg x0, x20
@@ -609,8 +584,7 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   tryok#10:
-    arm64.cbnz x24, __rc_panic#23
-    arm64.b __rc_ok#22
+    arm64.cbz x24, __rc_ok#22
   __rc_panic#23:
     arm64.leaRdata x0, __str_blob_119  ; "panic at driftsort-stage7-cross-check-large.test:122: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -627,9 +601,7 @@ func @main {
   __rc_ok#22:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#30
-    arm64.b __im_load#31
+    arm64.b.hs __im_slow#30
   __im_load#31:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -637,14 +609,10 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x20 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#32
-    arm64.b critsplit#37
+    arm64.b.eq critsplit#37
   __im_empty#32:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#30
-    arm64.b critsplit#38
+    arm64.b.ne critsplit#38
   __im_slow#30:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x22
@@ -655,12 +623,9 @@ func @main {
     arm64.b __im_cont#29
   critsplit#37:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont#29
   __im_cont#29:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#13
-    arm64.b tryok#12
+    arm64.b.eq tryok#12
   tryerr#13:
     arm64.movImm x21, 99
     arm64.movRegReg x0, x20
@@ -679,17 +644,12 @@ func @main {
     arm64.ret
   tryok#12:
     arm64.cmp x25, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, diff
-    arm64.b critsplit#34
+    arm64.b.eq critsplit#34
   diff:
     arm64.movImm x0, 0
-    arm64.b ifcont#15
+    arm64.b forstep#8
   critsplit#34:
     arm64.movRegReg x0, x21
-    arm64.b ifcont#15
-  ifcont#15:
-    arm64.b forstep#8
   forstep#8:
     arm64.add x22, x22, 1
     arm64.movRegReg x21, x0
@@ -699,10 +659,8 @@ func @main {
     arm64.b ifcont#16
   critsplit#33:
     arm64.movRegReg x0, x21
-    arm64.b ifcont#16
   ifcont#16:
-    arm64.cbnz x0, eq
-    arm64.b ifelse
+    arm64.cbz x0, ifelse
   eq:
     arm64.leaRdata x0, __str_rec_21  ; "equal\x0a"
     arm64.bl print
@@ -710,7 +668,6 @@ func @main {
   ifelse:
     arm64.leaRdata x0, __str_rec_22  ; "diverged\x0a"
     arm64.bl print
-    arm64.b ifcont#19
   ifcont#19:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x20

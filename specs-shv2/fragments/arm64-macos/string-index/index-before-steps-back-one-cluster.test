@@ -39,21 +39,16 @@ func @main {
     arm64.bl String.endIndex
     arm64.movImm x1, 0
     arm64.movRegReg x20, x0
-    arm64.b whilehdr
   whilehdr:
     arm64.storeSlotReg slot1, x1
     arm64.cmp x1, 3
-    arm64.cset x0, lt
-    arm64.cbnz x0, walkBack
-    arm64.b whileexit
+    arm64.b.ge whileexit
   walkBack:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl String.indexBefore
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movRegReg x0, x19
     arm64.bl String.startIndex
@@ -61,7 +56,6 @@ func @main {
     arm64.b trycont
   tryok:
     arm64.movRegReg x21, x0
-    arm64.b trycont
   trycont:
     arm64.storeSlotReg slot0, x21
     arm64.movRegReg x0, x20

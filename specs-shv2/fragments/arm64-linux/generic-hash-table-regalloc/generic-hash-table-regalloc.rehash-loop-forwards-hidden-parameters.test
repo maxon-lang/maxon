@@ -196,15 +196,11 @@ func @Tbl.insertAtSlot {
     arm64.movRegReg x21, x3
     arm64.movRegReg x22, x4
     arm64.cmp x22, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#10
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic#10
   __rc_chk:
     arm64.movImm x0, 4294967295
     arm64.cmp x22, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#10
-    arm64.b __rc_ok#9
+    arm64.b.le __rc_ok#9
   __rc_panic#10:
     arm64.leaRdata x0, __str_blob_13  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:36: Range check failed: value outside typealias 'HashValue'\x0a"
     arm64.bl mrt_panic
@@ -219,8 +215,7 @@ func @Tbl.insertAtSlot {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x20, 0
     arm64.cset x23, lt
-    arm64.cbnz x23, __rc_panic#13
-    arm64.b __rc_ok#12
+    arm64.b.ge __rc_ok#12
   __rc_panic#13:
     arm64.leaRdata x0, __str_blob_14  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:37: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -234,40 +229,28 @@ func @Tbl.insertAtSlot {
   __rc_ok#12:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.cmp x1, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word#22
-    arm64.b __im_stride#24
+    arm64.b.ne __im_stride#24
   __im_word#22:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#21
-    arm64.b __im_owned#25
+    arm64.b.ne __im_slow#21
   __im_owned#25:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __im_slow#21
-    arm64.b __im_bounds#26
+    arm64.b.lt __im_slow#21
   __im_bounds#26:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x20, x1
-    arm64.cset x1, hs
-    arm64.cbnz x1, __im_slow#21
-    arm64.b __im_buffer#27
+    arm64.b.hs __im_slow#21
   __im_buffer#27:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#21
-    arm64.b __im_viewed#28
+    arm64.b.eq __im_slow#21
   __im_viewed#28:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#21
-    arm64.b __im_store#29
+    arm64.b.ne __im_slow#21
   __im_store#29:
     arm64.arm64AddLsl x0, x1, x20, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -275,40 +258,28 @@ func @Tbl.insertAtSlot {
     arm64.b __im_cont#20
   __im_stride#24:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_byte#23
-    arm64.b __im_slow#21
+    arm64.b.ne __im_slow#21
   __im_byte#23:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#21
-    arm64.b __im_owned#30
+    arm64.b.ne __im_slow#21
   __im_owned#30:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __im_slow#21
-    arm64.b __im_bounds#31
+    arm64.b.lt __im_slow#21
   __im_bounds#31:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x20, x1
-    arm64.cset x1, hs
-    arm64.cbnz x1, __im_slow#21
-    arm64.b __im_buffer#32
+    arm64.b.hs __im_slow#21
   __im_buffer#32:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#21
-    arm64.b __im_viewed#33
+    arm64.b.eq __im_slow#21
   __im_viewed#33:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#21
-    arm64.b __im_store#34
+    arm64.b.ne __im_slow#21
   __im_store#34:
     arm64.add x0, x1, x20
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -318,12 +289,9 @@ func @Tbl.insertAtSlot {
     arm64.movRegReg x1, x20
     arm64.bl __managed_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#20
   __im_cont#20:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:37: k\x0a"
     arm64.bl mrt_panic
@@ -336,8 +304,7 @@ func @Tbl.insertAtSlot {
     arm64.ret
   tryok#1:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cbnz x23, __rc_panic#15
-    arm64.b __rc_ok#14
+    arm64.cbz x23, __rc_ok#14
   __rc_panic#15:
     arm64.leaRdata x0, __str_blob_15  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:38: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -351,34 +318,24 @@ func @Tbl.insertAtSlot {
   __rc_ok#14:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#36
-    arm64.b __im_owned#37
+    arm64.b.ne __im_slow#36
   __im_owned#37:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __im_slow#36
-    arm64.b __im_bounds#38
+    arm64.b.lt __im_slow#36
   __im_bounds#38:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x20, x1
-    arm64.cset x1, hs
-    arm64.cbnz x1, __im_slow#36
-    arm64.b __im_buffer#39
+    arm64.b.hs __im_slow#36
   __im_buffer#39:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#36
-    arm64.b __im_viewed#40
+    arm64.b.eq __im_slow#36
   __im_viewed#40:
     arm64.sub x2, x1, 24
     arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_slow#36
-    arm64.b __im_store#41
+    arm64.b.eq __im_store#41
   __im_slow#36:
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -389,12 +346,9 @@ func @Tbl.insertAtSlot {
     arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#35
   __im_cont#35:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_1  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:38: v\x0a"
     arm64.bl mrt_panic
@@ -408,8 +362,7 @@ func @Tbl.insertAtSlot {
   tryok#3:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.movImm x2, 1
-    arm64.cbnz x23, __rc_panic#17
-    arm64.b __rc_ok#16
+    arm64.cbz x23, __rc_ok#16
   __rc_panic#17:
     arm64.leaRdata x0, __str_blob_16  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:39: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -423,40 +376,28 @@ func @Tbl.insertAtSlot {
   __rc_ok#16:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.cmp x1, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word#44
-    arm64.b __im_stride#46
+    arm64.b.ne __im_stride#46
   __im_word#44:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#43
-    arm64.b __im_owned#47
+    arm64.b.ne __im_slow#43
   __im_owned#47:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __im_slow#43
-    arm64.b __im_bounds#48
+    arm64.b.lt __im_slow#43
   __im_bounds#48:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x20, x1
-    arm64.cset x1, hs
-    arm64.cbnz x1, __im_slow#43
-    arm64.b __im_buffer#49
+    arm64.b.hs __im_slow#43
   __im_buffer#49:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#43
-    arm64.b __im_viewed#50
+    arm64.b.eq __im_slow#43
   __im_viewed#50:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#43
-    arm64.b __im_store#51
+    arm64.b.ne __im_slow#43
   __im_store#51:
     arm64.arm64AddLsl x0, x1, x20, lsl #3
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -464,40 +405,28 @@ func @Tbl.insertAtSlot {
     arm64.b __im_cont#42
   __im_stride#46:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_byte#45
-    arm64.b __im_slow#43
+    arm64.b.ne __im_slow#43
   __im_byte#45:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#43
-    arm64.b __im_owned#52
+    arm64.b.ne __im_slow#43
   __im_owned#52:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __im_slow#43
-    arm64.b __im_bounds#53
+    arm64.b.lt __im_slow#43
   __im_bounds#53:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x20, x1
-    arm64.cset x1, hs
-    arm64.cbnz x1, __im_slow#43
-    arm64.b __im_buffer#54
+    arm64.b.hs __im_slow#43
   __im_buffer#54:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#43
-    arm64.b __im_viewed#55
+    arm64.b.eq __im_slow#43
   __im_viewed#55:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow#43
-    arm64.b __im_store#56
+    arm64.b.ne __im_slow#43
   __im_store#56:
     arm64.add x0, x1, x20
     arm64.storeBaseDispReg.byte [x0 + 0], x2
@@ -507,12 +436,9 @@ func @Tbl.insertAtSlot {
     arm64.movRegReg x1, x20
     arm64.bl __managed_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#42
   __im_cont#42:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.leaRdata x0, __str_blob_2  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:39: s\x0a"
     arm64.bl mrt_panic
@@ -525,8 +451,7 @@ func @Tbl.insertAtSlot {
     arm64.ret
   tryok#5:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
-    arm64.cbnz x23, __rc_panic#19
-    arm64.b __rc_ok#18
+    arm64.cbz x23, __rc_ok#18
   __rc_panic#19:
     arm64.leaRdata x0, __str_blob_17  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:40: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -542,9 +467,7 @@ func @Tbl.insertAtSlot {
     arm64.movRegReg x2, x22
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_blob_3  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:40: h\x0a"
     arm64.bl mrt_panic
@@ -589,14 +512,9 @@ func @Tbl.grow {
     arm64.movImm x16, 2
     arm64.mul x21, x20, x16
     arm64.cmp x21, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, handle_zero
-    arm64.b critsplit#106
+    arm64.b.ne ifcont#2
   handle_zero:
     arm64.movImm x21, 16
-    arm64.b ifcont#2
-  critsplit#106:
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
@@ -604,9 +522,7 @@ func @Tbl.grow {
     arm64.movRegReg x22, x0
     arm64.storeSlotReg slot2, x22
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#49
-    arm64.b __rc_ok#48
+    arm64.b.ge __rc_ok#48
   __rc_panic#49:
     arm64.leaRdata x0, __str_blob_18  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:52: Range check failed: value outside typealias 'ElementCount'\x0a"
     arm64.bl mrt_panic
@@ -632,9 +548,7 @@ func @Tbl.grow {
     arm64.movRegReg x23, x0
     arm64.storeSlotReg slot3, x23
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#51
-    arm64.b __rc_ok#50
+    arm64.b.ge __rc_ok#50
   __rc_panic#51:
     arm64.leaRdata x0, __str_blob_19  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:54: Range check failed: value outside typealias 'ElementCount'\x0a"
     arm64.bl mrt_panic
@@ -660,9 +574,7 @@ func @Tbl.grow {
     arm64.movRegReg x24, x0
     arm64.storeSlotReg slot4, x24
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#53
-    arm64.b __rc_ok#52
+    arm64.b.ge __rc_ok#52
   __rc_panic#53:
     arm64.leaRdata x0, __str_blob_20  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:56: Range check failed: value outside typealias 'ElementCount'\x0a"
     arm64.bl mrt_panic
@@ -688,9 +600,7 @@ func @Tbl.grow {
     arm64.movRegReg x25, x0
     arm64.storeSlotReg slot5, x25
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#55
-    arm64.b __rc_ok#54
+    arm64.b.ge __rc_ok#54
   __rc_panic#55:
     arm64.leaRdata x0, __str_blob_21  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:58: Range check failed: value outside typealias 'ElementCount'\x0a"
     arm64.bl mrt_panic
@@ -751,18 +661,14 @@ func @Tbl.grow {
     arm64.storeBaseDispReg.word64 [x19 + 32], x0
     arm64.sub x21, x21, 1
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.storeSlotReg slot9, x22
     arm64.cmp x22, x20
-    arm64.cset x0, lt
-    arm64.cbnz x0, rehash
-    arm64.b forexit
+    arm64.b.ge forexit
   rehash:
     arm64.cmp x22, 0
     arm64.cset x23, lt
-    arm64.cbnz x23, __rc_panic#57
-    arm64.b __rc_ok#56
+    arm64.b.ge __rc_ok#56
   __rc_panic#57:
     arm64.leaRdata x0, __str_blob_22  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:74: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -781,15 +687,11 @@ func @Tbl.grow {
   __rc_ok#56:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#77
-    arm64.b __im_stride#79
+    arm64.b.ne __im_stride#79
   __im_word#77:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#76
-    arm64.b __im_load#81
+    arm64.b.hs __im_slow#76
   __im_load#81:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -797,82 +699,54 @@ func @Tbl.grow {
     arm64.b __im_loaded#80
   __im_stride#79:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#78
-    arm64.b __im_slow#76
+    arm64.b.ne __im_slow#76
   __im_byte#78:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#76
-    arm64.b __im_load#82
+    arm64.b.hs __im_slow#76
   __im_load#82:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
     arm64.add x0, x0, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#80
   __im_loaded#80:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x27 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#83
-    arm64.b critsplit#109
+    arm64.b.eq __im_cont#75
   __im_empty#83:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#76
-    arm64.b critsplit#110
-  critsplit#110:
-    arm64.b __im_cont#75
-  critsplit#109:
-    arm64.b __im_cont#75
+    arm64.b.ne __im_cont#75
   __im_slow#76:
     arm64.movRegReg x0, x27
     arm64.movRegReg x1, x22
     arm64.bl __managed_get
     arm64.movRegReg x1, x9
-    arm64.b __im_cont#75
   __im_cont#75:
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq trycont#9
   tryerr#8:
     arm64.movImm x0, 0
-    arm64.b trycont#9
-  tryok#7:
-    arm64.b trycont#9
   trycont#9:
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#11
-    arm64.b matchnext#14
+    arm64.b.ne matchnext#14
   matcharm#11:
     arm64.movImm x0, 0
     arm64.b matchcont#16
   matchnext#14:
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#10
-    arm64.b matchnext#15
+    arm64.b.ne matchnext#15
   matcharm#10:
     arm64.movImm x0, 1
     arm64.b matchcont#16
   matchnext#15:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#12
-    arm64.b matchdead#13
+    arm64.b.ne matchdead#13
   matcharm#12:
     arm64.movImm x0, 0
-    arm64.b matchcont#16
   matchcont#16:
-    arm64.cbnz x0, occupied
-    arm64.b ifcont#47
+    arm64.cbz x0, forstep
   occupied:
-    arm64.cbnz x23, __rc_panic#59
-    arm64.b __rc_ok#58
+    arm64.cbz x23, __rc_ok#58
   __rc_panic#59:
     arm64.leaRdata x0, __str_blob_23  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:82: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -891,15 +765,11 @@ func @Tbl.grow {
   __rc_ok#58:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#86
-    arm64.b __im_stride#88
+    arm64.b.ne __im_stride#88
   __im_word#86:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#85
-    arm64.b __im_load#90
+    arm64.b.hs __im_slow#85
   __im_load#90:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -907,32 +777,23 @@ func @Tbl.grow {
     arm64.b __im_loaded#89
   __im_stride#88:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#87
-    arm64.b __im_slow#85
+    arm64.b.ne __im_slow#85
   __im_byte#87:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#85
-    arm64.b __im_load#91
+    arm64.b.hs __im_slow#85
   __im_load#91:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 0]
     arm64.add x0, x0, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#89
   __im_loaded#89:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x26 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty#92
-    arm64.b critsplit#111
+    arm64.b.eq critsplit#111
   __im_empty#92:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#85
-    arm64.b critsplit#112
+    arm64.b.eq __im_slow#85
   critsplit#112:
     arm64.movRegReg x24, x0
     arm64.b __im_cont#84
@@ -945,17 +806,11 @@ func @Tbl.grow {
     arm64.bl __managed_get
     arm64.movRegReg x24, x0
     arm64.movRegReg x1, x9
-    arm64.b __im_cont#84
   __im_cont#84:
     arm64.cmp x1, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#19
-    arm64.b tryok#18
-  tryerr#19:
-    arm64.b forstep
+    arm64.b.ne forstep
   tryok#18:
-    arm64.cbnz x23, __rc_panic#61
-    arm64.b __rc_ok#60
+    arm64.cbz x23, __rc_ok#60
   __rc_panic#61:
     arm64.leaRdata x0, __str_blob_24  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:85: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -975,9 +830,7 @@ func @Tbl.grow {
     arm64.loadRegSlot x0, slot11
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#94
-    arm64.b __im_load#95
+    arm64.b.hs __im_slow#94
   __im_load#95:
     arm64.loadRegSlot x0, slot11
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
@@ -986,14 +839,10 @@ func @Tbl.grow {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_empty#96
-    arm64.b critsplit#113
+    arm64.b.eq critsplit#113
   __im_empty#96:
     arm64.cmp x25, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_slow#94
-    arm64.b critsplit#114
+    arm64.b.ne critsplit#114
   __im_slow#94:
     arm64.loadRegSlot x0, slot11
     arm64.movRegReg x1, x22
@@ -1005,17 +854,11 @@ func @Tbl.grow {
     arm64.b __im_cont#93
   critsplit#113:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont#93
   __im_cont#93:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#21
-    arm64.b tryok#20
-  tryerr#21:
-    arm64.b forstep
+    arm64.b.ne forstep
   tryok#20:
-    arm64.cbnz x23, __rc_panic#63
-    arm64.b __rc_ok#62
+    arm64.cbz x23, __rc_ok#62
   __rc_panic#63:
     arm64.leaRdata x0, __str_blob_25  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:88: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -1037,11 +880,7 @@ func @Tbl.grow {
     arm64.bl __managed_get
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#23
-    arm64.b tryok#22
-  tryerr#23:
-    arm64.b forstep
+    arm64.b.ne forstep
   tryok#22:
     arm64.movRegReg x0, x22
     arm64.bl spreadHash
@@ -1050,15 +889,11 @@ func @Tbl.grow {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word#68
-    arm64.b __im_stride#70
+    arm64.b.ne __im_stride#70
   __im_word#68:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow#67
-    arm64.b __im_load#72
+    arm64.b.hs __im_slow#67
   __im_load#72:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.arm64AddLsl x2, x2, x1, lsl #3
@@ -1066,91 +901,63 @@ func @Tbl.grow {
     arm64.b __im_loaded#71
   __im_stride#70:
     arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_byte#69
-    arm64.b __im_slow#67
+    arm64.b.ne __im_slow#67
   __im_byte#69:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow#67
-    arm64.b __im_load#73
+    arm64.b.hs __im_slow#67
   __im_load#73:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-    arm64.b __im_loaded#71
   __im_loaded#71:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty#74
-    arm64.b critsplit#107
+    arm64.b.eq __im_cont#66
   __im_empty#74:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow#67
-    arm64.b critsplit#108
-  critsplit#108:
-    arm64.b __im_cont#66
-  critsplit#107:
-    arm64.b __im_cont#66
+    arm64.b.ne __im_cont#66
   __im_slow#67:
     arm64.bl __managed_get
     arm64.movRegReg x2, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont#66
   __im_cont#66:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#25
-    arm64.b tryok#24
+    arm64.b.eq tryok#24
   tryerr#25:
     arm64.movImm x0, 0
     arm64.b trycont#26
   tryok#24:
     arm64.movRegReg x0, x2
-    arm64.b trycont#26
   trycont#26:
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#27
-    arm64.b matchnext#31
+    arm64.b.ne matchnext#31
   matcharm#27:
     arm64.movImm x0, 0
     arm64.b matchcont#33
   matchnext#31:
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#28
-    arm64.b matchnext#32
+    arm64.b.ne matchnext#32
   matcharm#28:
     arm64.movImm x0, 1
     arm64.b matchcont#33
   matchnext#32:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#29
-    arm64.b matchdead#30
+    arm64.b.ne matchdead#30
   matcharm#29:
     arm64.movImm x0, 1
-    arm64.b matchcont#33
   matchcont#33:
     arm64.loadRegSlot x23, slot1
-    arm64.b whilehdr
   whilehdr:
-    arm64.cbnz x0, find_slot
-    arm64.b whileexit
+    arm64.cbz x0, whileexit
   find_slot:
     arm64.add x0, x23, 1
     arm64.and x1, x0, x21
     arm64.storeSlotReg slot0, x1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic#65
-    arm64.b __rc_ok#64
+    arm64.b.ge __rc_ok#64
   __rc_panic#65:
     arm64.leaRdata x0, __str_blob_26  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:101: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -1169,15 +976,11 @@ func @Tbl.grow {
   __rc_ok#64:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word#99
-    arm64.b __im_stride#101
+    arm64.b.ne __im_stride#101
   __im_word#99:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow#98
-    arm64.b __im_load#103
+    arm64.b.hs __im_slow#98
   __im_load#103:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.arm64AddLsl x2, x2, x1, lsl #3
@@ -1185,76 +988,52 @@ func @Tbl.grow {
     arm64.b __im_loaded#102
   __im_stride#101:
     arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_byte#100
-    arm64.b __im_slow#98
+    arm64.b.ne __im_slow#98
   __im_byte#100:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow#98
-    arm64.b __im_load#104
+    arm64.b.hs __im_slow#98
   __im_load#104:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-    arm64.b __im_loaded#102
   __im_loaded#102:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty#105
-    arm64.b critsplit#115
+    arm64.b.eq __im_cont#97
   __im_empty#105:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow#98
-    arm64.b critsplit#116
-  critsplit#116:
-    arm64.b __im_cont#97
-  critsplit#115:
-    arm64.b __im_cont#97
+    arm64.b.ne __im_cont#97
   __im_slow#98:
     arm64.bl __managed_get
     arm64.movRegReg x2, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont#97
   __im_cont#97:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#38
-    arm64.b tryok#37
+    arm64.b.eq tryok#37
   tryerr#38:
     arm64.movImm x0, 0
     arm64.b trycont#39
   tryok#37:
     arm64.movRegReg x0, x2
-    arm64.b trycont#39
   trycont#39:
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#40
-    arm64.b matchnext#44
+    arm64.b.ne matchnext#44
   matcharm#40:
     arm64.movImm x0, 0
     arm64.b matchcont#46
   matchnext#44:
     arm64.cmp x0, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#41
-    arm64.b matchnext#45
+    arm64.b.ne matchnext#45
   matcharm#41:
     arm64.movImm x0, 1
     arm64.b matchcont#46
   matchnext#45:
     arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#42
-    arm64.b matchdead#43
+    arm64.b.ne matchdead#43
   matcharm#42:
     arm64.movImm x0, 1
-    arm64.b matchcont#46
   matchcont#46:
     arm64.loadRegSlot x1, slot0
     arm64.movRegReg x23, x1
@@ -1274,10 +1053,9 @@ func @Tbl.grow {
     arm64.loadRegSlot x6, slot7
     arm64.loadRegSlot x7, slot6
     arm64.bl Tbl.insertAtSlot
-    arm64.b ifcont#47
+    arm64.b forstep
   matchdead#30:
   ifcont#47:
-    arm64.b forstep
   forstep:
     arm64.loadRegSlot x0, slot9
     arm64.add x0, x0, 1
@@ -1332,15 +1110,11 @@ func @main {
     arm64.bl Tbl.grow
     arm64.leaRdata x0, __witness_String.Hashable
     arm64.leaRdata x0, __witness_String.Equatable
-    arm64.b __il_body#6
   __il_body#6:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.b __il_cont#5
   __il_cont#5:
     arm64.cmp x0, 16
-    arm64.cset x0, ne
-    arm64.cbnz x0, wrongCapacity
-    arm64.b ifcont#2
+    arm64.b.eq ifcont#2
   wrongCapacity:
     arm64.movImm x20, 90
     arm64.movRegReg x0, x19
@@ -1353,15 +1127,11 @@ func @main {
   ifcont#2:
     arm64.leaRdata x0, __witness_String.Hashable
     arm64.leaRdata x0, __witness_String.Equatable
-    arm64.b __il_body#8
   __il_body#8:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 32]
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, wrongCount
-    arm64.b ifcont#4
+    arm64.b.eq ifcont#4
   wrongCount:
     arm64.movImm x20, 91
     arm64.movRegReg x0, x19

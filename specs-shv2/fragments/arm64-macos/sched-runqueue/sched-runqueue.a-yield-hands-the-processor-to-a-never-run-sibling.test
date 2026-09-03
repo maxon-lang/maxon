@@ -60,9 +60,10 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
 }
 
 func @yielder {
@@ -70,12 +71,9 @@ func @yielder {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 1000
-    arm64.cset x0, lt
-    arm64.cbnz x0, spin
-    arm64.b whileexit
+    arm64.b.ge whileexit
   spin:
     arm64.bl Runtime.yield
     arm64.add x19, x19, 1

@@ -1,94 +1,19 @@
-// Arm64PosixRuntime — what the TWO arm64 POSIX host surfaces SHARE: the symbol names the isel branches to,
-// the POSIX facts both lanes read, and the chunks whose body is the same on both once the one thing that
-// genuinely differs — the layout of `struct stat` — is a parameter.
+// Arm64PosixRuntime — what the TWO arm64 POSIX host surfaces SHARE that is written in INSTRUCTIONS: the
+// emit fragments both lanes place, the chunks whose body is the same on both once the one thing that
+// genuinely differs — the layout of `struct stat` — is a parameter, and the protocol constants only an
+// arm64 lane reads.
 //
-// ⭐⭐ **IT EXISTS BECAUSE THERE ARE NOW TWO OF THEM.** `Arm64DarwinRuntime` was written when arm64-macOS was
-// the only arm64 lane with a filesystem, and its header says outright that a Linux lane "writes its own
-// chunks against its own syscall numbers — it does not inherit these". That is TRUE OF THE CALLS and FALSE
-// OF EVERYTHING ELSE: `FindFirstFileA`'s glob split, the `dwFileAttributes` mask a `st_mode` becomes, the
-// FILETIME a whole second becomes and the 320-byte record all three fill are Win32-shaped facts that neither
-// OS has any say in. Copying them into a second file is this project's signature bug — ONE FACT WRITTEN DOWN
-// TWICE — in the one place where a drift shows up as a wrong SIZE or a wrong TIMESTAMP rather than as a
-// compile error.
-//
-// ⭐ **THE SYMBOLS ARE `mrt_host_*`, NOT `mrt_darwin_*`/`mrt_linux_*`, AND THAT IS WHY THE ISEL HAS NO NAME
-// TABLE.** Exactly ONE lane's chunks are appended to any image (`buildArm64Backend` picks by
-// `target.os`), so a shared name cannot collide — it can only ever have one body — and it is what lets
-// `lowerHostChunkValue(chunk: HostReadFileName)` stay a single unconditional lowering. The alternative,
-// per-lane names, needs a second table mapping `(os, verb)` to a symbol, which is a table that can disagree
-// with the builders. `mrt_start` and `mrt_panic` already work this way: one name, a per-OS body.
+// ⭐⭐ **THE FACTS THOSE BODIES READ ARE NOT HERE.** The symbol names, the POSIX constants and
+// `PosixStatLayout` are `Targets/Shared/PosixRuntime.maxon`, because x64-Linux's host surface reads them
+// too; the arch-neutral Linux ones are `Targets/Shared/LinuxRuntime.maxon`. What stays is what an AArch64
+// assembler is needed to express — `FindFirstFileA`'s glob split, the `dwFileAttributes` mask a `st_mode`
+// becomes, the FILETIME a whole second becomes and the 320-byte record all three fill are one shape per
+// backend, and writing that shape twice for the two arm64 OSes is this project's signature bug in the one
+// place where a drift shows up as a wrong SIZE or a wrong TIMESTAMP rather than as a compile error.
 //
 // ⚠ **A LANE-PRIVATE HELPER KEEPS ITS LANE'S INFIX.** `mrt_darwin_dup_cstring` is a `malloc`, and
 // `mrt_linux_glob_match` exists only because a raw static image has no `fnmatch` — neither has a counterpart
-// on the other lane, so neither may wear the shared prefix.
-
-// ==========================================================================
-// The shared chunk symbols
-// ==========================================================================
-
-// The ones the isel branches to (`StdToArm64Conversion`), plus the four the two find-first walks are built
-// out of. Each is built by whichever lane's `append…RuntimeChunks` ran.
-//
-// ⚠ **`mrt_host_file_open` AND `mrt_host_cpu_count` ARE THE TWO ONLY THE LINUX LANE BUILDS**, and the isel
-// is what keeps that honest: it `bl`s each on the SYSCALL route alone, because the macOS route has no chunk
-// to call — an `open` there is one inline import (`lowerOsFileOpen` carries the vararg argument for why) and
-// a processor count is one `sysconf`. They still wear the SHARED prefix rather than a `_linux_` infix
-// because the test is whether the VERB is a shared host-surface verb, not whether both lanes happen to spell
-// it as a chunk today; `mrt_linux_glob_match` is lane-private because `fnmatch` has no counterpart at all.
-export let HostLastErrorName = b"mrt_host_last_error"
-export let HostReadFileName = b"mrt_host_read_file"
-export let HostWriteFileName = b"mrt_host_write_file"
-export let HostFileOpenName = b"mrt_host_file_open"
-export let HostFileSizeName = b"mrt_host_file_size"
-export let HostFileDeleteName = b"mrt_host_file_delete"
-export let HostFileRenameName = b"mrt_host_file_rename"
-export let HostDirCreateName = b"mrt_host_dir_create"
-export let HostFileAttributesName = b"mrt_host_file_attributes"
-export let HostDirCurrentPathName = b"mrt_host_dir_current_path"
-export let HostDirFindFirstName = b"mrt_host_dir_find_first"
-export let HostDirFindNextName = b"mrt_host_dir_find_next"
-export let HostDirFindCloseName = b"mrt_host_dir_find_close"
-
-// --- L3: the two non-scheduler CLOCKS, the executable path and the processor count ---
-//
-// ⭐⭐ **THESE FOUR WORE A `mrt_darwin_` INFIX UNTIL arm64-LINUX GREW BODIES FOR THEM (L3), AND THE RENAME IS
-// WHAT KEPT THE ISEL FREE OF A NAME TABLE.** Their verbs — read the calendar, read this thread's CPU, name
-// the running image, count the processors — are host-surface verbs in exactly the sense this file's header
-// defines, so per-lane names would have needed a second table mapping `(os, verb)` to a symbol, which is a
-// table that can disagree with the builders.
-//
-// ⚠ **THIS BLOCK USED TO EXCLUDE `mrt_darwin_monotonic_clock` AND `mrt_darwin_sleep_ms` BY NAME**, on the
-// argument that both are reached only through SCHEDULER entries which arm64-linux refused, so each had
-// exactly one body. L4 built the second body, and the exclusion went with it — the test this file states is
-// whether the VERB is a shared host-surface verb, and both were always that.
-export let HostWallClockName = b"mrt_host_wall_clock"
-export let HostThreadCpuName = b"mrt_host_thread_cpu"
-export let HostExePathName = b"mrt_host_exe_path"
-export let HostCpuCountName = b"mrt_host_cpu_count"
-
-// --- L4: the GREEN-THREAD FLOOR's host objects, and the two clocks the scheduler reaches ---
-//
-// ⭐⭐ **TEN VERBS, TWO BODIES EACH.** macOS answers every one of them with a libSystem sequence (a pthread
-// key, a mutex, a condvar, a thread, `getenv`, `nanosleep`, `clock_gettime_nsec_np`); Linux answers each with
-// a raw `svc #0` against `futex`, `mmap` and `clock_gettime`, plus the writable thread pointer nothing else on
-// that lane touches. The verbs are identical and the primitives share nothing, which is exactly the split
-// this file's `mrt_host_` prefix exists for.
-//
-// ⚠ **`osLockEnter`/`osLockLeave` ARE NOT HERE, AND THAT IS THE LANE-PRIVATE RULE APPLIED HONESTLY.** On
-// macOS the region the Std tier allocated IS a `pthread_mutex_t`, so those two ops lower to a bare import
-// call with no chunk at all; only Linux needs a body, and a body only one lane builds is
-// `mrt_linux_lock_enter` (see `Arm64LinuxRuntime`). The same is true of `tlsSetValue`, which is one
-// `pthread_setspecific` there and a guarded store through `TPIDR_EL0` here.
-export let HostMonotonicClockName = b"mrt_host_monotonic_clock"
-export let HostSleepMsName = b"mrt_host_sleep_ms"
-export let HostWaitNewName = b"mrt_host_wait_new"
-export let HostEventSetName = b"mrt_host_event_set"
-export let HostThreadCreateName = b"mrt_host_thread_create"
-export let HostWaitOneName = b"mrt_host_wait_one"
-export let HostWaitCloseName = b"mrt_host_wait_close"
-export let HostLockInitName = b"mrt_host_lock_init"
-export let HostEnvReadName = b"mrt_host_env_read"
-export let HostTlsAllocName = b"mrt_host_tls_alloc"
+// on the other lane, so neither may wear the shared `mrt_host_` prefix.
 
 // ⭐ **THE WAIT OBJECT'S KIND, AS THE ISEL SPELLS IT.** `osEventCreate` lowers to `mrt_host_wait_new(kind)`
 // on BOTH lanes and must name the same number on each, so the value is a shared protocol rather than either
@@ -251,174 +176,6 @@ let PosixMillisPerSecond = 1000
 // `mrt_host_monotonic_clock` reports, so a lane that ever answered raw counter ticks would still be right.
 let PosixNanosPerMilli = 1000000
 
-// The shared walkers behind them. They are runtime FUNCTIONS rather than emit fragments because each has more
-// than one caller and each is a LOOP: inlining a loop at three sites is three copies of a termination
-// condition.
-export let HostBaseNameName = b"mrt_host_base_name"
-export let HostHasWildcardName = b"mrt_host_has_wildcard"
-export let HostAttrsFromModeName = b"mrt_host_attrs_from_mode"
-export let HostFillFindDataName = b"mrt_host_fill_find_data"
-
-// ==========================================================================
-// The POSIX facts both lanes read
-// ==========================================================================
-
-// ⭐ **THESE ARE POSIX-COMMON AND WERE MEASURED AS SUCH, NOT ASSUMED.** `S_IFMT`/`S_IFDIR`/`S_IWUSR` are the
-// same octal on Darwin and on Linux — unlike the `clockid_t` values one file over, which are NOT and which is
-// why that block stays with its lane.
-let PosixFileTypeMask = 0o170000
-let PosixFileTypeDirectory = 0o40000
-let PosixOwnerWriteBit = 0o200
-
-// `st_mode` is a `mode_t`. Darwin's is SIXTEEN bits inside the 32-bit word at its offset (the other half is
-// `st_nlink`); Linux's is a full 32-bit `unsigned int`. One mask serves both because every bit either lane
-// reads — the type field and the owner's write bit — is inside the low 16, so masking a Linux mode to 16 bits
-// discards nothing this surface asks about.
-let PosixModeMask = 0xFFFF
-
-// The two bytes that make a pattern a GLOB rather than a name, and the byte a path is split at. `*` and `?`
-// are the only two wildcard characters `FindFirstFileA` honours; a pattern with neither is a plain path and
-// takes the single-`stat` route.
-export let PosixGlobStarByte = 0x2A
-export let PosixGlobQuestionByte = 0x3F
-let PosixPathSeparatorByte = 0x2F
-
-// `fstatat`'s flag word: 0 means FOLLOW a symbolic link, which is what `FindFirstFileA` reports for one and
-// what every other `stat` in this surface does.
-export let PosixFollowSymlinks = 0
-
-// `O_RDONLY` — zero on both lanes, and named because a bare 0 in an open's flag position says nothing.
-export let PosixOpenReadOnly = 0
-
-// The permission masks a newly created file is given, before the process umask. 0644 is `CreateFileA`'s
-// ordinary file; 0755 is what `openWriteExecutable` adds and the whole reason that method has an op of its own.
-export let PosixCreateFileMode = 0o644
-export let PosixCreateExecutableFileMode = 0o755
-
-// `mkdir(path, 0777)` — `CreateDirectoryA`'s "inherit whatever the environment permits", which under POSIX is
-// a full mask handed to the process umask to narrow. The bootstrap's own directory create says 0777 and v1's
-// says 0755; 0777 is the one that leaves the DECISION with the umask instead of taking it here.
-export let PosixDirectoryMode = 0o777
-
-// ⭐⭐ **THE errno VALUES `mrt_host_last_error` TRANSLATES — AND ALL FIVE AGREE ACROSS THE TWO LANES.**
-// MEASURED on Darwin (`<errno.h>`) and read off Linux's `asm-generic/errno-base.h`: `EPERM = 1`,
-// `ENOENT = 2`, `EACCES = 13`, `ENOTDIR = 20`, `ERANGE = 34` on both. That agreement is what lets the
-// TRANSLATION be shared while the FETCH stays per-lane (`*__error()` on Darwin, a `.data` word on Linux).
-//
-// ⛔⛔ **ONLY `ENOENT` AGREES WITH ITS Win32 TWIN BY LUCK, AND THE OTHER TWO WOULD MISCLASSIFY.** The Std
-// tier tests 2 / 3 / 5 (`ManagedFileRuntime.emitErrnoClassifiedThrow`); 3 is `ESRCH` and 5 is `EIO` under
-// POSIX, so handing it a raw errno would report a hardware read error as `accessDenied` and would never
-// report a missing directory component at all. The translation therefore happens in the CHUNK, exactly as
-// `mrt_darwin_wall_clock` translates nanoseconds into a FILETIME — one lane's vocabulary becoming the op's
-// contract, rather than the op's contract becoming per-lane.
-export let PosixErrnoNoSuchFileOrDirectory = 2
-let PosixErrnoOperationNotPermitted = 1
-let PosixErrnoPermissionDenied = 13
-let PosixErrnoNotADirectory = 20
-export let PosixErrnoResultTooLarge = 34
-
-// ⭐⭐ **A CLEARED errno MEANS "THE WALK RAN OUT", AND THAT IS WHAT MAKES `ERROR_NO_MORE_FILES` REACHABLE
-// WITHOUT A PRIVATE SENTINEL.** `FindNextFileA` reports end-of-iteration by FAILING with
-// `ERROR_NO_MORE_FILES`; POSIX reports it by an exhausted enumeration that sets no errno at all. So each
-// lane's walk clears errno before every step and the classifier reads a zero as exactly that
-// end-of-iteration — which is sound because `osLastError` is only ever consumed on a path where a call has
-// just FAILED, and the one failure in this whole surface that sets no errno is this one.
-export let PosixErrnoCleared = 0
-
-// The catch-all an errno with no Win32 twin becomes — `ERROR_GEN_FAILURE`. It deliberately is not one of the
-// three the Std classifier tests, so every unmapped failure takes that classification's per-operation
-// fallback (`openFailed`, `readFailed`, …) instead of impersonating one of the three named variants.
-let ErrorGenericFailure = 31
-
-// ⭐ **HOW MANY NANOSECONDS A SECOND HAS.** Both POSIX lanes read clocks whose unit is the nanosecond, and
-// the Linux thread-CPU chunk needs this outright: `clock_gettime` answers a `timespec` while
-// `__thread_cpu_ticks` promises one number, so that chunk scales the seconds half by this. Darwin's twin
-// needs no such step — `clock_gettime_nsec_np` already answers nanoseconds.
-//
-// ⚠ `Arm64DarwinRuntime`'s `DarwinMonotonicTicksPerSecond` is the same digits and a DIFFERENT fact — the
-// frequency that chunk REPORTS through an out-param — which is why the two are not one name.
-export let PosixNanosPerSecond = 1000000000
-
-// ⭐⭐ **NANOSECONDS PER FILETIME TICK — the one FILETIME fact the Std tier does not already export, and it
-// is DERIVED rather than written down.** Both POSIX wall clocks must hand `osReadWallClock`'s consumer a
-// Win32 FILETIME, so both divide a nanosecond reading by this; the OTHER two facts of that encoding
-// (`FileTimeTicksPerSecond`, `FileTimeTicksFrom1601To1970`) are `ClockRuntime`'s exports and are read from
-// there rather than restated.
-//
-// ⛔ **ALL THREE USED TO BE RESTATED HERE-ISH, WITH AN ASSERT HOLDING THE COPIES TOGETHER**
-// (`Arm64DarwinRuntime`'s `DarwinFileTimeTicksPerSecond` / `DarwinNanosPerFileTimeTick` /
-// `DarwinFileTimeEpochOffset` and `assertDarwinFileTimeConstants`). A second POSIX lane would have made that
-// three copies and two asserts. The copies are gone and the assert with them: an emitter that reads the
-// consumer's own constants cannot be a second calendar, and a quotient that is COMPUTED cannot disagree with
-// its operands — which is this project's cure ladder taking its top rung instead of its middle one.
-//
-// ⚠ **IT IS A FUNCTION AND NOT A `let` FOR A LANGUAGE REASON, NOT A STYLE ONE**: a global initializer is a
-// constant expression, and `/` there folds as a FLOAT (E3009 on the cast, measured). Inside a body it is the
-// integer divide the two constants deserve — `posixStatSlotCount` above derives its own count the same way.
-export function posixNanosPerFileTimeTick() returns MachineWord
-	return (PosixNanosPerSecond / FileTimeTicksPerSecond) as MachineWord
-end 'posixNanosPerFileTimeTick'
-
-// ⭐ **HOW MANY BYTES OF A PATH-SHAPED STRING FIT BESIDE ITS TERMINATOR.** Three things are bounded by it and
-// all three are `char[MAX_PATH]` in the Win32 surface being emulated: `WIN32_FIND_DATAA`'s `cFileName`, the
-// copy of the pattern a search owns for its lifetime, and the directory prefix a glob is split into. One
-// name, because they are one number for one reason.
-export let PosixPathStringCapacity = MaxPathBytes - 1
-
-// The mode word an open that CREATES NOTHING must carry. ⛔ It is not merely "unused": Linux REFUSES an
-// `openat` whose mode is non-zero without `O_CREAT` (`build_open_flags`, -EINVAL), so this is a required
-// argument value rather than a placeholder — which is why it is named rather than left as a bare 0 beside
-// the `O_RDONLY` that is also 0 and is a different fact.
-export let PosixNoFileMode = 0
-
-// ⭐ **`INVALID_HANDLE_VALUE` as the two's-complement word a `mov` materialises.**
-// `ManagedFileRuntime.InvalidHandleValue` is the same -1 expressed for the Std tier, and `MmapAnonFd` is the
-// same spelling one file over for the same reason: `MachineWord` is unsigned.
-export let PosixInvalidHandle = 0xFFFFFFFFFFFFFFFF
-
-// ==========================================================================
-// struct stat — the ONE thing that is not shared
-// ==========================================================================
-
-// ⭐⭐ **THE FIVE FIELDS THIS SURFACE READS, AND WHERE EACH LANE PUTS THEM.** Every offset was MEASURED (the
-// Darwin set with a probe on this host; the Linux set is `asm-generic/stat.h`'s, which AArch64 uses), and
-// they agree on NOTHING — `st_size` is at 96 on one and 48 on the other. So the two chunks that read a
-// `struct stat` take this as a parameter instead of being written twice around two sets of literals.
-//
-// ⚠ **A `timespec` FIELD'S OFFSET IS ITS `tv_sec`**, because `tv_sec` comes first — so the three time
-// offsets address SECONDS directly and the nanosecond half is simply never read: a FILETIME's consumer
-// (`ManagedFileRuntime.emitFileTimeToUnixSeconds`) divides back down to whole seconds anyway.
-//
-// ⚠ **`creationTimeOffset` IS THE ONE FIELD THE TWO OSes DISAGREE ABOUT IN MEANING, NOT MERELY IN PLACE.**
-// Darwin has a real birth time (`st_birthtime`); Linux's `struct stat` has none at all — only `statx` does —
-// so its lane names `st_ctime`, the inode's last status change, which is the closest thing a `stat` can
-// answer and is what `File.info().createdTime` reports there.
-export type PosixStatLayout
-	// `sizeof(struct stat)`, from which the frame slots it occupies are derived.
-	export let bytes as ParsedInt
-	// `st_mode`, read as a 32-bit word and masked by `PosixModeMask`. Must be 4-aligned.
-	export let modeOffset as MachineWord
-	// The remaining four are 64-bit reads and must be 8-aligned.
-	export let sizeOffset as MachineWord
-	export let creationTimeOffset as MachineWord
-	export let accessTimeOffset as MachineWord
-	export let modifyTimeOffset as MachineWord
-
-	export static function create(bytes ParsedInt, modeOffset MachineWord, sizeOffset MachineWord, creationTimeOffset MachineWord, accessTimeOffset MachineWord, modifyTimeOffset MachineWord) returns PosixStatLayout
-		return Self{bytes: bytes, modeOffset: modeOffset, sizeOffset: sizeOffset, creationTimeOffset: creationTimeOffset, accessTimeOffset: accessTimeOffset, modifyTimeOffset: modifyTimeOffset}
-	end 'create'
-end 'PosixStatLayout'
-
-// How many 8-byte frame slots a `struct stat` occupies. Derived from the measured size rather than written
-// out, so a platform that widens the struct moves one number.
-//
-// ⚠ The quotient needs no cast: `MachineWord` and `StackSize` are the SAME range (`int(0 to u64.max)`), and
-// E3010 refuses a cast between two spellings of one range. It carried one until L3 gave every caller a
-// `StackSize` context (`arm64EmitZeroSlots`), at which point the cast became visibly redundant.
-export function posixStatSlotCount(layout PosixStatLayout) returns StackSize
-	return layout.bytes / SpillSlotBytes
-end 'posixStatSlotCount'
-
 // ⭐⭐ **ZERO `slotCount` CONSECUTIVE FRAME SLOTS, STARTING AT `firstSlot`.** Three chunks across the two
 // lanes need a kernel-facing buffer to start empty, and each had been writing the same six-instruction loop
 // out longhand:
@@ -513,6 +270,29 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm)
 
 	asm.placeLabel(answered)
 end 'arm64EmitErrnoToWin32'
+
+// ⭐⭐ **A TERMINAL TEST'S STATUS IN x0 BECOMING THE `GetFileType` WORD THE Std TIER COMPARES** — the second
+// Win32-vocabulary translation both arm64 POSIX lanes owe, and written once here for the first one's reason.
+// `StdOp.osHandleFileType` carries why that tier speaks Win32's enumeration rather than a bool.
+//
+// ⚠ **THE POLARITY IS THE CALLER'S BECAUSE THE TWO LANES DISAGREE ABOUT IT.** Darwin asks `isatty`, whose
+// NON-ZERO answer means a terminal; Linux asks `ioctl(TCGETS)`, whose ZERO status does. Both compare against
+// 0, so the comparison is here and only the condition crosses the boundary — folding either polarity into
+// this body would make the other lane's call site read as its own opposite.
+export function arm64EmitFileTypeFromStatus(asm Arm64RuntimeAsm, terminalWhen Arm64CondCode)
+	let terminal = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: terminalWhen, label: terminal)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: FileTypeDisk as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(terminal)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: FileTypeChar as MachineWord)
+
+	asm.placeLabel(answered)
+end 'arm64EmitFileTypeFromStatus'
 
 // Whole SECONDS since the Unix epoch becoming the FILETIME `WIN32_FIND_DATAA` carries.
 //
@@ -722,20 +502,6 @@ end 'arm64PosixFillFindDataTime'
 // no spawn primitive at all (and no legacy `fork`, `pipe`, `dup2` or `poll` either), so its body is a raw
 // `clone(SIGCHLD)` and a hand-built child. There is nothing in common to lift; each lane writes
 // `mrt_host_spawn` itself, under this file's shared name.
-
-// The child-process band's shared symbols. `mrt_host_proc_reap` and `mrt_host_proc_await` are internal to
-// the band — no isel lowering names either — but they are `bl`'d from bodies BOTH lanes lay out, so they
-// wear the shared prefix for the same reason every name above does: a per-lane infix would need a table
-// mapping `(os, verb)` to a symbol.
-export let HostPipeName = b"mrt_host_pipe"
-export let HostPipePeekName = b"mrt_host_pipe_peek"
-export let HostSpawnName = b"mrt_host_spawn"
-export let HostProcReapName = b"mrt_host_proc_reap"
-export let HostProcAwaitName = b"mrt_host_proc_await"
-export let HostProcExitCodeName = b"mrt_host_proc_exit_code"
-export let HostProcTerminateName = b"mrt_host_proc_terminate"
-export let HostWaitAnyName = b"mrt_host_wait_any"
-export let HostTickMsName = b"mrt_host_tick_ms"
 
 // ⭐ **A CHILD PROCESS IS A WAIT OBJECT KIND, AND BOTH LANES NOW MINT ONE**, so it joins `PosixWaitKindEvent`
 // here rather than staying either lane's private constant: `mrt_host_spawn` writes it and `mrt_host_wait_one`
@@ -1005,7 +771,7 @@ export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) 
 end 'buildArm64PosixPipeChunk'
 
 // `int fds[2]` — the WRITE end is the second `int`, four bytes past the first.
-let PosixPipeWriteEndOffset = 4
+export let PosixPipeWriteEndOffset = 4
 
 // ==========================================================================
 // mrt_host_pipe_peek(x0 = handle, x1 = availOutPtr) -> x0 = BOOL
@@ -1215,7 +981,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 end 'buildArm64PosixProcReapChunk'
 
 // `wait4`'s `struct rusage *` out-param, which NULL discards — and the register `waitpid` never reads.
-let PosixReapDiscardsRusage = 0
+export let PosixReapDiscardsRusage = 0
 
 // ==========================================================================
 // mrt_host_proc_await(x0 = object, x1 = timeoutMs) -> x0 = WAIT_OBJECT_0 | WAIT_TIMEOUT

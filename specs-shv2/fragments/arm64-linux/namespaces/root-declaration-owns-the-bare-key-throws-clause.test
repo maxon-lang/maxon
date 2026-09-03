@@ -51,14 +51,10 @@ func @pick {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#4
-    arm64.b __rc_chk#5
+    arm64.b.lt __rc_panic#4
   __rc_chk#5:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#4
-    arm64.b __rc_ok#3
+    arm64.b.le __rc_ok#3
   __rc_panic#4:
     arm64.leaRdata x0, __str_blob_4  ; "panic at main.maxon:7: Range check failed: value outside typealias 'Ms'\x0a"
     arm64.bl mrt_panic
@@ -68,9 +64,7 @@ func @pick {
     arm64.ret
   __rc_ok#3:
     arm64.cmp x0, 500
-    arm64.cset x1, gt
-    arm64.cbnz x1, tooBig
-    arm64.b ifcont
+    arm64.b.le ifcont
   tooBig:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -80,14 +74,10 @@ func @pick {
     arm64.add x0, x0, 7
     arm64.movImm x9, 0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#7
-    arm64.b __rc_chk#8
+    arm64.b.lt __rc_panic#7
   __rc_chk#8:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#7
-    arm64.b __rc_ok#6
+    arm64.b.le __rc_ok#6
   __rc_panic#7:
     arm64.leaRdata x0, __str_blob_5  ; "panic at main.maxon:11: Range check failed: value outside typealias 'Ms'\x0a"
     arm64.bl mrt_panic
@@ -116,17 +106,11 @@ func @main {
     arm64.bl pick
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.sub x0, x9, 1
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
-  matcharm:
-    arm64.b matchcont
+    arm64.b.ne matchdead
   matchcont:
     arm64.movImm x0, 9
     arm64.loadRegSlot x19, slot0
@@ -202,5 +186,4 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  afterbreak:
 }

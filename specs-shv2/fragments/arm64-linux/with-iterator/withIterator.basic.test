@@ -45,16 +45,10 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forjoin
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop
-    arm64.b forexit
+    arm64.b.ne forexit
   loop:
     arm64.leaRdata x1, __layout_WithIterIterator_ArrayIterator_int_int
     arm64.leaRdata x2, __witness_ArrayIterator_int.Iterator
@@ -136,7 +130,6 @@ func @main {
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot1
     arm64.bl __destruct___Tuple2.ArrayIterator_int.int
-    arm64.b forstep
   forstep:
     arm64.leaRdata x1, __witness_ArrayIterator_int.Iterator
     arm64.movRegReg x0, x19
@@ -146,9 +139,6 @@ func @main {
   forexit:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_WithIterIterator_ArrayIterator_int_int
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movImm x19, 0
     arm64.loadRegSlot x0, slot0

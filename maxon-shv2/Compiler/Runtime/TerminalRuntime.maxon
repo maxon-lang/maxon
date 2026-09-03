@@ -49,12 +49,18 @@
 // (`ARM64CodeEmitter.EmitMaxonStdoutWantsAnsiColor`) is the same decision in the other compiler, and it is
 // what lets the bootstrap cross-compile this project for the Mac at all.
 //
-// ⚠ **WHAT THE OTHER LANES OWE IS ONE PRIMITIVE AND NOT A DESIGN**, which is why the facility row is a
-// "not yet" rather than a permanent no: `isatty(1)` on the descriptor `osStdHandle` already answers with,
-// translated into `FILE_TYPE_CHAR` the way `Arm64DarwinRuntime` already translates errno into Win32's
-// vocabulary — see `StdOp.osHandleFileType`, which carries why the Std tier speaks Win32 here.
-// `docs/CLI_REFERENCE.md` records the user-visible consequence (`--color=auto` degrades to `never` on
-// those lanes) so the degradation is documented rather than merely true.
+// ⭐ **arm64-macOS ANSWERS IT, AND ITS BODY IS ONE PRIMITIVE**: `isatty` on the descriptor `osStdHandle`
+// already produces, translated into `FILE_TYPE_CHAR`/`FILE_TYPE_DISK` the way that surface already
+// translates an errno into Win32's vocabulary — see `StdOp.osHandleFileType`, which carries why the Std
+// tier speaks Win32 here.
+//
+// ⚠ **THE LANES THAT CANNOT ANSWER ARE HELD UP BY CONDITIONS 2 AND 3, NOT BY CONDITION 1.** Both Linux
+// lanes' terminal test is settled and measured — `ioctl(fd, TCGETS, …)`, which is what `isatty` is made of
+// — while a libc-less image reaches `NO_COLOR` and `TERM` only through a vector its entry stub captured, and
+// that capture rides the green-thread bit. wasm32-wasi cannot ask about an `output-stream` resource at all.
+// Each row in `targetProvidesFacility` carries its own lane's gap. `docs/CLI_REFERENCE.md` records the user-visible
+// consequence — `--color=auto` degrades to `never` there — so the degradation is documented rather than
+// merely true.
 
 // The `__tty_` prefix that identifies EVERY terminal-detection entry point — the one test
 // `scanRuntimeUsage` reads to set `usesTerminalDetection`.
@@ -85,17 +91,31 @@ let TerminalEnvNameRdataPrefix = "__tty_env_"
 // that keep the whole test to ONE comparison rather than four branches.
 let DumbTermName = "dumb"
 let DumbTermLength = 4
+
 // `dumb` as one little-endian 32-bit word: 'd'=0x64 at the low byte through 'b'=0x62 at the high one.
 let DumbTermWordLittleEndian = 0x626D7564 as ParsedInt
+
 // Bit 5 — the ONE bit ASCII case differs in — applied to each byte as it is read.
 let AsciiCaseFoldMaskByte = 0x20 as ParsedInt
+
 // How far each successive byte is shifted as the little-endian word is reassembled.
 let BitsPerByte = 8
 
 // `GetFileType`'s "this handle is a character device" answer — a console, a serial port, a terminal. The
 // three it is tested against are `FILE_TYPE_UNKNOWN` (0), `FILE_TYPE_DISK` (1, a redirect to a file) and
 // `FILE_TYPE_PIPE` (3, a redirect into another process); only this one means a person is looking.
-let FileTypeChar = 0x0002 as ParsedInt
+//
+// ⭐ **THE TWO WORDS ARE EXPORTED BECAUSE A POSIX HOST SURFACE PRODUCES THEM.** `GetFileType` answers this
+// enumeration on Windows and nothing else does, so a lane whose terminal test is `isatty` translates its own
+// answer into these two (`Arm64PosixRuntime.arm64EmitFileTypeFromStatus`), exactly as that surface
+// translates an errno into `ErrorFileNotFound`. One declaration, and every producer reads it.
+export let FileTypeChar = 0x0002 as ParsedInt
+
+// ⚠ **THE `false` ANSWER IS `FILE_TYPE_DISK` AND NOT `FILE_TYPE_UNKNOWN`.** `FILE_TYPE_UNKNOWN` is Win32's
+// spelling of *"the query itself failed"*; a descriptor that is not a terminal has been REDIRECTED, which is
+// what a disk file is. The comparison below only asks whether the word equals `FileTypeChar`, so both would
+// answer the predicate identically — the distinction is what a reader of the emitted code is told.
+export let FileTypeDisk = 0x0001 as ParsedInt
 
 // ⭐ **THE PROBE BUFFER: `dumb` plus its terminator, and not one byte more.** `GetEnvironmentVariableA`
 // answers the chars it COPIED when the value fits and the size it NEEDS (including the terminator) when

@@ -53,22 +53,15 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#15
-    arm64.b forempty#2
-  critsplit#15:
-    arm64.b forhdr#1
+    arm64.b.ne forjoin#6
   forhdr#1:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop1
-    arm64.b forexit#5
+    arm64.b.ne forexit#5
   loop1:
     arm64.leaRdata x1, __layout_ListIterator_int
     arm64.movRegReg x0, x21
     arm64.bl ListIterator.current
     arm64.add x19, x19, x0
-    arm64.b forstep#4
   forstep#4:
     arm64.movRegReg x0, x21
     arm64.bl ListIterator.advance
@@ -77,9 +70,6 @@ func @main {
   forexit#5:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_ListIterator_int
-    arm64.b forjoin#6
-  forempty#2:
-    arm64.b forjoin#6
   forjoin#6:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x20
@@ -87,22 +77,15 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#16
-    arm64.b forempty#8
-  critsplit#16:
-    arm64.b forhdr#7
+    arm64.b.ne forempty
   forhdr#7:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop2
-    arm64.b forexit#11
+    arm64.b.ne forexit#11
   loop2:
     arm64.leaRdata x1, __layout_ListIterator_int
     arm64.movRegReg x0, x22
     arm64.bl ListIterator.current
     arm64.add x21, x21, x0
-    arm64.b forstep#10
   forstep#10:
     arm64.movRegReg x0, x22
     arm64.bl ListIterator.advance
@@ -113,14 +96,11 @@ func @main {
     arm64.bl __destruct_ListIterator_int
     arm64.movRegReg x0, x21
     arm64.b forjoin#12
-  forempty#8:
+  forempty:
     arm64.movRegReg x0, x21
-    arm64.b forjoin#12
   forjoin#12:
     arm64.cmp x19, x0
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.ne ifcont
   check:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20

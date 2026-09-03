@@ -38,13 +38,10 @@ func @countIn {
     arm64.movRegReg x20, x1
     arm64.movImm x21, 0
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, scan
-    arm64.b forexit
+    arm64.b.ge forexit
   scan:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
@@ -58,17 +55,12 @@ func @countIn {
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x22
     arm64.bl CharacterSet.contains
-    arm64.cbnz x0, hit
-    arm64.b critsplit
+    arm64.cbz x0, ifcont
   hit:
     arm64.add x21, x21, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
   ifcont:
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x22, x23
     arm64.b forhdr
@@ -96,14 +88,10 @@ func @main {
     arm64.bl countIn
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_37  ; "panic at compiler-reserved-base-type-is-nameable-at-a-parameter.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

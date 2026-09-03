@@ -31,11 +31,9 @@ ExitCode: 42
 func @Toggle.isOff {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, 0
     arm64.cset x0, eq
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -46,14 +44,7 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.bl Toggle.isOff
-    arm64.cbnz x0, ok
-    arm64.b ifcont
-  ok:
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
-  __il_cont:
-    arm64.b ok2
+    arm64.cbz x0, ifcont
   ok2:
     arm64.movImm x0, 42
     arm64.epilogue 16

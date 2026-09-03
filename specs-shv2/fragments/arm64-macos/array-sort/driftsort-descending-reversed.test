@@ -73,26 +73,20 @@ data {
 func @ascending {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -231,37 +225,29 @@ func @main {
     arm64.leaRdata x1, __str_rec_21  ; "findRun.descending"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
-    arm64.cbnz x0, fd
-    arm64.b ifcont#2
+    arm64.cbz x0, ifcont#2
   fd:
     arm64.leaRdata x0, __str_rec_22  ; "descending "
     arm64.bl print
-    arm64.b ifcont#2
   ifcont#2:
     arm64.leaRdata x1, __str_rec_23  ; "driftsort.merge"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, nm
-    arm64.b ifcont#4
+    arm64.cbz x0, ifcont#4
   nm:
     arm64.leaRdata x0, __str_rec_24  ; "no-merge "
     arm64.bl print
-    arm64.b ifcont#4
   ifcont#4:
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, p
-    arm64.b forexit
+    arm64.b.ge forexit
   p:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -302,7 +288,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr

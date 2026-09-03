@@ -44,15 +44,11 @@ func @Reading.create {
     arm64.movRegReg d8, d0
     arm64.fpLoadRdata d0, [rdata + __fconst_0]
     arm64.fcmp d8, d0
-    arm64.cset x0, mi
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.mi __rc_panic
   __rc_chk:
     arm64.fpLoadRdata d0, [rdata + __fconst_100]
     arm64.fcmp d8, d0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_210  ; "panic at float-ranged-alias-positions.test:7: Range check failed: value outside typealias 'Percent'\x0a"
     arm64.bl mrt_panic
@@ -76,15 +72,11 @@ func @pick {
     arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
     arm64.fpLoadRdata d1, [rdata + __fconst_0]
     arm64.fcmp d0, d1
-    arm64.cset x0, mi
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.mi __rc_panic
   __rc_chk:
     arm64.fpLoadRdata d1, [rdata + __fconst_100]
     arm64.fcmp d0, d1
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_211  ; "panic at float-ranged-alias-positions.test:13: Range check failed: value outside typealias 'Percent'\x0a"
     arm64.bl mrt_panic
@@ -109,15 +101,11 @@ func @show {
     arm64.storeSlotReg slot0, x19
     arm64.fpLoadRdata d1, [rdata + __fconst_0]
     arm64.fcmp d0, d1
-    arm64.cset x0, mi
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.mi __rc_panic
   __rc_chk:
     arm64.fpLoadRdata d1, [rdata + __fconst_100]
     arm64.fcmp d0, d1
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_212  ; "panic at float-ranged-alias-positions.test:16: Range check failed: value outside typealias 'Percent'\x0a"
     arm64.bl mrt_panic
@@ -239,26 +227,18 @@ func @main {
     arm64.leaRdata x0, __str_rec_99  ; "ret="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 d0, [x19 + 0]
     arm64.fpLoadRdata d1, [rdata + __fconst_0]
     arm64.fcmp d0, d1
-    arm64.cset x0, mi
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_chk
+    arm64.b.mi __il_slow
   __rc_chk:
     arm64.fpLoadRdata d1, [rdata + __fconst_100]
     arm64.fcmp d0, d1
-    arm64.cset x0, gt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.le __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl pick
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.bl __float_toString
     arm64.movRegReg x22, x0

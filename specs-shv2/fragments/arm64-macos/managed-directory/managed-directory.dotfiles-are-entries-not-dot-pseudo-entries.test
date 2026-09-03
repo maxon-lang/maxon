@@ -100,9 +100,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @writeFile {
@@ -116,9 +117,7 @@ func @writeFile {
     arm64.bl __mf_open_write
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -138,9 +137,7 @@ func @writeFile {
     arm64.movRegReg x1, x19
     arm64.bl __mf_write
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movRegReg x0, x20
     arm64.bl __mf_close
@@ -189,9 +186,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __md_create
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq trycont
   tryerr#2:
     arm64.movRegReg x0, x19
     arm64.bl String.toByteArray
@@ -201,8 +196,7 @@ func @main {
     arm64.eor x21, x0, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cbnz x21, noScratchRoot
-    arm64.b ifcont#4
+    arm64.cbz x21, trycont
   noScratchRoot:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -220,10 +214,6 @@ func @main {
     arm64.loadRegSlot x28, slot10
     arm64.epilogue 112
     arm64.ret
-  ifcont#4:
-    arm64.b trycont
-  tryok#1:
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
@@ -236,8 +226,7 @@ func @main {
     arm64.eor x21, x0, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-    arm64.cbnz x21, needCreate
-    arm64.b ifcont#9
+    arm64.cbz x21, ifcont#9
   needCreate:
     arm64.movRegReg x0, x19
     arm64.bl String.toByteArray
@@ -245,9 +234,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __md_create
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20
@@ -268,7 +255,6 @@ func @main {
   tryok#7:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-    arm64.b ifcont#9
   ifcont#9:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
@@ -300,9 +286,7 @@ func @main {
     arm64.movRegReg x0, x25
     arm64.bl writeFile
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#11
-    arm64.b tryok#10
+    arm64.b.eq tryok#10
   tryerr#11:
     arm64.movImm x19, 2
     arm64.movRegReg x0, x25
@@ -353,9 +337,7 @@ func @main {
     arm64.movRegReg x0, x25
     arm64.bl writeFile
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#13
-    arm64.b tryok#12
+    arm64.b.eq tryok#12
   tryerr#13:
     arm64.movImm x19, 2
     arm64.movRegReg x0, x25
@@ -406,9 +388,7 @@ func @main {
     arm64.movRegReg x0, x25
     arm64.bl writeFile
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#15
-    arm64.b tryok#14
+    arm64.b.eq tryok#14
   tryerr#15:
     arm64.movImm x19, 2
     arm64.movRegReg x0, x25
@@ -463,9 +443,7 @@ func @main {
     arm64.bl __md_open_search
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#17
-    arm64.b tryok#16
+    arm64.b.eq tryok#16
   tryerr#17:
     arm64.movImm x19, 3
     arm64.movRegReg x0, x20
@@ -492,15 +470,12 @@ func @main {
     arm64.bl __str_decref
     arm64.movImm x20, 0
     arm64.movImm x22, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.storeSlotReg slot0, x20
     arm64.movRegReg x0, x21
     arm64.bl __md_next
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#20
-    arm64.b tryok#19
+    arm64.b.eq tryok#19
   tryerr#20:
     arm64.movImm x19, 4
     arm64.movRegReg x0, x21
@@ -520,9 +495,7 @@ func @main {
     arm64.ret
   tryok#19:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.eq whileexit
   loop:
     arm64.movRegReg x0, x21
     arm64.bl __md_filename
@@ -531,57 +504,37 @@ func @main {
     arm64.leaRdata x1, __str_rec_19  ; ".gitignore"
     arm64.movRegReg x0, x23
     arm64.bl __str_eq
-    arm64.cbnz x0, hidden
-    arm64.b critsplit#46
+    arm64.cbz x0, ifcont#24
   hidden:
     arm64.add x20, x20, 1
-    arm64.b ifcont#24
-  critsplit#46:
-    arm64.b ifcont#24
   ifcont#24:
     arm64.leaRdata x1, __str_rec_20  ; "..config"
     arm64.movRegReg x0, x23
     arm64.bl __str_eq
-    arm64.cbnz x0, doubleLeading
-    arm64.b critsplit#47
+    arm64.cbz x0, ifcont#26
   doubleLeading:
     arm64.add x20, x20, 1
-    arm64.b ifcont#26
-  critsplit#47:
-    arm64.b ifcont#26
   ifcont#26:
     arm64.leaRdata x1, __str_rec_21  ; "plain.txt"
     arm64.movRegReg x0, x23
     arm64.bl __str_eq
-    arm64.cbnz x0, ordinary
-    arm64.b critsplit#48
+    arm64.cbz x0, ifcont#28
   ordinary:
     arm64.add x20, x20, 1
-    arm64.b ifcont#28
-  critsplit#48:
-    arm64.b ifcont#28
   ifcont#28:
     arm64.leaRdata x1, __str_rec_22  ; "."
     arm64.movRegReg x0, x23
     arm64.bl __str_eq
-    arm64.cbnz x0, singleDot
-    arm64.b critsplit#49
+    arm64.cbz x0, ifcont#30
   singleDot:
     arm64.add x22, x22, 1
-    arm64.b ifcont#30
-  critsplit#49:
-    arm64.b ifcont#30
   ifcont#30:
     arm64.leaRdata x1, __str_rec_23  ; ".."
     arm64.movRegReg x0, x23
     arm64.bl __str_eq
-    arm64.cbnz x0, doubleDot
-    arm64.b critsplit#50
+    arm64.cbz x0, ifcont#32
   doubleDot:
     arm64.add x22, x22, 1
-    arm64.b ifcont#32
-  critsplit#50:
-    arm64.b ifcont#32
   ifcont#32:
     arm64.movRegReg x0, x23
     arm64.bl __str_decref
@@ -622,9 +575,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#34
-    arm64.b tryok#33
+    arm64.b.eq tryok#33
   tryerr#34:
     arm64.movImm x19, 5
     arm64.movRegReg x0, x20
@@ -684,9 +635,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#36
-    arm64.b tryok#35
+    arm64.b.eq tryok#35
   tryerr#36:
     arm64.movImm x19, 5
     arm64.movRegReg x0, x20
@@ -746,9 +695,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#38
-    arm64.b tryok#37
+    arm64.b.eq tryok#37
   tryerr#38:
     arm64.movImm x20, 5
     arm64.movRegReg x0, x19
@@ -776,9 +723,7 @@ func @main {
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.cmp x22, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, pseudoEntryLeaked
-    arm64.b ifcont#40
+    arm64.b.eq ifcont#40
   pseudoEntryLeaked:
     arm64.movImm x19, 6
     arm64.movRegReg x0, x21
@@ -799,9 +744,7 @@ func @main {
   ifcont#40:
     arm64.loadRegSlot x0, slot0
     arm64.cmp x0, 3
-    arm64.cset x0, eq
-    arm64.cbnz x0, allThree
-    arm64.b ifcont#42
+    arm64.b.ne ifcont#42
   allThree:
     arm64.movImm x19, 42
     arm64.movRegReg x0, x21
@@ -824,15 +767,11 @@ func @main {
     arm64.bl __md_destruct
     arm64.loadRegSlot x0, slot0
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.loadRegSlot x0, slot0
     arm64.cmp x0, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_26  ; "panic at managed-directory.dotfiles-are-entries-not-dot-pseudo-entries.test:68: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

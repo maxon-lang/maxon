@@ -55,12 +55,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @Calc.create {
@@ -123,15 +124,11 @@ func @main {
     arm64.bl __gt_try_await
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.sub x0, x9, 1
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm:
     arm64.movImm x19, 9
     arm64.movRegReg x0, x20
@@ -144,14 +141,10 @@ func @main {
   matchdead:
   tryok:
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-call-after-shutdown-answers-stopped.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -168,7 +161,6 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  matchcont:
 }
 
 func @Calc.__loop {
@@ -180,14 +172,11 @@ func @Calc.__loop {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.b serve
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, stopping
-    arm64.b dispatch
+    arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=total] @__jumptable_1
@@ -195,19 +184,15 @@ func @Calc.__loop {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
     arm64.bl __mm_decref
-    arm64.b stopping
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
-    arm64.b drain
   drain:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x1, x0
     arm64.cmp x1, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, finished
-    arm64.b abandon
+    arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -225,10 +210,8 @@ func @Calc.__loop {
     arm64.b drain
   total:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
-    arm64.b __il_cont
   __il_cont:
     arm64.bl __mm_decref
     arm64.movImm x2, 0
@@ -256,7 +239,6 @@ func @Calc.__abandon {
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref

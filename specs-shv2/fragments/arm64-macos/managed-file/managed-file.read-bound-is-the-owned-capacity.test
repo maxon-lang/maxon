@@ -69,9 +69,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @TestFile.openWrite {
@@ -82,9 +83,7 @@ func @TestFile.openWrite {
     arm64.bl __mf_open_write
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -118,9 +117,7 @@ func @TestFile.openRead {
     arm64.bl __mf_open_read
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -168,9 +165,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.storeSlotReg slot0, x21
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_7  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:22: openWrite: the runner's working directory is writable\x0a"
     arm64.bl mrt_panic
@@ -198,9 +193,7 @@ func @main {
     arm64.movRegReg x1, x22
     arm64.bl __mf_write
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_8  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:23: write: 10 bytes to a freshly opened file\x0a"
     arm64.bl mrt_panic
@@ -230,9 +223,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.storeSlotReg slot1, x21
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.leaRdata x0, __str_blob_9  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:26: openRead: the file just written\x0a"
     arm64.bl mrt_panic
@@ -258,9 +249,7 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot2, x20
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_blob_10  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:27: create: a 4-byte owned buffer\x0a"
     arm64.bl mrt_panic
@@ -283,30 +272,24 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __mf_read
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#10
-    arm64.b tryok#9
+    arm64.b.eq tryok#9
   tryerr#10:
     arm64.movImm x22, 999
     arm64.b trycont#11
   tryok#9:
     arm64.movRegReg x22, x0
-    arm64.b trycont#11
   trycont#11:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.movImm x2, 5
     arm64.movRegReg x1, x20
     arm64.bl __mf_read
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#13
-    arm64.b tryok#12
+    arm64.b.eq tryok#12
   tryerr#13:
     arm64.movImm x23, 999
     arm64.b trycont#14
   tryok#12:
     arm64.movRegReg x23, x0
-    arm64.b trycont#14
   trycont#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.bl __mf_close
@@ -314,9 +297,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.leaRdata x0, __str_blob_11  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:32: setLength: 4 bytes of a capacity-4 buffer\x0a"
     arm64.bl mrt_panic
@@ -339,9 +320,7 @@ func @main {
     arm64.bl __managed_byte_at
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#18
-    arm64.b tryok#17
+    arm64.b.eq tryok#17
   tryerr#18:
     arm64.leaRdata x0, __str_blob_12  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:33: byteAt: offset 0 of a 4-byte live range\x0a"
     arm64.bl mrt_panic
@@ -365,9 +344,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __mf_delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#20
-    arm64.b tryok#19
+    arm64.b.eq tryok#19
   tryerr#20:
     arm64.leaRdata x0, __str_blob_16  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:34: delete: the file this case created\x0a"
     arm64.bl mrt_panic

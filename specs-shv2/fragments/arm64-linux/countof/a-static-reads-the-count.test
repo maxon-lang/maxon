@@ -51,12 +51,9 @@ func @Vector.counted {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x1
     arm64.movImm x1, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x1, x19
-    arm64.cset x2, lt
-    arm64.cbnz x2, each
-    arm64.b whileexit
+    arm64.b.ge whileexit
   each:
     arm64.leaGlobal x2, __data_trips
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
@@ -102,16 +99,10 @@ func @Vector.rebuild {
     arm64.movRegReg x23, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forempty
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, countTheRecordsSlots
-    arm64.b forexit
+    arm64.b.ne forexit
   countTheRecordsSlots:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x19
@@ -120,7 +111,6 @@ func @Vector.rebuild {
     arm64.add x22, x22, 1
     arm64.movRegReg x0, x19
     arm64.bl __drop_type_param
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x23
     arm64.bl ArrayIterator.advance
@@ -133,12 +123,9 @@ func @Vector.rebuild {
     arm64.b forjoin
   forempty:
     arm64.movRegReg x0, x22
-    arm64.b forjoin
   forjoin:
     arm64.cmp x0, x20
-    arm64.cset x0, eq
-    arm64.cbnz x0, theStaticsResultStatesTheReceiversCount
-    arm64.b ifcont
+    arm64.b.ne ifcont
   theStaticsResultStatesTheReceiversCount:
     arm64.movImm x19, 0
     arm64.movRegReg x0, x21
@@ -196,14 +183,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-static-reads-the-count.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

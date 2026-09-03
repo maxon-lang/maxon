@@ -45,14 +45,10 @@ func @T.make {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, -1000
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 1000
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-static-and-instance-pair-where-the-static-throws.test:11: Range check failed: value outside typealias 'Num'\x0a"
     arm64.bl mrt_panic
@@ -74,14 +70,10 @@ func @T.m {
   entry:
     arm64.prologue 16
     arm64.cmp x1, -1000
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic#2
-    arm64.b __rc_chk#3
+    arm64.b.lt __rc_panic#2
   __rc_chk#3:
     arm64.cmp x1, 1000
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic#2
-    arm64.b __rc_ok#1
+    arm64.b.le __rc_ok#1
   __rc_panic#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-static-and-instance-pair-where-the-static-throws.test:15: Range check failed: value outside typealias 'Num'\x0a"
     arm64.bl mrt_panic
@@ -92,14 +84,10 @@ func @T.m {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.cmp x0, -1000
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic#5
-    arm64.b __rc_chk#6
+    arm64.b.lt __rc_panic#5
   __rc_chk#6:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic#5
-    arm64.b __rc_ok#4
+    arm64.b.le __rc_ok#4
   __rc_panic#5:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-static-and-instance-pair-where-the-static-throws.test:16: Range check failed: value outside typealias 'Num'\x0a"
     arm64.bl mrt_panic
@@ -115,14 +103,10 @@ func @T.m#__static {
   entry:
     arm64.prologue 16
     arm64.cmp x0, -1000
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at a-static-and-instance-pair-where-the-static-throws.test:19: Range check failed: value outside typealias 'Num'\x0a"
     arm64.bl mrt_panic
@@ -132,9 +116,7 @@ func @T.m#__static {
     arm64.ret
   __rc_ok:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, neg
-    arm64.b ifcont
+    arm64.b.ge ifcont
   neg:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -157,51 +139,32 @@ func @main {
     arm64.movImm x0, 4
     arm64.bl T.m#__static
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x20, 0
     arm64.b trycont
   tryok:
     arm64.movRegReg x20, x0
-    arm64.b trycont
   trycont:
     arm64.movImm x1, 2
-    arm64.b __il_body
-  __il_body:
-    arm64.b __rc_chk#10
-  __rc_chk#10:
-    arm64.b __rc_ok#9
   __rc_ok#9:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 2
     arm64.cmp x0, -1000
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_chk#12
+    arm64.b.lt __il_slow
   __rc_chk#12:
     arm64.cmp x0, 1000
-    arm64.cset x2, gt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok#11
+    arm64.b.le __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl T.m
-    arm64.b __il_cont
-  __rc_ok#11:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x20, x20, x0
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk#6
+    arm64.b.lt __rc_panic
   __rc_chk#6:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#4
+    arm64.b.le __rc_ok#4
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at a-static-and-instance-pair-where-the-static-throws.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

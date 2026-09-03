@@ -50,12 +50,9 @@ func @loopReuse {
     arm64.movImm x12, 0
     arm64.movRegReg x13, x12
     arm64.movRegReg x12, x5
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x13, 3
-    arm64.cset x14, lt
-    arm64.cbnz x14, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.sub x12, x0, x12
     arm64.add x13, x13, 1
@@ -82,9 +79,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl loopReuse
     arm64.cmp x0, 81
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

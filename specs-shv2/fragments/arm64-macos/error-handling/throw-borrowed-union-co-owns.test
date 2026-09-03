@@ -57,18 +57,13 @@ func @useAfterRethrow {
     arm64.movRegReg x0, x19
     arm64.bl rethrow
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x9
     arm64.bl __mm_decref

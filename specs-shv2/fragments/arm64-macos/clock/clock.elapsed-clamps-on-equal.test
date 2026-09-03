@@ -42,9 +42,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @main {
@@ -64,14 +65,9 @@ func @main {
     arm64.movImm x19, 0
     arm64.movImm x16, 10000
     arm64.cmp x0, x16
-    arm64.cset x0, lt
-    arm64.cbnz x0, bounded
-    arm64.b critsplit
+    arm64.b.ge ifcont
   bounded:
     arm64.movImm x19, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
   ifcont:
     arm64.leaRdata x0, __str_rec_2  ; "ok="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]

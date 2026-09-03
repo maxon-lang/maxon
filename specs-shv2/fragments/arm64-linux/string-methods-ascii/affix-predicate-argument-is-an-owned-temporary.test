@@ -57,14 +57,12 @@ func @makeAffix {
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.cbnz x19, ternarytrue
-    arm64.b ternaryfalse
+    arm64.cbz x19, ternaryfalse
   ternarytrue:
     arm64.leaRdata x1, __str_rec_9  ; "fix"
     arm64.b matchcont
   ternaryfalse:
     arm64.leaRdata x1, __str_rec_10  ; "ter"
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x22
     arm64.bl String.append
@@ -98,12 +96,10 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.cbnz x21, a
-    arm64.b ifcont#2
+    arm64.cbz x21, ifcont#2
   a:
     arm64.leaRdata x0, __str_rec_12  ; "start\x0a"
     arm64.bl print
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movImm x0, 0
     arm64.bl makeAffix
@@ -114,12 +110,10 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.cbnz x21, b
-    arm64.b ifcont#4
+    arm64.cbz x21, ifcont#4
   b:
     arm64.leaRdata x0, __str_rec_13  ; "end\x0a"
     arm64.bl print
-    arm64.b ifcont#4
   ifcont#4:
     arm64.movImm x0, 0
     arm64.bl makeAffix
@@ -130,12 +124,10 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.cbnz x21, c
-    arm64.b ifcont#6
+    arm64.cbz x21, ifcont#6
   c:
     arm64.leaRdata x0, __str_rec_14  ; "badStart\x0a"
     arm64.bl print
-    arm64.b ifcont#6
   ifcont#6:
     arm64.movRegReg x0, x19
     arm64.bl String.count

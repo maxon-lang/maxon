@@ -58,12 +58,13 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __mrt_errno@240 = i64 0
-  __mrt_envp@248 = i64 0
-  __mrt_tls_next_key@256 = i64 0
-  __slab_arena_list@264 = i64 0
-  __slab_arena_map_l1@272 = i64 0
-  __slab_state@280 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_errno@248 = i64 0
+  __mrt_envp@256 = i64 0
+  __mrt_tls_next_key@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
 }
 
 func @probe {
@@ -72,12 +73,9 @@ func @probe {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x19, 20
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.leaRdata x0, __str_rec_19  ; "noyield.txt"
     arm64.bl FilePath.init
@@ -86,7 +84,6 @@ func @probe {
     arm64.bl File.exists
     arm64.movRegReg x0, x20
     arm64.bl __destruct_FilePath
-    arm64.b forstep
   forstep:
     arm64.add x19, x19, 1
     arm64.b forhdr
@@ -128,26 +125,18 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
     arm64.cmp x20, 250
-    arm64.cset x1, ge
-    arm64.cbnz x1, slept
-    arm64.b critsplit#5
+    arm64.b.lt ifcont#2
   slept:
     arm64.movImm x0, 1
-    arm64.b ifcont#2
-  critsplit#5:
-    arm64.b ifcont#2
   ifcont#2:
     arm64.movImm x16, 10000
     arm64.cmp x20, x16
-    arm64.cset x1, lt
-    arm64.cbnz x1, bounded
-    arm64.b critsplit#6
+    arm64.b.ge critsplit
   bounded:
     arm64.add x20, x0, 1
     arm64.b ifcont#4
-  critsplit#6:
+  critsplit:
     arm64.movRegReg x20, x0
-    arm64.b ifcont#4
   ifcont#4:
     arm64.leaRdata x0, __str_rec_20  ; "score="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]

@@ -318,7 +318,7 @@ end 'main'
 ```
 
 <!-- test: await-any.over-service-replies -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐⭐ **THE COMPOSITION THAT MAKES THE PRIMITIVE WORTH HAVING.** A handler reply is an ordinary `Promise`, so
 ONE waiting primitive covers service replies, file IO and subprocess drains — there is no separate "channel
 select" anywhere in the design. Two services are sent to; the first handler sleeps and the second answers at
@@ -481,7 +481,7 @@ end 'main'
 ```
 
 <!-- test: await-any.the-losers-are-dropped-when-the-array-dies -->
-<!-- targets: x64-windows, arm64-linux -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐ The composition: select, serve the winner, and let the array die with the losers still in it. Exit 0
 is what a container that drops its promise elements gives. This case was `disabled-test` until the
 container owned its elements: the missing element walk on an `Array with Promise` (`W217`) reported

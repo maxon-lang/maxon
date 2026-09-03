@@ -67,16 +67,12 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.b __il_body#16
   __il_body#16:
     arm64.fpLoadRdata d0, [rdata + __fconst_1.5]
-    arm64.b __il_cont#15
   __il_cont#15:
     arm64.fpLoadRdata d1, [rdata + __fconst_1.5]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, squareRoot
-    arm64.b ifcont#2
+    arm64.b.eq __il_body#18
   squareRoot:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -86,17 +82,12 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#2:
-    arm64.b __il_body#18
   __il_body#18:
     arm64.fpLoadRdata d0, [rdata + __fconst_-3]
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.fpLoadRdata d1, [rdata + __fconst_-3]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, floorGoesDown
-    arm64.b ifcont#4
+    arm64.b.eq __il_body#20
   floorGoesDown:
     arm64.movImm x0, 2
     arm64.loadRegSlot x19, slot0
@@ -106,17 +97,12 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#4:
-    arm64.b __il_body#20
   __il_body#20:
     arm64.fpLoadRdata d0, [rdata + __fconst_-2]
-    arm64.b __il_cont#19
   __il_cont#19:
     arm64.fpLoadRdata d1, [rdata + __fconst_-2]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, ceilingGoesUp
-    arm64.b ifcont#6
+    arm64.b.eq __il_body#22
   ceilingGoesUp:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot0
@@ -126,17 +112,12 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#6:
-    arm64.b __il_body#22
   __il_body#22:
     arm64.fpLoadRdata d0, [rdata + __fconst_2]
-    arm64.b __il_cont#21
   __il_cont#21:
     arm64.fpLoadRdata d1, [rdata + __fconst_2]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, tiesGoToEven
-    arm64.b ifcont#8
+    arm64.b.eq __il_body#24
   tiesGoToEven:
     arm64.movImm x0, 4
     arm64.loadRegSlot x19, slot0
@@ -146,17 +127,12 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#8:
-    arm64.b __il_body#24
   __il_body#24:
     arm64.fpLoadRdata d0, [rdata + __fconst_4]
-    arm64.b __il_cont#23
   __il_cont#23:
     arm64.fpLoadRdata d1, [rdata + __fconst_4]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, andEvenIsNotAlwaysDown
-    arm64.b ifcont#10
+    arm64.b.eq __il_body#26
   andEvenIsNotAlwaysDown:
     arm64.movImm x0, 5
     arm64.loadRegSlot x19, slot0
@@ -166,11 +142,8 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#10:
-    arm64.b __il_body#26
   __il_body#26:
     arm64.fpLoadRdata d0, [rdata + __fconst_0]
-    arm64.b __il_cont#25
   __il_cont#25:
     arm64.bl __float_toString
     arm64.movRegReg x19, x0
@@ -200,8 +173,7 @@ func @main {
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
-    arm64.cbnz x20, absClearsTheSignBit
-    arm64.b ifcont#12
+    arm64.cbz x20, __il_body#28
   absClearsTheSignBit:
     arm64.movImm x0, 6
     arm64.loadRegSlot x19, slot0
@@ -211,11 +183,8 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#12:
-    arm64.b __il_body#28
   __il_body#28:
     arm64.fpLoadRdata d0, [rdata + __fconst_-2.5]
-    arm64.b __il_cont#27
   __il_cont#27:
     arm64.bl __float_toString
     arm64.movRegReg x19, x0
@@ -245,8 +214,7 @@ func @main {
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
-    arm64.cbnz x20, negFlipsIt
-    arm64.b ifcont#14
+    arm64.cbz x20, ifcont
   negFlipsIt:
     arm64.movImm x0, 7
     arm64.loadRegSlot x19, slot0
@@ -256,7 +224,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#14:
+  ifcont:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

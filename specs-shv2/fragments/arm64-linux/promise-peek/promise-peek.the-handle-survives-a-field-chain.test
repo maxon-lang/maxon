@@ -76,12 +76,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @Holder.of {
@@ -130,23 +131,17 @@ func @main {
     arm64.movImm x20, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_empty
-    arm64.b critsplit#28
+    arm64.b.eq critsplit#28
   __im_empty:
     arm64.cmp x21, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow
-    arm64.b critsplit#29
+    arm64.b.ne critsplit#29
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -158,12 +153,9 @@ func @main {
     arm64.b __im_cont
   critsplit#28:
     arm64.movRegReg x9, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at promise-peek.the-handle-survives-a-field-chain.test:23: the promise was just pushed\x0a"
     arm64.bl mrt_panic
@@ -187,23 +179,15 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.movImm x23, 0
     arm64.movImm x0, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x23, 100
-    arm64.cset x1, lt
-    arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs#4
-    arm64.b critsplit#23
+    arm64.movImm x1, 0
+    arm64.b.ge scmerge#5
   andrhs#4:
     arm64.cmp x0, 0
     arm64.cset x1, eq
-    arm64.b scmerge#5
-  critsplit#23:
-    arm64.movRegReg x1, x2
-    arm64.b scmerge#5
   scmerge#5:
-    arm64.cbnz x1, drive
-    arm64.b whileexit
+    arm64.cbz x1, whileexit
   drive:
     arm64.bl Runtime.yield
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
@@ -214,60 +198,41 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
     arm64.cmp x2, x21
-    arm64.cset x2, eq
-    arm64.cbnz x2, thetwodoorsagree
-    arm64.b critsplit#24
+    arm64.b.ne ifcont#9
   thetwodoorsagree:
     arm64.movImm x1, 1
-    arm64.b ifcont#9
-  critsplit#24:
-    arm64.b ifcont#9
   ifcont#9:
     arm64.cmp x22, 0
-    arm64.cset x2, eq
-    arm64.movImm x3, 0
-    arm64.cbnz x2, andrhs#10
-    arm64.b critsplit#25
+    arm64.movImm x2, 0
+    arm64.b.ne critsplit#25
   andrhs#10:
     arm64.cmp x0, 1
     arm64.cset x0, eq
     arm64.b scmerge#11
   critsplit#25:
-    arm64.movRegReg x0, x3
-    arm64.b scmerge#11
+    arm64.movRegReg x0, x2
   scmerge#11:
-    arm64.cbnz x0, thechainreadsarealstatus
-    arm64.b critsplit#26
+    arm64.cbz x0, critsplit#26
   thechainreadsarealstatus:
     arm64.add x21, x1, 2
     arm64.b ifcont#13
   critsplit#26:
     arm64.movRegReg x21, x1
-    arm64.b ifcont#13
   ifcont#13:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x20 + 0], x1
     arm64.bl __gt_await
     arm64.cmp x0, 42
-    arm64.cset x0, eq
-    arm64.cbnz x0, stillawaitable
-    arm64.b critsplit#27
+    arm64.b.ne ifcont#15
   stillawaitable:
     arm64.add x21, x21, 4
-    arm64.b ifcont#15
-  critsplit#27:
-    arm64.b ifcont#15
   ifcont#15:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at promise-peek.the-handle-survives-a-field-chain.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

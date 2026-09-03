@@ -192,6 +192,31 @@ export enum X64CondCode
 	greater = 0xF  // JG  (signed >)
 end 'X64CondCode'
 
+// The condition code that is TRUE exactly when `cond` is FALSE.
+//
+// ⭐ AN EXACT FLAG-LEVEL COMPLEMENT, NOT A "LOGICAL OPPOSITE", AND THE DIFFERENCE IS THE NaN EDGE.
+// Every x64 condition code is one of a pair testing the same flags for opposite values — JB/JAE on
+// CF, JE/JNE on ZF, JP/JNP on PF, JL/JGE on SF≠OF — so for any flag state exactly one of a pair is
+// taken. That is what makes the inversion safe for the float compares, where `ucomisd` reports an
+// unordered pair as ZF=PF=CF=1: swapping which target is the fall-through cannot change which of
+// `equal`/`notEqual` a NaN takes, because both still read the same ZF the compare set.
+export function invertX64Cond(cond X64CondCode) returns X64CondCode
+	return match cond 'invert'
+		below gives X64CondCode.aboveEqual
+		aboveEqual gives X64CondCode.below
+		equal gives X64CondCode.notEqual
+		notEqual gives X64CondCode.equal
+		belowEqual gives X64CondCode.above
+		above gives X64CondCode.belowEqual
+		parity gives X64CondCode.noParity
+		noParity gives X64CondCode.parity
+		less gives X64CondCode.greaterEqual
+		greaterEqual gives X64CondCode.less
+		lessEqual gives X64CondCode.greater
+		greater gives X64CondCode.lessEqual
+	end 'invert'
+end 'invertX64Cond'
+
 // Every arm64 physical register, its rawValue the NEUTRAL `RegNum` the allocator colors into: the
 // 31 general-purpose registers x0..x30 (0..30), then the 32 SIMD/FP registers d0..d31 (31..62).
 // One enum, two classes, exactly as `X64Register` — a register's CLASS is its number's position
@@ -299,6 +324,36 @@ export enum Arm64CondCode
 	gt = 12  // Z==0 ∧ N==V         (signed > ; float > — false on NaN)
 	le = 13  // Z==1 ∨ N!=V         (signed <=)
 end 'Arm64CondCode'
+
+// The condition code that is TRUE exactly when `cond` is FALSE.
+//
+// ⭐ AN EXACT FLAG-LEVEL COMPLEMENT OVER NZCV, NOT A COMPLEMENT OF THE SOURCE PREDICATE, AND THAT
+// DISTINCTION IS THE WHOLE NaN ARGUMENT. Each pair above partitions the flag states: Z / not-Z for
+// `eq`/`ne`, C / not-C for `hs`/`lo`, N / not-N for `mi`/`pl`, N==V / N!=V for `ge`/`lt`, and De
+// Morgan for `gt`/`le` and `hi`/`ls`. So for ANY flags — including the NZCV=0b0011 an `fcmp` leaves
+// on an unordered pair — exactly one of a pair is taken, and swapping which target is branched to
+// and which is fallen into cannot move a NaN onto the other arm.
+//
+// ⚠ THAT IS WHY `pl` AND `hi` APPEAR HERE despite the enum's warning that they read TRUE on NaN.
+// The warning is about LOWERING a source predicate: `pl` is not float `>=`, and `hi` is not float
+// `>`. Inverting a BRANCH asks a different question — "what is taken when `mi` is not?" — whose
+// answer is exactly `pl`, NaN included, because float `<` is false on NaN and its else-arm is taken.
+export function invertArm64Cond(cond Arm64CondCode) returns Arm64CondCode
+	return match cond 'invert'
+		eq gives Arm64CondCode.ne
+		ne gives Arm64CondCode.eq
+		hs gives Arm64CondCode.lo
+		lo gives Arm64CondCode.hs
+		mi gives Arm64CondCode.pl
+		pl gives Arm64CondCode.mi
+		hi gives Arm64CondCode.ls
+		ls gives Arm64CondCode.hi
+		ge gives Arm64CondCode.lt
+		lt gives Arm64CondCode.ge
+		gt gives Arm64CondCode.le
+		le gives Arm64CondCode.gt
+	end 'invert'
+end 'invertArm64Cond'
 
 // A set of physical registers: bit `i` is set iff `X64Register` number `i` (its
 // `rawValue`) is in the set — so bits 0-15 name GPRs and bits 16-31 name XMMs, and
@@ -1766,6 +1821,20 @@ export union TargetOp
 	// x16 write is an ordinary `arm64AddImm`), and no flags.
 	arm64LoadAcquire(dest TargetVReg, base TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64StoreRelease(base TargetVReg, src TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// ⭐ `SMULH Xd, Xn, Xm` — the high 64 bits of the 128-bit signed product, arm64's answer to the same
+	// question `imulHighReg` answers on x64 (EC18's magic multiply).
+	//
+	// ⚠ **IT CARRIES NO IMPLICIT MASKS, AND THAT IS THE WHOLE DIFFERENCE FROM `imulHighReg`.** x64's
+	// one-operand `imul` is a group-3 form wired to RAX/RDX, so its op declares those as implicit uses
+	// and defs and `forbidOperandsFromImplicit` keeps the explicit operand clear of them. AArch64's is an
+	// ordinary three-source data-processing instruction: both multiplicands and the destination are free
+	// registers, so it is a PLAIN 3-address op like `arm64Mul` and the allocator needs to know nothing
+	// special about it. It sets no flags either, so nothing is unfusable across it.
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `arm64StoreRelease`, per the band-append invariant this
+	// file states at `andRegReg` — NOT beside `arm64Mul` in the arm64 arithmetic band, where every
+	// `arm64Add to arm64Mvn` range arm would have swallowed it silently.
+	arm64Smulh(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

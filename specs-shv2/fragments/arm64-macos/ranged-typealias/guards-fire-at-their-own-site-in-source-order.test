@@ -1,0 +1,113 @@
+// Test: guards-fire-at-their-own-site-in-source-order
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 100000)
+
+function widen(n Wide) returns Wide
+	return n + 1
+end 'widen'
+
+function main() returns ExitCode
+	let a = widen(1)
+	let b = widen(2)
+	let c = widen(5000)
+	print("start\n")
+	let x = a as Small
+	print("after-x\n")
+	let y = b as Small
+	print("after-y\n")
+	let z = c as Small
+	print("after-z\n")
+	return x + y + z
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __rc_ok#17:
+    arm64.movImm x19, 2
+  __rc_ok#23:
+    arm64.movImm x20, 3
+  __rc_ok#29:
+    arm64.movImm x21, 5001
+  __il_cont:
+    arm64.leaRdata x0, __str_rec_4  ; "start\x0a"
+    arm64.bl print
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x19, 10
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at guards-fire-at-their-own-site-in-source-order.test:14: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#1:
+    arm64.leaRdata x0, __str_rec_5  ; "after-x\x0a"
+    arm64.bl print
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x20, 10
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at guards-fire-at-their-own-site-in-source-order.test:16: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#4:
+    arm64.leaRdata x0, __str_rec_6  ; "after-y\x0a"
+    arm64.bl print
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
+    arm64.cmp x21, 10
+    arm64.b.le __rc_ok#7
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at guards-fire-at-their-own-site-in-source-order.test:18: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#7:
+    arm64.leaRdata x0, __str_rec_7  ; "after-z\x0a"
+    arm64.bl print
+    arm64.add x0, x19, x20
+    arm64.add x0, x0, x21
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#11
+  __rc_chk#12:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok#10
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_13  ; "panic at guards-fire-at-their-own-site-in-source-order.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_ok#10:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

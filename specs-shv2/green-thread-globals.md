@@ -109,7 +109,7 @@ target-neutral.
 ## Tests
 
 <!-- test: error.a-handler-may-not-write-a-module-global -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE DIRECT SHAPE — the measurement above, reduced to the one statement that makes it possible.**
 `Counter.add` is an `export` instance method of a type this program `spawn`s, so it is a MESSAGE, so it
 runs on a green thread; `total = total + by` is the load/add/store that two Ms can interleave. The
@@ -146,7 +146,7 @@ note: <fragment>:17:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: error.a-function-called-by-a-handler-may-not-write-a-module-global -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE SAME REFUSAL ONE HOP OUT, AND IT IS THE ONE THAT DECIDES WHETHER THE RULE IS WORTH ANYTHING.** A
 rule keyed on writes SYNTACTICALLY INSIDE a handler body refuses only the shape an author would have
 spotted anyway; the race does not care which frame the store instruction sits in. `Counter.add` names no
@@ -190,7 +190,7 @@ note: <fragment>:21:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: error.a-dispatch-the-compiler-cannot-follow-widens-the-rule -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⛔⛔ **THE REFUSING DIRECTION, RUN — AND IT IS THE ROW ABOVE THAT NOTHING ELSE IN THIS FILE CAN SEE.**
 `a-plain-function-may-write-a-module-global` below is this program with ONE difference: there, `Counter.add`
 calls nothing the walk cannot follow, and `bookKeeping`'s write is legal. Here `Counter.add` calls
@@ -260,7 +260,7 @@ note: <fragment>:30:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: error.a-handler-may-not-read-a-module-global -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⛔⛔ **THE READ HALF, AND THIS IS THE PROGRAM THE MEASUREMENT WAS TAKEN ON — VERBATIM.** `Reader.size`
 names no global on the left of anything; it only *reads* `label`, four thousand times, while `main`
 reassigns it four thousand times from another green thread. Under the write rule alone this compiled and
@@ -354,7 +354,7 @@ note: <fragment>:37:11: the `spawn` that makes `Reader` a service
 ```
 
 <!-- test: a-handler-may-write-its-own-field -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE OVER-REFUSAL GUARD THAT MATTERS MOST — the cure the two refusals above prescribe must itself
 compile.** `self.count = self.count + by` is a store to a word owned by ONE green thread: the service's
 own. There is no second writer at any processor count, which is the language guarantee the whole
@@ -399,7 +399,7 @@ count=7
 ```
 
 <!-- test: a-handler-may-read-an-immutable-global -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE RULE IS ABOUT THE WRITE, AND A `let` HAS NONE.** A module-level `let` is written once before any
 green thread exists and never again, so every M that reads it reads the same word and no interleaving can
 produce a different answer. A rule that refused module-level state as such — rather than the store to it —
@@ -435,7 +435,7 @@ scaled=42
 ```
 
 <!-- test: a-plain-function-may-write-a-module-global -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 **THE SCOPE GUARD — a `spawn` anywhere does not make the whole program concurrent.** Whether a type is a
 service is a WHOLE-PROGRAM property (`services.md`, *"a `spawn` anywhere makes the type a service"*), and
 the tempting cheap implementation of this rule inherits that shape: refuse every global write in any
@@ -488,7 +488,7 @@ ledger=15 count=5
 ```
 
 <!-- test: an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐⭐ **THE OVER-REFUSAL THAT MADE THIS RULE UNUSABLE, PINNED — one ordinary interface method in a handler's
 cone used to refuse every program that so much as MENTIONED `Log`.**
 

@@ -47,9 +47,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @main {
@@ -58,40 +59,27 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.bl __md_current_path
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq __il_body
   tryerr:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  tryok:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x1, 0
-    arm64.cset x1, gt
-    arm64.cbnz x1, ternarytrue
-    arm64.b ternaryfalse
+    arm64.b.le ternaryfalse
   ternarytrue:
     arm64.movImm x19, 37
-    arm64.b matchcont
+    arm64.b __il_cont
   ternaryfalse:
     arm64.movImm x19, 12
-    arm64.b matchcont
-  matchcont:
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x19, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

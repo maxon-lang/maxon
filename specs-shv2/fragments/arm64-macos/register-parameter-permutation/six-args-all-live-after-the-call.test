@@ -22,7 +22,6 @@ ExitCode: 0
 func @keepAll {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.movImm x16, 100000
     arm64.mul x6, x5, x16
@@ -39,7 +38,6 @@ func @keepAll {
     arm64.mul x7, x1, x16
     arm64.add x6, x6, x7
     arm64.add x6, x6, x0
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x16, 100000
     arm64.mul x0, x0, x16
@@ -73,9 +71,7 @@ func @main {
     arm64.bl keepAll
     arm64.movImm x16, 777777
     arm64.cmp x0, x16
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

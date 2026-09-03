@@ -100,9 +100,7 @@ func @run {
     arm64.bl __retain_existential
     arm64.movRegReg x23, x0
     arm64.cmp x20, 0
-    arm64.cset x0, gt
-    arm64.cbnz x0, grow
-    arm64.b critsplit
+    arm64.b.le critsplit
   grow:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x19
@@ -115,7 +113,6 @@ func @run {
   critsplit:
     arm64.movRegReg x19, x23
     arm64.movRegReg x22, x21
-    arm64.b ifcont
   ifcont:
     arm64.movRegReg x0, x19
     arm64.loadRegBaseDisp.word64 x16, [x22 + 24]
@@ -152,14 +149,10 @@ func @main {
     arm64.bl run
     arm64.movRegReg x21, x0
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch-discriminating-merge.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

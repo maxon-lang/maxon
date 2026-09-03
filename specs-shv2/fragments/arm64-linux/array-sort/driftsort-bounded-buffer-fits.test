@@ -78,26 +78,20 @@ data {
 func @ascending {
   entry:
     arm64.prologue 16
-    arm64.b __il_body
   __il_body:
     arm64.cmp x0, x1
-    arm64.cset x2, lt
-    arm64.cbnz x2, lt
-    arm64.b ifcont#4
+    arm64.b.ge ifcont#4
   lt:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#4:
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.cbnz x0, gt
-    arm64.b ifcont#6
+    arm64.b.le ifcont#6
   gt:
     arm64.movImm x0, 2
     arm64.b __il_cont
   ifcont#6:
     arm64.movImm x0, 1
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -244,33 +238,27 @@ func @main {
     arm64.leaRdata x1, __str_rec_21  ; "buffer.alloc"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
-    arm64.cbnz x0, ba
-    arm64.b ifcont#2
+    arm64.cbz x0, ifcont#2
   ba:
     arm64.leaRdata x0, __str_rec_22  ; "buffer.alloc "
     arm64.bl print
-    arm64.b ifcont#2
   ifcont#2:
     arm64.leaRdata x1, __str_rec_23  ; "mergeBuffer.fits"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
-    arm64.cbnz x0, mf
-    arm64.b ifcont#4
+    arm64.cbz x0, ifcont#4
   mf:
     arm64.leaRdata x0, __str_rec_24  ; "mergeBuffer.fits "
     arm64.bl print
-    arm64.b ifcont#4
   ifcont#4:
     arm64.leaRdata x1, __str_rec_25  ; "mergeBuffer.exhausted"
     arm64.movRegReg x0, x20
     arm64.bl Log.fired
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, no
-    arm64.b ifcont#6
+    arm64.cbz x0, ifcont#6
   no:
     arm64.leaRdata x0, __str_rec_26  ; "no-rotation"
     arm64.bl print
-    arm64.b ifcont#6
   ifcont#6:
     arm64.leaRdata x0, __str_rec_27  ; "\x0a"
     arm64.bl print

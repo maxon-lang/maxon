@@ -45,9 +45,7 @@ func @consume {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 100
-    arm64.cset x2, gt
-    arm64.cbnz x2, big
-    arm64.b ifcont
+    arm64.b.le ifcont
   big:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -72,12 +70,9 @@ func @run {
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x21, x19
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b critsplit
+    arm64.b.ge whileexit
   loop:
     arm64.leaRdata x22, __str_rec_2  ; "x"
     arm64.movImm x0, 8
@@ -99,30 +94,20 @@ func @run {
     arm64.movRegReg x0, x23
     arm64.bl consume
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.cmp x21, 1
-    arm64.cset x0, gt
-    arm64.cbnz x0, deep
-    arm64.b ifcont
+    arm64.b.le trycont
   deep:
     arm64.movRegReg x0, x23
     arm64.bl __managed_decref
     arm64.b whileexit
-  ifcont:
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x23
     arm64.bl __managed_decref
     arm64.add x20, x20, 1
     arm64.add x21, x21, 1
     arm64.b whilehdr
-  critsplit:
-    arm64.b whileexit
   whileexit:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
@@ -140,14 +125,10 @@ func @main {
     arm64.movImm x0, 9
     arm64.bl run
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at an-inner-break-in-a-fell-through-handler-releases-them.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

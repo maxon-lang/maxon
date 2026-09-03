@@ -67,20 +67,15 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x1, 0
-    arm64.b forhdr
   forhdr:
     arm64.storeSlotReg slot0, x1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, e
-    arm64.b forexit
+    arm64.b.ge forexit
   e:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x1, lsl #3
@@ -88,9 +83,7 @@ func @main {
     arm64.b __im_cont
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x1
@@ -99,7 +92,6 @@ func @main {
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get_unchecked
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x0, 0
     arm64.cset x1, eq
@@ -135,18 +127,14 @@ func @main {
     arm64.leaRdata x1, __str_rec_14  ; "="
     arm64.loadRegBaseDisp.word64 x22, [x1 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x1 + 8]
-    arm64.b __il_body
   __il_body:
     arm64.jumpTable x0, default=matchdead [[0]=matcharm#13, [1]=matcharm#12, [2]=matcharm#13, [3..4]=matcharm#12, [5]=matcharm#13] @__jumptable_16
   matchdead:
   matcharm#13:
     arm64.movImm x24, 0
-    arm64.b matchcont
+    arm64.b __il_cont
   matcharm#12:
     arm64.movImm x24, 1
-    arm64.b matchcont
-  matchcont:
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x0, 5
     arm64.movImm x1, 0
@@ -202,7 +190,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.loadRegSlot x0, slot0
     arm64.add x1, x0, 1

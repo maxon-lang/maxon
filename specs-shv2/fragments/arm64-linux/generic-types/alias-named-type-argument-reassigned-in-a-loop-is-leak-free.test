@@ -120,12 +120,9 @@ func @main {
     arm64.bl Box.create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x20, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, rounds
-    arm64.b forexit
+    arm64.b.ge forexit
   rounds:
     arm64.leaRdata x0, __str_rec_3  ; "round"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -153,7 +150,6 @@ func @main {
     arm64.leaRdata x2, __layout_Box_N0
     arm64.movRegReg x0, x19
     arm64.bl Box.swap
-    arm64.b forstep
   forstep:
     arm64.add x20, x20, 1
     arm64.b forhdr

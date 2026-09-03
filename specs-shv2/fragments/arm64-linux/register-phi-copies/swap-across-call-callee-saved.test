@@ -33,16 +33,9 @@ func @swapAcrossCall {
     arm64.add x1, x0, 1
     arm64.add x0, x0, 2
     arm64.movImm x2, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x2, 3
-    arm64.cset x3, lt
-    arm64.cbnz x3, loop
-    arm64.b whileexit
-  loop:
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
+    arm64.b.ge whileexit
   __il_cont:
     arm64.add x2, x2, 1
     arm64.xchgRegReg x1, x0
@@ -61,9 +54,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl swapAcrossCall
     arm64.cmp x0, 21
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.b.ne ifcont
   ok:
     arm64.movImm x0, 0
     arm64.epilogue 16

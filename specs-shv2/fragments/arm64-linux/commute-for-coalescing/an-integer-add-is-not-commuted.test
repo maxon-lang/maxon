@@ -26,33 +26,25 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x1, 4
-    arm64.cset x2, lt
-    arm64.cbnz x2, feed
-    arm64.b forexit
+    arm64.b.ge forexit
   feed:
     arm64.movImm x16, 3
     arm64.mul x2, x1, x16
-    arm64.b __il_body
   __il_body:
     arm64.movImm x16, 5
     arm64.mul x3, x1, x16
     arm64.add x3, x2, x3
     arm64.add x2, x3, x2
-    arm64.b __il_cont
   __il_cont:
     arm64.add x0, x0, x2
-    arm64.b forstep
   forstep:
     arm64.add x1, x1, 1
     arm64.b forhdr
   forexit:
     arm64.cmp x0, 66
-    arm64.cset x0, ne
-    arm64.cbnz x0, sum
-    arm64.b ifcont
+    arm64.b.eq ifcont
   sum:
     arm64.movImm x0, 1
     arm64.epilogue 16

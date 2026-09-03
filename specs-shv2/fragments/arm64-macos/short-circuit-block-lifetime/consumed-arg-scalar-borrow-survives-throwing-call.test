@@ -230,16 +230,13 @@ func @Parser.parseIdentifierExpr {
     arm64.bl __mm_decref
     arm64.storeBaseDispReg.word64 [x19 + 0], x20
     arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
-    arm64.cbnz x21, callArgs
-    arm64.b critsplit
+    arm64.cbz x21, critsplit
   callArgs:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl Parser.parseCallArgsRaw
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -253,7 +250,6 @@ func @Parser.parseIdentifierExpr {
     arm64.b ifcont
   critsplit:
     arm64.movRegReg x0, x22
-    arm64.b ifcont
   ifcont:
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.add x0, x0, x1
@@ -286,9 +282,7 @@ func @Parser.parseCallArgsRaw {
     arm64.movRegReg x1, x20
     arm64.bl Parser.parseExpressionBP
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -328,9 +322,7 @@ func @Parser.parsePrimary {
     arm64.movRegReg x2, x21
     arm64.bl Parser.parseIdentifierExpr
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -372,9 +364,7 @@ func @Parser.parseUnary {
     arm64.movRegReg x2, x21
     arm64.bl Parser.parsePrimary
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -423,9 +413,7 @@ func @Parser.parseExpressionBP {
     arm64.movRegReg x21, x0
     arm64.movRegReg x23, x9
     arm64.cmp x23, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
@@ -445,12 +433,9 @@ func @Parser.parseExpressionBP {
     arm64.movRegReg x23, x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 0
-    arm64.cset x0, hi
-    arm64.cbnz x0, prattLoop
-    arm64.b whileexit
+    arm64.b.ls whileexit
   prattLoop:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
@@ -458,9 +443,7 @@ func @Parser.parseExpressionBP {
     arm64.movRegReg x22, x0
     arm64.movRegReg x24, x9
     arm64.cmp x24, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq tryok#6
   tryerr#7:
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
@@ -529,9 +512,7 @@ func @Parser.emitShortCircuit {
     arm64.movRegReg x23, x0
     arm64.movRegReg x24, x9
     arm64.cmp x24, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
@@ -550,12 +531,10 @@ func @Parser.emitShortCircuit {
     arm64.movImm x1, 102
     arm64.bl Module.addBlock
     arm64.movRegReg x24, x0
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 0], x0
-    arm64.b __il_cont
   __il_cont:
     arm64.add x20, x22, x20
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
@@ -608,9 +587,7 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl Parser.parseExpressionBP
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq __il_body
   tryerr:
     arm64.movImm x22, 3
     arm64.movRegReg x0, x21
@@ -626,38 +603,27 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
-    arm64.b __il_body
   __il_body:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x2 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.b forhdr
   forhdr:
     arm64.cmp x3, x4
-    arm64.cset x5, lt
-    arm64.cbnz x5, each
-    arm64.b forexit
+    arm64.b.ge __il_cont
   each:
     arm64.arm64AddLsl x5, x2, x3, lsl #3
     arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
     arm64.add x1, x1, x5
-    arm64.b forstep
   forstep:
     arm64.add x3, x3, 1
     arm64.b forhdr
-  forexit:
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x1, 205
-    arm64.cset x1, ne
-    arm64.cbnz x1, corrupt
-    arm64.b ifcont#4
+    arm64.b.eq ifcont#4
   corrupt:
     arm64.movImm x22, 1
     arm64.movRegReg x0, x21
@@ -675,9 +641,7 @@ func @main {
     arm64.ret
   ifcont#4:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, noResult
-    arm64.b ifcont#6
+    arm64.b.ne ifcont#6
   noResult:
     arm64.movImm x22, 2
     arm64.movRegReg x0, x21

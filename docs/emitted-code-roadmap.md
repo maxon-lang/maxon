@@ -110,7 +110,7 @@ Pipelines compared: `maxon-shv2/Compiler/IR/PassPipeline.maxon:398-413` ·
 | **CSE / GVN** | ✅ `CommonSubexpressionElimination` (EC13) — dominator-scoped, arith band, call-barriered | ❌ | ✅ `CommonSubexpressionElimination.maxon` (494) |
 | **LICM** | ✅ `LoopInvariantCodeMotion` (EC14) — pure ops AND invariant loads, two stated speculation rules | ◑ refcount pairs only | ✅ `LoopInvariantCodeMotion.maxon` (596) — pure ops only |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* | ✅ `DeadStoreEliminationPass` sub-pass 3 | ✅ `DeadCodeElimination.maxon` (728) |
-| **Block merging / branch simplification** | ◑ `X64BranchCleanup` (EC11) — elision, inversion, threading, unreachable; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
+| **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** | ◑ cond-br then-edge only | ✅ `CfgAnalysis` + `Canonicalize` |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 | ❌ | ❌ |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half | ❌ | ❌ |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15) | ❌ n/a | ❌ n/a |
@@ -264,8 +264,8 @@ bootstrap's** `StdCondBrOp` (`maxon-sharp`, the `G24` row on `PLAN.md`), a diffe
 order is semantically free at the shv2 Target tier — which is what makes this rung a DELETION rather
 than a reordering, and is the whole of why it is low risk.
 
-✅ **LANDED 2026-08-28** as `maxon-shv2/Compiler/Targets/X64/X64BranchCleanup.maxon`, scheduled in
-`buildX64Backend` between `allocateRegisters` and `insertPrologueEpilogue` — after `applyAllocation`,
+✅ **LANDED 2026-08-28** as `maxon-shv2/Compiler/Targets/Shared/BranchCleanup.maxon`, scheduled in
+`buildX64Backend` and `buildArm64Backend` between `allocateRegisters` and the frame pass — after `applyAllocation`,
 which is the whole correctness argument for the threading half (before SSA destruction has placed its
 edge copies, a "jmp-only" block is an edge ABOUT to receive moves). Four transforms landed: jump
 elision, conditional inversion, jump threading, unreachable-block elimination. **Block REORDERING did
@@ -285,6 +285,23 @@ branches that named it now reach the real target directly. Elision alone would h
 
 **ACCEPTANCE**: nbody's jump-to-next count 410 → 0; total emitted ops down ≥3%; byte-identical
 self-host fixpoint; suite green on x64-windows and wasm; `--emit-ir` diff audited on the anchor loop.
+
+✅ **arm64 ADOPTED 2026-09-02.** The pass moved to `Targets/Shared/` unchanged in shape; the only
+per-ISA fact is a condition code's complement (`invertX64Cond` / `invertArm64Cond`, beside their
+enums in `TargetDialect`), and `arm64Cbz`/`arm64Cbnz` complement each other. x64 emission is
+byte-identical across the move. On arm64-macos, `--emit-ir` over `examples/` (the x64 corpus's two
+programs plus `basic`), counting `arm64.b`:
+
+| | ops | b | b→next | b-only blocks |
+|---|---|---|---|---|
+| nbody | 894 → **832** | 82 → **20** | 25 → **0** | 2 → **0** |
+| fannkuch-redux | 2,426 → **2,159** | 330 → **63** | 139 → **0** | 11 → **0** |
+| TOTAL | 3,324 → **2,995** (−9.9%) | 412 → **83** (−80%) | 164 → **0** | 13 → **0** |
+
+⚠ The unit is not the x64 table's: these are `arm64.*` ops on a corpus of three programs, and the
+x64 rows above predate the 2026-08-29 `--emit-ir` unit change. Read each table against itself.
+`specs-shv2/branch-cleanup.md` pins the behaviour — the arms an inverted, threaded or dropped branch
+must still select, NaN included.
 
 #### `EC12` · `foldConstants` — evaluate `const ⊕ const`
 
@@ -1692,10 +1709,10 @@ source, so its producers are only the passes); `EC21` (interval match dispatch �
 
 - **A latent correctness bug, filed by `EC11`**: a block with no terminator op falls through
   PHYSICALLY, but `collectBlockSuccessorIds` / `buildFuncTopology` model it as having **no
-  successors**. `X64BranchCleanup` closes the hole locally; liveness, loop depth and critical-edge
+  successors**. `BranchCleanup` closes the hole locally; liveness, loop depth and critical-edge
   classification would all be wrong if such a block ever became reachable. **Rank this by risk, not
   by win.**
-- **arm64** owes a golden mint and carries real `EC16`/`EC18` codegen **never executed on that lane**.
+- **arm64** owes a golden mint — EC11's adoption moved every fragment on both arm64 lanes — and carries real `EC16`/`EC18` codegen **never executed on that lane**.
   `EC18`'s `SMULH` is all that lane needs for its half of strength reduction.
 - ✅ **CLOSED 2026-08-30 — `f(obj.managedField)` WHERE THE CALLEE FREES THAT FIELD.** shv2 handed a managed
   field read straight to a call with no refcount at all (`emitFieldLoad`: *"a receiver load, an argument, a

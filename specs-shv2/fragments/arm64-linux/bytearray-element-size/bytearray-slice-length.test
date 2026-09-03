@@ -34,19 +34,14 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movImm x21, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, copy
-    arm64.b forexit
+    arm64.b.ge forexit
   copy:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x21, lsl #3
@@ -54,9 +49,7 @@ func @main {
     arm64.b __im_cont
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x21
@@ -67,11 +60,9 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __managed_get_unchecked
     arm64.movRegReg x1, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x21, x21, 1
     arm64.b forhdr
@@ -82,14 +73,12 @@ func @main {
     arm64.leaRdata x1, __str_rec_1  ; "hello world"
     arm64.movRegReg x0, x21
     arm64.bl __str_eq
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
+    arm64.cbz x0, ternaryfalse
   ternarytrue:
     arm64.movImm x22, 0
     arm64.b matchcont
   ternaryfalse:
     arm64.movImm x22, 1
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
@@ -98,14 +87,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x22, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x22, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at bytearray-slice-length.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

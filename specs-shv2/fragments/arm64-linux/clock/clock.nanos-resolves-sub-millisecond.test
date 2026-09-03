@@ -54,12 +54,13 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __slab_arena_list@256 = i64 0
-  __slab_arena_map_l1@264 = i64 0
-  __slab_state@272 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __slab_arena_list@264 = i64 0
+  __slab_arena_map_l1@272 = i64 0
+  __slab_state@280 = i64 0
 }
 
 func @main {
@@ -79,47 +80,30 @@ func @main {
     arm64.movImm x20, 0
     arm64.movRegReg x21, x20
     arm64.movRegReg x20, x0
-    arm64.b whilehdr
   whilehdr:
     arm64.movImm x16, 200000
     arm64.cmp x21, x16
-    arm64.cset x0, lt
-    arm64.cbnz x0, sample
-    arm64.b whileexit
+    arm64.b.ge whileexit
   sample:
     arm64.bl Clock.nowNanos
     arm64.sub x1, x0, x20
     arm64.cmp x1, 0
-    arm64.cset x2, gt
-    arm64.cbnz x2, advanced
-    arm64.b critsplit#14
+    arm64.b.le critsplit#14
   advanced:
     arm64.cmp x19, 0
-    arm64.cset x2, eq
-    arm64.movImm x3, 1
-    arm64.cbnz x2, critsplit#16
-    arm64.b orrhs
-  critsplit#16:
-    arm64.b scmerge#6
+    arm64.movImm x2, 1
+    arm64.b.eq scmerge#6
   orrhs:
     arm64.cmp x1, x19
     arm64.cset x2, lt
-    arm64.movRegReg x3, x2
-    arm64.b scmerge#6
   scmerge#6:
-    arm64.cbnz x3, newMin
-    arm64.b critsplit#17
-  newMin:
-    arm64.b ifcont#8
+    arm64.cbnz x2, ifcont#9
   critsplit#17:
     arm64.movRegReg x1, x19
-    arm64.b ifcont#8
-  ifcont#8:
     arm64.b ifcont#9
   critsplit#14:
     arm64.movRegReg x1, x19
     arm64.movRegReg x0, x20
-    arm64.b ifcont#9
   ifcont#9:
     arm64.add x21, x21, 1
     arm64.movRegReg x19, x1
@@ -128,27 +112,19 @@ func @main {
   whileexit:
     arm64.movImm x20, 0
     arm64.cmp x19, 0
-    arm64.cset x0, gt
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit#15
+    arm64.movImm x0, 0
+    arm64.b.le scmerge#11
   andrhs:
     arm64.movImm x16, 1000000
     arm64.cmp x19, x16
     arm64.cset x0, lt
-    arm64.b scmerge#11
-  critsplit#15:
-    arm64.movRegReg x0, x1
-    arm64.b scmerge#11
   scmerge#11:
-    arm64.cbnz x0, subMillisecond
-    arm64.b critsplit#18
+    arm64.cbz x0, critsplit#18
   subMillisecond:
     arm64.movImm x19, 1
     arm64.b ifcont#13
   critsplit#18:
     arm64.movRegReg x19, x20
-    arm64.b ifcont#13
   ifcont#13:
     arm64.leaRdata x0, __str_rec_2  ; "subMs="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]

@@ -119,9 +119,7 @@ func @NumberedLines.create {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 1
-    arm64.cset x0, lt
-    arm64.cbnz x0, empty
-    arm64.b ifcont
+    arm64.b.ge ifcont
   empty:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -207,9 +205,7 @@ func @NumberedLines.advance {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x1, ge
-    arm64.cbnz x1, atTheLast
-    arm64.b ifcont
+    arm64.b.lt ifcont
   atTheLast:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -232,9 +228,7 @@ func @ShoutedLines.create {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 1
-    arm64.cset x0, lt
-    arm64.cbnz x0, empty
-    arm64.b ifcont
+    arm64.b.ge ifcont
   empty:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -333,9 +327,7 @@ func @ShoutedLines.advance {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x1, ge
-    arm64.cbnz x1, atTheLast
-    arm64.b ifcont
+    arm64.b.lt ifcont
   atTheLast:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -371,9 +363,7 @@ func @PlainDoc.createIterator {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl NumberedLines.create
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -404,9 +394,7 @@ func @LoudDoc.createIterator {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl ShoutedLines.create
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -432,39 +420,26 @@ func @widthOf {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit
-    arm64.b forempty
-  critsplit:
-    arm64.b forhdr
+    arm64.b.ne forempty
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, walk
-    arm64.b forexit
+    arm64.b.ne forexit
   walk:
     arm64.movRegReg x0, x21
     arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
     arm64.blr x16
     arm64.movRegReg x22, x0
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x22
     arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.add x19, x19, x0
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x21
     arm64.loadRegBaseDisp.word64 x16, [x20 + 32]
@@ -479,7 +454,6 @@ func @widthOf {
     arm64.b forjoin
   forempty:
     arm64.movRegReg x0, x19
-    arm64.b forjoin
   forjoin:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -505,12 +479,9 @@ func @main {
     arm64.movImm x19, 0
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, many
-    arm64.b whileexit
+    arm64.b.ge whileexit
   many:
     arm64.movImm x0, 4
     arm64.bl PlainDoc.create

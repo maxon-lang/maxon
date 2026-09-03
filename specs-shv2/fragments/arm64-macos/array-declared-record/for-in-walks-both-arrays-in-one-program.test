@@ -62,19 +62,15 @@ func @main {
     arm64.bl __managed_push
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b forhdr#1
   forhdr#1:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, ownLoop
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   ownLoop:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get_unchecked
     arm64.add x20, x20, x0
-    arm64.b forstep#3
   forstep#3:
     arm64.add x21, x21, 1
     arm64.b forhdr#1
@@ -84,35 +80,25 @@ func @main {
     arm64.bl String.split
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, librarysLoop
-    arm64.b forexit#8
+    arm64.b.ge forexit#8
   librarysLoop:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_cont
-  __im_cont:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok#15
+    arm64.b.ge __rc_ok#15
   __il_slow:
     arm64.bl String.byteLength
     arm64.b __il_cont
   __rc_ok#15:
     arm64.movRegReg x0, x1
-    arm64.b __il_cont
   __il_cont:
     arm64.add x20, x20, x0
-    arm64.b forstep#7
   forstep#7:
     arm64.add x22, x22, 1
     arm64.b forhdr#5
@@ -120,14 +106,10 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#9
+    arm64.b.le __rc_ok#9
   __rc_panic:
     arm64.leaRdata x0, __str_blob_9  ; "panic at for-in-walks-both-arrays-in-one-program.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

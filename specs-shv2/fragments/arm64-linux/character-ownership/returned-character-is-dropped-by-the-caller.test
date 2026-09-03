@@ -45,25 +45,18 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 50
-    arm64.cset x0, lt
-    arm64.cbnz x0, rep
-    arm64.b whileexit
+    arm64.b.ge whileexit
   rep:
     arm64.bl litOnly
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x21
     arm64.bl __str_eq
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
+    arm64.cbz x0, matchcont
   ternarytrue:
     arm64.add x20, x20, 1
-    arm64.b matchcont
-  ternaryfalse:
-    arm64.b matchcont
   matchcont:
     arm64.add x19, x19, 1
     arm64.movRegReg x0, x21

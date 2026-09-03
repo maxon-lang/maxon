@@ -39,12 +39,9 @@ func @printRest {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, rest
-    arm64.b forexit
+    arm64.b.ne forexit
   rest:
     arm64.leaRdata x1, __layout_ArrayIterator_String
     arm64.movRegReg x0, x19
@@ -83,7 +80,6 @@ func @printRest {
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.b forstep
   forstep:
     arm64.movRegReg x0, x19
     arm64.bl ArrayIterator.advance
@@ -138,9 +134,7 @@ func @main {
     arm64.bl Array.createIterator
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x19, 9
     arm64.movRegReg x0, x20
@@ -155,9 +149,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl ArrayIterator.advance
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x21, 9
     arm64.movRegReg x0, x19
@@ -174,9 +166,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl ArrayIterator.advance
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x21, 9
     arm64.movRegReg x0, x19

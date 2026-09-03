@@ -29,35 +29,25 @@ func @envSize {
     arm64.prologue 16
     arm64.leaRdata x1, __witness_String.Hashable
     arm64.leaRdata x2, __witness_String.Equatable
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x3, [x0 + 32]
     arm64.cmp x3, 0
-    arm64.cset x4, lt
-    arm64.cbnz x4, __il_slow
-    arm64.b __rc_chk#7
+    arm64.b.lt __il_slow
   __rc_chk#7:
     arm64.movImm x4, 4611686018427387904
     arm64.cmp x3, x4
-    arm64.cset x4, gt
-    arm64.cbnz x4, __il_slow
-    arm64.b __rc_ok#6
+    arm64.b.le __rc_ok#6
   __il_slow:
     arm64.bl Map.count
     arm64.b __il_cont
   __rc_ok#6:
     arm64.movRegReg x0, x3
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk#3
+    arm64.b.lt __rc_panic
   __rc_chk#3:
     arm64.cmp x0, 1000
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok#1
+    arm64.b.le __rc_ok#1
   __rc_panic:
     arm64.leaRdata x0, __str_blob_36  ; "panic at mapping-a-map-releases-the-entry-tuples-it-built.test:6: Range check failed: value outside typealias 'Cnt'\x0a"
     arm64.bl mrt_panic
@@ -228,9 +218,7 @@ func @main {
     arm64.movRegReg x2, x24
     arm64.bl Map.insert
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x22, 9
     arm64.movRegReg x0, x20
@@ -307,14 +295,10 @@ func @main {
     arm64.bl envSize
     arm64.add x20, x20, x0
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_37  ; "panic at mapping-a-map-releases-the-entry-tuples-it-built.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

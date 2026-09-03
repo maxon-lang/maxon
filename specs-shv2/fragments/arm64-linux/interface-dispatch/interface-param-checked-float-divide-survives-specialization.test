@@ -75,9 +75,7 @@ func @ratioVia {
     arm64.cset x0, eq
     arm64.fdiv d0, d0, d8
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at interface-param-checked-float-divide-survives-specialization.test:24: ratioVia: d was 0\x0a"
     arm64.bl mrt_panic
@@ -100,36 +98,26 @@ func @main {
     arm64.bl Alpha.create
     arm64.movRegReg x19, x0
     arm64.fpLoadRdata d0, [rdata + __fconst_3]
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
   __il_cont:
     arm64.leaRdata x1, __witness_Alpha.Scorer
     arm64.movRegReg x0, x19
     arm64.bl ratioVia
     arm64.fpLoadRdata d1, [rdata + __fconst_14]
     arm64.fcmp d0, d1
-    arm64.cset x0, eq
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
+    arm64.b.ne ternaryfalse
   ternarytrue:
     arm64.movImm x20, 14
     arm64.b matchcont
   ternaryfalse:
     arm64.movImm x20, 1
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at interface-param-checked-float-divide-survives-specialization.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -34,47 +34,34 @@ func @firstOf {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x1, x2
-    arm64.cset x3, lt
-    arm64.cbnz x3, each
-    arm64.b forexit#4
+    arm64.b.ge forexit
   each:
     arm64.arm64AddLsl x3, x0, x1, lsl #3
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
-    arm64.b __im_cont#9
   __im_cont#9:
     arm64.movImm x4, 0
-    arm64.b forhdr#5
   forhdr#5:
     arm64.loadRegBaseDisp.word64 x5, [x3 + 8]
     arm64.cmp x4, x5
-    arm64.cset x5, lt
-    arm64.cbnz x5, inner
-    arm64.b forexit#8
+    arm64.b.ge forstep
   inner:
     arm64.loadRegBaseDisp.word64 x0, [x3 + 0]
     arm64.arm64AddLsl x0, x0, x4, lsl #3
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_cont#10
   __im_cont#10:
     arm64.bl __str_retain
     arm64.epilogue 16
     arm64.ret
-  forexit#8:
-    arm64.b forstep#3
-  forstep#3:
+  forstep:
     arm64.add x1, x1, 1
     arm64.b forhdr#1
-  forexit#4:
+  forexit:
     arm64.leaRdata x0, __str_rec_3  ; "none"
     arm64.bl __str_retain
     arm64.epilogue 16
     arm64.ret
-  forstep#7:
-    arm64.add x4, x4, 1
-    arm64.b forhdr#5
 }
 
 func @main {

@@ -27,51 +27,37 @@ ExitCode: 0
 func @main {
   entry:
     arm64.prologue 16
-    arm64.b __il_body#8
   __il_body#8:
     arm64.fpLoadRdata d0, [rdata + __fconst_10]
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.fpLoadRdata d1, [rdata + __fconst_10]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, product
-    arm64.b ifcont#2
+    arm64.b.eq __il_body#10
   product:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont#2:
-    arm64.b __il_body#10
   __il_body#10:
     arm64.fpLoadRdata d0, [rdata + __fconst_0.75]
-    arm64.b __il_cont#9
   __il_cont#9:
     arm64.fpLoadRdata d1, [rdata + __fconst_0.75]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, sum
-    arm64.b ifcont#4
+    arm64.b.eq __il_body#12
   sum:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont#4:
-    arm64.b __il_body#12
   __il_body#12:
     arm64.fpLoadRdata d0, [rdata + __fconst_-3]
-    arm64.b __il_cont#11
   __il_cont#11:
     arm64.fpLoadRdata d1, [rdata + __fconst_-3]
     arm64.fcmp d0, d1
-    arm64.cset x0, ne
-    arm64.cbnz x0, negativeProduct
-    arm64.b ifcont#6
+    arm64.b.eq ifcont
   negativeProduct:
     arm64.movImm x0, 3
     arm64.epilogue 16
     arm64.ret
-  ifcont#6:
+  ifcont:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

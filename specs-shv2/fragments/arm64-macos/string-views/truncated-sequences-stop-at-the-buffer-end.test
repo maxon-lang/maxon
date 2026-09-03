@@ -80,23 +80,15 @@ func @show {
     arm64.bl __destruct_CodepointView
     arm64.movImm x0, 0
     arm64.cmp x23, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#19
-    arm64.b forempty#2
-  critsplit#19:
+    arm64.b.ne forempty#2
+  critsplit:
     arm64.movRegReg x1, x22
-    arm64.b forhdr#1
   forhdr#1:
     arm64.storeSlotReg slot18, x1
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, eachCp
-    arm64.b forexit#5
-  eachCp:
-    arm64.b __il_body#14
+    arm64.b.ne forexit#5
   __il_body#14:
     arm64.loadRegBaseDisp.word64 x20, [x21 + 16]
-    arm64.b __il_cont#13
   __il_cont#13:
     arm64.loadRegBaseDisp.word64 x22, [x1 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x1 + 8]
@@ -145,7 +137,6 @@ func @show {
     arm64.bl __mm_decref
     arm64.loadRegSlot x0, slot18
     arm64.bl __str_decref
-    arm64.b forstep#4
   forstep#4:
     arm64.movRegReg x0, x21
     arm64.bl CodepointIterator.advance
@@ -159,7 +150,6 @@ func @show {
     arm64.b forjoin#6
   forempty#2:
     arm64.movRegReg x20, x22
-    arm64.b forjoin#6
   forjoin#6:
     arm64.storeSlotReg slot1, x20
     arm64.leaRdata x0, __str_rec_15  ; ""
@@ -192,17 +182,11 @@ func @show {
     arm64.bl __destruct_UTF16View
     arm64.movImm x0, 0
     arm64.cmp x24, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#20
-    arm64.b forempty#8
-  critsplit#20:
-    arm64.b forhdr#7
+    arm64.b.ne forempty#8
   forhdr#7:
     arm64.storeSlotReg slot15, x23
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, eachUnit
-    arm64.b forexit#11
+    arm64.b.ne forexit#11
   eachUnit:
     arm64.movRegReg x0, x22
     arm64.bl UTF16Iterator.current
@@ -255,7 +239,6 @@ func @show {
     arm64.bl __mm_decref
     arm64.loadRegSlot x0, slot15
     arm64.bl __str_decref
-    arm64.b forstep#10
   forstep#10:
     arm64.movRegReg x0, x22
     arm64.bl UTF16Iterator.advance
@@ -270,7 +253,6 @@ func @show {
     arm64.b forjoin#12
   forempty#8:
     arm64.movRegReg x21, x23
-    arm64.b forjoin#12
   forjoin#12:
     arm64.storeSlotReg slot2, x21
     arm64.loadRegSlot x0, slot13
@@ -280,20 +262,14 @@ func @show {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot19, x1
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
-    arm64.b __il_body#16
   __il_body#16:
     arm64.loadRegBaseDisp.word64 x25, [x19 + 8]
     arm64.cmp x25, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont#15
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
     arm64.movRegReg x25, x0
-    arm64.b __il_cont#15
-  __rc_ok:
-    arm64.b __il_cont#15
   __il_cont#15:
     arm64.movImm x0, 20
     arm64.movImm x1, 0

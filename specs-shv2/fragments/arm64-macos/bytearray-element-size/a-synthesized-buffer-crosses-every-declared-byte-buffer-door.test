@@ -94,9 +94,10 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __slab_arena_list@232 = i64 0
-  __slab_arena_map_l1@240 = i64 0
-  __slab_state@248 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __slab_arena_list@240 = i64 0
+  __slab_arena_map_l1@248 = i64 0
+  __slab_state@256 = i64 0
 }
 
 func @Holder.create {
@@ -106,9 +107,7 @@ func @Holder.create {
     arm64.bl __md_current_path
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-synthesized-buffer-crosses-every-declared-byte-buffer-door.test:9: Holder.create: currentPath\x0a"
     arm64.bl mrt_panic
@@ -145,9 +144,7 @@ func @cwd {
     arm64.prologue 16
     arm64.bl __md_current_path
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-synthesized-buffer-crosses-every-declared-byte-buffer-door.test:24: cwd: currentPath\x0a"
     arm64.bl mrt_panic
@@ -187,9 +184,7 @@ func @main {
     arm64.bl __managed_mem_create
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -210,9 +205,7 @@ func @main {
     arm64.bl __md_current_path
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x21, 1
     arm64.movRegReg x0, x20
@@ -237,9 +230,7 @@ func @main {
     arm64.bl __md_current_path
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x21
@@ -261,9 +252,7 @@ func @main {
   tryok#5:
     arm64.bl alwaysFails
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.movRegReg x0, x20
     arm64.bl __mm_incref
@@ -271,14 +260,11 @@ func @main {
     arm64.b trycont
   tryok#7:
     arm64.movRegReg x22, x0
-    arm64.b trycont
   trycont:
     arm64.bl __md_current_path
     arm64.movRegReg x23, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#11
-    arm64.b tryok#10
+    arm64.b.eq matchdefault
   tryerr#11:
     arm64.movImm x23, 1
     arm64.movRegReg x0, x22
@@ -301,22 +287,17 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  tryok#10:
-    arm64.b matchdefault
   matchdefault:
     arm64.movRegReg x0, x23
     arm64.bl __mm_incref
     arm64.movRegReg x24, x23
-    arm64.b matchcont#14
   matchcont#14:
     arm64.bl Holder.create
     arm64.movRegReg x25, x0
     arm64.bl __md_current_path
     arm64.movRegReg x26, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#16
-    arm64.b tryok#15
+    arm64.b.eq tryok#15
   tryerr#16:
     arm64.movImm x26, 1
     arm64.movRegReg x0, x25
@@ -350,86 +331,59 @@ func @main {
     arm64.bl __mm_incref
     arm64.movRegReg x0, x26
     arm64.bl Box.create
-    arm64.b __il_body#32
   __il_body#32:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-    arm64.b __il_cont#31
   __il_cont#31:
     arm64.cmp x1, 0
-    arm64.cset x1, gt
-    arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs#17
-    arm64.b critsplit#44
-  andrhs#17:
-    arm64.b __il_body#34
+    arm64.movImm x1, 0
+    arm64.b.le scmerge#18
   __il_body#34:
     arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
-    arm64.b __il_cont#33
   __il_cont#33:
     arm64.cmp x1, 0
     arm64.cset x1, gt
-    arm64.b scmerge#18
-  critsplit#44:
-    arm64.movRegReg x1, x2
-    arm64.b scmerge#18
   scmerge#18:
     arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs#19
-    arm64.b critsplit#41
-  andrhs#19:
-    arm64.b __il_body#36
+    arm64.cbz x1, critsplit#41
   __il_body#36:
     arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
-    arm64.b __il_cont#35
   __il_cont#35:
     arm64.cmp x1, 0
     arm64.cset x1, gt
     arm64.b scmerge#20
   critsplit#41:
     arm64.movRegReg x1, x2
-    arm64.b scmerge#20
   scmerge#20:
     arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs#21
-    arm64.b critsplit#42
-  andrhs#21:
-    arm64.b __il_body#38
+    arm64.cbz x1, critsplit#42
   __il_body#38:
     arm64.loadRegBaseDisp.word64 x1, [x24 + 8]
-    arm64.b __il_cont#37
   __il_cont#37:
     arm64.cmp x1, 0
     arm64.cset x1, gt
     arm64.b scmerge#22
   critsplit#42:
     arm64.movRegReg x1, x2
-    arm64.b scmerge#22
   scmerge#22:
     arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs#23
-    arm64.b critsplit#43
-  andrhs#23:
+    arm64.cbz x1, critsplit#43
+  andrhs:
     arm64.loadRegBaseDisp.word64 x1, [x25 + 0]
-    arm64.b __il_body#40
   __il_body#40:
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.b __il_cont#39
   __il_cont#39:
     arm64.cmp x1, 0
     arm64.cset x1, gt
     arm64.b scmerge#24
   critsplit#43:
     arm64.movRegReg x1, x2
-    arm64.b scmerge#24
   scmerge#24:
-    arm64.cbnz x1, ternarytrue
-    arm64.b ternaryfalse
+    arm64.cbz x1, ternaryfalse
   ternarytrue:
     arm64.movImm x27, 0
     arm64.b matchcont#27
   ternaryfalse:
     arm64.movImm x27, 2
-    arm64.b matchcont#27
   matchcont#27:
     arm64.bl __destruct_Box_Bytes
     arm64.movRegReg x0, x26
@@ -449,14 +403,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x27, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x27, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at a-synthesized-buffer-crosses-every-declared-byte-buffer-door.test:61: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

@@ -46,9 +46,7 @@ func @main {
     arm64.bl Array.slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -67,34 +65,24 @@ func @main {
     arm64.movImm x2, 99
     arm64.loadRegBaseDisp.word64 x0, [x20 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_owned
+    arm64.b.ne __im_slow
   __im_owned:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_bounds
+    arm64.b.lt __im_slow
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_buffer
+    arm64.b.ls __im_slow
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b __im_viewed
+    arm64.b.eq __im_slow
   __im_viewed:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_slow
-    arm64.b __im_store
+    arm64.b.eq __im_store
   __im_slow:
     arm64.movRegReg x0, x20
     arm64.bl __managed_set
@@ -103,12 +91,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_1  ; "panic at slice-capacity-is-a-view-until-written.test:7: index 0 is in bounds\x0a"
     arm64.bl mrt_panic
@@ -122,20 +107,16 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl Array.capacity
     arm64.cmp x21, -1
-    arm64.cset x1, eq
-    arm64.movImm x2, 0
-    arm64.cbnz x1, andrhs
-    arm64.b critsplit
+    arm64.movImm x1, 0
+    arm64.b.ne critsplit
   andrhs:
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.b scmerge
   critsplit:
-    arm64.movRegReg x0, x2
-    arm64.b scmerge
+    arm64.movRegReg x0, x1
   scmerge:
-    arm64.cbnz x0, ok
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   ok:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x20

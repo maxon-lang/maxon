@@ -78,12 +78,13 @@ data {
   __sched_lock@216 = i64 0
   __sched_nmspinning@224 = i64 0
   __sched_parked_drivers@232 = i64 0
-  __mrt_errno@240 = i64 0
-  __mrt_envp@248 = i64 0
-  __mrt_tls_next_key@256 = i64 0
-  __slab_arena_list@264 = i64 0
-  __slab_arena_map_l1@272 = i64 0
-  __slab_state@280 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __mrt_errno@248 = i64 0
+  __mrt_envp@256 = i64 0
+  __mrt_tls_next_key@264 = i64 0
+  __slab_arena_list@272 = i64 0
+  __slab_arena_map_l1@280 = i64 0
+  __slab_state@288 = i64 0
 }
 
 func @main {
@@ -115,18 +116,14 @@ func @main {
     arm64.movImm x1, 67
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-    arm64.b __il_body
   __il_body:
     arm64.movImm x2, 0
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl File.writeBinary
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_rec_24  ; "Write failed"
     arm64.bl print
@@ -153,9 +150,7 @@ func @main {
     arm64.bl File.readBinary
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_rec_25  ; "Read failed"
     arm64.bl print
@@ -181,21 +176,14 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl File.delete
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq trycont
   tryerr#6:
     arm64.leaRdata x0, __str_rec_26  ; "Delete failed"
     arm64.bl print
-    arm64.b trycont
-  tryok#5:
-    arm64.b trycont
   trycont:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 3
-    arm64.cset x0, ne
-    arm64.cbnz x0, count_check
-    arm64.b ifcont#9
+    arm64.b.eq ifcont#9
   count_check:
     arm64.leaRdata x0, __str_rec_27  ; "Wrong count: "
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
@@ -261,60 +249,40 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#20
+    arm64.b.ls __im_slow
   __im_load#20:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#21
+    arm64.b.ls __im_slow
   __im_load#21:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#25
+    arm64.b.eq __im_cont
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#26
-  critsplit#26:
-    arm64.b __im_cont
-  critsplit#25:
-    arm64.b __im_cont
+    arm64.b.ne __im_cont
   __im_slow:
     arm64.movRegReg x0, x21
     arm64.bl __managed_get
     arm64.movRegReg x2, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x2, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#11
-    arm64.b tryok#10
+    arm64.b.eq tryok#10
   tryerr#11:
     arm64.movImm x22, 10
     arm64.movRegReg x0, x21
@@ -338,9 +306,7 @@ func @main {
     arm64.ret
   tryok#10:
     arm64.cmp x0, 65
-    arm64.cset x0, ne
-    arm64.cbnz x0, check0
-    arm64.b ifcont#13
+    arm64.b.eq ifcont#13
   check0:
     arm64.leaRdata x0, __str_rec_28  ; "Wrong value"
     arm64.bl print

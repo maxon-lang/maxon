@@ -88,21 +88,15 @@ func @main {
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
     arm64.bl Bag.add
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at var-self-field-passed-to-mutating-param-ok.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

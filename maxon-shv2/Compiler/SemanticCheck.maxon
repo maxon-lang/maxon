@@ -2431,6 +2431,16 @@ end 'pushSuccessorPair'
 // flat op array) so each call's diagnostic can name its declaring file (`func.sourceFilePath`);
 // the flat op INDEX still keys the call-site span in `project.opRanges`. Calls are body
 // ops (never terminators), so only `block.opRefs` is scanned.
+// ⭐ **WHO IS BLAMED FOR A TARGET-UNSUPPORTED CONSTRUCT — the rule, once, for the two passes that ask it.**
+// Both conditions are constant for a whole function: the target must be one that can refuse anything at all
+// (on x64-windows nothing is, and the short-circuit spares every other program the name hash), and the
+// function must be USER source, because a stdlib body's substrate requirement is reported at the user call
+// that crossed INTO stdlib and repeating it here would position a second diagnostic in a file the user never
+// opened.
+function blameTargetErrorsIn(project Project, func IrFunction) returns bool
+	return not targetProvidesEveryFacility(project.target) and not isStdlibFunction(project, func: func)
+end 'blameTargetErrorsIn'
+
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary)
 	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION** — the note `LowerMaxonToStd.witnessSlotsOf` carries, one pass
 	// over. `interfaceWitnessSlots` walks the `extends` graph and builds a fresh array plus a visited set on
@@ -2462,7 +2472,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 		//     diagnostic at `stdlib/Clock.maxon:L:C` — a file the user never opened and cannot change.
 		//     Keyed on stdlib-vs-user source, the fact that stays true as stdlib grows from one module to
 		//     all of it.
-		let blameTargetErrorsHere = not targetProvidesEveryFacility(project.target) and not isStdlibFunction(project, func: func)
+		let blameTargetErrorsHere = blameTargetErrorsIn(project, func: func)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
@@ -3519,16 +3529,46 @@ end 'reportIfNonYielding'
 // The spawn site itself. Keyed by the SAME name `calleeYields` built its edges from, so a spawn can never look
 // up a different function than the one whose yields were computed. A callee the index does not know is one
 // this pass cannot see through, and by the closure's asymmetry that resolves toward accepting.
+//
+// ⭐⭐ **AND IT IS ALSO WHERE A SPAWN MEETS THE TARGET GATE, BECAUSE A SPAWN REACHES THE GREEN-THREAD FLOOR
+// THROUGH AN OP RATHER THAN A CALLEE.** `checkCalls` sees `async f()`'s callee — `f` — and nothing about
+// `__gt_spawn`, which the lowering mints: the same blind spot the three SERVICE arms there record, and the
+// same panic behind it. ⛔ MEASURED: `async compute()` built for `--target=x64-linux` died at
+// `StdToX64Conversion.lowerTlsAlloc: TlsAlloc is x64-windows only`, with no span and no diagnostic. It was
+// masked only for as long as every `async` case in the corpus ALSO touched a facility that lane refused;
+// landing x64-linux's file surface removed that accident.
+//
+// ⚠ **THE TWO REFUSALS ARE EXCLUSIVE, AND THAT IS WHY THE GATE LIVES HERE AND NOT BESIDE THE OTHER E3104s.**
+// A NON-YIELDING spawn is wrong on every target and its message says so; adding a second line about the
+// target would make one defect read as two, and `async-await.md`'s `error.no-yield` pins exactly one.
 function reportSpawnOfNonYielding(project Project, callee ByteArray, opIndex OpIndex, func IrFunction, funcNames FunctionNameIndex, yields BoolArray)
 	let calleeIndex = try funcNames.byName.get(callee) otherwise return
 	let calleeYieldsSomewhere = try yields.get(calleeIndex) otherwise panic("reportSpawnOfNonYielding: yields.get({calleeIndex}) OOB below count {yields.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")
 	if calleeYieldsSomewhere 'itCanSuspend'
+		requireTargetHostsSpawn(project, func: func, opIndex: opIndex)
 		return
 	end 'itCanSuspend'
 
 	let site = try project.asyncSpawnSites.get(opIndex) otherwise return
 	reportPositioned(project, code: ErrorCode.asyncNonYielding, message: "'{String.from(site.text)}' — function never yields; 'async' is for I/O-concurrent work only", line: site.line, column: site.column, filePath: func.sourceFilePath)
 end 'reportSpawnOfNonYielding'
+
+// ⭐⭐ **THE SPAWN'S TARGET REFUSAL, AND IT IS A BACKSTOP RATHER THAN A GATE — WHICH IS WHY IT SPEAKS ONLY
+// INTO A COMPILE THAT WOULD OTHERWISE REACH THE BACKEND.** Its whole job is to turn a backend panic into a
+// diagnostic; a program already carrying a diagnostic never reaches a backend, so there is no panic left to
+// pre-empt and a second line would only make one rejection read as two.
+//
+// ⚠ MEASURED, both directions: without the guard, `await-any.md`'s and `promise-peek.md`'s wasm refusal
+// cases — each of which pins the ONE E3104 its own construct earns — grew a second line about the spawn
+// beneath it; with it, `async compute()` on `--target=x64-linux` still answers E3104 where it used to die
+// at `StdToX64Conversion.lowerTlsAlloc`.
+function requireTargetHostsSpawn(project Project, func IrFunction, opIndex OpIndex)
+	if projectHasErrors(project) 'alreadyRefused'
+		return
+	end 'alreadyRefused'
+
+	requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "an `async` spawn", entry: GtSpawnName, blameTargetErrorsHere: blameTargetErrorsIn(project, func: func))
+end 'requireTargetHostsSpawn'
 
 function checkDiscardedResults(project Project, module MaxonModule, funcNames FunctionNameIndex)
 	if project.pendingDiscardedResults.count() == 0 'nothingDiscardedAWholeResult'

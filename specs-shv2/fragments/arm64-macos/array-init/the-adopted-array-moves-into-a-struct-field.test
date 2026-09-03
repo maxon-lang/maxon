@@ -66,9 +66,7 @@ func @build {
     arm64.bl __managed_mem_create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_0  ; "panic at the-adopted-array-moves-into-a-struct-field.test:14: create failed\x0a"
     arm64.bl mrt_panic
@@ -82,9 +80,7 @@ func @build {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_1  ; "panic at the-adopted-array-moves-into-a-struct-field.test:15: setLength failed\x0a"
     arm64.bl mrt_panic
@@ -99,9 +95,7 @@ func @build {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set_byte
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.leaRdata x0, __str_blob_2  ; "panic at the-adopted-array-moves-into-a-struct-field.test:16: setByte failed\x0a"
     arm64.bl mrt_panic
@@ -116,9 +110,7 @@ func @build {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set_byte
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#8
-    arm64.b tryok#7
+    arm64.b.eq tryok#7
   tryerr#8:
     arm64.leaRdata x0, __str_blob_3  ; "panic at the-adopted-array-moves-into-a-struct-field.test:17: setByte failed\x0a"
     arm64.bl mrt_panic
@@ -152,46 +144,33 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word#10
-    arm64.b __im_stride#12
+    arm64.b.ne __im_stride#12
   __im_word#10:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow#9
-    arm64.b __im_load#14
+    arm64.b.ls __im_slow#9
   __im_load#14:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.b __im_loaded#13
   __im_stride#12:
     arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_byte#11
-    arm64.b __im_slow#9
+    arm64.b.ne __im_slow#9
   __im_byte#11:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow#9
-    arm64.b __im_load#15
+    arm64.b.ls __im_slow#9
   __im_load#15:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-    arm64.b __im_loaded#13
   __im_loaded#13:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty#16
-    arm64.b critsplit#26
+    arm64.b.eq critsplit#26
   __im_empty#16:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow#9
-    arm64.b critsplit#27
+    arm64.b.eq __im_slow#9
   critsplit#27:
     arm64.movRegReg x20, x2
     arm64.b __im_cont#8
@@ -202,12 +181,9 @@ func @main {
     arm64.bl __managed_get
     arm64.movRegReg x20, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont#8
   __im_cont#8:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -222,15 +198,11 @@ func @main {
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word#19
-    arm64.b __im_stride#21
+    arm64.b.ne __im_stride#21
   __im_word#19:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 1
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow#18
-    arm64.b __im_load#23
+    arm64.b.ls __im_slow#18
   __im_load#23:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, 8
@@ -238,46 +210,30 @@ func @main {
     arm64.b __im_loaded#22
   __im_stride#21:
     arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_byte#20
-    arm64.b __im_slow#18
+    arm64.b.ne __im_slow#18
   __im_byte#20:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 1
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow#18
-    arm64.b __im_load#24
+    arm64.b.ls __im_slow#18
   __im_load#24:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, 1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-    arm64.b __im_loaded#22
   __im_loaded#22:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty#25
-    arm64.b critsplit#28
+    arm64.b.eq __im_cont#17
   __im_empty#25:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow#18
-    arm64.b critsplit#29
-  critsplit#29:
-    arm64.b __im_cont#17
-  critsplit#28:
-    arm64.b __im_cont#17
+    arm64.b.ne __im_cont#17
   __im_slow#18:
     arm64.bl __managed_get
     arm64.movRegReg x2, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont#17
   __im_cont#17:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -290,14 +246,10 @@ func @main {
   tryok#3:
     arm64.add x20, x20, x2
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at the-adopted-array-moves-into-a-struct-field.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

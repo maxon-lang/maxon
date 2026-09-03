@@ -41,8 +41,7 @@ func @recordVisit {
   entry:
     arm64.prologue 16
     arm64.eor x0, x0, 1
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   check:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
@@ -77,26 +76,16 @@ func @main {
     arm64.movImm x0, 1
     arm64.bl recordVisit
     arm64.cmp x9, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, ok
-    arm64.b ifelse#2
+    arm64.b.ne ifcont#3
   ok:
     arm64.movImm x19, 1
-    arm64.b ifcont#3
-  ifelse#2:
-    arm64.b ifcont#3
   ifcont#3:
     arm64.movImm x0, 0
     arm64.bl recordVisit
     arm64.cmp x9, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, bad
-    arm64.b ifelse#5
+    arm64.b.ne ifcont#6
   bad:
     arm64.add x19, x19, 10
-    arm64.b ifcont#6
-  ifelse#5:
-    arm64.b ifcont#6
   ifcont#6:
     arm64.movImm x0, 21
     arm64.movImm x1, 0

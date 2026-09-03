@@ -109,15 +109,11 @@ func @refDiv {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 2
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.movImm x16, 1000000
     arm64.cmp x1, x16
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:7: Range check failed: value outside typealias 'PosDivisor'\x0a"
     arm64.bl mrt_panic
@@ -134,15 +130,11 @@ func @refMod {
   entry:
     arm64.prologue 16
     arm64.cmp x1, 2
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.movImm x16, 1000000
     arm64.cmp x1, x16
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:11: Range check failed: value outside typealias 'PosDivisor'\x0a"
     arm64.bl mrt_panic
@@ -161,14 +153,10 @@ func @refDivNeg {
     arm64.prologue 16
     arm64.movImm x16, 18446744073708551616
     arm64.cmp x1, x16
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, -2
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:15: Range check failed: value outside typealias 'NegDivisor'\x0a"
     arm64.bl mrt_panic
@@ -186,14 +174,10 @@ func @refModNeg {
     arm64.prologue 16
     arm64.movImm x16, 18446744073708551616
     arm64.cmp x1, x16
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x1, -2
-    arm64.cset x2, gt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:19: Range check failed: value outside typealias 'NegDivisor'\x0a"
     arm64.bl mrt_panic
@@ -267,28 +251,24 @@ func @main {
     arm64.bl edgeDividends
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-    arm64.b forhdr
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, each
-    arm64.b forexit
+    arm64.b.ge forexit
   each:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x20, lsl #3
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
-    arm64.b __im_cont
   __im_cont:
-    arm64.movImm x0, 2
-    arm64.sdiv x22, x21, x0
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 63
+    arm64.add x0, x21, x0
+    arm64.asr x22, x0, 1
     arm64.movImm x1, 2
     arm64.movRegReg x0, x21
     arm64.bl refDiv
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divTwo
-    arm64.b ifcont#6
+    arm64.b.eq ifcont#6
   divTwo:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -301,16 +281,18 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#6:
-    arm64.movImm x0, 2
-    arm64.sdiv x16, x21, x0
-    arm64.msub x22, x16, x0, x21
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 63
+    arm64.add x0, x21, x0
+    arm64.asr x0, x0, 1
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 2
     arm64.movRegReg x0, x21
     arm64.bl refMod
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, modTwo
-    arm64.b ifcont#8
+    arm64.b.eq ifcont#8
   modTwo:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -323,15 +305,15 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#8:
-    arm64.movImm x0, 8
-    arm64.sdiv x22, x21, x0
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 61
+    arm64.add x0, x21, x0
+    arm64.asr x22, x0, 3
     arm64.movImm x1, 8
     arm64.movRegReg x0, x21
     arm64.bl refDiv
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divEight
-    arm64.b ifcont#10
+    arm64.b.eq ifcont#10
   divEight:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
@@ -344,16 +326,18 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#10:
-    arm64.movImm x0, 8
-    arm64.sdiv x16, x21, x0
-    arm64.msub x22, x16, x0, x21
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 61
+    arm64.add x0, x21, x0
+    arm64.asr x0, x0, 3
+    arm64.movImm x16, 8
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 8
     arm64.movRegReg x0, x21
     arm64.bl refMod
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, modEight
-    arm64.b ifcont#12
+    arm64.b.eq ifcont#12
   modEight:
     arm64.movImm x20, 4
     arm64.movRegReg x0, x19
@@ -366,15 +350,16 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#12:
-    arm64.movImm x0, 10
-    arm64.sdiv x22, x21, x0
+    arm64.movImm x0, 7378697629483820647
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 2
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
     arm64.movImm x1, 10
     arm64.movRegReg x0, x21
     arm64.bl refDiv
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divTen
-    arm64.b ifcont#14
+    arm64.b.eq ifcont#14
   divTen:
     arm64.movImm x20, 5
     arm64.movRegReg x0, x19
@@ -387,16 +372,19 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#14:
-    arm64.movImm x0, 10
-    arm64.sdiv x16, x21, x0
-    arm64.msub x22, x16, x0, x21
+    arm64.movImm x0, 7378697629483820647
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 2
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 10
     arm64.movRegReg x0, x21
     arm64.bl refMod
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, modTen
-    arm64.b ifcont#16
+    arm64.b.eq ifcont#16
   modTen:
     arm64.movImm x20, 6
     arm64.movRegReg x0, x19
@@ -409,15 +397,16 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#16:
-    arm64.movImm x0, 7
-    arm64.sdiv x22, x21, x0
+    arm64.movImm x0, 5270498306774157605
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 1
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
     arm64.movImm x1, 7
     arm64.movRegReg x0, x21
     arm64.bl refDiv
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divSeven
-    arm64.b ifcont#18
+    arm64.b.eq ifcont#18
   divSeven:
     arm64.movImm x20, 7
     arm64.movRegReg x0, x19
@@ -430,16 +419,19 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#18:
-    arm64.movImm x0, 28
-    arm64.sdiv x16, x21, x0
-    arm64.msub x22, x16, x0, x21
+    arm64.movImm x0, 5270498306774157605
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 28
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 28
     arm64.movRegReg x0, x21
     arm64.bl refMod
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, modTwentyEight
-    arm64.b ifcont#20
+    arm64.b.eq ifcont#20
   modTwentyEight:
     arm64.movImm x20, 8
     arm64.movRegReg x0, x19
@@ -452,15 +444,16 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#20:
-    arm64.movImm x0, 1000
-    arm64.sdiv x22, x21, x0
+    arm64.movImm x0, 2361183241434822607
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 7
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
     arm64.movImm x1, 1000
     arm64.movRegReg x0, x21
     arm64.bl refDiv
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divThousand
-    arm64.b ifcont#22
+    arm64.b.eq ifcont#22
   divThousand:
     arm64.movImm x20, 9
     arm64.movRegReg x0, x19
@@ -473,15 +466,17 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#22:
-    arm64.movImm x0, 15
-    arm64.sdiv x22, x21, x0
+    arm64.movImm x0, 9838263505978427529
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
     arm64.movImm x1, 15
     arm64.movRegReg x0, x21
     arm64.bl refDiv
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divFifteen
-    arm64.b ifcont#24
+    arm64.b.eq ifcont#24
   divFifteen:
     arm64.movImm x20, 10
     arm64.movRegReg x0, x19
@@ -494,16 +489,20 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#24:
-    arm64.movImm x0, 15
-    arm64.sdiv x16, x21, x0
-    arm64.msub x22, x16, x0, x21
+    arm64.movImm x0, 9838263505978427529
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 15
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 15
     arm64.movRegReg x0, x21
     arm64.bl refMod
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, modFifteen
-    arm64.b ifcont#26
+    arm64.b.eq ifcont#26
   modFifteen:
     arm64.movImm x20, 11
     arm64.movRegReg x0, x19
@@ -516,15 +515,17 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#26:
-    arm64.movImm x0, 100
-    arm64.sdiv x22, x21, x0
+    arm64.movImm x0, 11805916207174113035
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 6
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
     arm64.movImm x1, 100
     arm64.movRegReg x0, x21
     arm64.bl refDiv
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divHundred
-    arm64.b ifcont#28
+    arm64.b.eq ifcont#28
   divHundred:
     arm64.movImm x20, 12
     arm64.movRegReg x0, x19
@@ -537,15 +538,16 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#28:
-    arm64.movImm x0, 18446744073709551613
-    arm64.sdiv x22, x21, x0
+    arm64.movImm x0, 6148914691236517206
+    arm64.smulh x0, x0, x21
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.neg x22, x0
     arm64.movImm x1, 18446744073709551613
     arm64.movRegReg x0, x21
     arm64.bl refDivNeg
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divMinusThree
-    arm64.b ifcont#30
+    arm64.b.eq ifcont#30
   divMinusThree:
     arm64.movImm x20, 13
     arm64.movRegReg x0, x19
@@ -558,16 +560,18 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#30:
-    arm64.movImm x0, 18446744073709551613
-    arm64.sdiv x16, x21, x0
-    arm64.msub x22, x16, x0, x21
+    arm64.movImm x0, 6148914691236517206
+    arm64.smulh x0, x0, x21
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 3
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 18446744073709551613
     arm64.movRegReg x0, x21
     arm64.bl refModNeg
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, modMinusThree
-    arm64.b ifcont#32
+    arm64.b.eq ifcont#32
   modMinusThree:
     arm64.movImm x20, 14
     arm64.movRegReg x0, x19
@@ -580,15 +584,18 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#32:
-    arm64.movImm x0, 18446744073709551601
-    arm64.sdiv x22, x21, x0
+    arm64.movImm x0, 9838263505978427529
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.neg x22, x0
     arm64.movImm x1, 18446744073709551601
     arm64.movRegReg x0, x21
     arm64.bl refDivNeg
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divMinusFifteen
-    arm64.b ifcont#34
+    arm64.b.eq ifcont#34
   divMinusFifteen:
     arm64.movImm x20, 15
     arm64.movRegReg x0, x19
@@ -601,15 +608,16 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#34:
-    arm64.movImm x0, 18446744073709551608
-    arm64.sdiv x22, x21, x0
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 61
+    arm64.add x0, x21, x0
+    arm64.asr x0, x0, 3
+    arm64.neg x22, x0
     arm64.movImm x1, 18446744073709551608
     arm64.movRegReg x0, x21
     arm64.bl refDivNeg
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, divMinusEight
-    arm64.b ifcont#36
+    arm64.b.eq ifcont#36
   divMinusEight:
     arm64.movImm x20, 16
     arm64.movRegReg x0, x19
@@ -622,16 +630,18 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   ifcont#36:
-    arm64.movImm x0, 18446744073709551608
-    arm64.sdiv x16, x21, x0
-    arm64.msub x22, x16, x0, x21
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 61
+    arm64.add x0, x21, x0
+    arm64.asr x0, x0, 3
+    arm64.movImm x16, 8
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 18446744073709551608
     arm64.movRegReg x0, x21
     arm64.bl refModNeg
     arm64.cmp x22, x0
-    arm64.cset x0, ne
-    arm64.cbnz x0, modMinusEight
-    arm64.b ifcont#38
+    arm64.b.eq forstep
   modMinusEight:
     arm64.movImm x20, 17
     arm64.movRegReg x0, x19
@@ -643,8 +653,6 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  ifcont#38:
-    arm64.b forstep
   forstep:
     arm64.add x20, x20, 1
     arm64.b forhdr

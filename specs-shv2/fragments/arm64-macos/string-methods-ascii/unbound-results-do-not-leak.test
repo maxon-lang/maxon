@@ -57,14 +57,9 @@ func @firstWord {
     arm64.movRegReg x0, x19
     arm64.bl __managed_first
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.leaRdata x0, __str_rec_13  ; "?"
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.bl __str_retain
     arm64.movRegReg x20, x0
@@ -216,14 +211,11 @@ func @main {
     arm64.bl __str_decref
     arm64.movImm x19, 0
     arm64.movImm x0, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot0, x19
     arm64.cmp x19, 200
-    arm64.cset x0, lt
-    arm64.cbnz x0, loop
-    arm64.b whileexit
+    arm64.b.ge whileexit
   loop:
     arm64.leaRdata x0, __str_rec_20  ; "k"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -302,13 +294,9 @@ func @main {
     arm64.leaRdata x1, __str_rec_23  ; ";"
     arm64.movRegReg x0, x21
     arm64.bl String.contains
-    arm64.cbnz x0, has
-    arm64.b critsplit
+    arm64.cbz x0, ifcont
   has:
     arm64.add x20, x20, 1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
   ifcont:
     arm64.loadRegSlot x0, slot0
     arm64.add x22, x0, 1

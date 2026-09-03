@@ -51,38 +51,26 @@ func @main {
     arm64.bl Set.insert
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 24]
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_chk#7
+    arm64.b.lt __il_slow
   __rc_chk#7:
     arm64.movImm x0, 4611686018427387904
     arm64.cmp x19, x0
-    arm64.cset x0, gt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok#6
+    arm64.b.le __il_cont
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl Set.count
     arm64.movRegReg x19, x0
-    arm64.b __il_cont
-  __rc_ok#6:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Set_int
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk#3
+    arm64.b.lt __rc_panic
   __rc_chk#3:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#1
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_17  ; "panic at insert.duplicate.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -91,7 +79,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  __rc_ok#1:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

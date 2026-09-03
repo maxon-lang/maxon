@@ -51,19 +51,12 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Array.pop
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x0, 18446744073709551615
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.cmp x0, 30
-    arm64.cset x0, ne
-    arm64.cbnz x0, check
-    arm64.b ifcont#5
+    arm64.b.eq ifcont#5
   check:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -76,9 +69,7 @@ func @main {
   ifcont#5:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 2
-    arm64.cset x0, ne
-    arm64.cbnz x0, cnt
-    arm64.b ifcont#7
+    arm64.b.eq ifcont#7
   cnt:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19

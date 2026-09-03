@@ -107,25 +107,19 @@ func @Bag.seenCount {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x2, __witness_int.Equatable
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x3, [x0 + 24]
     arm64.cmp x3, 0
-    arm64.cset x4, lt
-    arm64.cbnz x4, __il_slow
-    arm64.b __rc_chk
+    arm64.b.lt __il_slow
   __rc_chk:
     arm64.movImm x4, 4611686018427387904
     arm64.cmp x3, x4
-    arm64.cset x4, gt
-    arm64.cbnz x4, __il_slow
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __il_slow:
     arm64.bl Set.count
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x0, x3
-    arm64.b __il_cont
   __il_cont:
     arm64.epilogue 16
     arm64.ret
@@ -157,23 +151,17 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#12
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow
-    arm64.b critsplit#13
+    arm64.b.ne critsplit#13
   __im_slow:
     arm64.bl __managed_get
     arm64.b __im_cont
@@ -184,31 +172,24 @@ func @main {
   critsplit#12:
     arm64.movRegReg x0, x2
     arm64.movRegReg x9, x3
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x20, __str_rec_9  ; ""
     arm64.b trycont
   tryok:
     arm64.movRegReg x20, x0
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x19
     arm64.bl Bag.mark
     arm64.movImm x1, 7
     arm64.movRegReg x0, x19
     arm64.bl Bag.note
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl String.byteLength
@@ -216,7 +197,6 @@ func @main {
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x20, x21
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x0, 20
     arm64.movImm x1, 0

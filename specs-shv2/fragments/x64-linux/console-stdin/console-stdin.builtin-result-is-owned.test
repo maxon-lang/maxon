@@ -1,0 +1,66 @@
+// Test: console-stdin.builtin-result-is-owned
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 100 'reads'
+		let mm = __Builtins.readStdin(4096)
+		total = total + mm.length()
+		i = i + 1
+	end 'reads'
+	return (total + 6) as ExitCode
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __mrt_errno@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+  whilehdr:
+    x64.cmpRegImm32 r12, 100
+    x64.jcc greaterEqual, whileexit
+  reads:
+    x64.movRegImm32 rcx, 4096
+    x64.callDirect __con_read_stdin
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegImm32 r8, rbx, 6
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at console-stdin.builtin-result-is-owned.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

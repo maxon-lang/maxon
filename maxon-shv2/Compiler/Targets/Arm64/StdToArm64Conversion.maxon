@@ -13,11 +13,13 @@
 //   • NO FLOAT-EQUALITY SPLIT — arm64 `fcmp` sets Z=0 on an UNORDERED (NaN) result (x64 `ucomisd`
 //     sets ZF=1), so `a == b` via `eq` is already FALSE on NaN and `a != b` via `ne` already TRUE.
 //     The parity bit and the second `ordered` block x64 needs do not exist here.
-//   • COMPARES ALWAYS MATERIALISE — every compare emits `cmp`/`fcmp` + `cset`, and every conditional
-//     branch tests the resulting bool with `cbnz`. This trades the fused `b.cond` (a wave-2
-//     optimisation, and the reason the compare/branch-fusion analysis stays x64-only for now) for a
-//     structure that needs no flag-lifetime reasoning: a `cbnz` reads a register, not NZCV, so the
-//     divide-by-zero guard's `cmp` between a compare and its branch can never disturb it.
+//   • A COMPARE MATERIALISES ONLY WHEN ITS BOOLEAN IS READ — the compare/branch fusion census
+//     (`CompareFusionCensus`, shared with x64) says whether the branch terminating a compare's own
+//     block reads its flags. If it does, the pair is `cmp`/`fcmp` + `b.cond` and no `cset` is emitted;
+//     a boolean that is read as a VALUE still gets its `cset`, and a condition that is not a fused
+//     compare at all is still truth-tested with `cbnz`. All three shapes can coexist in one block.
+//     ⚠ `b.cond` reads NZCV where `cbnz` reads a register, so the fused pair now DOES depend on flag
+//     lifetime — see `lowerCondBranch` for the rule and why arm64 needs no rule of its own beyond it.
 //   • DIVIDE-BY-ZERO IS NOT A TRAP — AArch64 `sdiv`/`udiv` are DEFINED to return 0 on a zero divisor
 //     (no `#DE`, unlike x64's `idiv`), and the spec adopts that: `a / 0` yields 0, and the
 //     divide/modulo-by-zero tests are gated to x64-windows (safety.md). So a division lowers to a bare
@@ -417,8 +419,8 @@ function arm64RequireScalarDouble(t StdType, what String)
 	end 'notDouble'
 end 'arm64RequireScalarDouble'
 
-export function lowerStdToArm64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToArm64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames)
+export function lowerStdToArm64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns (TargetModule, ValueClassColumns)
+	var lowering = StdToArm64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usesGt)
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers (the divide-by-zero
 	// guard appends blocks to its `blockRefs` and bumps `nextBlockId`), so no `srcFunc` borrowed out of
@@ -469,8 +471,18 @@ type StdToArm64Lowering
 	// here and the memory fold does not.
 	var scaledIndexFolds as ScaledIndexFolds
 
-	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames)}
+	// Which compares this function keeps in NZCV and which must write their boolean to a register — the
+	// TARGET-INDEPENDENT analysis both native isels read (`CompareFusionCensus`, in the shared lowering).
+	// Created ONCE and recomputed per function, like `scaledIndexFolds` above.
+	var compareFusion as CompareFusionCensus
+
+	// Whether the green-thread scheduler was installed, and so whether a `blocking` op is wrapped in the
+	// syscall bracket (`lowerBodyOp`). A program with no scheduler has no machine to announce itself to and
+	// no processor to lose, so its lowering is byte-identical to what it would be without this door.
+	let usesGt as bool
+
+	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns StdToArm64Lowering
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), compareFusion: CompareFusionCensus.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
@@ -499,18 +511,20 @@ type StdToArm64Lowering
 	function lowerFunction(funcIdx FuncIndex)
 		// Every read of the source function happens HERE, before the walk, so the walk holds no borrow of it
 		// while `applyOutgoingArgSize` writes to the TARGET function of the same index (E3019).
-		self.prepareScaledIndexFolds(funcIdx)
+		self.prepareFunctionTables(funcIdx)
 		let outgoingArgBytes = self.lowerFunctionBlocks(funcIdx)
 		self.applyOutgoingArgSize(funcIdx, bytes: outgoingArgBytes)
 	end 'lowerFunction'
 
-	// EC16 — decide this function's scaled-index folds before the walk, in a SCOPED read of the source
+	// The per-function analyses, all READS, decided before the walk in a SCOPED read of the source
 	// function: the borrow ends with this call, which is `lowerFunction`'s stated reason for reading
-	// everything up front.
-	function prepareScaledIndexFolds(funcIdx FuncIndex)
+	// everything up front. Both must precede the walk because a compare is lowered long before the branch
+	// or the phi edge that decides what it has to produce.
+	function prepareFunctionTables(funcIdx FuncIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, foldsIntoMemoryOps: false)
-	end 'prepareScaledIndexFolds'
+		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
+	end 'prepareFunctionTables'
 
 	// Walk the function's blocks, and return the OUTGOING stack-argument bytes its largest call needs — a
 	// running MAX, not a sum, because the region is REUSED by every call site. Only shv2-to-shv2 calls
@@ -644,8 +658,9 @@ type StdToArm64Lowering
 			osEnvBlock to osEnvBlockFree gives 0
 			// G3: an ordered access marshals nothing — one `add` into the IP scratch and one instruction.
 			loadAcquire or storeRelease gives 0
-			// The terminal question is refused below on this lane rather than lowered, so — like the TLS ops
-			// above — no frame is reserved for arguments that will never be marshalled here.
+			// The terminal question lowers here on the macOS route and still reserves nothing: it hands its
+			// chunk ONE argument, inside AAPCS64's x0..x7, so nothing overflows onto the outgoing-argument
+			// stack. The Linux route is refused below and marshals nothing at all.
 			osHandleFileType gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
@@ -699,7 +714,40 @@ type StdToArm64Lowering
 
 	// Lower a regular (non-terminator) Std op into the block named by `dstRef`. Every op lowers into the
 	// SAME block — nothing splits the walk (div/mod is a bare `sdiv`/`msub`, not a guarded block).
+	//
+	// ⭐⭐⭐ **THE SYSCALL BRACKET IS EMITTED HERE, AT THE ONE DISPATCH DOOR, AND THAT IS THE WHOLE REASON IT
+	// IS CORRECT.** A `blocking` op (`StdDialect.stdOpSyscallClassOf`) holds this OS thread in the kernel, so
+	// the machine announces itself before the call and reads the verdict after it — otherwise the processor
+	// it is holding is idle for the duration and nothing else can run on it.
+	//
+	// ⛔⛔ **IT MUST NOT BE WRAPPED AROUND THE BUILDERS INSTEAD, AND IT MUST NOT SIT IN THE IMPORT SHIM.**
+	// Every blocking op on these lanes takes a DIFFERENT road — a hand-assembled chunk reached by `bl`
+	// (`lowerHostChunkValue`), an isel-inline libSystem import (`emitArm64GtGatedImportCall`), or a raw `svc`
+	// emitted inline — and `__con_read_stdin`, the read this bracket exists for, takes the first of the
+	// three. A bracket in the shim would cover only the second; a bracket at each builder site is one a new
+	// builder site can forget. The dispatcher cannot.
+	//
+	// ⚠ **THE EXIT CALL IS SAFE AFTER EVERY LOWERING BECAUSE EACH ONE HAS ALREADY CAPTURED ITS RESULT INTO A
+	// VIRTUAL REGISTER**, and `arm64BranchLink` declares the whole caller-saved set as implicit defs
+	// (`TargetDialect`), so the allocator keeps that value live across it.
+	//
+	// ⛔⛔ **A BRACKETED OP MUST ALREADY DECLARE `clobbersFlags`, AND THE CHECK IS HERE BECAUSE NOTHING ELSE
+	// COUPLES THE TWO ROSTERS.** The two `bl`s wrap the op in code the fusion census cannot see — the census
+	// reads `StdOpMeta.clobbersFlags` off the op and stops there — so a `blocking` op declaring `false` would
+	// let a `b.cond` read NZCV the bracket's own call had already destroyed. Every op in the `blocking` set
+	// declares `true` today; the pairing is checked rather than commented, so an op added to one roster and
+	// not the other is a compiler failure at its first use instead of a wrong branch.
 	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType, paramFloatMask ArgFloatMask)
+		let bracketed = self.usesGt and stdOpSyscallClassOf(op) == SyscallClass.blocking
+
+		if bracketed and not op.rawValue.clobbersFlags 'theBracketWouldBeInvisible'
+			panic("lowerBodyOp: `{op.name}` is `SyscallClass.blocking` (StdDialect.stdOpSyscallClassOf) but declares `clobbersFlags: false` — the syscall bracket wraps it in two `bl`s, which write NZCV where the fusion census believes nothing does")
+		end 'theBracketWouldBeInvisible'
+
+		if bracketed 'announceTheCall'
+			self.emit(dstRef, op: TargetOp.arm64BranchLink(SchedEnterSyscallName))
+		end 'announceTheCall'
+
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstRef: dstRef)
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstRef: dstRef)
@@ -984,14 +1032,18 @@ type StdToArm64Lowering
 			// emits no free because the vector is the live table and not a copy. A no-op stub would be the same
 			// claim written where nothing can check it; this panic is the backstop for a producer that starts
 			// emitting one.
-			// ⛔ NO POSIX LANE ANSWERS THIS YET, AND THE REFUSAL IS THE USER-FACING ONE RATHER THAN THIS
-			// PANIC. `isatty(1)` is what would serve it, translated into `FILE_TYPE_CHAR`; until a lane
-			// writes that, `targetProvidesFacility` denies `terminalDetection` here and a source-written
-			// `__Builtins.stdoutWantsAnsiColor()` is refused at its own span with E3104. Reaching this arm
-			// means a producer emitted the op past that gate, which is a compiler bug.
-			osHandleFileType then panic("lowerStdToArm64: `osHandleFileType` asks Win32 what kind of object a handle names, and no POSIX lane has written the `isatty` translation of it yet — `targetProvidesFacility` denies `terminalDetection` on this target, so `installTerminalRuntime` builds the fallback body (`return 0`) here, which emits no such op. Nothing is refused for it: a program that asks is TOLD `false`. Reaching here therefore means an op was emitted on a lane whose facility row says it cannot serve one")
+			// ⭐ **`GetFileType` THROUGH A CHUNK ON BOTH ARM64 LANES, AND THE TWO BODIES ARE DIFFERENT CALLS.**
+			// Darwin's is `isatty` plus a narrowing; Linux's is the `ioctl(fd, TCGETS, …)` `isatty` is made of,
+			// which needs a frame for the `struct termios` the kernel fills. Either way the answer is mapped
+			// into the Win32 word this tier reads (`StdOp.osHandleFileType` carries why it speaks Win32), so
+			// the lowering is one unconditional chunk call and only the appended body differs.
+			osHandleFileType(resultId, handleId) then self.lowerHostChunkValue(resultId, args: argsOf(handleId), chunk: HostHandleFileTypeName, dstRef: dstRef)
 			osEnvBlockFree then panic("lowerStdToArm64: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
 		end 'lower'
+
+		if bracketed 'readTheVerdict'
+			self.emit(dstRef, op: TargetOp.arm64BranchLink(SchedExitSyscallName))
+		end 'readTheVerdict'
 	end 'lowerBodyOp'
 
 	function lowerTerminatorOp(op StdOp, dstRef BlockRef, returnType StdReturnType)
@@ -1136,13 +1188,10 @@ type StdToArm64Lowering
 			// Integer `binOp(div)` is illegal — integer division traps and is `StdOp.div`; only FLOAT
 			// division (which cannot fault) rides the pure arith band. Reaching here is a lowering bug.
 			div to max then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — all three are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Integer division is `StdOp.div` (it can fault); `min`/`max` have no integer form and their operands are promoted by the parser")
-			// ⚠ EC18 — `mulHighSigned` CANNOT REACH THIS LANE. `StrengthReduceDivision` asks
-			// `targetLowersMulHigh` and reduces nothing where the opcode has no lowering, and arm64 has none:
-			// AArch64 spells the high half of a signed product as `SMULH Xd, Xn, Xm`, a plain 3-address
-			// instruction that would be a `TargetOp` of its own (and a strictly nicer one than x64's
-			// fixed-register `imul r/m64`). Adding it is what turns this lane on — see the row in
-			// docs/emitted-code-roadmap.md.
-			mulHighSigned then panic("lowerBinOp: `mulHighSigned` has no arm64 lowering — AArch64 spells it `SMULH`, which this dialect does not carry, and `StrengthReduceDivision` declines the whole reduction on a target that cannot lower the opcode. Reaching here means that target gate was bypassed")
+			// ⭐ EC18 — ONE instruction, and no pre-move. x64's `lowerMulHighSigned` needs three ops because
+			// its `imul r/m64` reads RAX and writes RDX:RAX; `SMULH` names all three registers, so the
+			// magic multiply costs arm64 exactly what an ordinary `MUL` costs.
+			mulHighSigned then self.emit(dstRef, op: TargetOp.arm64Smulh(dest, lhs: lhsReg, rhs: rhsReg))
 		end 'op'
 	end 'lowerBinOp'
 
@@ -1453,8 +1502,10 @@ type StdToArm64Lowering
 		end 'div'
 	end 'lowerDivMod'
 
-	// Lower a Std `cmp` to `cmp`/`fcmp` + `cset` — the compare ALWAYS materialises its boolean into a
-	// register (see this file's header). A following `condBranch` truth-tests that bool with `cbnz`.
+	// Lower a Std `cmp` to `cmp`/`fcmp`, plus a `cset` when something reads the boolean out of a REGISTER.
+	// Two INDEPENDENT consumers, exactly as x64 has: the branch terminating this block may read the flags
+	// (`lowerCondBranch`), and anything holding the compare as a value needs the `cset`. Both at once is
+	// legal — `cset` reads NZCV and writes none, so the `b.cond` still sees the compare's flags.
 	function lowerCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, dstRef BlockRef)
 		let isFloat = stdTypeIsFloat(operandType)
 		if isFloat 'float'
@@ -1463,8 +1514,24 @@ type StdToArm64Lowering
 		end 'float' else 'int'
 			self.emit(dstRef, op: TargetOp.arm64Cmp(TargetVReg.virtual(lhs), rhs: TargetVReg.virtual(rhs)))
 		end 'int'
-		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: isFloat, isUnsigned: stdTypeIsUnsigned(operandType))))
+		self.materialiseCompareIfRead(resultId, pred: pred, operandType: operandType, dstRef: dstRef)
 	end 'lowerCmp'
+
+	// Write a compare's boolean into its register — but only when something actually reads it as a value.
+	// A compare read ONLY by the branch it fuses with needs no register at all, which is why `if a > b`
+	// lowers to a bare `cmp` + `b.gt`.
+	//
+	// ⭐ THE CONDITION IS `arm64CondForPred`'s, THE SAME MAPPING THE FUSED BRANCH ASKS FOR, and that is
+	// what keeps the two spellings of one predicate from drifting: `cset cond` + `cbnz` branches when
+	// `cond` holds, and `b.cond` branches when `cond` holds. Neither ever inverts, so the NaN-safe float
+	// conditions (`mi`/`ls`/`gt`/`ge`) are preserved and their TRUE-on-NaN complements `pl`/`hi` stay
+	// unreachable — see `Arm64CondCode`.
+	function materialiseCompareIfRead(resultId ValueId, pred StdCmpPred, operandType StdType, dstRef BlockRef)
+		if not self.compareFusion.valueIsReadFromRegister(resultId) 'flagsOnly'
+			return
+		end 'flagsOnly'
+		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: stdTypeIsFloat(operandType), isUnsigned: stdTypeIsUnsigned(operandType))))
+	end 'materialiseCompareIfRead'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, #imm` + `cset`. `cmpImm` is INTEGER by
 	// construction (no NEON form takes an immediate, so `foldConstOperands` refuses a float rhs) — which
@@ -1492,15 +1559,45 @@ type StdToArm64Lowering
 			self.emit(dstRef, op: TargetOp.arm64Cmp(lhsReg, rhs: scratch))
 		end 'materialise'
 
-		self.emit(dstRef, op: TargetOp.arm64Cset(TargetVReg.virtual(resultId), cond: arm64CondForPred(pred, isFloat: stdTypeIsFloat(operandType), isUnsigned: stdTypeIsUnsigned(operandType))))
+		self.materialiseCompareIfRead(resultId, pred: pred, operandType: operandType, dstRef: dstRef)
 	end 'lowerCmpImm'
 
-	// Lower a Std `condBranch` to `cbnz cond, <then>` + `b <else>`. The condition is always an ordinary
-	// boolean VALUE in a register — a materialised compare, a `bool` param, a call's `bool` return, a
-	// short-circuit merge phi — because every compare materialises (this file's header). `cbnz` is the
-	// register zero-test arm64 has and x64 does not, so no `cmp reg, 0` is needed.
+	// Lower a Std `condBranch` to a conditional branch to `<then>` plus a `b <else>`. The conditional is a
+	// body op and the `b` is the block's terminator; the unconditional edge is emitted for EVERY layout so
+	// correctness never rests on block ordering (a later pass may elide a fall-through).
+	//
+	// TWO shapes, and which one applies is settled BEFORE the walk by the fusion census, never guessed:
+	//
+	//   • FUSED — the compare defining `condId` is the last flag-clobbering op of this block, so the NZCV
+	//     it set are exactly the ones the branch reads. `b.cond` tests that compare's predicate directly
+	//     and no `cset` was emitted.
+	//   • NOT FUSED — the condition is an ordinary boolean VALUE in a register: a `bool` param, a call's
+	//     `bool` return, a short-circuit merge phi, a `let`-bound compare read a few statements later, or
+	//     a compare whose own block's branch could not fuse. `cbnz` is the register zero-test arm64 has
+	//     and x64 does not, so no `cmp reg, 0` is needed.
+	//
+	// ⛔⛔ **`b.cond` READS NZCV WHERE `cbnz` READS A REGISTER, SO THE FUSED SHAPE HAS A FLAG LIFETIME AND
+	// THE ZERO-TEST SHAPE HAS NONE.** Any instruction between the compare and the branch that writes NZCV
+	// destroys the fusion. arm64 needs no rule of its own beyond the census's, and that rests on ONE
+	// property of this file: **every arm64 lowering that writes NZCV sits on a Std op declaring
+	// `clobbersFlags: true`** — `cmp`/`fcmp` here, the `cmp` inside `arm64MemFill`'s size ladder, the
+	// CAS/RMW retry loops, and every call. The one lowering that writes flags for a reason of its own is
+	// `lowerTlsSlotLoad`'s uninitialised-offset gate, and `StdOp.tlsSlotLoad` declares the clobber for it.
+	// ⇒ **A NEW arm64 LOWERING THAT EMITS AN S-SUFFIXED FORM (`adds`/`subs`/`ands`), A `cmp`/`cmn` OR AN
+	// `fcmp` MUST CHECK ITS STD OP'S DECLARATION**, or a `b.cond` somewhere will read its flags instead of
+	// the compare's — silently, and only in the block that happens to contain both.
+	//
+	// The non-S forms this file leans on make the rest free: `add`/`sub`/`orr`/`eor`/`and`, the shifts,
+	// `madd`/`msub`, `sdiv`/`udiv`, `adrp`+`add`, `movz`/`movk` and every load/store write no flag at all.
 	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstRef BlockRef)
-		self.emitCondBranch(dstRef, op: TargetOp.arm64Cbnz(TargetVReg.virtual(condId), targetBlockId: thenBlockId))
+		if not self.compareFusion.blockFusesCompare(dstRef) 'notFused'
+			self.emitCondBranch(dstRef, op: TargetOp.arm64Cbnz(TargetVReg.virtual(condId), targetBlockId: thenBlockId))
+			self.emitTerminator(dstRef, op: TargetOp.arm64Branch(elseBlockId))
+			return
+		end 'notFused'
+
+		let cond = arm64CondForPred(self.compareFusion.fusedPredicateOf(dstRef), isFloat: self.compareFusion.fusedCompareIsFloat(condId), isUnsigned: self.compareFusion.fusedCompareIsUnsigned(condId))
+		self.emitCondBranch(dstRef, op: TargetOp.arm64CondBranch(cond, targetBlockId: thenBlockId))
 		self.emitTerminator(dstRef, op: TargetOp.arm64Branch(elseBlockId))
 	end 'lowerCondBranch'
 
@@ -2364,11 +2461,11 @@ type StdToArm64Lowering
 	// so the same select is a `cset` (0 or 1) and a multiply — one instruction more, no branch, and no new
 	// `TargetOp` for a sequence with one caller.
 	//
-	// ⚠ **IT CLOBBERS THE FLAGS, WHICH `StdOp.tlsSlotLoad` DECLARES IT DOES NOT — AND THAT IS SAFE ON THIS
-	// BACKEND ONLY.** arm64 never carries NZCV across ops: every compare MATERIALISES into a register
-	// (`lowerCmp`/`lowerCmpImm` end in `cset`) and `condBranch` is a `cbnz` on that register, so there is no
-	// live flag state for an op to preserve. On x64, where a compare's flags DO reach its branch, this
-	// sequence would be a miscompile — which is why the property is stated here rather than assumed.
+	// ⚠ **THE GATE CLOBBERS NZCV, AND `StdOp.tlsSlotLoad` DECLARES THAT FOR IT.** x64 lowers this op to a
+	// single flag-free `mov r, gs:[off]` and needs no gate at all, so the declaration is arm64's alone —
+	// the field is a union over the backends for exactly this case (see its header in StdDialect).
+	// Undeclared, this sequence would sit invisibly between a fused compare and its `b.cond` and the branch
+	// would read the gate's flags instead of the compare's.
 	//
 	// ⚠ **THE TWO IP SCRATCHES, AND WHY x17's LIVE RANGE IS ONE OP.** `Arm64Scratch`'s header states the
 	// invariant these pairs rest on: nothing a post-isel pass splices in writes x16, and a wide-frame address

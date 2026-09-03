@@ -66,17 +66,13 @@ func @massOf {
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.movImm x0, 1
     arm64.b matchcont
   matchnext:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#2
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
@@ -85,7 +81,6 @@ func @massOf {
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
     arm64.movRegReg x0, x20
-    arm64.b matchcont
   matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -112,12 +107,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x19
     arm64.movImm x19, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x19, 300
-    arm64.cset x0, lt
-    arm64.cbnz x0, spin
-    arm64.b whileexit
+    arm64.b.ge whileexit
   spin:
     arm64.movRegReg x0, x20
     arm64.bl massOf
@@ -126,9 +118,7 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.cmp x21, 900
-    arm64.cset x0, ne
-    arm64.cbnz x0, wrong
-    arm64.b ifcont
+    arm64.b.eq ifcont
   wrong:
     arm64.movImm x19, 1
     arm64.movRegReg x0, x20

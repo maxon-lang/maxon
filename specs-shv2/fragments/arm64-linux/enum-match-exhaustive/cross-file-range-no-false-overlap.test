@@ -44,9 +44,7 @@ func @classify {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#1
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#1:
     arm64.movImm x0, 1
     arm64.b matchcont
@@ -56,21 +54,15 @@ func @classify {
     arm64.cmp x0, 2
     arm64.cset x0, le
     arm64.and x0, x1, x0
-    arm64.cbnz x0, matcharm#2
-    arm64.b matchdead
+    arm64.cbz x0, matchdead
   matcharm#2:
     arm64.movImm x0, 2
-    arm64.b matchcont
   matchcont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 125
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at main.maxon:4: Range check failed: value outside typealias 'Code'\x0a"
     arm64.bl mrt_panic
@@ -87,48 +79,24 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.movImm x0, 1
-    arm64.b __il_body#5
-  __il_body#5:
-    arm64.b matchnext
-  matchnext:
-    arm64.b matcharm#7
   matcharm#7:
     arm64.movImm x1, 2
-    arm64.b matchcont#10
-  matchcont#10:
+  matchcont:
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_chk#12
-  __rc_chk#12:
+    arm64.b.lt __il_slow
+  __rc_chk:
     arm64.cmp x1, 125
-    arm64.cset x2, gt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok#11
+    arm64.b.le __rc_ok
   __il_slow:
     arm64.bl classify
-    arm64.b __il_cont#4
-  __rc_ok#11:
-    arm64.movRegReg x0, x1
-    arm64.b __il_cont#4
-  __il_cont#4:
-    arm64.b __il_body#14
-  __il_body#14:
     arm64.b matcharm#15
+  __rc_ok:
+    arm64.movRegReg x0, x1
   matcharm#15:
     arm64.movImm x1, 9
-    arm64.b matchcont#17
-  matchcont#17:
-    arm64.b __rc_chk#19
-  __rc_chk#19:
-    arm64.b __rc_ok#18
-  __rc_ok#18:
-    arm64.b __il_cont#3
-  __il_cont#3:
+  __il_cont:
     arm64.cmp x1, 9
-    arm64.cset x1, eq
-    arm64.cbnz x1, wideOk
-    arm64.b ifcont
+    arm64.b.ne ifcont
   wideOk:
     arm64.epilogue 16
     arm64.ret

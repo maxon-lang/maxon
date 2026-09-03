@@ -19,8 +19,7 @@ func @main {
     arm64.leaRdata x1, __str_rec_2  ; "hello"
     arm64.bl __str_eq
     arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit
+    arm64.cbz x0, critsplit
   andrhs:
     arm64.leaRdata x1, __str_rec_3  ; "A"
     arm64.movRegReg x0, x19
@@ -28,10 +27,8 @@ func @main {
     arm64.b scmerge
   critsplit:
     arm64.movRegReg x0, x1
-    arm64.b scmerge
   scmerge:
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   check:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

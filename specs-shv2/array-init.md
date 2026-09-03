@@ -694,7 +694,7 @@ error E2015: <fragment>:6:20: Unsupported: `Array` static method 'nosuch' — sh
 ```
 
 <!-- test: a-synthesized-byte-buffer-adopts -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⭐⭐ **THE BYTE-BUFFER BOUNDARY AT THIS DOOR (W5).** A COMPILER-SYNTHESIZED buffer wears the
 reserved element `__ManagedByte`, deliberately a DIFFERENT instance from the user-visible `Byte` —
 a user may declare `Byte`, and a compiler-minted buffer's stride may not follow. Raw instance
@@ -729,7 +729,7 @@ end 'main'
 ```
 
 <!-- test: error.a-synthesized-buffer-is-refused-at-a-narrowed-byte -->
-<!-- targets: x64-windows, arm64-macos -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
 ⛔ **AND THE ADMISSION IS THREE QUESTIONS, NOT ONE — THIS IS THE ONE THAT STOPS THE MEASURED 223.**
 The element is still NAMED `Byte` and the record still strides one byte, so a door that asked only
 those two would adopt a buffer of raw OS bytes as an array of `int(0 to 200)` and hand back

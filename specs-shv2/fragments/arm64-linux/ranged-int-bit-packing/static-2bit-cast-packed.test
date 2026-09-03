@@ -45,9 +45,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_element_size
     arm64.cmp x0, -2
-    arm64.cset x0, ne
-    arm64.cbnz x0, notPacked
-    arm64.b ifcont
+    arm64.b.eq ifcont
   notPacked:
     arm64.movImm x20, 99
     arm64.movRegReg x0, x19
@@ -61,17 +59,12 @@ func @main {
   ifcont:
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x21, 4
-    arm64.cset x0, lt
-    arm64.cbnz x0, read
-    arm64.b whileexit
+    arm64.b.ge whileexit
   read:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#10
-    arm64.b __rc_ok#9
+    arm64.b.ge __rc_ok#9
   __rc_panic#10:
     arm64.leaRdata x0, __str_blob_1  ; "panic at static-2bit-cast-packed.test:12: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -86,14 +79,9 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.movImm x0, 0
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.add x20, x20, x0
     arm64.add x21, x21, 1
@@ -102,14 +90,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#12
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic#12
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic#12
-    arm64.b __rc_ok#11
+    arm64.b.le __rc_ok#11
   __rc_panic#12:
     arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

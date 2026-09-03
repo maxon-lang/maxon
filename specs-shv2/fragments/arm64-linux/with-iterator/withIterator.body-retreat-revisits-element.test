@@ -57,18 +57,13 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, critsplit#15
-    arm64.b forempty
+    arm64.b.ne forjoin
   critsplit#15:
     arm64.movRegReg x1, x20
-    arm64.b forhdr
   forhdr:
     arm64.storeSlotReg slot3, x1
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, loop
-    arm64.b critsplit#16
+    arm64.b.ne forexit
   loop:
     arm64.leaRdata x1, __layout_WithIterIterator_ArrayIterator_int_int
     arm64.leaRdata x2, __witness_ArrayIterator_int.Iterator
@@ -81,9 +76,7 @@ func @main {
     arm64.add x2, x19, 1
     arm64.storeSlotReg slot0, x2
     arm64.cmp x2, 5
-    arm64.cset x2, ge
-    arm64.cbnz x2, stop
-    arm64.b ifcont#7
+    arm64.b.lt ifcont#7
   stop:
     arm64.bl __destruct___Tuple2.ArrayIterator_int.int
     arm64.b forexit
@@ -162,41 +155,28 @@ func @main {
     arm64.loadRegSlot x0, slot4
     arm64.bl ArrayIterator.index
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.movImm x1, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit#17
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
   andrhs:
     arm64.loadRegSlot x0, slot3
     arm64.eor x0, x0, 1
-    arm64.b scmerge
-  critsplit#17:
-    arm64.movRegReg x0, x1
-    arm64.b scmerge
   scmerge:
-    arm64.cbnz x0, once
-    arm64.b critsplit#18
+    arm64.cbz x0, critsplit#18
   once:
     arm64.movImm x19, 1
     arm64.loadRegSlot x0, slot4
     arm64.bl ArrayIterator.retreat
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq ifcont#13
   tryerr:
     arm64.loadRegSlot x0, slot2
     arm64.bl __destruct___Tuple2.ArrayIterator_int.int
     arm64.b forexit
-  tryok:
-    arm64.b ifcont#13
   critsplit#18:
     arm64.loadRegSlot x19, slot3
-    arm64.b ifcont#13
   ifcont#13:
     arm64.loadRegSlot x0, slot2
     arm64.bl __destruct___Tuple2.ArrayIterator_int.int
-    arm64.b forstep
   forstep:
     arm64.leaRdata x1, __witness_ArrayIterator_int.Iterator
     arm64.movRegReg x0, x21
@@ -206,14 +186,9 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x9
     arm64.b forhdr
-  critsplit#16:
-    arm64.b forexit
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_WithIterIterator_ArrayIterator_int_int
-    arm64.b forjoin
-  forempty:
-    arm64.b forjoin
   forjoin:
     arm64.movImm x19, 0
     arm64.loadRegSlot x0, slot1

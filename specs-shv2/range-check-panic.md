@@ -187,7 +187,7 @@ arm existed, and could not: the only frame that knows which ops moved is the one
 ## Tests
 
 <!-- test: range-check-panic.upper-bound -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Above the maximum, and not foldable — so a runtime check is what fires, and the trace names `clamp`.
 ⭐ Since A1f the guard is `clamp`'s ENTRY guard, at the parameter's own line (5), not the one on its
 `return` (6): the value was already outside `Percent` when it crossed the boundary, and the parameter
@@ -221,7 +221,7 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.lower-bound -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Below the minimum. `Natural`'s lower bound is 0, so a negative value is out of range even though it
 is a perfectly ordinary `int` — and, as above, `check`'s entry guard is what refuses it, at the
 parameter's line.
@@ -275,7 +275,7 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.nested-call -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The stack trace goes as deep as the value does: `process` receives an in-range `Score`, computes one
 that is not, and `validate` is where it is refused — at `validate`'s parameter (line 4), the boundary
 the bad value crosses first.
@@ -347,7 +347,7 @@ error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-s
 ```
 
 <!-- test: range-check-panic.runtime-argument -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A runtime out-of-range argument is refused AT THE PARAMETER, before the callee's body runs. `by`
 excludes 0, so `a / by` is a bare divide with no `try` spellable -- the proof the elision rests on is
 the parameter's declared range, and this is the check that makes that proof true. The panic names the
@@ -403,7 +403,7 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.float-argument -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⭐ A narrowed FLOAT parameter is guarded on exactly the same terms as an integer one. Shipping the
 integer half alone would have replaced *five doors of which four guard* with *parameters of which only
 the int ones guard* — a fresh instance of the very asymmetry the entry guard exists to delete. The
@@ -460,7 +460,7 @@ error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-a
 ```
 
 <!-- test: range-check-panic.entry-guard-on-a-parameter-no-body-reads -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⭐⭐ **THE GUARD IS NOT DEAD CODE, EVEN WHEN NOTHING BUT THE PREMISE CONSUMES IT.** `unused`'s body never
 mentions its parameter — it is spelled `_`, the ignore name, because a parameter no body reads is exactly
 what this case is about and E3012 refuses any other spelling of it — so the only thing the entry guard
@@ -498,7 +498,7 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.argument-through-a-function-value-is-guarded -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⭐⭐ **THE CLAIM THE CALLEE-ENTRY DESIGN RESTS ON, AND THE ONLY CASE THAT CAN TEST IT.** The reason the
 guard belongs to the callee rather than the call is that a call-site rule structurally cannot reach every
 caller: a call through a function VALUE has no callee name at the call site to look a parameter's range
@@ -543,7 +543,7 @@ Stack trace:
 
 
 <!-- test: range-check-panic.return-of-a-reassigned-shadow-is-still-guarded -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠ **CLAUSE 1 BROKEN: the returned value is not the parameter any more.** `y` starts as `x` — which mints
 no op, so at that point it IS the parameter's `ValueId` — and is then REASSIGNED, which rebinds it to the
 call's result. A `return` guard elided on "the function has a ranged parameter" rather than on the
@@ -579,7 +579,7 @@ Stack trace:
 
 
 <!-- test: range-check-panic.return-through-a-narrower-alias-is-still-guarded -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠ **CLAUSE 2 BROKEN: same value, DIFFERENT alias.** `x` is a `Wide` the entry guard admits and a `Narrow`
 the return must refuse. An elision keyed on "the returned value is a ranged parameter" — without
 comparing the alias NAMES — would return `50` through a type declared `int(0 to 10)`.
@@ -608,7 +608,7 @@ Stack trace:
 
 
 <!-- test: range-check-panic.return-of-a-computed-value-is-still-guarded -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠ **CLAUSE 1 BROKEN THE OTHER WAY: the value never was the parameter.** `x * 3` is a `binOp` result, so
 the entry guard says nothing about it — the parameter it was computed FROM was in range, and the result
 is not.
@@ -657,7 +657,7 @@ end 'main'
 
 
 <!-- test: range-check-panic.entry-guard-covers-a-return-inside-a-branch -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⭐ **CLAUSE 3, which is the one that cannot be broken by writing a program.** The entry guard splits the
 entry block before any body op, so it DOMINATES every `return` — including one inside a branch, whose own
 guard is elided. `99` is refused at `pick`'s parameter line before the `if` is even evaluated, which is
@@ -981,7 +981,7 @@ total=2016
 
 
 <!-- test: range-check-panic.a-counted-loop-one-past-the-alias-still-panics -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠ **THE DISCRIMINATING CASE FOR THE EXCLUSIVE ARITHMETIC.** One more trip and the counter reaches 64,
 which `RegNum` does not admit — so the guard stays and fires. A rule that took the interval as
 `[0, b-2]`, or that compared it the other way round, would print `2080` here instead.
@@ -1034,7 +1034,7 @@ total=2016
 
 
 <!-- test: range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-still-panics -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠ **THE DISCRIMINATING CASE FOR THE INCLUSIVE ARITHMETIC**, and it is the one that would go silently
 wrong if `to` were read as `upto`: under `[0, 63]` the guard would be elided and this would print
 `2080` rather than panicking at 64.
@@ -1064,7 +1064,7 @@ Stack trace:
 
 
 <!-- test: range-check-panic.a-runtime-loop-bound-proves-nothing -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A bound the compiler cannot fold states no interval, however obvious the value is at run time — so
 the guard stands and fires at 64.
 ```maxon
@@ -1172,7 +1172,7 @@ total=2080
 
 
 <!-- test: range-check-panic.a-counted-loop-past-a-callees-parameter-still-panics -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠ The negative control for the inlined cascade, and it pins the FRAME as well as the panic: the
 counter is not inside `RegNum`, the cascade is copied as it always was, and the slow arm re-issues the
 real call — so the trace still names `weigh`, at `weigh`'s own parameter line.
@@ -1233,7 +1233,7 @@ t=16
 
 
 <!-- test: range-check-panic.a-wider-parameter-does-not-prove-a-narrower-one -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠ The negative control for that second proof: `Wide` admits values `RegNum` does not, so the caller's
 own guard proves nothing about the callee's and the spliced cascade stays. Both frames are in the
 trace, which is what says the panic is still the callee's.
@@ -1269,7 +1269,7 @@ Stack trace:
 
 
 <!-- test: range-check-panic.an-inclusive-counted-loop-past-the-unsigned-top-still-panics -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⚠⚠ **THE DISCRIMINATING CASE FOR THE TOP BOUND, AND IT WAS A MEASURED WRONG ANSWER.** A `to` loop runs the
 body AT its bound, steps past it and tests again — so at the top of the domain the test READS, the step wraps
 to that domain's bottom and the loop never leaves. There are two tops, because `emitCompare` picks a
@@ -1334,6 +1334,55 @@ t=281
 ```
 
 
+<!-- test: range-check-panic.a-guarded-float-cast-proves-a-divisor-a-merge-cannot -->
+⭐⭐ **THE POSITIVE COUNTERPART OF THE WITHHOLD ABOVE, AND THE LINE BETWEEN THEM IS *NAMED AND GUARDED*.**
+`d` is a reassigned `var`, so it denotes nothing a merge or an interval could vouch for — but `as Positive`
+is a DECLARED alias, and the cast emits the runtime guard the next case fires. Past that guard the value
+satisfies `Positive` whatever it was before, so `8.0 / s` is `safety.md`'s escape hatch and needs no `try`.
+⚠ The proof cannot ride the SOURCE value: `d` is a bare local, one value under two names, and stamping it
+would vouch for `d` on paths the guard never ran on. The cast mints its own value to carry it.
+```maxon
+typealias Positive = float(2.2250738585072014e-308 to f64.max)
+
+function main() returns ExitCode
+  var d = 0.0
+  d = d + 4.0
+  let s = d as Positive
+  print("q={8.0 / s}\n")
+  return 0
+end 'main'
+```
+```stdout
+q=2.0
+```
+
+
+<!-- test: range-check-panic.a-guarded-float-cast-that-fails-still-panics -->
+⛔ **WHAT MAKES THE PROOF ABOVE LEGITIMATE.** The same shape with `d` landing on `0.0`: the guard the cast
+emits is what stands between a bare `divsd` and a division by zero, so it must still fire — and it must fire
+at the CAST, before the divide the proof exempted. An elided guard here would print `q=inf`.
+```maxon
+typealias Positive = float(2.2250738585072014e-308 to f64.max)
+
+function main() returns ExitCode
+  var d = 1.0
+  d = d - 1.0
+  let s = d as Positive
+  print("q={8.0 / s}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-guarded-float-cast-that-fails-still-panics.test:7: Range check failed: value outside typealias 'Positive'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+
 <!-- test: range-check-panic.a-merge-fed-by-a-counted-loop-denotes-no-alias -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⛔ **THE RED-GATE CONTROL FOR THE THIRD WITHHOLD.** `x` is an `if`-continuation merge — one of the four that
@@ -1395,7 +1444,7 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.a-guard-in-the-selected-ternary-arm-still-fires -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The positive control for the case above, and the half that says the guard was MOVED rather than lost:
 the identical program with the condition TRUE panics, at the arm's own line.
 ```maxon
@@ -1461,7 +1510,7 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.a-computed-value-in-the-selected-ternary-arm-still-panics -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The fourth corner, and the one that says the computed shape's guard was MOVED rather than dropped: the
 same program with the arm SELECTED and the computation out of range panics, from the arm's own line.
 ```maxon

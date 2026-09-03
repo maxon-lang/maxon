@@ -46,22 +46,16 @@ func @show {
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x0, 200
-    arm64.cset x1, lt
-    arm64.cbnz x1, spin
-    arm64.b whileexit
+    arm64.b.ge whileexit
   spin:
     arm64.add x21, x0, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, matcharm#4
-    arm64.b matchnext
+    arm64.b.ne matchnext
   matcharm#4:
     arm64.add x0, x20, 1
-    arm64.b matchcont
   matchcont:
     arm64.add x0, x0, 2
     arm64.movRegReg x20, x0
@@ -69,9 +63,7 @@ func @show {
     arm64.b whilehdr
   matchnext:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm#5
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm#5:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
     arm64.movRegReg x0, x22

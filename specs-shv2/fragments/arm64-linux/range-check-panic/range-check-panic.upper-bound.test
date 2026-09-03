@@ -1,0 +1,49 @@
+// Test: range-check-panic.upper-bound
+typealias Integer = int(i64.min to i64.max)
+typealias Percent = int(0 to 100)
+
+function clamp(x Percent) returns Percent
+  return x
+end 'clamp'
+
+function grow(n Integer) returns Integer
+  return n * 101
+end 'grow'
+
+function main() returns ExitCode
+  let big = grow(1)
+  return clamp(big)
+end 'main'
+---
+ExitCode: 1
+---
+func @clamp {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 101
+  __il_slow:
+    arm64.bl clamp
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

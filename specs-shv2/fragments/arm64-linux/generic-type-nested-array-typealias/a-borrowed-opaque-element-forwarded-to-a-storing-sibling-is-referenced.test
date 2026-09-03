@@ -104,9 +104,7 @@ func @GHolder.relay {
     arm64.movRegReg x20, x2
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_7  ; "panic at a-borrowed-opaque-element-forwarded-to-a-storing-sibling-is-referenced.test:24: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -117,15 +115,11 @@ func @GHolder.relay {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load#11
+    arm64.b.hs __im_slow
   __im_load#11:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.arm64AddLsl x2, x2, x1, lsl #3
@@ -133,32 +127,23 @@ func @GHolder.relay {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x2, 1
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.cset x2, hs
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load#12
+    arm64.b.hs __im_slow
   __im_load#12:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#14
+    arm64.b.eq critsplit#14
   __im_empty:
     arm64.cmp x2, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow
-    arm64.b critsplit#15
+    arm64.b.eq __im_slow
   critsplit#15:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
@@ -169,12 +154,9 @@ func @GHolder.relay {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_3  ; "panic at a-borrowed-opaque-element-forwarded-to-a-storing-sibling-is-referenced.test:24: out of range\x0a"
     arm64.bl mrt_panic
@@ -235,12 +217,9 @@ func @main {
     arm64.movRegReg x1, x22
     arm64.bl GHolder.seed
     arm64.movImm x20, 0
-    arm64.b whilehdr
   whilehdr:
     arm64.cmp x20, 100
-    arm64.cset x0, lo
-    arm64.cbnz x0, relayMany
-    arm64.b whileexit
+    arm64.b.hs whileexit
   relayMany:
     arm64.movImm x1, 0
     arm64.leaRdata x2, __layout_GHolder_String
@@ -252,11 +231,9 @@ func @main {
     arm64.leaRdata x0, __str_rec_5  ; "spare "
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x0, 20
     arm64.movImm x1, 0

@@ -169,7 +169,7 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
 
 <!-- test: hot-loop-overflow-arm64 -->
 <!-- targets: arm64-macos, arm64-linux -->
-arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), not x64's 14, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i`, plus the loop condition's materialized boolean — arm64 lowers `i < N` to `cmp`+`cset` into a GPR, where x64 fuses `cmp`+`jcc` and materializes nothing — so thirty values are live at the loop header against a pool of twenty-six. The deficit is exactly 4 (30 − 26), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
+arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), not x64's 14, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i` — twenty-nine values live at the loop header against a pool of twenty-six. The condition adds nothing: `i < N` lowers to a fused `cmp`+`b.cond`, materializing no boolean into a GPR. The deficit is exactly 3 (29 − 26), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
 ```maxon
 function hot(_ Integer) returns Integer
 	var s1 = 1
@@ -241,13 +241,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:32 needs 4 more register(s) than are available
-  30 values must be held in registers at once inside this loop, but
+error E5001: the loop at <fragment>:33 needs 3 more register(s) than are available
+  29 values must be held in registers at once inside this loop, but
   only 26 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 4 of these 30 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+  remove 3 of these 29 value(s) from the loop, cheapest first (ranked by reads inside the loop):
     <fragment>:3:11   read 1 time in the loop
     <fragment>:4:11   read 1 time in the loop
     <fragment>:5:11   read 1 time in the loop
@@ -276,7 +276,6 @@ error E5001: the loop at <fragment>:32 needs 4 more register(s) than are availab
     <fragment>:28:12   read 1 time in the loop
     <fragment>:29:12   read 1 time in the loop
     <fragment>:30:12   read 1 time in the loop
-    <fragment>:32:10   read 1 time in the loop
     <fragment>:31:10   read 30 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
@@ -612,7 +611,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: hot-loop-param-used-arm64 -->
 <!-- targets: arm64-macos, arm64-linux -->
-The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators, the counter, and the condition boolean it is one of twenty-nine values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3.
+The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 2.
 ```maxon
 function hot(p Integer) returns Integer
 	var s1 = 1
@@ -680,13 +679,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:30 needs 3 more register(s) than are available
-  29 values must be held in registers at once inside this loop, but
+error E5001: the loop at <fragment>:31 needs 2 more register(s) than are available
+  28 values must be held in registers at once inside this loop, but
   only 26 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 3 of these 29 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+  remove 2 of these 28 value(s) from the loop, cheapest first (ranked by reads inside the loop):
     <fragment>:2:14   read 1 time in the loop
     <fragment>:3:11   read 1 time in the loop
     <fragment>:4:11   read 1 time in the loop
@@ -714,7 +713,6 @@ error E5001: the loop at <fragment>:30 needs 3 more register(s) than are availab
     <fragment>:26:12   read 1 time in the loop
     <fragment>:27:12   read 1 time in the loop
     <fragment>:28:12   read 1 time in the loop
-    <fragment>:30:10   read 1 time in the loop
     <fragment>:29:10   read 28 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
@@ -875,7 +873,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:30 needs 2 more register(s) than are available
+error E5001: the loop at <fragment>:31 needs 2 more register(s) than are available
   28 values must be held in registers at once inside this loop, but
   only 26 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside

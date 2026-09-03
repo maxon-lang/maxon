@@ -37,7 +37,6 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b __il_body#7
   __il_body#7:
     arm64.jumpTable x1, default=matchdead#15 [[0]=matcharm#8, [1]=matcharm#9, [2]=matcharm#10, [3]=matcharm#11, [4]=matcharm#12, [5]=matcharm#13, [6]=matcharm#14] @__jumptable_1
   matchdead#15:
@@ -61,15 +60,11 @@ func @main {
     arm64.b __il_cont#6
   matcharm#14:
     arm64.movImm x1, 64
-    arm64.b __il_cont#6
   __il_cont#6:
     arm64.cmp x1, 1
-    arm64.cset x1, eq
-    arm64.cbnz x1, guard
-    arm64.b critsplit
+    arm64.b.ne ifcont
   guard:
     arm64.movImm x0, 0
-    arm64.b __il_body#24
   __il_body#24:
     arm64.jumpTable x0, default=matchdead#32 [[0]=matcharm#25, [1]=matcharm#26, [2]=matcharm#27, [3]=matcharm#28, [4]=matcharm#29, [5]=matcharm#30, [6]=matcharm#31] @__jumptable_2
   matchdead#32:
@@ -93,10 +88,8 @@ func @main {
     arm64.b __il_cont#23
   matcharm#31:
     arm64.movImm x0, 64
-    arm64.b __il_cont#23
   __il_cont#23:
     arm64.movImm x1, 1
-    arm64.b __il_body#34
   __il_body#34:
     arm64.jumpTable x1, default=matchdead#42 [[0]=matcharm#35, [1]=matcharm#36, [2]=matcharm#37, [3]=matcharm#38, [4]=matcharm#39, [5]=matcharm#40, [6]=matcharm#41] @__jumptable_3
   matchdead#42:
@@ -120,11 +113,9 @@ func @main {
     arm64.b __il_cont#22
   matcharm#41:
     arm64.movImm x1, 64
-    arm64.b __il_cont#22
   __il_cont#22:
     arm64.add x0, x0, x1
     arm64.movImm x1, 2
-    arm64.b __il_body#44
   __il_body#44:
     arm64.jumpTable x1, default=matchdead#52 [[0]=matcharm#45, [1]=matcharm#46, [2]=matcharm#47, [3]=matcharm#48, [4]=matcharm#49, [5]=matcharm#50, [6]=matcharm#51] @__jumptable_4
   matchdead#52:
@@ -148,11 +139,9 @@ func @main {
     arm64.b __il_cont#21
   matcharm#51:
     arm64.movImm x1, 64
-    arm64.b __il_cont#21
   __il_cont#21:
     arm64.add x0, x0, x1
     arm64.movImm x1, 3
-    arm64.b __il_body#54
   __il_body#54:
     arm64.jumpTable x1, default=matchdead#62 [[0]=matcharm#55, [1]=matcharm#56, [2]=matcharm#57, [3]=matcharm#58, [4]=matcharm#59, [5]=matcharm#60, [6]=matcharm#61] @__jumptable_5
   matchdead#62:
@@ -176,11 +165,9 @@ func @main {
     arm64.b __il_cont#20
   matcharm#61:
     arm64.movImm x1, 64
-    arm64.b __il_cont#20
   __il_cont#20:
     arm64.add x0, x0, x1
     arm64.movImm x1, 4
-    arm64.b __il_body#64
   __il_body#64:
     arm64.jumpTable x1, default=matchdead#72 [[0]=matcharm#65, [1]=matcharm#66, [2]=matcharm#67, [3]=matcharm#68, [4]=matcharm#69, [5]=matcharm#70, [6]=matcharm#71] @__jumptable_6
   matchdead#72:
@@ -204,11 +191,9 @@ func @main {
     arm64.b __il_cont#19
   matcharm#71:
     arm64.movImm x1, 64
-    arm64.b __il_cont#19
   __il_cont#19:
     arm64.add x0, x0, x1
     arm64.movImm x1, 5
-    arm64.b __il_body#74
   __il_body#74:
     arm64.jumpTable x1, default=matchdead#82 [[0]=matcharm#75, [1]=matcharm#76, [2]=matcharm#77, [3]=matcharm#78, [4]=matcharm#79, [5]=matcharm#80, [6]=matcharm#81] @__jumptable_7
   matchdead#82:
@@ -232,11 +217,9 @@ func @main {
     arm64.b __il_cont#18
   matcharm#81:
     arm64.movImm x1, 64
-    arm64.b __il_cont#18
   __il_cont#18:
     arm64.add x0, x0, x1
     arm64.movImm x1, 6
-    arm64.b __il_body#84
   __il_body#84:
     arm64.jumpTable x1, default=matchdead#92 [[0]=matcharm#85, [1]=matcharm#86, [2]=matcharm#87, [3]=matcharm#88, [4]=matcharm#89, [5]=matcharm#90, [6]=matcharm#91] @__jumptable_8
   matchdead#92:
@@ -260,22 +243,14 @@ func @main {
     arm64.b __il_cont#17
   matcharm#91:
     arm64.movImm x1, 64
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.add x0, x0, x1
-    arm64.b ifcont
-  critsplit:
-    arm64.b ifcont
   ifcont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at every-block-keyword-as-a-case-member.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -285,12 +260,4 @@ func @main {
   __rc_ok:
     arm64.epilogue 16
     arm64.ret
-  matchcont#16:
-  matchcont#33:
-  matchcont#43:
-  matchcont#53:
-  matchcont#63:
-  matchcont#73:
-  matchcont#83:
-  matchcont#93:
 }

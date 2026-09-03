@@ -39,8 +39,7 @@ func @callA {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.cbnz x0, c
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   c:
     arm64.movImm x19, 50
     arm64.movImm x0, 16
@@ -70,20 +69,13 @@ func @main {
     arm64.movImm x0, 1
     arm64.bl callA
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryblkthrow
-    arm64.b tryblkok
-  tryblkthrow:
-    arm64.b tryblkerr
+    arm64.b.eq tryblkcont
   tryblkerr:
     arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm:
     arm64.loadRegBaseDisp.word64 x19, [x9 + 8]
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x9
     arm64.bl __mm_decref
@@ -91,17 +83,12 @@ func @main {
     arm64.b tryblkcont
   matchdead:
   tryblkok:
-    arm64.b tryblkcont
   tryblkcont:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at try-block.single-enum-assoc-value.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

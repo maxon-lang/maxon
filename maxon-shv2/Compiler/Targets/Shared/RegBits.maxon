@@ -269,6 +269,13 @@ end 'registerFileFor'
 // the slot stride, so the splitter's frame-size tally and the encoder's slot offsets agree.
 export let SpillSlotBytes = 8 as StackSize
 
+// How many of those slots a STRUCTURE of `byteCount` bytes occupies, rounded up — the frame reservation a
+// hand-assembled runtime chunk makes for a buffer the OS fills. It is a function rather than a `let` per
+// size for `posixNanosPerFileTimeTick`'s language reason: a global initializer folds `/` as a float.
+export function runtimeFrameSlots(byteCount ParsedInt) returns StackSize
+	return ((byteCount + SpillSlotBytes - 1) / SpillSlotBytes) as StackSize
+end 'runtimeFrameSlots'
+
 // A number of registers, or of simultaneously-live values (register PRESSURE) — the
 // quantity the E5001 feasibility test compares against the pool size. Distinct in
 // PURPOSE from a byte count or a CFG index even though all are non-negative ints.

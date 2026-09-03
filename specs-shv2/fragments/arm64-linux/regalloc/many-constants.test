@@ -66,9 +66,7 @@ func @main {
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 8
@@ -76,14 +74,10 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#22
+    arm64.b.eq critsplit#22
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#23
+    arm64.b.ne critsplit#23
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -93,48 +87,25 @@ func @main {
     arm64.b __im_cont
   critsplit#22:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq trycont#3
   tryerr#2:
     arm64.leaRdata x0, __str_rec_1  ; "0"
-    arm64.b trycont#3
-  tryok#1:
-    arm64.b trycont#3
   trycont#3:
     arm64.bl __int_fromString
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#5
-    arm64.b tryok#4
+    arm64.b.eq trycont#6
   tryerr#5:
     arm64.movImm x0, 0
-    arm64.b trycont#6
-  tryok#4:
-    arm64.b trycont#6
   trycont#6:
     arm64.add x1, x0, 11
-    arm64.b __il_body#18
-  __il_body#18:
-    arm64.b __il_cont#17
   __il_cont#17:
     arm64.add x2, x0, 22
-    arm64.b __il_body#19
-  __il_body#19:
-    arm64.b __il_cont#16
   __il_cont#16:
     arm64.add x3, x0, 33
-    arm64.b __il_body#20
-  __il_body#20:
-    arm64.b __il_cont#15
   __il_cont#15:
     arm64.add x0, x0, 44
-    arm64.b __il_body#21
-  __il_body#21:
-    arm64.b __il_cont#14
   __il_cont#14:
     arm64.and x4, x1, 255
     arm64.movImm x16, 61680
@@ -173,14 +144,10 @@ func @main {
     arm64.add x0, x1, x0
     arm64.and x20, x0, 255
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_11  ; "panic at many-constants.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

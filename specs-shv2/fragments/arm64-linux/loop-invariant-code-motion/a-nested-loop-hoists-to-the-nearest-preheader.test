@@ -45,39 +45,29 @@ func @grid {
     arm64.movImm x4, 0
     arm64.movImm x16, 5
     arm64.mul x2, x2, x16
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x4, x1
-    arm64.cset x5, lt
-    arm64.cbnz x5, outer
-    arm64.b forexit#4
+    arm64.b.ge forexit
   outer:
     arm64.movImm x5, 0
     arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x7, [x0 + 0]
-    arm64.b forhdr#5
   forhdr#5:
     arm64.cmp x5, x6
-    arm64.cset x8, lt
-    arm64.cbnz x8, inner
-    arm64.b forexit#8
+    arm64.b.ge forstep#3
   inner:
     arm64.arm64AddLsl x8, x7, x5, lsl #3
     arm64.loadRegBaseDisp.word64 x8, [x8 + 0]
-    arm64.b __im_cont
   __im_cont:
     arm64.add x3, x3, x8
     arm64.add x3, x3, x2
-    arm64.b forstep#7
   forstep#7:
     arm64.add x5, x5, 1
     arm64.b forhdr#5
-  forexit#8:
-    arm64.b forstep#3
   forstep#3:
     arm64.add x4, x4, 1
     arm64.b forhdr#1
-  forexit#4:
+  forexit:
     arm64.movRegReg x0, x3
     arm64.epilogue 16
     arm64.ret
@@ -106,9 +96,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl grid
     arm64.cmp x0, 120
-    arm64.cset x0, ne
-    arm64.cbnz x0, nested
-    arm64.b ifcont#2
+    arm64.b.eq ifcont#2
   nested:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -124,9 +112,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl grid
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, noRows
-    arm64.b ifcont#4
+    arm64.b.eq ifcont#4
   noRows:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19

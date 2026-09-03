@@ -90,19 +90,15 @@ func @main {
     arm64.bl Box.create
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x1, 0
-    arm64.cset x2, lt
-    arm64.cbnz x2, __il_slow
-    arm64.b __rc_ok#6
+    arm64.b.ge __rc_ok#6
   __il_slow:
     arm64.bl String.byteLength
     arm64.b __il_cont
   __rc_ok#6:
     arm64.movRegReg x0, x1
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x16, 7
     arm64.mul x20, x0, x16
@@ -111,14 +107,10 @@ func @main {
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#1
+    arm64.b.le __rc_ok#1
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at a-keyword-named-parameter-that-a-CONSTRUCTOR-CONSUMES.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

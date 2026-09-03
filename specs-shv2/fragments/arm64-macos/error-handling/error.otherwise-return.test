@@ -40,9 +40,7 @@ func @runIt {
     arm64.prologue 16
     arm64.bl mayFail
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 18446744073709551615
     arm64.epilogue 16
@@ -57,9 +55,7 @@ func @main {
     arm64.prologue 16
     arm64.bl runIt
     arm64.cmp x0, -1
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.ne ifcont
   check:
     arm64.movImm x0, 99
     arm64.epilogue 16

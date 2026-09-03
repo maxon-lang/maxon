@@ -36,9 +36,7 @@ func @main {
     arm64.bl __managed_mem_create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -51,9 +49,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -76,9 +72,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set_byte
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#6
-    arm64.b tryok#5
+    arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x21, 3
     arm64.movRegReg x0, x20
@@ -94,9 +88,7 @@ func @main {
   tryok#5:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 3
-    arm64.cset x0, ne
-    arm64.cbnz x0, lengthNotShared
-    arm64.b ifcont
+    arm64.b.eq ifcont
   lengthNotShared:
     arm64.movImm x21, 4
     arm64.movRegReg x0, x20
@@ -113,46 +105,33 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word#18
-    arm64.b __im_stride#20
+    arm64.b.ne __im_stride#20
   __im_word#18:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#17
-    arm64.b __im_load#22
+    arm64.b.ls __im_slow#17
   __im_load#22:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.b __im_loaded#21
   __im_stride#20:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#19
-    arm64.b __im_slow#17
+    arm64.b.ne __im_slow#17
   __im_byte#19:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#17
-    arm64.b __im_load#23
+    arm64.b.ls __im_slow#17
   __im_load#23:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#21
   __im_loaded#21:
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#24
-    arm64.b critsplit#34
+    arm64.b.eq critsplit#34
   __im_empty#24:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#17
-    arm64.b critsplit#35
+    arm64.b.eq __im_slow#17
   critsplit#35:
     arm64.movRegReg x21, x0
     arm64.b __im_cont#16
@@ -164,12 +143,9 @@ func @main {
     arm64.bl __managed_get
     arm64.movRegReg x21, x0
     arm64.movRegReg x2, x9
-    arm64.b __im_cont#16
   __im_cont#16:
     arm64.cmp x2, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#10
-    arm64.b tryok#9
+    arm64.b.eq tryok#9
   tryerr#10:
     arm64.movImm x21, 5
     arm64.movRegReg x0, x20
@@ -186,15 +162,11 @@ func @main {
     arm64.movImm x1, 2
     arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
     arm64.cmp x0, 8
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_word#27
-    arm64.b __im_stride#29
+    arm64.b.ne __im_stride#29
   __im_word#27:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 2
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#26
-    arm64.b __im_load#31
+    arm64.b.ls __im_slow#26
   __im_load#31:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.add x0, x0, 16
@@ -202,46 +174,30 @@ func @main {
     arm64.b __im_loaded#30
   __im_stride#29:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#28
-    arm64.b __im_slow#26
+    arm64.b.ne __im_slow#26
   __im_byte#28:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 2
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#26
-    arm64.b __im_load#32
+    arm64.b.ls __im_slow#26
   __im_load#32:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.add x0, x0, 2
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded#30
   __im_loaded#30:
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty#33
-    arm64.b critsplit#36
+    arm64.b.eq __im_cont#25
   __im_empty#33:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow#26
-    arm64.b critsplit#37
-  critsplit#37:
-    arm64.b __im_cont#25
-  critsplit#36:
-    arm64.b __im_cont#25
+    arm64.b.ne __im_cont#25
   __im_slow#26:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
     arm64.movRegReg x2, x9
-    arm64.b __im_cont#25
   __im_cont#25:
     arm64.cmp x2, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq tryok#11
   tryerr#12:
     arm64.movImm x21, 5
     arm64.movRegReg x0, x20
@@ -257,14 +213,10 @@ func @main {
   tryok#11:
     arm64.add x21, x21, x0
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at the-buffer-keeps-its-own-surface.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

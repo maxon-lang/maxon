@@ -1,0 +1,79 @@
+// Test: range-check-panic.argument-through-a-function-value-is-guarded
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias DivFn = function(Integer, NonZero) returns Integer
+
+function opaque(n Integer) returns Integer
+  return n
+end 'opaque'
+
+function divide(a Integer, b NonZero) returns Integer
+  return a / b
+end 'divide'
+
+function apply(f DivFn, a Integer, b Integer) returns Integer
+  return f(a, b)
+end 'apply'
+
+function main() returns ExitCode
+  let fn = divide
+  return apply(fn, a: 10, b: opaque(0)) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+func @divide {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 1
+    arm64.b.ge __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at range-check-panic.argument-through-a-function-value-is-guarded.test:10: Range check failed: value outside typealias 'NonZero'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.sdiv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @apply {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_divide
+    arm64.movImm x1, 10
+    arm64.movImm x2, 0
+  __il_cont:
+    arm64.movImm x3, 0
+    arm64.bl apply
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at range-check-panic.argument-through-a-function-value-is-guarded.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

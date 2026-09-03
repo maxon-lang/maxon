@@ -15,19 +15,13 @@ func @main {
     arm64.leaRdata x0, __str_rec_1  ; "\xc3\xa9"
     arm64.bl __char_ascii
     arm64.cmp x9, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, hasAscii
-    arm64.b ifelse
+    arm64.b.ne ifcont
   hasAscii:
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at ascii-value-non-ascii.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -37,8 +31,6 @@ func @main {
   __rc_ok:
     arm64.epilogue 16
     arm64.ret
-  ifelse:
-    arm64.b ifcont
   ifcont:
     arm64.movImm x0, 0
     arm64.epilogue 16

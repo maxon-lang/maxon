@@ -50,18 +50,14 @@ func @shift {
     arm64.movRegReg x21, x2
     arm64.movImm x22, 0
     arm64.movImm x23, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, lt
-    arm64.cbnz x0, shiftEach
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   shiftEach:
     arm64.cmp x23, 0
     arm64.cset x24, lt
-    arm64.cbnz x24, __rc_panic#14
-    arm64.b __rc_ok#13
+    arm64.b.ge __rc_ok#13
   __rc_panic#14:
     arm64.leaRdata x0, __str_blob_3  ; "panic at reuse-def-confined-by-a-later-call.test:9: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -76,9 +72,7 @@ func @shift {
   __rc_ok#13:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#20
-    arm64.b __im_load
+    arm64.b.hs __im_slow#20
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.arm64AddLsl x0, x0, x23, lsl #3
@@ -86,14 +80,10 @@ func @shift {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#37
+    arm64.b.eq critsplit#37
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow#20
-    arm64.b critsplit#38
+    arm64.b.ne critsplit#38
   __im_slow#20:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
@@ -104,12 +94,9 @@ func @shift {
     arm64.b __im_cont#19
   critsplit#37:
     arm64.movRegReg x9, x1
-    arm64.b __im_cont#19
   __im_cont#19:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#5
-    arm64.b tryok#4
+    arm64.b.eq tryok#4
   tryerr#5:
     arm64.leaRdata x0, __str_blob_0  ; "panic at reuse-def-confined-by-a-later-call.test:9: get\x0a"
     arm64.bl mrt_panic
@@ -132,8 +119,7 @@ func @shift {
     arm64.orr x22, x0, x22
     arm64.movImm x0, 4294967295
     arm64.and x2, x22, x0
-    arm64.cbnz x24, __rc_panic#16
-    arm64.b __rc_ok#15
+    arm64.cbz x24, __rc_ok#15
   __rc_panic#16:
     arm64.leaRdata x0, __str_blob_4  ; "panic at reuse-def-confined-by-a-later-call.test:10: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -148,34 +134,24 @@ func @shift {
   __rc_ok#15:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#24
-    arm64.b __im_owned#25
+    arm64.b.ne __im_slow#24
   __im_owned#25:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#24
-    arm64.b __im_bounds#26
+    arm64.b.lt __im_slow#24
   __im_bounds#26:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x23, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#24
-    arm64.b __im_buffer#27
+    arm64.b.hs __im_slow#24
   __im_buffer#27:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#24
-    arm64.b __im_viewed#28
+    arm64.b.eq __im_slow#24
   __im_viewed#28:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#24
-    arm64.b __im_store#29
+    arm64.b.eq __im_store#29
   __im_slow#24:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
@@ -186,12 +162,9 @@ func @shift {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#23
   __im_cont#23:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq tryok#6
   tryerr#7:
     arm64.leaRdata x0, __str_blob_1  ; "panic at reuse-def-confined-by-a-later-call.test:10: set\x0a"
     arm64.bl mrt_panic
@@ -209,18 +182,13 @@ func @shift {
     arm64.b whilehdr#1
   whileexit#3:
     arm64.movImm x20, 0
-    arm64.b whilehdr#8
   whilehdr#8:
     arm64.cmp x20, x21
-    arm64.cset x0, lt
-    arm64.cbnz x0, clear
-    arm64.b whileexit#10
+    arm64.b.ge whileexit#10
   clear:
     arm64.movImm x2, 0
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic#18
-    arm64.b __rc_ok#17
+    arm64.b.ge __rc_ok#17
   __rc_panic#18:
     arm64.leaRdata x0, __str_blob_5  ; "panic at reuse-def-confined-by-a-later-call.test:17: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -235,34 +203,24 @@ func @shift {
   __rc_ok#17:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#31
-    arm64.b __im_owned#32
+    arm64.b.ne __im_slow#31
   __im_owned#32:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#31
-    arm64.b __im_bounds#33
+    arm64.b.lt __im_slow#31
   __im_bounds#33:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x20, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow#31
-    arm64.b __im_buffer#34
+    arm64.b.hs __im_slow#31
   __im_buffer#34:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#31
-    arm64.b __im_viewed#35
+    arm64.b.eq __im_slow#31
   __im_viewed#35:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#31
-    arm64.b __im_store#36
+    arm64.b.eq __im_store#36
   __im_slow#31:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -273,12 +231,9 @@ func @shift {
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.movRegReg x9, x0
-    arm64.b __im_cont#30
   __im_cont#30:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#12
-    arm64.b tryok#11
+    arm64.b.eq tryok#11
   tryerr#12:
     arm64.leaRdata x0, __str_blob_2  ; "panic at reuse-def-confined-by-a-later-call.test:17: clear\x0a"
     arm64.bl mrt_panic
@@ -326,9 +281,7 @@ func @main {
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 8
@@ -336,14 +289,10 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#11
+    arm64.b.eq critsplit#11
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#12
+    arm64.b.ne critsplit#12
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -353,30 +302,22 @@ func @main {
     arm64.b __im_cont
   critsplit#11:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x20, 99
     arm64.b trycont
   tryok:
     arm64.movRegReg x20, x0
-    arm64.b trycont
   trycont:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_6  ; "panic at reuse-def-confined-by-a-later-call.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

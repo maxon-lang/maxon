@@ -55,19 +55,14 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-    arm64.b forhdr#1
   forhdr#1:
     arm64.cmp x1, x2
-    arm64.cset x4, lt
-    arm64.cbnz x4, loop1
-    arm64.b forexit#4
+    arm64.b.ge forexit#4
   loop1:
     arm64.arm64AddLsl x4, x3, x1, lsl #3
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
-    arm64.b __im_cont#13
   __im_cont#13:
     arm64.add x0, x0, x4
-    arm64.b forstep#3
   forstep#3:
     arm64.add x1, x1, 1
     arm64.b forhdr#1
@@ -76,38 +71,26 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x4, [x19 + 0]
-    arm64.b forhdr#5
   forhdr#5:
     arm64.cmp x2, x3
-    arm64.cset x5, lt
-    arm64.cbnz x5, loop2
-    arm64.b forexit#8
+    arm64.b.ge forexit#8
   loop2:
     arm64.arm64AddLsl x5, x4, x2, lsl #3
     arm64.loadRegBaseDisp.word64 x5, [x5 + 0]
-    arm64.b __im_cont#14
   __im_cont#14:
     arm64.add x1, x1, x5
-    arm64.b forstep#7
   forstep#7:
     arm64.add x2, x2, 1
     arm64.b forhdr#5
   forexit#8:
     arm64.cmp x0, 60
-    arm64.cset x0, eq
-    arm64.movImm x2, 0
-    arm64.cbnz x0, andrhs
-    arm64.b critsplit
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
   andrhs:
     arm64.cmp x1, 60
     arm64.cset x0, eq
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x2
-    arm64.b scmerge
   scmerge:
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.cbz x0, ifcont
   check:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19

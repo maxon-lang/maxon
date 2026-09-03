@@ -64,19 +64,20 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __mrt_errno@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __io_iocp@256 = i64 0
-  __io_done_event@264 = i64 0
-  __io_init_done@272 = i64 0
-  __io_pending@280 = i64 0
-  __io_pipe_seq@288 = i64 0
-  __subp_table@296 = i64 0
-  __subp_last_error@304 = i64 0
-  __slab_arena_list@312 = i64 0
-  __slab_arena_map_l1@320 = i64 0
-  __slab_state@328 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __mrt_errno@240 = i64 0
+  __mrt_envp@248 = i64 0
+  __mrt_tls_next_key@256 = i64 0
+  __io_iocp@264 = i64 0
+  __io_done_event@272 = i64 0
+  __io_init_done@280 = i64 0
+  __io_pending@288 = i64 0
+  __io_pipe_seq@296 = i64 0
+  __subp_table@304 = i64 0
+  __subp_last_error@312 = i64 0
+  __slab_arena_list@320 = i64 0
+  __slab_arena_map_l1@328 = i64 0
+  __slab_state@336 = i64 0
 }
 
 func @appendToken {
@@ -92,17 +93,12 @@ func @appendToken {
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x22, x21
-    arm64.cset x0, lt
-    arm64.cbnz x0, byteLoop
-    arm64.b forexit
+    arm64.b.ge forexit
   byteLoop:
     arm64.cmp x22, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_28  ; "panic at subprocess-builtins.posix-argv-reaches-the-child-verbatim.test:9: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -115,15 +111,11 @@ func @appendToken {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#15
+    arm64.b.hs __im_slow
   __im_load#15:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -131,32 +123,23 @@ func @appendToken {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#16
+    arm64.b.hs __im_slow
   __im_load#16:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.add x0, x0, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x20 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#18
+    arm64.b.eq critsplit#18
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#19
+    arm64.b.eq __im_slow
   critsplit#19:
     arm64.xchgRegReg x1, x0
     arm64.b __im_cont
@@ -169,12 +152,9 @@ func @appendToken {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_12  ; "panic at subprocess-builtins.posix-argv-reaches-the-child-verbatim.test:9: appendToken: get is in range\x0a"
     arm64.bl mrt_panic
@@ -187,7 +167,6 @@ func @appendToken {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x22, x22, 1
     arm64.b forhdr
@@ -251,9 +230,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.storeSlotReg slot1, x21
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_25  ; "panic at subprocess-builtins.posix-argv-reaches-the-child-verbatim.test:24: create(1, 1) cannot fail\x0a"
     arm64.bl mrt_panic
@@ -331,13 +308,10 @@ func @main {
     arm64.leaRdata x0, __str_rec_23  ; " len="
     arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x27, [x20 + 8]
     arm64.cmp x27, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl String.byteLength
@@ -345,7 +319,6 @@ func @main {
     arm64.b __il_cont
   __rc_ok:
     arm64.movRegReg x20, x27
-    arm64.b __il_cont
   __il_cont:
     arm64.movImm x0, 20
     arm64.movImm x1, 0

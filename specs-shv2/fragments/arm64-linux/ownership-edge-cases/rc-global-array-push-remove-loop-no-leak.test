@@ -63,12 +63,9 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.b whilehdr#1
   whilehdr#1:
     arm64.cmp x19, 10
-    arm64.cset x0, lt
-    arm64.cbnz x0, push
-    arm64.b whileexit#3
+    arm64.b.ge whileexit#3
   push:
     arm64.leaGlobal x0, __data_globalArr
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -81,15 +78,12 @@ func @main {
     arm64.b whilehdr#1
   whileexit#3:
     arm64.movImm x20, 0
-    arm64.b whilehdr#4
   whilehdr#4:
     arm64.leaGlobal x0, __data_globalArr
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, gt
-    arm64.cbnz x0, remove
-    arm64.b whileexit#6
+    arm64.b.le whileexit#6
   remove:
     arm64.leaGlobal x0, __data_globalArr
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -103,9 +97,7 @@ func @main {
     arm64.bl Array.remove
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x19, 99
     arm64.movRegReg x0, x23
@@ -129,14 +121,10 @@ func @main {
     arm64.b whilehdr#4
   whileexit#6:
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at rc-global-array-push-remove-loop-no-leak.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

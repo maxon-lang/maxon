@@ -76,7 +76,7 @@ high word passing as a plausible id.
 ## Tests
 
 <!-- test: process-id.is-positive -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The weakest property, and the one a missing lowering fails first: the call answers a number above
 zero rather than whatever the result register happened to hold.
 ```maxon
@@ -93,7 +93,7 @@ end 'main'
 ```
 
 <!-- test: process-id.fits-in-a-dword -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 `GetCurrentProcessId` answers a 32-bit `DWORD` and `getpid()` a 32-bit `pid_t`. The id must therefore
 land in `[1, 2^32)` — which is what a plain 32-bit write to `EAX` gives for free and what a stale
 high half, on either lane, would break. A wrong answer of that shape is still positive and still
@@ -118,7 +118,7 @@ end 'main'
 ```
 
 <!-- test: process-id.is-stable-across-calls -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Three independent calls in one process agree. This is the property `TreeLock` actually leans on — a
 token written at `takeLock` and re-read at the release has to name the same process — and it is what
 a lowering that read a THREAD id, or that answered a fresh counter, would fail.

@@ -27,9 +27,7 @@ func @runB {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, b
-    arm64.b ifcont
+    arm64.b.ge ifcont
   b:
     arm64.leaRdata x0, __str_blob_1  ; "panic at panic.two-distinct-messages.test:13: message B\x0a"
     arm64.bl mrt_panic
@@ -46,30 +44,17 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 1
-    arm64.b __il_body#6
-  __il_body#6:
-    arm64.b ifcont
-  ifcont:
-    arm64.b __il_cont#5
   __il_cont#5:
     arm64.movImm x0, 18446744073709551615
-    arm64.b __il_body#9
-  __il_body#9:
-    arm64.b __il_slow
   __il_slow:
     arm64.bl runB
-    arm64.b __il_cont#4
   __il_cont#4:
     arm64.add x0, x19, x0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at panic.two-distinct-messages.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

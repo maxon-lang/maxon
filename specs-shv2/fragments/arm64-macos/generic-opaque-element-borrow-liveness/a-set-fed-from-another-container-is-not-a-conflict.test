@@ -49,46 +49,33 @@ func @Array.setFrom {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x0, [x1 + 24]
     arm64.cmp x0, 8
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_word#7
-    arm64.b __im_stride#9
+    arm64.b.ne __im_stride#9
   __im_word#7:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#6
-    arm64.b __im_load#11
+    arm64.b.ls __im_slow#6
   __im_load#11:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.b __im_loaded
   __im_stride#9:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#8
-    arm64.b __im_slow#6
+    arm64.b.ne __im_slow#6
   __im_byte#8:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#6
-    arm64.b __im_load#12
+    arm64.b.ls __im_slow#6
   __im_load#12:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x1 + 40]
     arm64.cmp x4, 0
-    arm64.cset x4, ne
-    arm64.cbnz x4, __im_empty
-    arm64.b critsplit#29
+    arm64.b.eq critsplit#29
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x4, eq
-    arm64.cbnz x4, __im_slow#6
-    arm64.b critsplit#30
+    arm64.b.eq __im_slow#6
   critsplit#30:
     arm64.movRegReg x1, x0
     arm64.b __im_cont#5
@@ -101,12 +88,9 @@ func @Array.setFrom {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x3, x9
-    arm64.b __im_cont#5
   __im_cont#5:
     arm64.cmp x3, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.leaRdata x0, __str_blob_4  ; "panic at a-set-fed-from-another-container-is-not-a-conflict.test:15: oob\x0a"
     arm64.bl mrt_panic
@@ -122,80 +106,56 @@ func @Array.setFrom {
     arm64.movRegReg x2, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word#16
-    arm64.b __im_stride#18
+    arm64.b.ne __im_stride#18
   __im_word#16:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#15
-    arm64.b __im_owned#19
+    arm64.b.ne __im_slow#15
   __im_owned#19:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#15
-    arm64.b __im_bounds#20
+    arm64.b.lt __im_slow#15
   __im_bounds#20:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#15
-    arm64.b __im_buffer#21
+    arm64.b.ls __im_slow#15
   __im_buffer#21:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#15
-    arm64.b __im_viewed#22
+    arm64.b.eq __im_slow#15
   __im_viewed#22:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#15
-    arm64.b __im_store#23
+    arm64.b.ne __im_slow#15
   __im_store#23:
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
     arm64.movImm x0, 0
     arm64.b __im_cont#14
   __im_stride#18:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte#17
-    arm64.b __im_slow#15
+    arm64.b.ne __im_slow#15
   __im_byte#17:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, __im_slow#15
-    arm64.b __im_owned#24
+    arm64.b.ne __im_slow#15
   __im_owned#24:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __im_slow#15
-    arm64.b __im_bounds#25
+    arm64.b.lt __im_slow#15
   __im_bounds#25:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow#15
-    arm64.b __im_buffer#26
+    arm64.b.ls __im_slow#15
   __im_buffer#26:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_slow#15
-    arm64.b __im_viewed#27
+    arm64.b.eq __im_slow#15
   __im_viewed#27:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, __im_slow#15
-    arm64.b __im_store#28
+    arm64.b.ne __im_slow#15
   __im_store#28:
     arm64.storeBaseDispReg.byte [x0 + 0], x2
     arm64.movImm x0, 0
@@ -205,12 +165,9 @@ func @Array.setFrom {
     arm64.movRegReg x1, x21
     arm64.bl __managed_mem_set
     arm64.movRegReg x0, x9
-    arm64.b __im_cont#14
   __im_cont#14:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#4
-    arm64.b tryok#3
+    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_5  ; "panic at a-set-fed-from-another-container-is-not-a-conflict.test:16: oob\x0a"
     arm64.bl mrt_panic
@@ -264,23 +221,17 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, ls
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#8
+    arm64.b.eq critsplit#8
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#9
+    arm64.b.ne critsplit#9
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -290,17 +241,11 @@ func @main {
     arm64.b __im_cont
   critsplit#8:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq trycont
   tryerr:
     arm64.leaRdata x0, __str_rec_8  ; "?"
-    arm64.b trycont
-  tryok:
-    arm64.b trycont
   trycont:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]

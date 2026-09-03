@@ -61,7 +61,7 @@ end
 ## Tests
 
 <!-- test: managed-file.open-read-nonexistent -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".toByteArray().managed) otherwise 'notFound'
@@ -79,7 +79,7 @@ not found
 ```
 
 <!-- test: managed-file.write-and-read -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -165,7 +165,7 @@ Hello Managed
 ```
 
 <!-- test: managed-file.exists -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -214,7 +214,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.delete-nonexistent -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedFile.delete("nonexistent_delete_xyz.txt".toByteArray().managed) otherwise 'checkFail'
@@ -232,7 +232,7 @@ delete failed as expected
 ```
 
 <!-- test: managed-file.auto-close -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 export enum TestFileError implements Error
 	openFailed
@@ -289,7 +289,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.open-read-not-found-variant -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 
 The errno→variant mapping ensures that opening a path that does not exist
 routes to the `notFound` arm (rather than the catch-all `openFailed`).
@@ -313,7 +313,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.delete-not-found-variant -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -331,7 +331,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.stat-not-found-variant -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -349,7 +349,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.error-direct-construction -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let f = __ManagedFile{_handle: 0}
@@ -361,7 +361,7 @@ error E3072: specs/fragments/managed-file/managed-file.error-direct-construction
 ```
 
 <!-- test: managed-file.unknown-instance-method-is-refused-by-name -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 shv2-authored, and it pins the DISPATCHER rather than a behaviour the oracle defines.
 
 The instance surface is exactly four methods (`size`/`read`/`write`/`close`), so anything else is refused
@@ -393,7 +393,7 @@ error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'seek' — the
 ```
 
 <!-- test: managed-file.rename-round-trip -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 shv2-authored, like the dispatcher case above, and for a reason of the same kind: `rename` is the ONLY one
 of the thirteen methods that NO canonical case reaches. Every `/specs` exercise of it goes through
 `File.rename`, whose signature takes a `FilePath` — and `stdlib/FilePath.maxon` did not then load for shv2
@@ -444,7 +444,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.stat-round-trip -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 shv2-authored, and it is the case whose ABSENCE was the R4.2 review's first blocker: not one committed
 case reached a SUCCESSFUL `stat`. Every canonical `stat` exercise goes through `File.info`, and
 `stdlib/FilePath.maxon` did not then load for shv2 (all of `stdlib/` loads now), so
@@ -517,7 +517,7 @@ dirIsDirectory=1
 ```
 
 <!-- test: managed-file.open-read-without-try -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 
 ⭐ **E3057 MUST NAME THE CONSTRUCT THE AUTHOR WROTE (D12).** `openRead` throws, so a bare call branches on
 nothing and its error flag is discarded — the same defect `managed-directory.next-without-try` pins for the
@@ -537,7 +537,7 @@ error E3057: specs/fragments/managed-file/managed-file.open-read-without-try.tes
 ```
 
 <!-- test: managed-file.open-write-executable-without-try -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 
 ⭐⭐ **THE CALLEE NAMES THE METHOD THAT WAS WRITTEN, AND THIS CASE RECORDED IN ADVANCE THE DAY IT WOULD
 BECOME ABLE TO.** It used to read *"`openWriteExecutable` and `openWrite` are ONE call here … the callee is
@@ -562,7 +562,7 @@ error E3057: specs/fragments/managed-file/managed-file.open-write-executable-wit
 ```
 
 <!-- test: managed-file.read-into-a-non-owned-buffer-is-refused -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 
 ⛔⛔ **A `read` IS A WRITE INTO THE CALLER'S BUFFER, AND A BUFFER THE RECORD DOES NOT OWN IS REFUSED —
 NOT FILLED.** A zero-copy view, an `.rdata` byte-string blob, an inline String and an immortal record all
@@ -643,7 +643,7 @@ within=999 over=999 parent=65,68
 ```
 
 <!-- test: managed-file.read-bound-is-the-owned-capacity -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 
 ⭐⭐ **THE CONTROL THAT MAKES THE REFUSAL ABOVE MEAN SOMETHING.** "A read into a non-owned buffer throws" is
 satisfied just as well by a guard that throws on EVERY buffer, so the owned path has to be pinned beside it:

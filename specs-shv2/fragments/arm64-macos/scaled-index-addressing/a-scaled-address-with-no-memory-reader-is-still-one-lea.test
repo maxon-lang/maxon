@@ -34,22 +34,16 @@ func @main {
     arm64.prologue 16
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x1, 4
-    arm64.cset x2, lt
-    arm64.cbnz x2, feed
-    arm64.b forexit
+    arm64.b.ge forexit
   feed:
     arm64.add x2, x1, 1
-    arm64.b __il_body#11
   __il_body#11:
     arm64.arm64AddLsl x3, x1, x2, lsl #3
-    arm64.b __il_cont#10
   __il_cont#10:
     arm64.add x0, x0, x3
     arm64.add x3, x1, 2
-    arm64.b __il_body#12
   __il_body#12:
     arm64.movImm x16, 8
     arm64.mul x3, x3, x16
@@ -57,38 +51,29 @@ func @main {
     arm64.sub x1, x1, x3
     arm64.add x1, x4, x1
     arm64.add x1, x1, x3
-    arm64.b __il_cont#9
   __il_cont#9:
     arm64.add x0, x0, x1
-    arm64.b forstep
   forstep:
     arm64.movRegReg x1, x2
     arm64.b forhdr
   forexit:
     arm64.cmp x0, 210
-    arm64.cset x1, ne
-    arm64.cbnz x1, value
-    arm64.b ifcont#6
+    arm64.b.eq __il_body#14
   value:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret
-  ifcont#6:
-    arm64.b __il_body#14
   __il_body#14:
     arm64.movImm x16, 8
     arm64.mul x0, x0, x16
-    arm64.b __il_cont#13
   __il_cont#13:
     arm64.cmp x0, 1680
-    arm64.cset x0, ne
-    arm64.cbnz x0, scaleOfARuntimeValue
-    arm64.b ifcont#8
+    arm64.b.eq ifcont
   scaleOfARuntimeValue:
     arm64.movImm x0, 2
     arm64.epilogue 16
     arm64.ret
-  ifcont#8:
+  ifcont:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

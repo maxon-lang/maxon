@@ -175,7 +175,7 @@ Could not delete file
 
 ## Targets — the one statement of the FILESYSTEM gate
 
-⭐ **THIS SECTION IS THE HOME of the `<!-- targets: x64-windows, arm64-macos, arm64-linux -->` marker every `File.*` case in
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 this file, in `file-info.md`, and the one filesystem case in `bytearray-element-size.md` carries.**
 Those cases point HERE rather than restating it, so the reason exists once and cannot drift into
 fourteen versions of itself. It is `async-scheduler.md`'s Targets section applied to a SECOND
@@ -224,7 +224,7 @@ each of the six is a syscall table rather than a re-spelling of the macOS work.
 ## Tests
 
 <!-- test: read-text-file -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	// Try to read a nonexistent file - this tests the error path
@@ -244,7 +244,7 @@ File not found
 ```
 
 <!-- test: read-nonexistent-file -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let content = try File.readText(FilePath from "nonexistent.txt") otherwise 'err'
@@ -263,7 +263,7 @@ File not found
 ```
 
 <!-- test: file-exists -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	// Test File.exists on a nonexistent file (returns false)
@@ -278,7 +278,7 @@ end 'main'
 ```
 
 <!-- test: read-binary-nonexistent -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
@@ -297,7 +297,7 @@ File not found
 ```
 
 <!-- test: write-and-read-text -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_readtext.txt"
@@ -335,7 +335,7 @@ Hello World
 ```
 
 <!-- test: write-and-read-binary -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 
 function main() returns ExitCode
@@ -399,7 +399,7 @@ exists. Backed by `MoveFileEx` (Windows), `rename(2)` (POSIX), and
 **Signature:** `static function rename(from FilePath, to FilePath) throws FileRenameError`
 
 <!-- test: write-rename-and-read -->
-<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 
 function main() returns ExitCode

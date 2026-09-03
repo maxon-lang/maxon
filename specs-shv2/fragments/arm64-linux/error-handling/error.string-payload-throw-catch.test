@@ -68,43 +68,29 @@ func @main {
     arm64.bl mk
     arm64.movRegReg x20, x9
     arm64.cmp x20, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, matcharm
-    arm64.b matchdead
+    arm64.b.ne matchdead
   matcharm:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok#12
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
     arm64.movRegReg x21, x0
-    arm64.b __il_cont
-  __rc_ok#12:
-    arm64.b __il_cont
   __il_cont:
     arm64.cmp x21, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok#7
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at error.string-payload-throw-catch.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -114,10 +100,9 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  __rc_ok#7:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
-    arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_E
@@ -126,7 +111,6 @@ func @main {
   matchdead:
   tryok:
     arm64.movRegReg x0, x19
-    arm64.b trycont
   trycont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

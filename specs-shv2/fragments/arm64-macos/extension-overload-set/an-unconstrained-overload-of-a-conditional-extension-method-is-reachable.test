@@ -111,35 +111,22 @@ func @main {
     arm64.leaRdata x2, __witness_int.Comparable
     arm64.movRegReg x0, x19
     arm64.bl Holder.beats
-    arm64.cbnz x0, cmp
-    arm64.b critsplit
+    arm64.cbz x0, critsplit
   cmp:
     arm64.movImm x0, 1
-    arm64.b ifcont#2
+    arm64.b fb
   critsplit:
     arm64.movRegReg x0, x20
-    arm64.b ifcont#2
-  ifcont#2:
-    arm64.b __il_body
-  __il_body:
-    arm64.b __il_cont
-  __il_cont:
-    arm64.b fb
   fb:
     arm64.add x19, x0, 10
-    arm64.b ifcont#4
-  ifcont#4:
+  ifcont:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Holder_Opaque
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at an-unconstrained-overload-of-a-conditional-extension-method-is-reachable.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

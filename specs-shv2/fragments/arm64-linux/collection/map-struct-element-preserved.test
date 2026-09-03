@@ -76,23 +76,17 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
-    arm64.cset x2, ls
-    arm64.cbnz x2, __im_slow
-    arm64.b __im_load
+    arm64.b.ls __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x2 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
     arm64.cmp x3, 0
-    arm64.cset x3, ne
-    arm64.cbnz x3, __im_empty
-    arm64.b critsplit#8
+    arm64.b.eq critsplit#8
   __im_empty:
     arm64.cmp x19, 0
-    arm64.cset x3, eq
-    arm64.cbnz x3, __im_slow
-    arm64.b critsplit#9
+    arm64.b.ne critsplit#9
   __im_slow:
     arm64.bl __managed_get
     arm64.movRegReg x19, x0
@@ -102,12 +96,9 @@ func @main {
     arm64.b __im_cont
   critsplit#8:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
     arm64.bl Point.create
@@ -116,7 +107,6 @@ func @main {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
-    arm64.b trycont
   trycont:
     arm64.leaRdata x0, __str_rec_2  ; "x="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]

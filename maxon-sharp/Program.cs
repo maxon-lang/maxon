@@ -33,6 +33,7 @@ class Program {
       "golden-mint-selftest" => Testing.GoldenMintSelfTest.Run(),
       "spec-run-selftest" => Testing.SpecRunSelfTest.Run(),
       "fmt-selftest" => Testing.FormatterSelfTest.Run(),
+      "arm64-sp-selftest" => Testing.Arm64StackPointerSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
       "coverage" => CoverageCommand.Run(args[1..]),
       "profile" => ProfileCommand.Run(args[1..]),

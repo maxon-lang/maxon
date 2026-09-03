@@ -40,24 +40,16 @@ func @Value.fromString {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.b __il_body#4
   __il_body#4:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __il_slow#6
-    arm64.b __rc_ok#5
+    arm64.b.ge __il_cont#3
   __il_slow#6:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
-    arm64.b __il_cont#3
-  __rc_ok#5:
-    arm64.b __il_cont#3
   __il_cont#3:
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.cbnz x0, check
-    arm64.b ifcont
+    arm64.b.ne __il_body#8
   check:
     arm64.movImm x9, 2
     arm64.movImm x0, 0
@@ -65,22 +57,17 @@ func @Value.fromString {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.b __il_body#8
   __il_body#8:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
     arm64.cmp x20, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow#10
-    arm64.b __rc_ok#9
+    arm64.b.ge __rc_ok
   __il_slow#10:
     arm64.movRegReg x0, x19
     arm64.bl String.byteLength
     arm64.movRegReg x19, x0
     arm64.b __il_cont#7
-  __rc_ok#9:
+  __rc_ok:
     arm64.movRegReg x19, x20
-    arm64.b __il_cont#7
   __il_cont#7:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -100,9 +87,7 @@ func @main {
     arm64.leaRdata x0, __str_rec_1  ; ""
     arm64.bl Value.fromString
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 42
     arm64.loadRegSlot x19, slot0
@@ -112,14 +97,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.bl __mm_decref
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.cset x0, gt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_2  ; "panic at parsable.throws-on-invalid-input.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

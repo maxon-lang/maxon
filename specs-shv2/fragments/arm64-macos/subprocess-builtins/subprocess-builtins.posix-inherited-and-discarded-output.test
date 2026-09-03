@@ -67,16 +67,17 @@ data {
   __sched_lock@208 = i64 0
   __sched_nmspinning@216 = i64 0
   __sched_parked_drivers@224 = i64 0
-  __io_iocp@232 = i64 0
-  __io_done_event@240 = i64 0
-  __io_init_done@248 = i64 0
-  __io_pending@256 = i64 0
-  __io_pipe_seq@264 = i64 0
-  __subp_table@272 = i64 0
-  __subp_last_error@280 = i64 0
-  __slab_arena_list@288 = i64 0
-  __slab_arena_map_l1@296 = i64 0
-  __slab_state@304 = i64 0
+  __sched_sysmon_started@232 = i64 0
+  __io_iocp@240 = i64 0
+  __io_done_event@248 = i64 0
+  __io_init_done@256 = i64 0
+  __io_pending@264 = i64 0
+  __io_pipe_seq@272 = i64 0
+  __subp_table@280 = i64 0
+  __subp_last_error@288 = i64 0
+  __slab_arena_list@296 = i64 0
+  __slab_arena_map_l1@304 = i64 0
+  __slab_state@312 = i64 0
 }
 
 func @appendToken {
@@ -92,17 +93,12 @@ func @appendToken {
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
     arm64.movImm x22, 0
-    arm64.b forhdr
   forhdr:
     arm64.cmp x22, x21
-    arm64.cset x0, lt
-    arm64.cbnz x0, byteLoop
-    arm64.b forexit
+    arm64.b.ge forexit
   byteLoop:
     arm64.cmp x22, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.ge __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_20  ; "panic at subprocess-builtins.posix-inherited-and-discarded-output.test:9: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
@@ -115,15 +111,11 @@ func @appendToken {
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 24]
     arm64.cmp x0, 8
-    arm64.cset x1, eq
-    arm64.cbnz x1, __im_word
-    arm64.b __im_stride
+    arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#15
+    arm64.b.hs __im_slow
   __im_load#15:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.arm64AddLsl x0, x0, x22, lsl #3
@@ -131,32 +123,23 @@ func @appendToken {
     arm64.b __im_loaded
   __im_stride:
     arm64.cmp x0, 1
-    arm64.cset x0, eq
-    arm64.cbnz x0, __im_byte
-    arm64.b __im_slow
+    arm64.b.ne __im_slow
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x22, x0
-    arm64.cset x0, hs
-    arm64.cbnz x0, __im_slow
-    arm64.b __im_load#16
+    arm64.b.hs __im_slow
   __im_load#16:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.add x0, x0, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_loaded
   __im_loaded:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x20 + 40]
     arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cbnz x2, __im_empty
-    arm64.b critsplit#18
+    arm64.b.eq critsplit#18
   __im_empty:
     arm64.cmp x0, 0
-    arm64.cset x2, eq
-    arm64.cbnz x2, __im_slow
-    arm64.b critsplit#19
+    arm64.b.eq __im_slow
   critsplit#19:
     arm64.xchgRegReg x1, x0
     arm64.b __im_cont
@@ -169,12 +152,9 @@ func @appendToken {
     arm64.bl __managed_get
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x9
-    arm64.b __im_cont
   __im_cont:
     arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_8  ; "panic at subprocess-builtins.posix-inherited-and-discarded-output.test:9: appendToken: get is in range\x0a"
     arm64.bl mrt_panic
@@ -187,7 +167,6 @@ func @appendToken {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.b forstep
   forstep:
     arm64.add x22, x22, 1
     arm64.b forhdr
@@ -239,9 +218,7 @@ func @runEcho {
     arm64.bl __managed_mem_create
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr
-    arm64.b tryok
+    arm64.b.eq tryok
   tryerr:
     arm64.leaRdata x0, __str_blob_12  ; "panic at subprocess-builtins.posix-inherited-and-discarded-output.test:20: create(1, 1) cannot fail\x0a"
     arm64.bl mrt_panic
@@ -299,20 +276,14 @@ func @runEcho {
     arm64.bl __gt_subp_result_stdout
     arm64.bl String.init
     arm64.movRegReg x23, x0
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x24, [x23 + 8]
     arm64.cmp x24, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x23
     arm64.bl String.byteLength
     arm64.movRegReg x24, x0
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x23
     arm64.bl __str_decref

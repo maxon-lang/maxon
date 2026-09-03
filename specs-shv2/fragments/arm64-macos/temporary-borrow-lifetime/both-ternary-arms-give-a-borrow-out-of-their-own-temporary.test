@@ -134,8 +134,7 @@ func @pickLength {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.cbnz x0, ternarytrue
-    arm64.b ternaryfalse
+    arm64.cbz x0, ternaryfalse
   ternarytrue:
     arm64.bl makeA
     arm64.movRegReg x19, x0
@@ -144,7 +143,7 @@ func @pickLength {
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Holder
-    arm64.b matchcont
+    arm64.b __il_body
   ternaryfalse:
     arm64.bl makeB
     arm64.movRegReg x19, x0
@@ -153,22 +152,14 @@ func @pickLength {
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Holder
-    arm64.b matchcont
-  matchcont:
-    arm64.b __il_body
   __il_body:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.cmp x19, 0
-    arm64.cset x0, lt
-    arm64.cbnz x0, __il_slow
-    arm64.b __rc_ok
+    arm64.b.ge __il_cont
   __il_slow:
     arm64.movRegReg x0, x20
     arm64.bl String.byteLength
     arm64.movRegReg x19, x0
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.b __il_cont
   __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
@@ -191,14 +182,10 @@ func @main {
     arm64.bl pickLength
     arm64.add x0, x19, x0
     arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_chk
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.cset x1, gt
-    arm64.cbnz x1, __rc_panic
-    arm64.b __rc_ok
+    arm64.b.le __rc_ok
   __rc_panic:
     arm64.leaRdata x0, __str_blob_4  ; "panic at both-ternary-arms-give-a-borrow-out-of-their-own-temporary.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

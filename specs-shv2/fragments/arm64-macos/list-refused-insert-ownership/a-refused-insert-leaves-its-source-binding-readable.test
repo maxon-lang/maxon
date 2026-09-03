@@ -92,9 +92,7 @@ func @main {
     arm64.movRegReg x2, x24
     arm64.bl List.insert
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#2
-    arm64.b tryok#1
+    arm64.b.eq trycont#3
   tryerr#2:
     arm64.leaRdata x0, __str_rec_10  ; "rejected "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -136,9 +134,6 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-    arm64.b trycont#3
-  tryok#1:
-    arm64.b trycont#3
   trycont#3:
     arm64.movImm x20, 1
     arm64.loadRegSlot x0, slot9
@@ -166,9 +161,7 @@ func @main {
     arm64.movRegReg x2, x23
     arm64.bl List.insert
     arm64.cmp x9, 0
-    arm64.cset x0, ne
-    arm64.cbnz x0, tryerr#5
-    arm64.b tryok#4
+    arm64.b.eq tryok
   tryerr#5:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -186,21 +179,16 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  tryok#4:
+  tryok:
     arm64.movImm x1, 1
     arm64.leaRdata x2, __layout_List_String
     arm64.movRegReg x0, x19
     arm64.bl List.get
     arm64.cmp x9, 0
-    arm64.cset x1, ne
-    arm64.cbnz x1, tryerr#7
-    arm64.b tryok#6
+    arm64.b.eq trycont#8
   tryerr#7:
     arm64.leaRdata x0, __str_rec_12  ; "?"
     arm64.bl __str_retain
-    arm64.b trycont#8
-  tryok#6:
-    arm64.b trycont#8
   trycont#8:
     arm64.storeSlotReg slot1, x0
     arm64.leaRdata x1, __str_rec_13  ; "stored "
