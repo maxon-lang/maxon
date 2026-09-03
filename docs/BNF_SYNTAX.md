@@ -140,10 +140,12 @@ atom          = 'os' '(' IDENTIFIER ')'
               | 'arch' '(' IDENTIFIER ')'
               | 'testing' '(' BOOL ')'
               | 'rcSanitize' '(' BOOL ')'
+              | 'leakReport' '(' BOOL ')'
+              | 'compiler' '(' IDENTIFIER ')'
               | '(' condition ')'
 ```
 
-Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`), plus parentheses for grouping. Supported `os` values: `Windows`, `Linux`, `Macos`, `Wasi`. Supported `arch` values: `x64`, `arm64`, `wasm32`. Supported `testing` values: `true`, `false`. Supported `rcSanitize` values: `true`, `false` (true in `--rc-sanitize` builds). Nested `#if` blocks are supported.
+Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`), plus parentheses for grouping. Supported `os` values: `Windows`, `Linux`, `Macos`, `Wasi`. Supported `arch` values: `x64`, `arm64`, `wasm32`. Supported `testing` values: `true`, `false`. Supported `rcSanitize` values: `true`, `false` (true in `--rc-sanitize` builds). Supported `leakReport` values: `true`, `false` (true in `--leak-report` builds). Supported `compiler` values: `shv2`, `csharp` — the compiler compiling the file, not the target it emits for. Nested `#if` blocks are supported.
 
 ---
 

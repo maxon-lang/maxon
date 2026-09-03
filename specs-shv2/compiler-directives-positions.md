@@ -384,7 +384,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2064: specs/fragments/compiler-directives-positions/error.unknown-predicate.test:3:6: Unknown conditional compilation function 'wibble'. Expected 'os', 'arch', 'testing', 'rcSanitize', or 'leakReport'.
+error E2064: specs/fragments/compiler-directives-positions/error.unknown-predicate.test:3:6: Unknown conditional compilation function 'wibble'. Expected 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'compiler'.
 ```
 
 <!-- test: error.unterminated-if -->
@@ -473,7 +473,7 @@ end 'main'
 #endif
 ```
 ```maxoncstderr
-error E2065: specs/fragments/compiler-directives-positions/error.malformed-condition.test:5:15: Malformed '#if' condition. Expected a predicate call -- 'os', 'arch', 'testing', 'rcSanitize', or 'leakReport' -- optionally combined with 'and', 'or', 'not' and parentheses
+error E2065: specs/fragments/compiler-directives-positions/error.malformed-condition.test:5:15: Malformed '#if' condition. Expected a predicate call -- 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'compiler' -- optionally combined with 'and', 'or', 'not' and parentheses
 ```
 
 <!-- test: error.dead-branch-lexically-invalid -->

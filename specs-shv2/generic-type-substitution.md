@@ -411,7 +411,7 @@ would byte-blit the inner box's pointer and free it twice).
 The cloner now exists and is the exact dual of the drop cascade it mirrors: `__clone_Holder_String` clones
 its `cell` field through `__clone_Cell_String`, which clones its `v` through `__str_clone` — the same three
 levels `__destruct_Holder_String` → `__destruct_Cell_String` → `__str_decref` releases. Neither inner cloner
-is named anywhere the module scan can see, so `noteClonerUsage`'s closure has to reach them through the
+is named anywhere the module scan can see, so `noteCascadeUsage`'s closure has to reach them through the
 instance nodes it registers.
 
 The source array is built and dropped inside the helper, so what `main` reads is the clone alone: a shallow

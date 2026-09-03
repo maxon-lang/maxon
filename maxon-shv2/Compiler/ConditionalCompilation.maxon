@@ -111,11 +111,16 @@ enum ConditionPredicate
 	testing
 	rcSanitize
 	leakReport
+	compiler
 end 'ConditionPredicate'
 
 // The spelling `flag(false)` must carry for an absent build flag to satisfy it. See
 // `satisfyingArgument`.
 let FalseSpelling = b"false"
+
+// `compiler(...)` names WHICH COMPILER IS COMPILING THE FILE, never the target it emits for — so
+// this is a property of this binary and not of `Target`.
+let SelfCompilerSpelling = b"shv2"
 
 // ⭐ **THE FILTER: `tokens` minus every directive token and every inactive branch.**
 //
@@ -382,7 +387,7 @@ function evaluateAtom(tokens TokenArray, cursor ConditionCursor, target Target) 
 	try expectKind(tokens, cursor: cursor, kind: TokenKind.leftParen)
 	// The argument is an identifier (`Windows`, `x64`) or a bool keyword (`true`, `false`), which
 	// the lexer gives distinct kinds. Its TEXT is what every predicate reads, and `true`/`false`
-	// carry their own spelling in `value` — so one read serves all five.
+	// carry their own spelling in `value` — so one read serves them all.
 	let argTok = try readConditionArgument(tokens, cursor: cursor)
 	try expectKind(tokens, cursor: cursor, kind: TokenKind.rightParen)
 
@@ -394,7 +399,7 @@ function evaluateAtom(tokens TokenArray, cursor ConditionCursor, target Target) 
 end 'evaluateAtom'
 
 // The predicate a source spelling names, or E2064. Matched EXACTLY, unlike a predicate's ARGUMENT:
-// `os` is a function name in this grammar and the corpus spells all five in camelCase, whereas
+// `os` is a function name in this grammar and the corpus spells them all in camelCase, whereas
 // `os(Windows)` names a platform whose conventional spelling is capitalized.
 function predicateNamed(nameTok Token) returns ConditionPredicate throws DirectiveError
 	for predicate in ConditionPredicate.allCases 'each'
@@ -415,11 +420,12 @@ function predicateSpelling(predicate ConditionPredicate) returns ByteArray
 		testing gives b"testing"
 		rcSanitize gives b"rcSanitize"
 		leakReport gives b"leakReport"
+		compiler gives b"compiler"
 	end 'spelling'
 end 'predicateSpelling'
 
-// ⭐ **WHAT A PREDICATE'S ARGUMENT MUST SPELL FOR IT TO BE TRUE — one comparison serves all five,
-// because all five ask the same shape of question: "is your argument the current value of this
+// ⭐ **WHAT A PREDICATE'S ARGUMENT MUST SPELL FOR IT TO BE TRUE — one comparison serves them all,
+// because every one asks the same shape of question: "is your argument the current value of this
 // fact?"** So the match yields a VALUE and never a second evaluator, and there is exactly one place
 // where an argument is compared to anything.
 //
@@ -449,11 +455,12 @@ function satisfyingArgument(predicate ConditionPredicate, target Target) returns
 		testing gives FalseSpelling
 		rcSanitize gives FalseSpelling
 		leakReport gives FalseSpelling
+		compiler gives SelfCompilerSpelling
 	end 'satisfying'
 end 'satisfyingArgument'
 
-// The accepted predicates as the diagnostics list them — `'os', 'arch', 'testing', 'rcSanitize', or
-// 'leakReport'`. Rendered from `allCases` rather than written out, so the sentence a reader is told
+// The accepted predicates as the diagnostics list them, in enum order and comma-separated with a
+// final `or`. Rendered from `allCases` rather than written out, so the sentence a reader is told
 // to obey and the set `predicateNamed` actually accepts are the same walk of the same enum.
 export function acceptedPredicateList() returns String
 	let finalIndex = ConditionPredicate.allCases.count() - 1

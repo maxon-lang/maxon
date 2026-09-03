@@ -74,13 +74,19 @@ the `spawn`** rather than at the method it names — the method may be in a diff
 
 ### Sending MOVES, and that is load-bearing
 
-A message's arguments are **moved** into the service, which becomes their one owner. This is not
-ergonomics: a refcount step in this compiler is a plain load/add/store, because the language guarantees
-one green thread per box. A send that let two green threads hold one box would not be slow, it would
-corrupt the heap. So a parameter whose value cannot have exactly one owner on the far side is **E3135** —
-a `Promise` (a handle its awaiter owns), a function value (whose captured environment is shared), a value
-held at an interface type (a fat pointer released through a witness), an opaque type parameter (no layout
-at the send).
+A message's arguments, a `spawn`'s factory arguments and a reply are **moved** across: the far side becomes
+the value's one owner. This is not ergonomics: a refcount step in this compiler is a plain load/add/store,
+because the language guarantees one green thread per box, so a send that let two green threads hold one
+box would not be slow, it would corrupt the heap. Two refusals are static. A ROOT this frame does not
+solely own — a value a closure or a container also holds, or a borrowed parameter — is **E3138**, and a
+value that cannot have exactly one owner on the far side at all is **E3135**: a `Promise` (a handle its
+awaiter owns), a function value (whose captured environment is shared), a value held at an interface type
+(a fat pointer released through a witness), an opaque type parameter (no layout at the send). Every other
+aggregate — a container, a record with a managed field, a union with a managed payload — is admitted after
+a runtime WALK over its graph at the send: every reachable refcounted record must be sole (a count of
+exactly 1; an immortal literal has no count and passes), a shared copy-on-write buffer is detached, because
+a move is a write, and a shared RECORD aborts the process with exit **96** rather than
+hand one box to two green threads.
 
 ### `ServiceError`
 
@@ -1693,9 +1699,9 @@ error E3104: <fragment>:16:2: this construct is x64-windows only at this rung: a
 
 <!-- test: a-scalar-only-record-crosses-whole -->
 <!-- targets: x64-windows, arm64-macos, arm64-linux -->
-⭐ The POSITIVE CONTROL for the three cases below, and the shape the transfer rule admits: a record whose
-every slot is a machine word holds no reference to anything, so moving it moves the whole of it. Built at the
-send, so this frame gives up the only reference there was.
+⭐ The simplest shape that crosses, and the control for the `deepmove.*` cases below: a record whose every
+slot is a machine word holds no reference to anything, so the walk has nothing to visit and moving it moves
+the whole of it. Built at the send, so this frame gives up the only reference there was.
 ```maxon
 type Point
 	export var x as Integer
@@ -1735,16 +1741,13 @@ at 1,2 (1)
 at 3,4 (2)
 ```
 
-<!-- test: error.a-record-with-a-managed-field-may-not-cross -->
-⭐⭐ **SOLENESS IS NOT TRANSITIVE, AND THIS IS THE CASE THAT SAYS SO.** `main` owns `cell` and owns the
-`Calc` the factory handed back — each of them ALONE — and the two facts together still do not say that
-`main` and the service will not both own the `Cell`. The factory's `Self{c: alias}` increfs rather than
-moves, so the record has two owners across two green threads, whose plain refcount steps then race.
-
-⚠ **THE RETAIN IS THE FACTORY'S, WHICH IS WHY THE RULE IS ABOUT THE TYPE.** `let alias = src` puts the store
-out of reach of the swept consume scan, so `main` passes a BORROW and emits no retain of its own: nothing
-observable at the SEND distinguishes this from the safe program. Before the rule existed this compiled clean
-and exited 0.
+<!-- test: deepmove.a-record-with-managed-fields-crosses -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+A record with managed fields crosses at the `spawn`, as the factory's argument, and its three fields are
+the three answers the walk gives. The literal `String` is an immortal `.rdata` record: nothing ever steps
+its count, so it has none to check and passes. The interpolated `String` is a heap record the walk visits
+and finds sole. The `CellArray` is a container the walk descends, element by element. Every reachable
+record has one owner, so the whole graph moves and the service reads all of it.
 ```maxon
 type Cell
 	export var n as Integer
@@ -1754,72 +1757,234 @@ type Cell
 	end 'create'
 end 'Cell'
 
-type Calc
-	var c as Cell
+typealias CellArray = Array with Cell
 
-	static function create(src Cell) returns Self
-		let alias = src
-		return Self{c: alias}
-	end 'create'
-
-	export function bump()
-		self.c.n = self.c.n + 100
-	end 'bump'
-end 'Calc'
-
-function main() returns ExitCode
-	var cell = Cell.create()
-	let h = spawn Calc.create(cell)
-	h.bump()
-	return cell.n as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3138: <fragment>:25:21: the state `spawn Calc.create(…)` would start the service with is a `type Calc` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
-```
-
-<!-- test: error.a-record-with-a-string-field-may-not-cross-either -->
-⭐⭐ **A `String` ARGUMENT CROSSES AND A `String` FIELD DOES NOT, AND THE DIAGNOSTIC USED TO SAY OTHERWISE.**
-A `String` VALUE is closed — its record's slots hold a byte buffer and a length, never a reference to a second
-refcounted record — which is exactly why a `String` message argument is allowed. A record that HOLDS one is a
-different question: `Self{held: s}` stores a reference where a move would have given one up, so the `String`
-has two owners the instant the record has one. That is the same non-transitivity one level down, and it is
-what makes a scalar-only record the shape that crosses.
-
-⚠ **THIS CASE EXISTS BECAUSE THE MESSAGE OVER-PROMISED.** It read *"a record whose every slot is one of
-those"* — of *"a scalar, a `String`, a service HANDLE"* — which names this program as legal. The compiler
-refuses it, and always did; the sentence was the part that was wrong. A refusal an author cannot act on is
-worse than one they can, and this is the shape they would have written next.
-```maxon
 type Holder
-	var held as String
-	var bytes as Integer
+	export var tag as String
+	export var label as String
+	export var cells as CellArray
 
-	static function create() returns Self
-		return Self{held: "", bytes: 0}
+	export static function create(k Integer) returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		cells.push(Cell.create())
+		return Self{tag: "literal", label: "heap {k}", cells: cells}
 	end 'create'
-
-	export function keep(s String)
-		self.bytes = self.bytes + s.byteLength()
-	end 'keep'
 end 'Holder'
 
+type Svc
+	var held as Holder
+
+	static function create(held Holder) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function report()
+		print("{self.held.tag} {self.held.label} {self.held.cells.count()}\n")
+	end 'report'
+end 'Svc'
+
 function main() returns ExitCode
-	let h = spawn Holder.create()
-	h.keep("payload")
+	let h = spawn Svc.create(Holder.create(7))
+	h.report()
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3138: <fragment>:16:23: the state `spawn Holder.create(…)` would start the service with is a `type Holder` with a managed field — a reference the sending frame may still hold. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
+```exitcode
+0
+```
+```stdout
+literal heap 7 2
 ```
 
-<!-- test: error.a-container-may-not-cross -->
-A container is unclosed whatever its element type is, and `Cell` is the proof that the ELEMENT's own
-scalar-ness is not the question: `push` INCREFS what it is handed, so `cell` is owned by `main` and by `cs`
-at once. Sending `cs` would hand the second owner's record to another green thread.
+<!-- test: deepmove.a-reply-carries-a-container-back -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+The reply road runs the same walk in the other direction, and a container whose whole graph is fresh
+crosses: the handler mints the array in its own frame and every element is a scalar, so the walk finds
+nothing to refuse and the awaiter takes the container whole.
+```maxon
+typealias IntegerArray = Array with Integer
+
+type Source
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function values() returns IntegerArray
+		var xs = IntegerArray.create()
+		xs.push(1)
+		xs.push(2)
+		xs.push(3)
+		return xs
+	end 'values'
+end 'Source'
+
+function main() returns ExitCode
+	let h = spawn Source.create()
+	let xs = try await h.values() otherwise IntegerArray.create()
+	var sum = 0
+	for x in xs 'each'
+		sum = sum + x
+	end 'each'
+	return sum as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+6
+```
+
+<!-- test: deepmove.a-reply-carries-a-record-with-a-string-back -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+A record HOLDING a `String` comes back the way a bare `String` does: the record and the heap string inside
+it are both minted by the handler, so the walk finds nothing to refuse and the record moves with its field.
+```maxon
+type Note
+	export var text as String
+
+	export static function create(k Integer) returns Self
+		return Self{text: "note {k}"}
+	end 'create'
+end 'Note'
+
+type Author
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function write(k Integer) returns Note
+		return Note.create(k)
+	end 'write'
+end 'Author'
+
+function main() returns ExitCode
+	let h = spawn Author.create()
+	let note = try await h.write(4) otherwise Note.create(0)
+	print("{note.text}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+note 4
+```
+
+<!-- test: deepmove.abort.a-reply-holding-a-shared-record-aborts -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+The refusal on the reply road. The reply's root is a `CellArray` the handler mints in its own frame, so the
+static E3137 rule admits it; what the walk finds inside is the `Cell` the service's state still owns —
+`push` increfs the borrowed element, so that one record has two owners, the state and the reply. Handing it
+across would put one box in two green threads' hands with a plain reference count between them, so the move
+aborts with `RuntimeAbort` exit **96** and nothing reaches the awaiter.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Store
+	var cells as CellArray
+
+	static function create() returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		cells.push(Cell.create())
+		return Self{cells: cells}
+	end 'create'
+
+	export function snapshot() returns CellArray
+		var out = CellArray.create()
+		let first = try self.cells.get(0) otherwise Cell.create()
+		out.push(first)
+		return out
+	end 'snapshot'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let got = try await h.snapshot() otherwise CellArray.create()
+	return got.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: deepmove.a-container-crosses-with-its-elements -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+A container crosses WHOLE. `push` increfs what it is handed, so an element's count says nothing the type can
+promise about the frame that filled the array — which is why soleness is proved at the SEND, by a walk over
+the value's graph, rather than declared from the type. Each `Cell` here has the array as its only owner, the
+walk finds a count of 1 at every record it reaches, and the service receives the elements along with the
+array.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(cs CellArray)
+		var sum = 0
+		for c in cs 'each'
+			sum = sum + c.n
+		end 'each'
+		print("svc {cs.count()}\n")
+		print("sum {sum}\n")
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var cs = CellArray.create()
+	cs.push(Cell.create())
+	cs.push(Cell.create())
+	let h = spawn Svc.create()
+	h.take(cs)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+svc 2
+sum 2
+```
+
+<!-- test: deepmove.abort.a-container-holding-a-shared-record-aborts-at-the-send -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+The refusal the walk exists to make. `cell` is owned by `main`'s binding and by `cs` at once — `push`
+increfs — and `main` reads it back after the send, so handing the array across would leave one box with a
+plain refcount on two green threads. The root `cs` is this frame's alone, so no static arm can see the
+second owner; the walk finds the `Cell` at a count of 2 and aborts the process before anything is enqueued —
+`RuntimeAbort` exit **96** on the sender's own green thread. No processor count is
+involved: nothing has crossed yet.
 ```maxon
 type Cell
 	export var n as Integer
@@ -1853,8 +2018,928 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3138: <fragment>:29:9: argument `cs` of the message `Svc.take` is a container, whose elements a push increfs rather than moves — so this frame may still own what is in it (`cs`). This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it
+```exitcode
+96
+```
+
+<!-- test: deepmove.a-cloned-array-detaches-its-shared-buffer-at-the-send -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+A shared BUFFER is not a shared record. `a.clone()` yields a second array RECORD viewing `a`'s buffer until
+one of them writes — and a move is a write, so the walk detaches `b`'s buffer at the send, copying the
+elements out, exactly as `b.push(…)` would have. Only a shared RECORD is refused; a shared buffer is what
+copy-on-write is for. The reply sequences the two sides, so the service's lines land before `main` reads
+`a` back.
+```maxon
+typealias IntegerArray = Array with Integer
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(xs IntegerArray) returns Integer
+		for x in xs 'each'
+			print("svc {x}\n")
+		end 'each'
+		return xs.count()
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var a = IntegerArray.create()
+	a.push(1)
+	a.push(2)
+	a.push(3)
+	let b = a.clone()
+	let h = spawn Svc.create()
+	let n = try await h.take(b) otherwise 0
+	for x in a 'each'
+		print("main {x}\n")
+	end 'each'
+	print("crossed {n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+svc 1
+svc 2
+svc 3
+main 1
+main 2
+main 3
+crossed 3
+```
+
+<!-- test: deepmove.a-chain-crosses-with-its-elements -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+The SECOND element-bearing record crosses too, and it is a different walk: a chain owns its record, a node
+per element and each node's element, so `__list_sole` proves all three where the buffer's walk proves the
+record and its slots. Every `String` here is minted at the append, so each node and each element has one
+owner and the whole chain moves.
+```maxon
+typealias Texts = List with String
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(xs Texts)
+		for x in xs 'each'
+			print("svc {x}\n")
+		end 'each'
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var xs = Texts.create()
+	xs.append("a {1}")
+	xs.append("b {2}")
+	let h = spawn Svc.create()
+	h.take(xs)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+svc a 1
+svc b 2
+```
+
+<!-- test: deepmove.abort.a-chain-holding-a-shared-record-aborts -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+The chain's refusal, and the element half of the walk is what finds it: `append` increfs the `Cell` it is
+handed, `main` reads it back afterwards, and the chain's own record and nodes are all sole — so only a walk
+that descends into the NODE's element sees the second owner. Exit **96** on the sender's own green thread.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias Cells = List with Cell
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(xs Cells)
+		print("svc {xs.count()}\n")
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var xs = Cells.create()
+	var cell = Cell.create()
+	xs.append(cell)
+	let h = spawn Svc.create()
+	h.take(xs)
+	return cell.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: deepmove.a-map-crosses-with-its-keys-and-values -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+A `Map` is a declared record over two element-bearing containers, so it crosses through the ordinary field
+cascade and its keys and values are proved by the containers' own element walks. Nothing here is a special
+case for `Map`, which is the point: a record that holds containers is a record.
+```maxon
+typealias Names = Map with (String, String)
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(m Names)
+		print("svc {m.count()}\n")
+		let v = try m.get("a 1") otherwise "missing"
+		print("got {v}\n")
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var m = Names.create()
+	m.upsert("a {1}", value: "x {2}")
+	let h = spawn Svc.create()
+	h.take(m)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+svc 1
+got x 2
+```
+
+<!-- test: deepmove.abort.a-map-holding-a-shared-value-aborts -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+The same refusal two containers down: `upsert` increfs the `Cell` into the value column, `main` reads it
+back, and the walk finds that one record at two owners. Exit **96**.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias Cells = Map with (String, Cell)
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(m Cells)
+		print("svc {m.count()}\n")
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var m = Cells.create()
+	var cell = Cell.create()
+	m.upsert("k {1}", value: cell)
+	let h = spawn Svc.create()
+	h.take(m)
+	return cell.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: deepmove.a-union-payload-crosses-and-a-shared-one-aborts -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+A boxed union crosses under its TAG: the walk proves the box, reads the discriminant and descends only into
+the LIVE case's managed payloads, so a variant that owns nothing costs one refcount test. The payload here is
+the service's own to keep.
+```maxon
+union Shape
+	empty
+	labelled(text String)
+end 'Shape'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(s Shape)
+		match s 'k'
+			empty then print("empty\n")
+			labelled(t) then print("labelled {t}\n")
+		end 'k'
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	h.take(Shape.labelled("heap {1 + 1}"))
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+labelled heap 2
+```
+
+<!-- test: deepmove.abort.a-union-payload-with-a-second-owner-aborts -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+The tag-guarded half of that walk, refusing: `Shape.held(cell)` increfs into the payload slot and `main`
+reads `cell` back, so the live case's payload has two owners. Exit **96**.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+union Shape
+	empty
+	held(c Cell)
+end 'Shape'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(s Shape)
+		match s 'k'
+			empty then print("empty\n")
+			held(c) then print("held {c.n}\n")
+		end 'k'
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var cell = Cell.create()
+	let s = Shape.held(cell)
+	let h = spawn Svc.create()
+	h.take(s)
+	return cell.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: deepmove.a-deep-graph-crosses-and-is-released-on-the-service -->
+<!-- targets: x64-windows, arm64-macos, arm64-linux -->
+⭐ **THE GRAPH IS BUILT ON `main` AND RELEASED ON THE SERVICE, AND A GREEN THREAD'S STACK STARTS AT 2 KB.**
+The handler reads one scalar and returns, so the only frames that release the chain are the per-type
+cascade's own — `__destruct_S63` calling `__destruct_S62`, once per level. A cascade recurses to the depth
+of the PROGRAM's types, which is why it carries the green-thread stack guard that grows and relocates the
+stack rather than the exemption the compiler's fixed-depth runtime primitives take. `report` is a SECOND
+message so that the line it prints cannot grow the stack ahead of the release: with the cascade exempt this
+faults on the stack, with no output, on every run at this depth (MEASURED with the cascade exempted:
+`0xC0000005` on x64-windows).
+```maxon
+type S0
+	export var n as Level
+
+	export static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+end 'S0'
+
+type S1
+	export var n as Level
+	export var inner as S0
+
+	export static function create() returns Self
+		return Self{n: 1, inner: S0.create()}
+	end 'create'
+end 'S1'
+
+type S2
+	export var n as Level
+	export var inner as S1
+
+	export static function create() returns Self
+		return Self{n: 2, inner: S1.create()}
+	end 'create'
+end 'S2'
+
+type S3
+	export var n as Level
+	export var inner as S2
+
+	export static function create() returns Self
+		return Self{n: 3, inner: S2.create()}
+	end 'create'
+end 'S3'
+
+type S4
+	export var n as Level
+	export var inner as S3
+
+	export static function create() returns Self
+		return Self{n: 4, inner: S3.create()}
+	end 'create'
+end 'S4'
+
+type S5
+	export var n as Level
+	export var inner as S4
+
+	export static function create() returns Self
+		return Self{n: 5, inner: S4.create()}
+	end 'create'
+end 'S5'
+
+type S6
+	export var n as Level
+	export var inner as S5
+
+	export static function create() returns Self
+		return Self{n: 6, inner: S5.create()}
+	end 'create'
+end 'S6'
+
+type S7
+	export var n as Level
+	export var inner as S6
+
+	export static function create() returns Self
+		return Self{n: 7, inner: S6.create()}
+	end 'create'
+end 'S7'
+
+type S8
+	export var n as Level
+	export var inner as S7
+
+	export static function create() returns Self
+		return Self{n: 8, inner: S7.create()}
+	end 'create'
+end 'S8'
+
+type S9
+	export var n as Level
+	export var inner as S8
+
+	export static function create() returns Self
+		return Self{n: 9, inner: S8.create()}
+	end 'create'
+end 'S9'
+
+type S10
+	export var n as Level
+	export var inner as S9
+
+	export static function create() returns Self
+		return Self{n: 10, inner: S9.create()}
+	end 'create'
+end 'S10'
+
+type S11
+	export var n as Level
+	export var inner as S10
+
+	export static function create() returns Self
+		return Self{n: 11, inner: S10.create()}
+	end 'create'
+end 'S11'
+
+type S12
+	export var n as Level
+	export var inner as S11
+
+	export static function create() returns Self
+		return Self{n: 12, inner: S11.create()}
+	end 'create'
+end 'S12'
+
+type S13
+	export var n as Level
+	export var inner as S12
+
+	export static function create() returns Self
+		return Self{n: 13, inner: S12.create()}
+	end 'create'
+end 'S13'
+
+type S14
+	export var n as Level
+	export var inner as S13
+
+	export static function create() returns Self
+		return Self{n: 14, inner: S13.create()}
+	end 'create'
+end 'S14'
+
+type S15
+	export var n as Level
+	export var inner as S14
+
+	export static function create() returns Self
+		return Self{n: 15, inner: S14.create()}
+	end 'create'
+end 'S15'
+
+type S16
+	export var n as Level
+	export var inner as S15
+
+	export static function create() returns Self
+		return Self{n: 16, inner: S15.create()}
+	end 'create'
+end 'S16'
+
+type S17
+	export var n as Level
+	export var inner as S16
+
+	export static function create() returns Self
+		return Self{n: 17, inner: S16.create()}
+	end 'create'
+end 'S17'
+
+type S18
+	export var n as Level
+	export var inner as S17
+
+	export static function create() returns Self
+		return Self{n: 18, inner: S17.create()}
+	end 'create'
+end 'S18'
+
+type S19
+	export var n as Level
+	export var inner as S18
+
+	export static function create() returns Self
+		return Self{n: 19, inner: S18.create()}
+	end 'create'
+end 'S19'
+
+type S20
+	export var n as Level
+	export var inner as S19
+
+	export static function create() returns Self
+		return Self{n: 20, inner: S19.create()}
+	end 'create'
+end 'S20'
+
+type S21
+	export var n as Level
+	export var inner as S20
+
+	export static function create() returns Self
+		return Self{n: 21, inner: S20.create()}
+	end 'create'
+end 'S21'
+
+type S22
+	export var n as Level
+	export var inner as S21
+
+	export static function create() returns Self
+		return Self{n: 22, inner: S21.create()}
+	end 'create'
+end 'S22'
+
+type S23
+	export var n as Level
+	export var inner as S22
+
+	export static function create() returns Self
+		return Self{n: 23, inner: S22.create()}
+	end 'create'
+end 'S23'
+
+type S24
+	export var n as Level
+	export var inner as S23
+
+	export static function create() returns Self
+		return Self{n: 24, inner: S23.create()}
+	end 'create'
+end 'S24'
+
+type S25
+	export var n as Level
+	export var inner as S24
+
+	export static function create() returns Self
+		return Self{n: 25, inner: S24.create()}
+	end 'create'
+end 'S25'
+
+type S26
+	export var n as Level
+	export var inner as S25
+
+	export static function create() returns Self
+		return Self{n: 26, inner: S25.create()}
+	end 'create'
+end 'S26'
+
+type S27
+	export var n as Level
+	export var inner as S26
+
+	export static function create() returns Self
+		return Self{n: 27, inner: S26.create()}
+	end 'create'
+end 'S27'
+
+type S28
+	export var n as Level
+	export var inner as S27
+
+	export static function create() returns Self
+		return Self{n: 28, inner: S27.create()}
+	end 'create'
+end 'S28'
+
+type S29
+	export var n as Level
+	export var inner as S28
+
+	export static function create() returns Self
+		return Self{n: 29, inner: S28.create()}
+	end 'create'
+end 'S29'
+
+type S30
+	export var n as Level
+	export var inner as S29
+
+	export static function create() returns Self
+		return Self{n: 30, inner: S29.create()}
+	end 'create'
+end 'S30'
+
+type S31
+	export var n as Level
+	export var inner as S30
+
+	export static function create() returns Self
+		return Self{n: 31, inner: S30.create()}
+	end 'create'
+end 'S31'
+
+type S32
+	export var n as Level
+	export var inner as S31
+
+	export static function create() returns Self
+		return Self{n: 32, inner: S31.create()}
+	end 'create'
+end 'S32'
+
+type S33
+	export var n as Level
+	export var inner as S32
+
+	export static function create() returns Self
+		return Self{n: 33, inner: S32.create()}
+	end 'create'
+end 'S33'
+
+type S34
+	export var n as Level
+	export var inner as S33
+
+	export static function create() returns Self
+		return Self{n: 34, inner: S33.create()}
+	end 'create'
+end 'S34'
+
+type S35
+	export var n as Level
+	export var inner as S34
+
+	export static function create() returns Self
+		return Self{n: 35, inner: S34.create()}
+	end 'create'
+end 'S35'
+
+type S36
+	export var n as Level
+	export var inner as S35
+
+	export static function create() returns Self
+		return Self{n: 36, inner: S35.create()}
+	end 'create'
+end 'S36'
+
+type S37
+	export var n as Level
+	export var inner as S36
+
+	export static function create() returns Self
+		return Self{n: 37, inner: S36.create()}
+	end 'create'
+end 'S37'
+
+type S38
+	export var n as Level
+	export var inner as S37
+
+	export static function create() returns Self
+		return Self{n: 38, inner: S37.create()}
+	end 'create'
+end 'S38'
+
+type S39
+	export var n as Level
+	export var inner as S38
+
+	export static function create() returns Self
+		return Self{n: 39, inner: S38.create()}
+	end 'create'
+end 'S39'
+
+type S40
+	export var n as Level
+	export var inner as S39
+
+	export static function create() returns Self
+		return Self{n: 40, inner: S39.create()}
+	end 'create'
+end 'S40'
+
+type S41
+	export var n as Level
+	export var inner as S40
+
+	export static function create() returns Self
+		return Self{n: 41, inner: S40.create()}
+	end 'create'
+end 'S41'
+
+type S42
+	export var n as Level
+	export var inner as S41
+
+	export static function create() returns Self
+		return Self{n: 42, inner: S41.create()}
+	end 'create'
+end 'S42'
+
+type S43
+	export var n as Level
+	export var inner as S42
+
+	export static function create() returns Self
+		return Self{n: 43, inner: S42.create()}
+	end 'create'
+end 'S43'
+
+type S44
+	export var n as Level
+	export var inner as S43
+
+	export static function create() returns Self
+		return Self{n: 44, inner: S43.create()}
+	end 'create'
+end 'S44'
+
+type S45
+	export var n as Level
+	export var inner as S44
+
+	export static function create() returns Self
+		return Self{n: 45, inner: S44.create()}
+	end 'create'
+end 'S45'
+
+type S46
+	export var n as Level
+	export var inner as S45
+
+	export static function create() returns Self
+		return Self{n: 46, inner: S45.create()}
+	end 'create'
+end 'S46'
+
+type S47
+	export var n as Level
+	export var inner as S46
+
+	export static function create() returns Self
+		return Self{n: 47, inner: S46.create()}
+	end 'create'
+end 'S47'
+
+type S48
+	export var n as Level
+	export var inner as S47
+
+	export static function create() returns Self
+		return Self{n: 48, inner: S47.create()}
+	end 'create'
+end 'S48'
+
+type S49
+	export var n as Level
+	export var inner as S48
+
+	export static function create() returns Self
+		return Self{n: 49, inner: S48.create()}
+	end 'create'
+end 'S49'
+
+type S50
+	export var n as Level
+	export var inner as S49
+
+	export static function create() returns Self
+		return Self{n: 50, inner: S49.create()}
+	end 'create'
+end 'S50'
+
+type S51
+	export var n as Level
+	export var inner as S50
+
+	export static function create() returns Self
+		return Self{n: 51, inner: S50.create()}
+	end 'create'
+end 'S51'
+
+type S52
+	export var n as Level
+	export var inner as S51
+
+	export static function create() returns Self
+		return Self{n: 52, inner: S51.create()}
+	end 'create'
+end 'S52'
+
+type S53
+	export var n as Level
+	export var inner as S52
+
+	export static function create() returns Self
+		return Self{n: 53, inner: S52.create()}
+	end 'create'
+end 'S53'
+
+type S54
+	export var n as Level
+	export var inner as S53
+
+	export static function create() returns Self
+		return Self{n: 54, inner: S53.create()}
+	end 'create'
+end 'S54'
+
+type S55
+	export var n as Level
+	export var inner as S54
+
+	export static function create() returns Self
+		return Self{n: 55, inner: S54.create()}
+	end 'create'
+end 'S55'
+
+type S56
+	export var n as Level
+	export var inner as S55
+
+	export static function create() returns Self
+		return Self{n: 56, inner: S55.create()}
+	end 'create'
+end 'S56'
+
+type S57
+	export var n as Level
+	export var inner as S56
+
+	export static function create() returns Self
+		return Self{n: 57, inner: S56.create()}
+	end 'create'
+end 'S57'
+
+type S58
+	export var n as Level
+	export var inner as S57
+
+	export static function create() returns Self
+		return Self{n: 58, inner: S57.create()}
+	end 'create'
+end 'S58'
+
+type S59
+	export var n as Level
+	export var inner as S58
+
+	export static function create() returns Self
+		return Self{n: 59, inner: S58.create()}
+	end 'create'
+end 'S59'
+
+type S60
+	export var n as Level
+	export var inner as S59
+
+	export static function create() returns Self
+		return Self{n: 60, inner: S59.create()}
+	end 'create'
+end 'S60'
+
+type S61
+	export var n as Level
+	export var inner as S60
+
+	export static function create() returns Self
+		return Self{n: 61, inner: S60.create()}
+	end 'create'
+end 'S61'
+
+type S62
+	export var n as Level
+	export var inner as S61
+
+	export static function create() returns Self
+		return Self{n: 62, inner: S61.create()}
+	end 'create'
+end 'S62'
+
+type S63
+	export var n as Level
+	export var inner as S62
+
+	export static function create() returns Self
+		return Self{n: 63, inner: S62.create()}
+	end 'create'
+end 'S63'
+
+type Sink
+	var seen as Level
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(root S63)
+		self.seen = self.seen + root.n
+	end 'take'
+
+	export function report()
+		print("released {self.seen}\n")
+	end 'report'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	h.take(S63.create())
+	h.report()
+	return 0
+end 'main'
+typealias Level = int(0 to 1024)
+```
+```exitcode
+0
+```
+```stdout
+released 63
 ```
 
 <!-- test: error.a-promise-may-not-be-sent -->
@@ -2102,9 +3187,8 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: error.a-reply-may-not-alias-service-state -->
 A handler must not return a value this frame does not solely own, or the caller ends up aliasing a box the
 service still names — two green threads naming one box, with a plain refcount between them. `return self` is
-the shortest way to say it and the only one a service STATE can currently spell: a state record may hold
-nothing but scalars (`error.a-record-with-a-managed-field-may-not-cross`), so a FIELD read has nothing managed
-to hand back yet. The other population is a message PARAMETER — see the case below it.
+the shortest way to say it — the state is the one box the service is guaranteed to still name. The other
+population is a message PARAMETER — see the case below it.
 
 ⚠ The blame names the RETURN, and the note names the **`spawn`** that made the type a service — whether a
 type is a service is a whole-program property, and the `spawn` deciding it may be in another file entirely
@@ -2559,9 +3643,8 @@ typealias Integer = int(i64.min to i64.max)
 ⭐⭐ **THE FIRST CROSS-GREEN-THREAD WAKE IN THE LANGUAGE.** `Outer`'s message awaits a reply from `Inner`, so a
 green thread — not the main one — is the awaiter, and the drive that completes its cell runs `Inner` from
 `Outer`'s own stack. The graph `Outer → Inner` is acyclic, which is what makes this legal.
-⚠ The peer's handle crosses as a message ARGUMENT and not as `Outer`'s state: a state record may hold nothing
-managed at all (`error.a-record-with-a-managed-field-may-not-cross`), which is a live limit of SV1's transfer
-rule rather than anything this rung changes.
+⚠ The peer's handle crosses as a message ARGUMENT rather than as `Outer`'s state, so the subject stays the
+cross-green-thread wake and not the walk `deepmove.a-record-with-managed-fields-crosses` pins.
 ```maxon
 type Inner
 	var n as Integer

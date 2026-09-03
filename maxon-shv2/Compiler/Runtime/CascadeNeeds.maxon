@@ -1,17 +1,15 @@
-// CascadeNeeds — the ONE worklist engine behind BOTH per-type cascade closures.
+// CascadeNeeds — the ONE worklist engine behind EVERY per-type cascade closure.
 //
-// ⭐ **TWO CLOSURES, ONE MECHANISM (P1.7 Workstream O).** A synthesized per-type cascade calls other
+// ⭐ **THREE CLOSURES, ONE MECHANISM (P1.7 Workstream O).** A synthesized per-type cascade calls other
 // synthesized per-type cascades from inside a body the Maxon-module scan cannot see: a
 // `__destruct_<Outer>` calls its managed field's `__destruct_<Inner>` (`MmRuntime.closeDestructorNeeds`),
-// and the CLONE dual `__clone_<Outer>` calls that field's `__clone_<Inner>`
-// (`MmRuntime.noteClonerUsage`). Both therefore grow a needed-SYMBOL set to a fixpoint over the SAME
-// node space — declared structs, declared unions, and generic instances — under the SAME monotone rule
-// (the instance nodes are the CLONE side's too since W162; they were the drop side's alone before it).
-// Written twice, they carried the same quadratic twice: each was a `while changed`
-// RE-SCAN of every declared type, so a cascade chain of depth D cost D passes over T types —
-// **O(passes × types)** — and re-minted every type's `__destruct_`/`__clone_` symbol on every one of
-// them. Written once here, each node is EXPANDED EXACTLY ONCE and each symbol minted ONCE:
-// **O(types + fields)**.
+// the CLONE dual `__clone_<Outer>` calls that field's `__clone_<Inner>`, and the SOLENESS walk
+// `__sole_<Outer>` calls that field's `__sole_<Inner>` — the last two through one driver,
+// `MmRuntime.noteCascadeUsage`, parameterized by `CascadeAction`. All three grow a needed-SYMBOL set to a
+// fixpoint over the SAME node space — declared structs, declared unions, and generic instances — under the
+// SAME monotone rule. Written once here, each node is EXPANDED EXACTLY ONCE and each symbol minted ONCE:
+// **O(types + fields)**. A closure per action would be a `while changed` RE-SCAN of every declared type
+// apiece — **O(passes × types)**, and one type's symbol re-minted on each pass.
 //
 // ⚠ **DEMAND-DRIVEN, AND THAT IS THE CONTRACT, NOT AN OPTIMIZATION.** The graph is deliberately NOT
 // built up front, the way the parser's descriptor-need fixpoint builds a CSR and marks reachability
@@ -22,7 +20,7 @@
 // program does not carry. That is why `register` (cheap, every type) is separate from
 // `seed`/`discovered`, which enqueue only REFERENCED ones.
 //
-// The two drivers keep their own per-field dispatch (`addNested*Destructors` / `note*ClonerNeeds`) —
+// The drivers keep their own per-field dispatch (`addNested*Destructors` / `note*CascadeNeeds`) —
 // they classify different things and are separately reviewed duals. What is single-sourced here is the
 // part that was identical and that carried the cost: the node space, the seeding rule, the
 // expand-at-most-once discipline, and the termination argument.
@@ -44,7 +42,7 @@ export union CascadeNode
 	// same field list DIFFERENTLY — a slot standing at a bare type parameter is released through the
 	// descriptor and names no nested symbol at all — and a node is expanded by its kind. They are neighbours
 	// so the CLONE closure, which has nothing to expand through either, declines them in one range arm
-	// (`MmRuntime.noteClonerUsage`); a variant inserted between them would silently join that arm.
+	// (`MmRuntime.noteCascadeUsage`); a variant inserted between them would silently join that arm.
 	//
 	// A declared record's (`MmRuntime.dictionaryDestructorSymbol`, W183) — a TUPLE of the enclosing generic's
 	// own parameters is a `structRef` and reaches none of the instance family.

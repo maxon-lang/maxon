@@ -350,7 +350,7 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 end 'untransferableParameterNoun'
 
 // The noun for a value held at an interface type — one string, because the three arms that reach that verdict
-// (an `interfaceRef` the parse minted, a bare `named` the sweep left, and `Parser.unclosedTransferSlotNoun`'s
+// (an `interfaceRef` the parse minted, a bare `named` the sweep left, and `Parser.transferGraphProofOf`'s
 // existential arm) are one finding about one shape.
 module let InterfaceParameterNoun = "a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry"
 
@@ -472,25 +472,24 @@ module function serviceSharedTransferMessage(blame String, source String) return
 	return "{blame} cannot be proven to have exactly one owner{serviceTransferSourceClause(source)}: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). {ServiceTransferLesson}"
 end 'serviceSharedTransferMessage'
 
-// ⭐⭐ **THE THIRD HALF, AND THE ONLY ONE THAT IS ABOUT WHAT THE RECORD *HOLDS* (SV1 review).** The two
-// sentences above ask whether THIS box has one owner. That question is answered, and it is not enough:
-// **SOLENESS IS NOT TRANSITIVE.** `Parser.OwnedHeapExclusivity`'s header retires exactly that inference one
-// frame in — *"A box this frame solely owns can hold a payload it only CO-owns, because
-// `moveManagedValueInto`'s `borrowedManaged` arm stores by `__mm_incref` rather than by move"* — and a cross
-// to a green thread is where it is fatal rather than merely wrong: the second owner stays behind on THIS
-// thread, and its later decref races the service's, both being a plain load/add/store since EC10.
+// ⭐⭐ **THE THIRD HALF, AND THE ONLY ONE THAT IS ABOUT WHAT THE RECORD *HOLDS*.** The two sentences above
+// ask whether THIS box has one owner. That question is answered, and it is not enough: **SOLENESS IS NOT
+// TRANSITIVE.** `Parser.OwnedHeapExclusivity`'s header retires exactly that inference one frame in — *"A box
+// this frame solely owns can hold a payload it only CO-owns, because `moveManagedValueInto`'s
+// `borrowedManaged` arm stores by `__mm_incref` rather than by move"* — and a cross to a green thread is
+// where it is fatal rather than merely wrong: the second owner stays behind on THIS thread, and its later
+// decref races the service's, both being a plain load/add/store since EC10.
 //
-// ⚠ **IT NAMES NO `.clone()`, WHICH IS WHY IT DOES NOT QUOTE `ServiceTransferLesson`.** The rule is about the
-// record's TYPE (see `Parser.unclosedTransferSlotNoun` for why the value cannot answer it), so a clone of the
-// same type is refused identically — quoting the shared lesson here would name a cure that does not work.
+// ⚠⚠ **A GRAPH THAT MIGHT BE SHARED IS NOT WHAT THIS SENTENCE IS FOR — that is proved at RUN TIME**
+// (`Parser.transferGraphProofOf`, the synthesized `__sole_<T>` walk, `RuntimeAbort.transferredRecordNotSole`).
+// This is the refusal for the shapes no walk can be BUILT for, so it names the shape and not a suspicion.
+//
+// ⚠ **IT NAMES NO `.clone()`, WHICH IS WHY IT DOES NOT QUOTE `ServiceTransferLesson`.** Every shape it
+// refuses is refused for a property of the TYPE, so a clone of the same type is refused identically —
+// quoting the shared lesson here would name a cure that does not work.
 module function serviceUnclosedRecordTransferMessage(blame String, source String, noun String) returns String
-	return "{blame} is {noun}{serviceTransferSourceClause(source)}. This frame owns that record alone — but a record it POINTS AT may have a second owner, because every co-owning store takes a reference where a move would give one up, and soleness is not transitive. A send MOVES the record WHOLE, so the second owner would be left on this green thread with a plain refcount racing the service's. What may cross today is a scalar, a `String`, a service HANDLE, or a record whose every slot is a SCALAR — a `String` FIELD does not make a record crossable even though a `String` ARGUMENT crosses, because the store that put it there took a reference where a move would have given one up. Proving the rest needs a record's whole graph tracked through the co-owning stores, which is a whole-program fact this compiler does not yet compute. Send the scalars the record is built from, or keep the record on this side and send what the service needs of it"
+	return "{blame} is {noun}{serviceTransferSourceClause(source)}. A move hands the record over WHOLE, and this compiler proves the graph below it sole at run time, immediately before the move — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it"
 end 'serviceUnclosedRecordTransferMessage'
-
-// The noun for a CONTAINER, which is unclosed whatever it holds: `push`/`set`/`insert` INCREF the element
-// rather than moving it (`OwnedHeapExclusivity`'s retain producer 1), so a container this frame allocated
-// says nothing about who else owns what is in it. MEASURED, and it is the arrival a field-only rule misses.
-module let ContainerTransferNoun = "a container, whose elements a push increfs rather than moves — so this frame may still own what is in it"
 
 // The source binding named in parentheses, or nothing at all when no binding holds the value (a temporary, an
 // element read). Split out because both sentences name the source and an author reading two spellings of one
@@ -563,6 +562,12 @@ end 'serviceSpawnNoteText'
 module function serviceSendArgumentBlame(typeName ByteArray, methodName ByteArray, paramName ByteArray) returns String
 	return "argument `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}`"
 end 'serviceSendArgumentBlame'
+
+// The same blame on the REPLY road, where the value has no parameter name because the author wrote a
+// `return`. It exists so a graph refused on that road is not described as an argument of a send.
+module function serviceReplyBlame(typeName ByteArray, methodName ByteArray) returns String
+	return "the reply of the message `{String.from(typeName)}.{String.from(methodName)}`"
+end 'serviceReplyBlame'
 
 // ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL — THIS IS OPEN #56's HAZARD (four times, and
 // counting).** A payload type built below is a `MaxonType`, which carries a `TypeNameId` that is only a
@@ -832,6 +837,11 @@ end 'serviceSpawnSiteOf'
 //
 // ⚠ **VARIANT 0 IS EXCLUDED.** `__shutdown` is the compiler's pill and no source declares a function under
 // that name, so it can never be the enclosing function of anything.
+//
+// ⚡ **IT COSTS THREE ALLOCATIONS PER ASK — the roster array, its return, and the boxed answer — so a
+// PER-STATEMENT caller gates on `ProgramSignatures.spawnsAnyService()` first.** That gate lives at the door
+// that needs it (`Parser.requireServiceReplyDoesNotAliasState`) rather than here, because here it could only
+// skip the roster and would still box a `notAMessage` to say so.
 module function serviceMessageOwnerOf(signatures ProgramSignatures, callee ByteArray) returns ServiceMessageOwner
 	for typeName in serviceTypeRoster(signatures) 'eachService'
 		let request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue

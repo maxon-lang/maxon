@@ -201,7 +201,7 @@ enum LeafVerdict
 	tooManyOps
 	// Everything else, and the list is the whole eligibility rule read backwards: a call of any kind, a
 	// `/` or `mod` (which can FAULT — see `leafOpRole`), an `isUnsupportedInInlineBody` op, a
-	// by-reference parameter, a body that runs user code on its caller's stack, a panicking ENTRY block,
+	// by-reference parameter, a body that carries the green-thread stack guard, a panicking ENTRY block,
 	// an entry block carrying phis, a block still in `Terminator.unset` (a body the lowering never
 	// emitted), or no body at all.
 	notALeaf
@@ -333,10 +333,10 @@ function scanLeafBody(module StdModule, func IrFunction) returns LeafBodyScan
 		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'noBody'
 	// A by-reference parameter is an ADDRESS whose aliasing is not what a tiny leaf is, and a body that
-	// runs user code on its caller's stack is the one family whose FRAME is load-bearing
-	// (`IrFunction.runsUserCodeOnItsCallersStack`). Both are function-level facts, so they are asked
-	// before a single op is read.
-	if func.reassignedParamMask != 0 or func.runsUserCodeOnItsCallersStack 'refusedBySignature'
+	// carries the green-thread stack guard has a load-bearing FRAME — inlining it into an exempt caller
+	// erases the checkpoint (`IrFunction.needsGreenThreadStackGuard`). Both are function-level facts, so
+	// they are asked before a single op is read.
+	if func.reassignedParamMask != 0 or func.needsGreenThreadStackGuard 'refusedBySignature'
 		return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'refusedBySignature'
 

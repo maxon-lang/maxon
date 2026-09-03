@@ -204,24 +204,38 @@ export type IrFunction
 	// Line and column of the function-name token; zero for synthesized functions.
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
-	// ⭐⭐ **DOES THIS SYNTHESIZED FUNCTION RUN THE PROGRAM'S OWN CODE, ON ITS CALLER'S STACK?**
-	// (spec-port `lazy-static`, §6 review finding 1.) FALSE for every parsed function — for which it is not
-	// asked, `isRuntimeFunction` having already answered — and false for the runtime's own scaffolding.
-	// TRUE for exactly one family so far: `__lazy_init#<label>`, which is compiler-synthesized but whose body
-	// is the user's factory call tree, reached from an ordinary access inside `main`.
+	// ⭐⭐ **IS THIS SYNTHESIZED FUNCTION'S STACK DEPTH THE PROGRAM'S RATHER THAN THE RUNTIME'S?** — which is
+	// to say, must it carry the green-thread stack guard despite being the compiler's own emitted code. FALSE
+	// for every parsed function — for which it is not asked, `isRuntimeFunction` having already answered — and
+	// false for the runtime's own scaffolding. TRUE for two families:
+	//
+	//   * `__lazy_init#<label>`, whose body is the user's factory call tree, reached from an ordinary access
+	//     inside `main` on whatever green thread first touches the static.
+	//   * the per-type CASCADES — `__destruct_<T>`, `__clone_<T>`, `__sole_<T>`, their dictionary twins and
+	//     the one-argument element thunks — which recurse once per LEVEL of the user's data graph. Their
+	//     frame count is a property of the program's types and nothing in the runtime bounds it.
 	//
 	// ⛔ **IT EXISTS BECAUSE PROVENANCE AND STACK BEHAVIOUR ARE DIFFERENT QUESTIONS AND ONE FIELD WAS
 	// ANSWERING BOTH.** `TargetPrinter.isRuntimeFunction` (empty `sourceFilePath` + the `mrt_`/`__` band)
 	// withholds the green-thread stack guard, on the stated premise that *"the scheduler core must never
 	// trigger the grower, and their kernel calls are already shimmed onto the system stack"*. That premise
 	// held for `__module_init` / `__maxon_global_cleanup` only because they run OUTSIDE `main`, where no
-	// green thread exists. `__lazy_init#X` runs INSIDE it, on whatever green thread first touches the static,
-	// with a real frame — which is precisely what the guard is for.
+	// green thread exists. Neither family here satisfies it: both run INSIDE `main`, on a green thread, with
+	// real frames — which is precisely what the guard is for. MEASURED on x64-windows: a 128-deep nested-struct
+	// chain deep-moved to a service and released by `ServiceLoop.dropUnconsumedPayloads` SIGSEGVs 8/8 through
+	// 128 unguarded `__destruct_` frames on a 2 KB green-thread stack.
+	//
+	// ⚠ **IT IS NOT EVERY `__`-BAND FRAME A GREEN THREAD RUNS, and the flat container walkers
+	// (`__managed_*`, `__list_*`, `__drop_existential`) DELIBERATELY stay exempt.** They are not recursive:
+	// at most a couple of them sit between one cascade level's checkpoint and the next, which is exactly the
+	// free-ride `GtStackGuardMargin` is sized to cover (see `gtStackGuardMargin`, whose second term names
+	// them). The families above are the ones the margin cannot cover, because their count grows with the
+	// program's data.
 	//
 	// ⚠ It is a FIELD and not a name test, for the reason `declaredAt`'s header gives one door up: the
 	// `__`-prefix test once handed this same exemption to a user function declared in `stdlib/Builtins.maxon`
 	// and SEGFAULTED a green thread. A synthesizing caller says this out loud; nothing infers it.
-	export var runsUserCodeOnItsCallersStack as bool
+	export var needsGreenThreadStackGuard as bool
 
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
@@ -613,11 +627,11 @@ export type IrFunction
 	// error, and the stack-guard one is the SIGSEGV the A1r review measured. Passing the position in means a
 	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
 	// caller says so out loud.
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, runsUserCodeOnItsCallersStack bool = false) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		return Self{
 			name: name,
 			visibility: Visibility.file,
-			runsUserCodeOnItsCallersStack: runsUserCodeOnItsCallersStack,
+			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -661,19 +675,17 @@ export type IrFunction
 	// the position is `SourcePosition.synthesized()`, and `FunctionNameIndex.refuseDuplicateFunctionName` reads exactly
 	// that to tell an author's declaration apart from a symbol the compiler emitted (as `TargetPrinter.
 	// isRuntimeFunction` reads it for the GT stack-guard exemption). Unlike `create`, this door takes no
-	// position argument, because there is no caller it could come from: every one of them synthesizes. ⚠ This
-	// header used to name *"stdlib-cache restore"* as a caller — shv2 has no such restore, and the phantom
-	// answered "yes" to the one question both readers turn on: *can a function parsed from source reach the
-	// Std module with empty provenance?* It cannot.
-	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	// position argument, because there is no caller it could come from: every one of them synthesizes.
+	//
+	// `needsGreenThreadStackGuard` defaults to false because most callers here install a runtime primitive
+	// whose frame and nesting the runtime itself bounds. The per-type CASCADES come through this same door and
+	// do not — see the field.
+	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		let declaredAt = SourcePosition.synthesized()
 		return Self{
 			name: name,
 			visibility: Visibility.global,
-			// Every caller of this door is a RUNTIME installer or an entry stub — the scaffolding the guard
-			// exemption is actually about. The one synthesized family that runs user code is built at the
-			// MAXON tier (`ModuleInit.buildLazyStaticInit`) and says so through `create` above.
-			runsUserCodeOnItsCallersStack: false,
+			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -723,7 +735,7 @@ export type IrFunction
 			visibility: src.visibility,
 			// A copy is the same code with the same stack behaviour, so the claim TRAVELS rather than being
 			// re-decided here — exactly as `sourceFilePath` does one line down, and for the same reason.
-			runsUserCodeOnItsCallersStack: src.runsUserCodeOnItsCallersStack,
+			needsGreenThreadStackGuard: src.needsGreenThreadStackGuard,
 			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,
 			blockRefs: BlockRefArray.create(),

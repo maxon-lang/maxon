@@ -1451,7 +1451,8 @@ export enum ErrorCode
 	// whether a type is a service is a whole-program property, and the `spawn` deciding it may be in a
 	// different file from the method the rule fires on.
 	semanticServiceReplyAliasesState = "E3137"
-	// A message argument cannot be proven to have exactly one owner, so it may not be sent.
+	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
+	// cross. It is asked of a message argument, of a `spawn`'s state, and of a service handler's reply.
 	// A send MOVES: the service becomes the argument's one owner, and the sending frame gives up the
 	// reference it held. That is what keeps reference counting PLAIN rather than atomic -- the language
 	// guarantees one green thread per box -- so an argument this frame still shares with something else
@@ -1468,14 +1469,19 @@ export enum ErrorCode
 	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
 	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
 	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
-	// a reference where a move would give one up -- and a send moves the record WHOLE, leaving that second
-	// owner behind on this green thread with a plain refcount racing the service's. It is asked of the
-	// record's TYPE, because the retain can happen inside a callee the send site cannot see. What may cross
-	// is a scalar, a `String` (whose slots hold bytes, never a second reference), a service HANDLE, and a
-	// record whose every slot is one of those; a container never crosses, whatever its element type is.
-	// This arm is deliberately conservative and refuses sound programs too -- proving the safe half needs a
-	// record's whole graph tracked through the co-owning stores, which is a whole-program fact shv2 does not
-	// compute. The cure is to send the scalars the record is built from.
+	// a reference where a move would give one up -- and a move hands the record over WHOLE, leaving that
+	// second owner behind on this green thread with a plain refcount racing the service's. No compile-time
+	// tier can settle it: the retain can happen inside a callee the site cannot see, and `push(cell)` and
+	// `push(Cell.create())` build the same TYPE. So the graph is proved where the counts are -- at run time,
+	// immediately before the move, by a synthesized per-type walk. A reachable record with a second owner
+	// ABORTS the process (exit 96) on the sending green thread, before anything is enqueued; an immortal
+	// `.rdata` literal passes with no count to check; a shared copy-on-write BUFFER is detached, exactly as
+	// a write to it would detach it.
+	// What this arm still REFUSES is the shape no walk can be built for, never a shape that might be
+	// shared: a value held at an interface type (a witness table names a destructor and no walk), an opaque
+	// type parameter (the site cannot see its slots), a record no declaration in scope describes, and any
+	// graph reaching a type with no per-type cascade -- an OS handle, or a base-struct-less generic
+	// instance. Containers, records with managed fields and unions with managed payloads all cross.
 	semanticServiceArgumentNotUnique = "E3138"
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting
 	// on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.

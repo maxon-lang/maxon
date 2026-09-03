@@ -28202,8 +28202,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // so both parsers accept the same conditional-compilation language and the
       // shared Internals.maxon keeps parsing under the C# lane.
       "leakReport" => string.Equals(value, "false", StringComparison.OrdinalIgnoreCase),
+      // Names WHICH COMPILER IS COMPILING THE FILE, never the target it emits for. An
+      // unrecognized name is false rather than an error, the rule every predicate here follows.
+      "compiler" => string.Equals(value, "csharp", StringComparison.OrdinalIgnoreCase),
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', 'rcSanitize', or 'leakReport'.",
+        $"Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'compiler'.",
         funcToken.Line, funcToken.Column),
     };
   }

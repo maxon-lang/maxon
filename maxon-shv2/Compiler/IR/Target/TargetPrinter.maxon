@@ -579,23 +579,22 @@ function isSuppliedFunction(func IrFunction, stdlibFunctions FunctionNameSet) re
 	return isRuntimeFunction(func) or stdlibFunctions.contains(func.name)
 end 'isSuppliedFunction'
 
-// ⭐⭐ **MAY THIS FUNCTION SKIP THE GREEN-THREAD STACK GUARD?** — the OTHER question
-// `isRuntimeFunction` was answering, split out by the §6 review of spec-port `lazy-static`
-// (finding 1).
+// ⭐⭐ **MAY THIS FUNCTION SKIP THE GREEN-THREAD STACK GUARD?** — the OTHER question `isRuntimeFunction`
+// is close enough to answer by accident.
 //
-// The two are not the same question and only looked it while every synthesized function was scaffolding.
+// The two are not the same question and only look it while every synthesized function is scaffolding.
 // `isRuntimeFunction` asks about PROVENANCE — "is this the compiler's own invariant machinery?" — and that
 // is the right question for the GOLDENS, which is its other reader. The guard asks about STACK BEHAVIOUR:
 // "can this frame overflow a green thread's stack?" The scheduler core must never trigger the grower and
 // its kernel calls are shimmed onto the system stack; `__module_init` and `__maxon_global_cleanup` run
-// outside `main`, where there is no green thread to overflow. `__lazy_init#<label>` satisfies
-// `isRuntimeFunction` and satisfies NEITHER of those reasons — it runs the user's factory call tree, inside
-// `main`, on whatever green thread first touched the static.
+// outside `main`, where there is no green thread to overflow.
 //
-// ⚠ Its callees guard their own frames, so the exposure was this frame's own bytes on a small GT stack.
-// That is exactly the exposure the guard exists for, and "small" is the case a grower is written for.
+// ⚠ Two synthesized families satisfy `isRuntimeFunction` and NEITHER of those reasons, so they carry the
+// guard: `__lazy_init#<label>`, which runs the user's factory call tree inside `main`, and the per-type
+// CASCADES, which recurse to the depth of the user's data graph. `IrFunction.needsGreenThreadStackGuard`
+// is where each says so, and carries the measurement for both.
 export function skipsGreenThreadStackGuard(func IrFunction) returns bool
-	return isRuntimeFunction(func) and not func.runsUserCodeOnItsCallersStack
+	return isRuntimeFunction(func) and not func.needsGreenThreadStackGuard
 end 'skipsGreenThreadStackGuard'
 
 // --- Block names: the ONE derivation a header and a branch target both read ---

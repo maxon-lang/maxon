@@ -23,6 +23,7 @@ Maxon supports conditional compilation via `#if` / `#else` / `#endif` directives
 - `os(Name)` — matches the build target's OS (`Windows`, `Linux`, `Macos`, `Wasi`).
 - `arch(Name)` — matches the build target's CPU (`x64`, `arm64`, `wasm32`).
 - `testing(true|false)` — true when the compiler is running under the spec test harness.
+- `compiler(Name)` — matches the compiler doing the compiling (`shv2`, `csharp`). An unrecognised name is false, like an unknown `os`.
 
 **Boolean operators:** `and`, `or`, `not`, plus parentheses for grouping.
 
@@ -125,4 +126,36 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: directives.compiler-predicate-names-csharp -->
+`compiler(csharp)` is true under the compiler running this suite, so source that must differ between the two
+compilers can name its compiler rather than infer it.
+```maxon
+function main() returns ExitCode
+	#if compiler(csharp)
+		return 32
+	#else
+		return 31
+	#endif
+end 'main'
+```
+```exitcode
+32
+```
+
+<!-- test: directives.compiler-does-not-name-the-other-compiler -->
+The half the case above cannot pin on its own: `compiler(shv2)` is a name this predicate RECOGNISES and is
+still false here, so a file that branches between the two compilers takes exactly one branch under each.
+```maxon
+function main() returns ExitCode
+	#if compiler(shv2)
+		return 1
+	#else
+		return 34
+	#endif
+end 'main'
+```
+```exitcode
+34
 ```

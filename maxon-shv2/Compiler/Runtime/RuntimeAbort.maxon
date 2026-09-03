@@ -50,9 +50,10 @@
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
 // ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 95 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
+// FREE number above 70, which is now 97 (91 went to `slabArenaBaseNotGranuleAligned`, the guard on
 // W215's arena alignment, SV1 took 92/93 for the scheduler's two — a deadlocked drive and a park note
-// carrying a kind nothing writes — and SV2 took 94 for a promise naming a mailbox-parked thread) — 77 went
+// carrying a kind nothing writes — SV2 took 94 for a promise naming a mailbox-parked thread, 95 went to
+// `schedulerIdledAProcessorHoldingWork` and 96 to `transferredRecordNotSole`) — 77 went
 // to `managedListNodeNotInThisChain`, 81 to
 // `managedListNodeElementMovedOut`, 82/83/84/88 to the slab ARENA's four (`SlabArena.maxon`) and 85/86/87 to
 // the slab OBJECT layer's three (`SlabRuntime.maxon`), while 76
@@ -322,6 +323,19 @@ export enum RuntimeAbort
 	// `handoffp` is the road that will take it. This is what says so on the first run rather than the
 	// five-hundredth.
 	schedulerIdledAProcessorHoldingWork = 95
+	// ⭐⭐ **`__mm_sole_box`: a record about to CROSS to another green thread has a second owner.** A send,
+	// a `spawn`'s state and a service reply all MOVE their value whole, and the language guarantees one
+	// green thread per box — which is what lets a refcount step be a plain load/add/store. The static
+	// rules prove the ROOT sole; soleness is not transitive, so the graph below it is proved at run time
+	// by the synthesized `__sole_<T>` walk. A reachable record whose count says two owners is that
+	// guarantee about to be broken, and there is no diagnostic road left: the sender's frame is already
+	// past every compile-time gate. Aborting on the sender's own green thread, before anything is
+	// enqueued, is the only answer that cannot corrupt the heap.
+	//
+	// ⚠ It reports a NUMBER and not the type's name for this enum's founding reason: the walk is a
+	// SYNTHESIZED Std function, and the abort road (`emitRuntimeAbort`) is `osExit`, not `osPanic` —
+	// `mrt_panic` prints a message but exits `PanicExitCode`, which is not this code.
+	transferredRecordNotSole = 96
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

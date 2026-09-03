@@ -310,11 +310,19 @@ let ListFromName = b"__list_from"
 // ⚠ **THE SPLIT BY ELEMENT KIND IS NOT AN OPTIMIZATION, IT IS THE `direct` BOUNDARY.** An ARRAY ELEMENT's
 // cloner is invoked through `callIndirect(fn, elem)`, so it must be a ONE-argument `(box) -> newBox` — which
 // the trivial entry is, and which the managed one, carrying its per-element cloner, cannot be. That is exactly
-// the line `ManagedCloneStrategy` already draws for the managed record, so `Array with (List with Integer)` is
+// the line `ManagedCascadeStrategy` already draws for the managed record, so `Array with (List with Integer)` is
 // copied while `Array with (List with String)` is refused at the front end and reached one level down instead,
 // through the field cascade of whatever struct or instance holds it.
 export let ListCloneName = b"__list_clone"
 export let ListCloneManagedName = b"__list_clone_managed"
+
+// ⭐⭐ **THE CHAIN'S SOLENESS WALKS** — the `__managed_sole`/`__managed_sole_managed` pair one container
+// over, and split by element kind on the SAME `direct` boundary the clone pair above is split on. A chain
+// owns its record, a node per element and — when the element is managed — each node's element, so proving it
+// moveable means proving all three sole rather than only the record. There is no buffer to detach: a chain
+// has no copy-on-write shape.
+export let ListSoleName = b"__list_sole"
+export let ListSoleManagedName = b"__list_sole_managed"
 
 // `__list_node_alloc` is INTERNAL — called only by `append`/`prepend`/`insert`, the entry points that mint a
 // node. Kept out of the public name set so no parser path dispatches to it.
@@ -450,6 +458,14 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 	buildListFrom(module)
 	buildListClone(module, name: ListCloneName, clonesElements: false)
 	buildListClone(module, name: ListCloneManagedName, clonesElements: true)
+	// ⚠ **THE ONE PAIR THIS ALL-OR-NOTHING INSTALL GATES, AND THE GATE IS NOT TIDINESS.** Every other helper
+	// here calls only what this install builds; the soleness walks call `__mm_sole_box`, which
+	// `installMmRuntime` builds under `usesSoleWalk` alone — so installing them unconditionally would leave
+	// an unresolved call in every list program that hands nothing to a green thread.
+	if usage.usesSoleWalk 'soleWalk'
+		buildListSole(module, name: ListSoleName, walksElements: false)
+		buildListSole(module, name: ListSoleManagedName, walksElements: true)
+	end 'soleWalk'
 	buildListDecref(module)
 
 	// ⭐ **THE THREE LISTS, HELD TO EACH OTHER AT INSTALL** — `installManagedDirectoryRuntime`'s guard, one
@@ -1831,6 +1847,79 @@ function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, 
 	module.setTerminator(movedOut, op: StdOp.branch(append.id))
 	movedOut.branchEdges.push(BranchEdge.create(append.id, argIds: argsOf(absent)))
 end 'emitListClonedElement'
+
+// ⭐⭐ **`__list_sole(list)` / `__list_sole_managed(list, soleFn)` — PROVE A CHAIN MOVEABLE.** The
+// record, then every node, then — for the managed entry — every live element, each through the one refcount
+// leaf `__mm_sole_box`. Both entries in one builder for `buildListClone`'s reason, and the node walk is
+// shared rather than conditional: a node is a co-ownable box in EITHER chain, because a `ListNode` handle
+// takes a reference to one whatever its element is.
+function buildListSole(module StdModule, name ByteArray, walksElements bool)
+	var paramTypes = oneI64Param()
+	if walksElements 'perElementWalk'
+		paramTypes.push(StdType.i64)
+	end 'perElementWalk'
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
+	// ⚠ Both entries reserve two parameter id slots — `buildListClone`'s rule, for its reason.
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"walk")
+	var body = module.addBlock(func, label: b"body")
+	var step = module.addBlock(func, label: b"step")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: paramTypes.count())
+	let list = 0 as ValueId
+	let soleFn = 1 as ValueId
+
+	emitSoleBoxCall(module, block: entry, box: list, ids: ids)
+	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(head)))
+
+	// walk(node): a 0 link is the chain's end — `buildListClone`'s own stopping test.
+	let node = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
+	let chainEnd = emitConst(module, block: header, value: 0, ids: ids)
+	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	emitSoleBoxCall(module, block: body, box: node, ids: ids)
+	emitListElementSole(module, func: func, body: body, step: step, node: node, soleFn: soleFn, walksElements: walksElements, ids: ids)
+
+	let next = emitLoadField(module, block: step, record: node, offset: ListNextOffset, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildListSole'
+
+// One node's ELEMENT, proved sole or skipped. A TRIVIAL element owns nothing, so the trivial entry falls
+// straight to the advance. A MANAGED one is proved through the caller's `(box) -> void`, except where the
+// slot is the 0 `__list_remove_node` leaves behind — `emitListClonedElement`'s null rule, and
+// `callIndirect` on a null box is a fault either way.
+function emitListElementSole(module StdModule, func IrFunction, body IrBlock, step IrBlock, node ValueId, soleFn ValueId, walksElements bool, ids ValueMinter)
+	if not walksElements 'trivialElement'
+		module.setTerminator(body, op: StdOp.branch(step.id))
+		return
+	end 'trivialElement'
+
+	var visit = module.addBlock(func, label: b"solelem")
+
+	let value = emitLoadField(module, block: body, record: node, offset: ListValueOffset, ids: ids)
+	let absent = emitConst(module, block: body, value: 0, ids: ids)
+	let owns = emitCmp(module, block: body, a: value, b: absent, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(owns, thenBlockId: visit.id, elseBlockId: step.id))
+
+	// Both ABI masks are 0 for `emitListClonedElement`'s reason: a stamped element walk takes one
+	// whole-machine-word POINTER.
+	let visited = ids.mint()
+	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: soleFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(value)))
+	module.setTerminator(visit, op: StdOp.branch(step.id))
+end 'emitListElementSole'
 
 // `__list_decref(list)` — one fewer owner; at the last, let go of every node (each one destroying its own
 // element and freeing itself unless a handle still holds it), then free the record. The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner`.

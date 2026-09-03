@@ -785,7 +785,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// needed-cloner set over that nesting and declare its transitive `usesStrClone`/`usesManagedMemory`/`usesHeap` needs
 	// now — before `.data` layout reads `usesHeap` and `installStringRuntime` reads `usesStrClone` — exactly as
 	// `noteDestructorUsage` does for the drop cascades.
-	noteClonerUsage(usage, project: project, signatures: signatures)
+	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.clone)
+	// The SOLENESS walks are the third cascade over that same node space and close in the same window
+	// for the same reason: a `__sole_<T>` calls `__managed_sole`/`__list_sole`/nested `__sole_<T>` inside a
+	// synthesized body, and `installMmRuntime` reads `usesSoleWalk` for the refcount leaf they all reach.
+	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.soleWalk)
 	// A `<Enum>.fromName(name)` helper calls `__str_eq` per case tested and, for a boxed union, `__mm_alloc`s
 	// the record it returns — all inside a body synthesized after the pipeline, which the scan above cannot
 	// see. Declared here for the two installers' reason and in their window: before `.data` layout reads
@@ -1237,14 +1241,20 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The per-struct and per-union DEEP-CLONER cascades (P1.7 slice 3b-vi-b) — the clone twins of the destructor
 	// installers, appended already-lowered after the pipeline for the same reason. Only the cloners the module
 	// references (directly through a `funcAddr(__clone_<T>)` element-cloner stamp, or through a nested cascade
-	// `noteClonerUsage` closed the set over) are built (`usage.neededCloners`).
-	installUnionCloners(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners)
-	installStructCloners(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners)
+	// `noteCascadeUsage` closed the set over) are built (`usage.neededCloners`).
+	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners, action: CascadeAction.clone)
+	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners, action: CascadeAction.clone)
 	// The per-instance DEEP-CLONER cascade (W162) — the clone twin of `installGenericInstanceDestructors` above,
 	// installed beside the struct/union cloners for the same reason they sit beside their own destructors. It
 	// takes `project` (which the destructor twin does not) for one fact the instance registry cannot answer: the
 	// MM tag index a fresh box is allocated under lives in `project.globalData`.
-	installGenericInstanceCloners(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners)
+	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededCloners, action: CascadeAction.clone)
+	// The per-type SOLENESS WALKS — the third twin of the two families above, over the same node space
+	// and installed in the same band. Only the walks the module references (a transfer door's emitted call, or
+	// a nested cascade `noteCascadeUsage` closed the set over) are built (`usage.neededSoleWalks`).
+	installUnionCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks, action: CascadeAction.soleWalk)
+	installStructCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks, action: CascadeAction.soleWalk)
+	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks, action: CascadeAction.soleWalk)
 	// The `__fnref_` env-thunks for plain functions used as first-class values — collected before the pipeline
 	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
 	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).

@@ -135,10 +135,10 @@ end 'installManagedGlobalInit'
 // which `buildModuleInit`'s header already recorded); on demand it gives unbounded recursion instead, so it
 // needs an answer rather than a note.
 function buildLazyStaticInit(module MaxonModule, project Project, global ManagedGlobal)
-	// ⭐ **THE ONE SYNTHESIZED FUNCTION THAT RUNS USER CODE ON ITS CALLER'S STACK** — so it says so, and keeps
-	// the green-thread stack guard the rest of the compiler's scaffolding is exempt from. See
-	// `TargetPrinter.skipsGreenThreadStackGuard`, which the §6 review split out for exactly this frame.
-	var fn = SynthesizedFunction.open(module, project: project, name: global.lazyInitCallee(), returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create(), runsUserCodeOnItsCallersStack: true)
+	// The body is the user's factory call tree, so this frame's depth is the program's: it keeps the
+	// green-thread stack guard the rest of the compiler's scaffolding is exempt from. See
+	// `TargetPrinter.skipsGreenThreadStackGuard`.
+	var fn = SynthesizedFunction.open(module, project: project, name: global.lazyInitCallee(), returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create(), needsGreenThreadStackGuard: true)
 	let range = global.range
 
 	let entry = fn.currentBlock()
@@ -775,7 +775,7 @@ export type SynthesizedFunction
 	// Create the function, register it and its single `entry` block on `module`, and seed the value
 	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
 	// mints, exactly as `Parser.recordValueType` does for a parsed function's parameters.
-	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray, runsUserCodeOnItsCallersStack bool = false) returns SynthesizedFunction
+	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray, needsGreenThreadStackGuard bool = false) returns SynthesizedFunction
 		var valueTags = ValueTypeTagArray.create()
 		var valueNameIds = TypeNameIdArray.create()
 		var valueClosureEnv = ValueIdArray.create()
@@ -791,11 +791,10 @@ export type SynthesizedFunction
 		// `__maxon_global_cleanup` read as the compiler's own at `FunctionNameIndex.refuseDuplicateFunctionName`
 		// (so a `Builtins.maxon` declaration of one is E4015 against them, and a doubled install is a panic), at
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
-		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. ⚠ They were the ONLY two Maxon-tier
-		// functions the compiler built until spec-port `lazy-static` added one `__lazy_init#<label>` per lazy
-		// static — a POPULATION rather than a fixed pair, and the one that carries
-		// `runsUserCodeOnItsCallersStack`.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), runsUserCodeOnItsCallersStack: runsUserCodeOnItsCallersStack)
+		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. ⚠ The Maxon-tier population is
+		// `__module_init`, `__maxon_global_cleanup` and one `__lazy_init#<label>` per lazy static — the last of
+		// which is the one that carries `needsGreenThreadStackGuard`.
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: needsGreenThreadStackGuard)
 		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 

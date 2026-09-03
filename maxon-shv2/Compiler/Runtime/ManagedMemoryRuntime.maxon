@@ -357,6 +357,21 @@ export let ManagedSliceManagedName = b"__managed_slice_managed"
 export let ManagedCloneManagedName = b"__managed_clone_managed"
 export let ManagedAppendManagedName = b"__managed_append_managed"
 
+// ⭐⭐ **THE SOLENESS WALK OVER A CONTAINER RECORD** — the third answer beside `__managed_decref` and
+// `__managed_clone_managed`, and the one a String record takes too (it IS this record format). It proves the
+// record has one owner, DETACHES a shared copy-on-write buffer, and — the `_managed` entry — walks each live
+// element through the per-element walk the call site stamps (`funcAddr(__sole_<E>)`), exactly as the clone
+// pair passes an element cloner.
+//
+// ⭐ **A SHARED BUFFER IS DETACHED RATHER THAN REFUSED, AND THAT IS THE WHOLE DIFFERENCE BETWEEN THE TWO
+// THINGS A COUNT CAN MEAN HERE.** A shared RECORD is two owners of one box, which is what the language
+// forbids across green threads. A shared BUFFER is copy-on-write — `.clone()`/`.slice()` share bytes until a
+// write — and its allocation carries a plain refcount too, so leaving the two records on two green threads
+// would race that word. **A MOVE IS A WRITE-LIKE EVENT**, so the answer is the one a write already gives:
+// `__managed_cow_detach`, called rather than restated.
+export let ManagedSoleName = b"__managed_sole"
+export let ManagedSoleManagedName = b"__managed_sole_managed"
+
 // ⭐ **THE OPAQUE-`T` copy operations (P1.7 slice 3b-vi-b-β).** A `slice`/`append` on an `Array with <type
 // parameter>` field inside a GENERIC body serves both a MANAGED (`Container with String`) and a TRIVIAL
 // (`Container with SmallInt`) instantiation from ONE shared body, so the shared body cannot pick the trivial
@@ -375,7 +390,7 @@ export let ManagedAppendManagedName = b"__managed_append_managed"
 // opaque-element clone reaches the descriptor through `__managed_slice_opaque` like every other corpus copy —
 // and a second wrapper doing the same branch for a name nothing emits is emitted runtime no program can
 // call. `__managed_clone` and `__managed_clone_managed` both STAYED, because neither was ever the `Array` SURFACE's:
-// the first is what a managed-array FIELD's cloner calls (`SignatureIndex.managedFieldCloneStrategy`) and
+// the first is what a managed-array FIELD's cloner calls (`SignatureIndex.managedFieldCascadeStrategy`) and
 // the second is the deep-clone half that field cascade branches to.
 export let ManagedSliceOpaqueName = b"__managed_slice_opaque"
 export let ManagedAppendOpaqueName = b"__managed_append_opaque"
@@ -1128,6 +1143,14 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 		buildManagedSliceOpaque(module)
 		buildManagedAppendOpaque(module)
 	end 'opaqueCopy'
+	// The two SOLENESS walks — under their OWN bit, so a program that hands nothing to a green thread
+	// does not carry them. Both entries are installed together for the reason `buildManagedSole` states: they
+	// are one operation split only by whether the elements are managed, and a `String` field reaches the
+	// first while an `Array with <struct>` field reaches the second in the same program.
+	if usage.usesSoleWalk 'soleWalk'
+		buildManagedSole(module, name: ManagedSoleName, walksElements: false)
+		buildManagedSole(module, name: ManagedSoleManagedName, walksElements: true)
+	end 'soleWalk'
 	verifyThrowingAccessorsMatchPredicate(module)
 end 'installManagedMemoryRuntime'
 
@@ -4957,11 +4980,32 @@ end 'buildManagedDecref'
 // skips a null. `srcBase`/`destBase` are already offset to the first element of their respective windows.
 // Threads `cur` (sets its terminator) and returns the continuation block.
 function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, srcBase ValueId, destBase ValueId, count ValueId, elementSize ValueId, cloneFn ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"clnh")
-	var body = module.addBlock(func, label: b"clnb")
-	var doClone = module.addBlock(func, label: b"clndo")
-	var step = module.addBlock(func, label: b"clnstep")
-	let done = module.addBlock(func, label: b"clndone")
+	var visit = module.addBlock(func, label: b"clndo")
+	let loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, labels: elementRangeLabels(CascadeAction.clone), ids: ids)
+
+	let cloned = ids.mint()
+	// Both ABI masks are 0 for the reason `emitElementDestructorCall`'s are: a stamped `copyFunc@32` is a
+	// `(box) -> newBox`, so its one argument is a whole-machine-word POINTER — never a float, never sub-word.
+	module.appendOp(visit, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(loop.element)))
+	let destSlot = emitSlotAddr(module, block: visit, buffer: destBase, index: loop.index, elementSize: elementSize, ids: ids)
+	module.appendOp(visit, op: StdOp.storeIndirect(destSlot, offset: 0, valueId: cloned, valueType: StdType.i64))
+
+	return loop.done
+end 'emitElementCloneRange'
+
+// ⭐⭐ **THE PER-ELEMENT LOOP EVERY CONTAINER-RECORD WALK EMITS — ONE SKELETON FOR EVERY ACTION.** Walk
+// `[0, count)` over `base` (stride `elementSize`, always 8 for a managed element — a heap pointer), load each
+// slot, and hand the caller back the `visit` block a NON-NULL element reaches, that element, its index, and
+// the continuation. A NULL slot is SKIPPED: a moved-out or resize-created empty owns nothing, and
+// `callIndirect` on a null box is a fault. Threads `cur` (sets its terminator).
+//
+// The bounds test, the null rule and the advance are what must not diverge — a second copy of them is free to
+// visit a different set of slots, which on the soleness side is one element of a moved graph left unproved.
+function emitElementRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, visit IrBlock, labels ElementRangeLabels, ids ValueMinter) returns ElementRangeLoop
+	var header = module.addBlock(func, label: labels.header)
+	var body = module.addBlock(func, label: labels.body)
+	var step = module.addBlock(func, label: labels.step)
+	let done = module.addBlock(func, label: labels.done)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	module.setTerminator(cur, op: StdOp.branch(header.id))
@@ -4972,28 +5016,56 @@ function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, s
 	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
-	let srcSlot = emitSlotAddr(module, block: body, buffer: srcBase, index: i, elementSize: elementSize, ids: ids)
+	let slot = emitSlotAddr(module, block: body, buffer: base, index: i, elementSize: elementSize, ids: ids)
 	let elem = ids.mint()
-	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: srcSlot, offset: 0, valueType: StdType.i64))
+	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: slot, offset: 0, valueType: StdType.i64))
 	let zeroElem = emitConst(module, block: body, value: 0, ids: ids)
 	let nonNull = emitCmp(module, block: body, a: elem, b: zeroElem, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: doClone.id, elseBlockId: step.id))
+	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: visit.id, elseBlockId: step.id))
 
-	let cloned = ids.mint()
-	// Both ABI masks are 0 for the reason `emitElementDestructorCall`'s are: a stamped `copyFunc@32` is a
-	// `(box) -> newBox`, so its one argument is a whole-machine-word POINTER — never a float, never sub-word.
-	module.appendOp(doClone, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(elem)))
-	let destSlot = emitSlotAddr(module, block: doClone, buffer: destBase, index: i, elementSize: elementSize, ids: ids)
-	module.appendOp(doClone, op: StdOp.storeIndirect(destSlot, offset: 0, valueId: cloned, valueType: StdType.i64))
-	module.setTerminator(doClone, op: StdOp.branch(step.id))
+	module.setTerminator(visit, op: StdOp.branch(step.id))
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(step, op: StdOp.branch(header.id))
 	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
 
-	return done
-end 'emitElementCloneRange'
+	return ElementRangeLoop.create(elem, index: i, done: done)
+end 'emitElementRange'
+
+// What the skeleton hands back: the live element the caller's `visit` block is reached with, its index, and
+// the block the loop leaves through. A record rather than three out-parameters, so a caller cannot spend one
+// loop's element against another loop's index.
+type ElementRangeLoop
+	export let element as ValueId
+	export let index as ValueId
+	export let done as IrBlock
+
+	static function create(element ValueId, index ValueId, done IrBlock) returns ElementRangeLoop
+		return Self{element: element, index: index, done: done}
+	end 'create'
+end 'ElementRangeLoop'
+
+// The four skeleton block names one action's loop wears (the caller names its own `visit`). They exist for an
+// IR dump and nothing else: a `__`-prefixed runtime body is not printed into a spec golden, so a program that
+// both clones and moves is where the two name sets earn their keep.
+type ElementRangeLabels
+	export let header as ByteArray
+	export let body as ByteArray
+	export let step as ByteArray
+	export let done as ByteArray
+
+	static function create(header ByteArray, body ByteArray, step ByteArray, done ByteArray) returns ElementRangeLabels
+		return Self{header: header, body: body, step: step, done: done}
+	end 'create'
+end 'ElementRangeLabels'
+
+function elementRangeLabels(action CascadeAction) returns ElementRangeLabels
+	return match action 'action'
+		clone gives ElementRangeLabels.create(b"clnh", body: b"clnb", step: b"clnstep", done: b"clndone")
+		soleWalk gives ElementRangeLabels.create(b"solh", body: b"solb", step: b"solstep", done: b"soldone")
+	end 'action'
+end 'elementRangeLabels'
 
 // `__managed_clone_managed(arr, cloneFn) -> newArr` — a deep, independent copy of a MANAGED-element array. A fresh
 // `__managed_create` record carrying the SAME `element_size@24`/`element_destroy@40` as the source (so the clone
@@ -5026,6 +5098,73 @@ function buildManagedCloneManaged(module StdModule)
 
 	module.functions.push(func)
 end 'buildManagedCloneManaged'
+
+// ⭐⭐ **`__managed_sole(arr)` / `__managed_sole_managed(arr, soleFn)` — PROVE A CONTAINER RECORD
+// MOVEABLE.** Both entries in one builder for `buildListClone`'s reason: the immortal test, the refcount
+// proof and the buffer detach are ONE answer, and the element walk is the only thing the two differ by.
+//
+// ⚠ **THE IMMORTAL TEST COMES FIRST, EXACTLY AS `__managed_decref`'s DOES.** An `ImmortalRecordCapacity`
+// record is a String literal's: its header is image data with no count anyone maintains, and its buffer is
+// `.rdata` a detach would pointlessly copy out. Nothing can co-own it either, so it is already moveable.
+//
+// ⚠ **A MANAGED-ELEMENT ARRAY'S OWN BUFFER IS NEVER SHARED TODAY** — `.clone()`/`.slice()` on one deep-copy
+// through the `_managed` entries rather than viewing — so the detach is a no-op there. It is called anyway
+// because "a move is a write" is a rule about the RECORD FORMAT, not about which elements it happens to
+// hold, and a second element-bearing view shape would otherwise need this same line added back.
+function buildManagedSole(module StdModule, name ByteArray, walksElements bool)
+	var paramTypes = oneI64Param()
+	if walksElements 'perElementWalk'
+		paramTypes.push(StdType.i64)
+	end 'perElementWalk'
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
+	// ⚠ BOTH entries reserve two parameter id slots, so `soleFn` is either parameter 1 or nothing at all —
+	// `buildListClone`'s rule, and it is what keeps the name from denoting a temporary in the other entry.
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var countable = module.addBlock(func, label: b"countable")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: paramTypes.count())
+	let arr = 0 as ValueId
+	let soleFn = 1 as ValueId
+
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: arr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: done.id, elseBlockId: countable.id))
+
+	emitSoleBoxCall(module, block: countable, box: arr, ids: ids)
+	emitCowDetach(module, block: countable, arr: arr, ids: ids)
+
+	if walksElements 'eachElement'
+		// Read AFTER the detach: it replaces `buffer@0`, so a pointer taken above it would walk the
+		// abandoned allocation.
+		let buffer = emitLoadField(module, block: countable, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+		let length = emitLoadField(module, block: countable, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+		let es = emitLoadField(module, block: countable, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+		let afterWalk = emitElementSoleRange(module, func: func, cur: countable, base: buffer, count: length, elementSize: es, soleFn: soleFn, ids: ids)
+		module.setTerminator(afterWalk, op: StdOp.branch(done.id))
+	end 'eachElement' else 'noElementWalk'
+		module.setTerminator(countable, op: StdOp.branch(done.id))
+	end 'noElementWalk'
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedSole'
+
+// Prove each live element sole through the caller's `(box) -> void` `soleFn`, over the same per-element
+// skeleton `emitElementCloneRange` copies through. Threads `cur` and returns the continuation block.
+function emitElementSoleRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, soleFn ValueId, ids ValueMinter) returns IrBlock
+	var visit = module.addBlock(func, label: b"soldo")
+	let loop = emitElementRange(module, func: func, cur: cur, base: base, count: count, elementSize: elementSize, visit: visit, labels: elementRangeLabels(CascadeAction.soleWalk), ids: ids)
+
+	// Both ABI masks are 0 for `emitElementDestructorCall`'s reason: a stamped element walk is a
+	// `(box) -> void` whose one argument is a whole-machine-word POINTER.
+	let visited = ids.mint()
+	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: soleFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(loop.element)))
+
+	return loop.done
+end 'emitElementSoleRange'
 
 // `__managed_slice_managed(arr, start, end, cloneFn) -> (newArr, flag)` — the throwing managed slice: the SAME
 // bounds check as `__managed_slice` (out of bounds / inverted range / negative index → `ArrayError`), then a fresh

@@ -369,13 +369,32 @@ let PlainDestructorBoxParam = 0 as ValueId
 // `(box) -> newBox` DUAL of `__destruct_<TypeName>`. `__`-prefixed, so `isCompilerInternalCallee` routes its
 // call/`funcAddr` past the user-function checks and no file declares it. ONE speller, so the STAMP site
 // (`Parser.arrayElementCloneValue` / the struct/union field cascade), the USAGE scan (`recordCallUsage`) and
-// the SYNTHESIS (`installStructCloners`/`installUnionCloners`) name it identically and cannot drift — exactly as
+// the SYNTHESIS (`installStructCascades`/`installUnionCascades`) name it identically and cannot drift — exactly as
 // `DestructorPrefix`/`destructorSymbol` pair for the drop family.
 export let ClonerPrefix = b"__clone_"
 
 export function clonerSymbol(typeName ByteArray) returns ByteArray
 	return "{String.from(ClonerPrefix)}{String.from(typeName)}".toByteArray()
 end 'clonerSymbol'
+
+// ⭐⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED SOLENESS WALK — `__sole_<TypeName>`**, the THIRD
+// per-type cascade beside the drop and the clone. Its `(box) -> void` body proves at run time what no
+// compile-time tier can: that every refcounted record reachable from `box` has exactly one owner, so the
+// whole graph may MOVE to another green thread. A shared record aborts
+// (`RuntimeAbort.transferredRecordNotSole`); a shared copy-on-write BUFFER is detached, because a move is a
+// write-like event. `__`-prefixed for `ClonerPrefix`'s reason, and one speller for the same three parties.
+export let SoleWalkPrefix = b"__sole_"
+
+export function soleWalkSymbol(typeName ByteArray) returns ByteArray
+	return "{String.from(SoleWalkPrefix)}{String.from(typeName)}".toByteArray()
+end 'soleWalkSymbol'
+
+// ⭐ **`__mm_sole_box(box)` — THE REFCOUNT HALF OF EVERY SOLENESS WALK, ASKED ONCE.** Every `__sole_<T>`
+// opens with it, `__managed_sole` reaches it past the immortal test, and a SERVICE HANDLE box — which has
+// no synthesized per-type walk of its own — is nothing but it. It is an `__mm_` operation because the
+// question is about a header the rest of this file owns; putting the compare in each synthesized body
+// instead would be the header geometry spelled once per type.
+export let MmSoleBoxName = b"__mm_sole_box"
 
 // The prefix every HEAP runtime entry point shares — the single test for "does this program touch the
 // heap at all?", which `StringRuntime.scanRuntimeUsage` reads for its `usesHeap` bit.
@@ -628,6 +647,12 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesMmIsNull 'isNull'
 		buildMmIsNull(module)
 	end 'isNull'
+
+	// The soleness walk's refcount leaf, under the bit every producer of a walk turns on — a program that
+	// crosses nothing to a green thread must not carry it.
+	if usage.usesSoleWalk 'soleBox'
+		buildMmSoleBox(module)
+	end 'soleBox'
 
 	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__managed_cow_detach`, under
 	// `usesManagedMemory` — so that a program reaching no array does not carry it dead. It is still built HERE
@@ -1736,6 +1761,50 @@ function buildMmRetain(module StdModule)
 	module.functions.push(func)
 end 'buildMmRetain'
 
+// ⭐⭐ **`__mm_sole_box(box)` — PROVE THIS BOX HAS ONE OWNER, OR ABORT.** The leaf of the soleness walk:
+// `emitIsSharedAllocation` owns what the count means (`owners - 1`, so sole is 0), so this reads literally
+// as *"is anyone else holding it?"* and takes the only answer available at this point — the value is past
+// every compile-time gate and about to be handed to a second green thread, where a plain refcount has no
+// second party to lose a race to.
+//
+// ⚠ **IT MUST NOT BE HANDED AN IMMORTAL RECORD.** A `.rdata` literal's header is image data whose count
+// word nothing maintains; `__managed_sole` asks `emitRecordIsImmortal` FIRST and returns, exactly as
+// `__managed_decref` does. Every other caller reaches it with an `__mm_alloc` box.
+function buildMmSoleBox(module StdModule)
+	var func = IrFunction.createFromStd(MmSoleBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var shared = module.addBlock(func, label: b"shared")
+	let sole = module.addBlock(func, label: b"sole")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	let hasSecondOwner = emitIsSharedAllocation(module, block: entry, ptr: box, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(hasSecondOwner, thenBlockId: shared.id, elseBlockId: sole.id))
+
+	emitRuntimeAbort(module, func: func, block: shared, abort: RuntimeAbort.transferredRecordNotSole, ids: ids)
+
+	module.setTerminator(sole, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMmSoleBox'
+
+// Call `__mm_sole_box(box)` — the refcount proof every soleness walk owes for each box it reaches. The one
+// place that name is spelled at an emit site, so the leaf and the bit `recordCallUsage` takes off it cannot
+// come apart.
+export function emitSoleBoxCall(module StdModule, block IrBlock, box ValueId, ids ValueMinter)
+	emitVoidBoxCall(module, block: block, box: box, callee: MmSoleBoxName, ids: ids)
+end 'emitSoleBoxCall'
+
+// Call a `(box) -> void` cascade entry. The callee returns nothing, so the minted result is unread; it exists
+// because a `call` op always defines a value.
+function emitVoidBoxCall(module StdModule, block IrBlock, box ValueId, callee ByteArray, ids ValueMinter)
+	let proved = ids.mint()
+	module.appendOp(block, op: StdOp.call(proved, callee: callee, args: argsOf(box)))
+end 'emitVoidBoxCall'
+
 // The refcount word of the box `ptr` addresses — `[ptr - HeaderBytes + HeaderRefcountOffset]`. ONE of the
 // two places the header geometry is spelled (the other is `emitAdjustRefcount`, which reaches the same word
 // through this function's own `emitHeaderBase` and needs the base itself because it also STORES), so
@@ -2421,6 +2490,7 @@ export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, 
 	let heapBefore = usage.usesHeap
 	let destructorsBefore = usage.neededDestructors.count()
 	let clonersBefore = usage.neededCloners.count()
+	let soleWalksBefore = usage.neededSoleWalks.count()
 	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
 		recordCallUsage(reloc.funcName, usage: usage)
 	end 'eachRdataSlot'
@@ -2438,8 +2508,15 @@ export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, 
 	end 'newDropCascades'
 
 	if usage.neededCloners.count() > clonersBefore 'newCloneCascades'
-		noteClonerUsage(usage, project: project, signatures: signatures)
+		noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.clone)
 	end 'newCloneCascades'
+
+	// The soleness walks' twin of the arm above. A `.rdata` slot cannot name one today — the transfer doors
+	// emit a direct call and a `funcAddr` element stamp, both of which the module scan sees — but the
+	// re-entry is what keeps that a property of today's producers rather than of this walk.
+	if usage.neededSoleWalks.count() > soleWalksBefore 'newSoleCascades'
+		noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.soleWalk)
+	end 'newSoleCascades'
 
 	// ⚠ **CHECKED LAST, BECAUSE THE TWO CLOSURES ABOVE ALSO SET THE BIT** — a referenced struct destructor
 	// and a referenced cloner each declare the heap. Checking it against the reloc loop alone would leave
@@ -2455,8 +2532,8 @@ end 'noteRelocatedFunctionUsage'
 // nowhere the module scan can see. So `Box with (Box with String)`, reached only through the outer cascade,
 // still gets the inner instance destructor synthesized.
 //
-// ⭐ Driven by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the CLONE
-// dual (`noteClonerUsage`, in this file). Both used to be a `while changed` RE-SCAN of every declared type,
+// ⭐ Driven by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the two
+// non-drop cascades (`noteCascadeUsage`, in this file). A closure per action is a `while changed` RE-SCAN of every declared type,
 // which is one quadratic written down twice: a cascade chain of depth D cost D passes over all T types and
 // re-minted every type's `__destruct_` symbol on each. Registration walks the node space ONCE, the drain
 // expands each referenced node exactly once, and the loop no longer needs a growth flag at all — the queue
@@ -2466,8 +2543,8 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	// seed set can only stay empty — nothing derives a nested destructor from no destructor. Early-out then,
 	// so registering the node space (a `destructorSymbol` per declared type and a `mangleGenericInstance` per
 	// instance) is paid only by a program that actually drops something. This is the same early-out, for the
-	// same reason, that the CLONE dual `noteClonerUsage` has always had; the drop side simply never had it,
-	// and so re-minted every type's symbol twice on every compile that dropped nothing at all.
+	// same reason, that the non-drop dual `noteCascadeUsage` opens with: without it every type's symbol is
+	// re-minted twice on a compile that drops nothing at all.
 	if usage.neededDestructors.count() == 0 'noDestructors'
 		return
 	end 'noDestructors'
@@ -2669,7 +2746,7 @@ end 'insertIfDestructorSymbol'
 // A void `(i64) -> void` signature — the X64 backend discards nothing, and there is no `call_indirect`
 // type tag to satisfy (static dispatch), so it needs no `i64` return the way v1's header destructor did.
 function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	let func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -2763,6 +2840,9 @@ union StructRuntimeEntryKind
 	// bare type parameter, which is the one slot `structHasManagedField` cannot see. Its instance twin is
 	// `installGenericInstanceDictionaryDestructors`.
 	dictionaryDestructor
+	// `__sole_<Struct>` — admitted for every referenced layout, managed fields or not: a scalar-only
+	// box still has an owner count to prove, which is exactly what a cross to another green thread needs.
+	soleWalk
 	// `__clone_<Struct>` — admitted for any referenced layout, managed fields or not.
 	cloner
 end 'StructRuntimeEntryKind'
@@ -2775,7 +2855,7 @@ end 'StructRuntimeEntryKind'
 // layouts, or a fourth rule about which of the two wins, is now ONE edit; when it was two, the second copy
 // did not exist for four months and the tell was `bakeFuncAbs64Relocs: … it was never installed`, a BACKEND
 // PANIC rather than a diagnostic.** What stays per-entry is the ADMISSION TEST, which is genuinely different
-// (`installOneStructDestructor` gates on a managed field, `installOneStructCloner` deliberately does not).
+// (`installOneStructDestructor` gates on a managed field, `installOneStructCascade` deliberately does not).
 //
 // ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED ONE
 // (W41).** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
@@ -2787,7 +2867,7 @@ end 'StructRuntimeEntryKind'
 // the compile stops at `resolveCallFixups: call to unknown function '__destruct___Tuple2.String.int'`.** A
 // plain `function pair() returns (String, Num)` in the same tree compiles and runs, which is what
 // localizes it to the substituted mint rather than to tuples. The clone side's own measurement of the same
-// hole is on `installStructCloners`.
+// hole is on `installStructCascades`.
 //
 // ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED, AND LETTING THIS WALK OWN ALL TUPLES
 // INSTEAD WAS A MEASURED REGRESSION (22 failures against 14).** The two registries are NOT two views of
@@ -2822,13 +2902,15 @@ function installStructRuntimeEntries(module StdModule, project Project, signatur
 	end 'eachInternedTuple'
 end 'installStructRuntimeEntries'
 
-// The one layout, under whichever entry the walk is installing. The two arms below are the ONLY place the
-// drop side and the clone side part company, which is the property the shared walk exists to make visible.
+// The one layout, under whichever entry the walk is installing. The arms below are the ONLY place the drop
+// side and the two non-drop cascades part company, which is the property the shared walk exists to make
+// visible.
 function installOneStructRuntimeEntry(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
 	match kind 'entry'
 		destructor then installOneStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed)
 		dictionaryDestructor then installOneStructDictionaryDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed)
-		cloner then installOneStructCloner(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed)
+		cloner then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed, action: CascadeAction.clone)
+		soleWalk then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed, action: CascadeAction.soleWalk)
 	end 'entry'
 end 'installOneStructRuntimeEntry'
 
@@ -3145,7 +3227,7 @@ typealias ManagedFieldDropArray = Array with ManagedFieldDrop
 // skeleton the union cascade uses too, minus the tag switch — hence the shared `emitNullGuardedDrop`.
 function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drops ManagedFieldDropArray, takesDescriptor bool = false)
 	let paramCount = DictionaryDestructorParamCount if takesDescriptor else PlainDestructorParamCount
-	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), returnLine: 0)
+	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -3281,55 +3363,56 @@ end 'emitDictionaryFieldDrop'
 // `WithIterIterator_*` the `String` cone puts in every registry). `noteRelocatedFunctionUsage` reads
 // the stamps themselves and now re-enters THIS closure when they grow `neededCloners`, so the measured set
 // replaces the predicted one on both sides at once. See `noteDestructorUsage` above for the measurement.
-export function noteClonerUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
-	// The overwhelmingly common program (and the entire generic/managed-free scale corpus) references no cloner,
-	// so its `neededCloners` is empty and can only STAY empty (nothing seeds a nested need). Early-out then, so
-	// the per-type `clonerSymbol` allocations of the registration below are paid only by a program that deep-clones
-	// — a managed-copy-gated cost, not a per-compile one on every struct/enum in the program.
-	if usage.neededCloners.count() == 0 'noCloners'
+export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures, action CascadeAction)
+	// The overwhelmingly common program (and the entire generic/managed-free scale corpus) references neither
+	// cascade, so the set is empty and can only STAY empty (nothing seeds a nested need). Early-out then, so
+	// the per-type symbol allocations of the registration below are paid only by a program that actually
+	// deep-clones or actually hands a graph to a green thread.
+	if cascadeNeededSet(usage, action: action).count() == 0 'noneReferenced'
 		return
-	end 'noCloners'
+	end 'noneReferenced'
 
 	// ⭐ Closed by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the DROP
-	// dual (`closeDestructorNeeds` above). Both used to be a `while changed` RE-SCAN of every declared type,
-	// which is one quadratic written down twice: a cloner chain of depth D cost D passes over all T types and
-	// re-minted every type's `__clone_` symbol on each. Each referenced node is now expanded exactly once.
+	// dual (`closeDestructorNeeds` above), so each referenced node is expanded exactly once. A `while changed`
+	// re-scan of every declared type instead would cost D passes over all T types for a cascade chain of depth
+	// D, and re-mint every type's symbol on each — one quadratic per action.
 	//
-	// ⭐ The node space is the DROP side's exactly (W162): a generic instance now has a `__clone_<mangled>`
-	// beside its `__destruct_<mangled>`, so the drain's instance arm is reachable here and the two closures
-	// register one node space rather than two. It USED to register none, because a non-`Array` instance was
-	// rejected as uncopyable by `genericTypeFieldUncopyableInstantiation` and the arm could only panic.
+	// ⭐ The node space is the DROP side's exactly (W162): a generic instance has a `__clone_<mangled>` beside
+	// its `__destruct_<mangled>`, so the drain's instance arm is reachable here and the closures register one
+	// node space rather than one apiece.
 	var work = CascadeWorklist.create()
 
 	for (_, layout) in project.structTypes 'eachStruct'
-		work.register(clonerSymbol(layout.name), node: CascadeNode.declaredStruct(layout))
+		work.register(perTypeCascadeSymbol(action, typeName: layout.name), node: CascadeNode.declaredStruct(layout))
 	end 'eachStruct'
 
 	for (_, layout) in project.enumTypes 'eachUnion'
-		work.register(clonerSymbol(layout.name), node: CascadeNode.declaredUnion(layout))
+		work.register(perTypeCascadeSymbol(action, typeName: layout.name), node: CascadeNode.declaredUnion(layout))
 	end 'eachUnion'
 
 	// ⚠ The instance node space is registered under the SAME symbol-key discipline the drop side states at
 	// `closeDestructorNeeds` — a declaration and an instance cannot mint one symbol (P1.7's `reservedIfDeclared`),
 	// and two instances that do are E3006 and fail the build before this runs.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		work.register(clonerSymbol(signatures.mangleGenericInstance(id)), node: CascadeNode.genericInstance(id))
+		work.register(perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id)), node: CascadeNode.genericInstance(id))
 	end 'eachInstance'
 
-	work.seed(usage.neededCloners)
+	work.seed(cascadeNeededSet(usage, action: action))
 
 	// Every cloner ALLOCATES a fresh box, so one referenced cloner anywhere means the program touches the
-	// heap — a fact about the queue being non-empty, not about any single node in it.
-	if work.hasPending() 'anyClonerReferenced'
+	// heap — a fact about the queue being non-empty, not about any single node in it. A SOLENESS walk
+	// allocates nothing and declares nothing here; the one entry it needs is `__mm_sole_box`, whose bit
+	// `recordCallUsage` takes off the call itself.
+	if action == CascadeAction.clone and work.hasPending() 'anyClonerReferenced'
 		usage.usesHeap = true
 	end 'anyClonerReferenced'
 
 	while work.hasPending() 'drain'
 		let node = work.take()
 		match node 'node'
-			declaredStruct(layout) then noteStructClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
-			declaredUnion(layout) then noteUnionClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
-			genericInstance(id) then noteInstanceClonerNeeds(usage, id: id, signatures: signatures, work: work)
+			declaredStruct(layout) then noteStructCascadeNeeds(usage, layout: layout, project: project, signatures: signatures, work: work, action: action)
+			declaredUnion(layout) then noteUnionCascadeNeeds(usage, layout: layout, project: project, signatures: signatures, work: work, action: action)
+			genericInstance(id) then noteInstanceCascadeNeeds(usage, id: id, signatures: signatures, work: work, action: action)
 			// ⭐ A DICTIONARY node names a drop cascade and no cloner at all (BATCH41, and W183 for the
 			// declared-record twin), so the clone closure has nothing to expand through either of them. They
 			// are registered by the shared node space rather than by either driver, so these arms are where
@@ -3347,27 +3430,49 @@ export function noteClonerUsage(usage RuntimeUsage, project Project, signatures 
 			genericInstanceDictionary then continue
 		end 'node'
 	end 'drain'
-end 'noteClonerUsage'
+end 'noteCascadeUsage'
 
-// ⭐ The GENERIC-INSTANCE twin of `noteStructClonerNeeds` (W162) — over each SUBSTITUTED managed field, and
+// The needed-SYMBOL set `action` grows and this closure reads. READ-ONLY here: the insert is
+// `recordCallUsage`'s, which routes a callee to its own family's set by prefix, so this selector cannot
+// become a second place a symbol is filed.
+function cascadeNeededSet(usage RuntimeUsage, action CascadeAction) returns CascadeSymbolSet
+	// An `if` rather than a `match` expression: the two fields wear DIFFERENT typealiases over the one
+	// `Set with ByteArray`, which a match expression reconciles by name and refuses.
+	if action == CascadeAction.clone 'theCloneSet'
+		return usage.neededCloners
+	end 'theCloneSet'
+
+	return usage.neededSoleWalks
+end 'cascadeNeededSet'
+
+// The symbol prefix `action`'s per-type entries wear — what tells a NESTED cascade callee apart from a leaf
+// (`__str_clone`, `__managed_sole`), which names no node in this graph.
+function cascadeSymbolPrefix(action CascadeAction) returns ByteArray
+	return match action 'action'
+		clone gives ClonerPrefix
+		soleWalk gives SoleWalkPrefix
+	end 'action'
+end 'cascadeSymbolPrefix'
+
+// ⭐ The GENERIC-INSTANCE twin of `noteStructCascadeNeeds` (W162) — over each SUBSTITUTED managed field, and
 // the exact clone dual of `addNestedInstanceDestructors`. It needs no `project`: every fact about an instance
 // is answered inside `signatures`, over `signatures`' own interner.
 //
 // ⚠ The no-layout early-out is this walk's precondition, exactly as it is the drop twin's: a node is expanded
 // as soon as its SYMBOL is needed, and the field walk reads a base struct a layout-less instance does not have.
-// Nothing is lost by returning — `instanceCloneStrategy` refuses such an instance at the same tier, so no
+// Nothing is lost by returning — `instanceCascadeStrategy` refuses such an instance at the same tier, so no
 // referenced `__clone_<mangled>` can name one. ⭐ The ONE exception is the arm below it: the two
 // element-bearing records are layout-less and DO have a cloner, so they are taken before that early-out
 // rather than exempted from it.
-function noteInstanceClonerNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
+function noteInstanceCascadeNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist, action CascadeAction)
 	// ⭐ **A MANAGED-ELEMENT RECORD'S `__clone_<mangled>` IS THE ONE-ARGUMENT THUNK (G18), NOT A FIELD CASCADE.**
 	// It has no field list to walk — it has no base layout at all — and its whole body is the container's own
 	// 2-argument per-element copy, so its needs are exactly that FIELD-position strategy's: the container entry
 	// (`__managed_clone_managed` / `__list_clone_managed`) and the ELEMENT's own cloner, which may itself be
-	// another thunk one level down. Rooted through the shared `noteFieldCloneNeeds` so the closure and
+	// another thunk one level down. Rooted through the shared `noteFieldCascadeNeeds` so the closure and
 	// `synthesizeElementRecordCloner` read one strategy.
 	if signatures.isManagedElementRecordInstance(id) 'theOneArgumentThunk'
-		noteFieldCloneNeeds(usage, strategy: signatures.elementRecordFieldCopyStrategy(id), work: work)
+		noteFieldCascadeNeeds(usage, strategy: signatures.elementRecordFieldCascadeStrategy(id, action: action), work: work, action: action)
 		return
 	end 'theOneArgumentThunk'
 	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
@@ -3378,52 +3483,52 @@ function noteInstanceClonerNeeds(usage RuntimeUsage, id GenericInstanceId, signa
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
-		noteFieldCloneNeeds(usage, strategy: signatures.genericInstanceFieldCloneStrategy(id, index: i), work: work)
+		noteFieldCascadeNeeds(usage, strategy: signatures.genericInstanceFieldCascadeStrategy(id, index: i, action: action), work: work, action: action)
 	end 'eachField'
-end 'noteInstanceClonerNeeds'
+end 'noteInstanceCascadeNeeds'
 
 // Turn on the transitive bits (and grow `neededCloners`) for every managed field of struct `layout`'s cloner,
 // queueing each newly-needed cloner on `work` so its OWN nesting is closed in turn.
-function noteStructClonerNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
+function noteStructCascadeNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures, work CascadeWorklist, action CascadeAction)
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
-		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructClonerNeeds: fieldTypes.get OOB at {i}")
-		noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType, asElement: false), work: work)
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructCascadeNeeds: fieldTypes.get OOB at {i}")
+		noteFieldCascadeNeeds(usage, strategy: managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType, asElement: false, action: action), work: work, action: action)
 	end 'eachField'
-end 'noteStructClonerNeeds'
+end 'noteStructCascadeNeeds'
 
-// The union twin of `noteStructClonerNeeds` — over each managed payload of each case.
-function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
+// The union twin of `noteStructCascadeNeeds` — over each managed payload of each case.
+function noteUnionCascadeNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist, action CascadeAction)
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		let payloads = layout.payloadsAt(ci)
 		for fi in 0 upto payloads.count() 'eachField'
-			let field = try payloads.get(fi) otherwise panic("noteUnionClonerNeeds: payloadsAt count disagrees with get at {fi}")
+			let field = try payloads.get(fi) otherwise panic("noteUnionCascadeNeeds: payloadsAt count disagrees with get at {fi}")
 			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 				continue
 			end 'scalar'
-			noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false), work: work)
+			noteFieldCascadeNeeds(usage, strategy: managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action), work: work, action: action)
 		end 'eachField'
 	end 'eachCase'
-end 'noteUnionClonerNeeds'
+end 'noteUnionCascadeNeeds'
 
 // Turn on the bits a managed field's clone STRATEGY needs, inserting a nested cloner into `neededCloners`.
-function noteFieldCloneNeeds(usage RuntimeUsage, strategy ManagedCloneStrategy, work CascadeWorklist)
+function noteFieldCascadeNeeds(usage RuntimeUsage, strategy ManagedCascadeStrategy, work CascadeWorklist, action CascadeAction)
 	match strategy 'strategy'
-		direct(callee) then noteCloneCalleeNeeds(usage, callee: callee, work: work)
-		managedElements(containerClone, elementClone) then noteManagedElementsFieldNeeds(usage, containerClone: containerClone, elementClone: elementClone, work: work)
-		unsupported then panic("noteFieldCloneNeeds: an unsupported managed field strategy reached the cloner-needs closure — arrayElementSupportsDeepClone gates the front end")
+		direct(callee) then noteCascadeCalleeNeeds(usage, callee: callee, work: work, action: action)
+		managedElements(containerEntry, elementEntry) then noteManagedElementsFieldNeeds(usage, containerEntry: containerEntry, elementEntry: elementEntry, work: work, action: action)
+		unsupported then panic("noteFieldCascadeNeeds: an unsupported managed field strategy reached a cascade-needs closure — arrayElementSupportsDeepClone gates the front end for both actions, because the strategy's `unsupported` arms are action-independent")
 	end 'strategy'
-end 'noteFieldCloneNeeds'
+end 'noteFieldCascadeNeeds'
 
 // A managed-element CONTAINER field clones through `containerClone(field, funcAddr(elementClone))` — route BOTH
 // callees the synthesized cloner body will emit through the ONE usage map, so their bits are exactly a direct
 // scan of those calls (no second spelling of "__managed_clone_managed → usesManagedElementCopy", and none of
 // "__list_clone_managed → usesList" either — W173).
-function noteManagedElementsFieldNeeds(usage RuntimeUsage, containerClone ByteArray, elementClone ByteArray, work CascadeWorklist)
-	recordCallUsage(containerClone, usage: usage)
-	noteCloneCalleeNeeds(usage, callee: elementClone, work: work)
+function noteManagedElementsFieldNeeds(usage RuntimeUsage, containerEntry ByteArray, elementEntry ByteArray, work CascadeWorklist, action CascadeAction)
+	recordCallUsage(containerEntry, usage: usage)
+	noteCascadeCalleeNeeds(usage, callee: elementEntry, work: work, action: action)
 end 'noteManagedElementsFieldNeeds'
 
 // A single `(box) -> newBox` clone callee the synthesized cloner will CALL: its usage bits are exactly what a
@@ -3432,24 +3537,25 @@ end 'noteManagedElementsFieldNeeds'
 // `__clone_<T>` that is NEWLY joined to `neededCloners` is announced to `work`, which queues the declaration
 // that symbol names; announcing exactly on the newly-added edge is what makes the closure O(types + fields).
 // The leaf callees (`__str_clone`, `__managed_clone`) name no cascade node and announce nothing.
-function noteCloneCalleeNeeds(usage RuntimeUsage, callee ByteArray, work CascadeWorklist)
-	let grew = bytesStartWith(callee, prefix: ClonerPrefix) and not usage.neededCloners.contains(callee)
+function noteCascadeCalleeNeeds(usage RuntimeUsage, callee ByteArray, work CascadeWorklist, action CascadeAction)
+	let grew = bytesStartWith(callee, prefix: cascadeSymbolPrefix(action)) and not cascadeNeededSet(usage, action: action).contains(callee)
 	recordCallUsage(callee, usage: usage)
 
 	if grew 'newlyNeeded'
 		work.discovered(callee)
 	end 'newlyNeeded'
-end 'noteCloneCalleeNeeds'
+end 'noteCascadeCalleeNeeds'
 
-// ⭐ **THE PER-STRUCT DEEP-CLONER INSTALLER (P1.7 slice 3b-vi-b)** — the clone twin of `installStructDestructors`.
-// Synthesize `__clone_<Struct>` for every struct whose cloner is REFERENCED (directly by an element-cloner
-// stamp, or through a nested cascade `noteClonerUsage` grew the set over). Unlike the destructor installer there
-// is NO managed-field gate: a scalar-only struct box still needs a fresh-box clone (the drop side's
-// `__mm_decref` has no clone analogue). Appended already-lowered after the pipeline, like the destructor cascades.
-export function installStructCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
-	if needed.count() == 0 'noCloners'
+// ⭐ **THE PER-STRUCT CASCADE INSTALLER for either non-drop action** — the twin of `installStructDestructors`.
+// Synthesize `__clone_<Struct>` / `__sole_<Struct>` for every struct whose entry is REFERENCED (directly by an
+// element stamp or a transfer door's call, or through a nested cascade `noteCascadeUsage` grew the set over).
+// Unlike the destructor installer there is NO managed-field gate: a scalar-only struct box still needs a
+// fresh-box clone (the drop side's `__mm_decref` has no clone analogue) and still has an owner count to prove.
+// Appended already-lowered after the pipeline, like the destructor cascades.
+export function installStructCascades(module StdModule, project Project, signatures ProgramSignatures, needed CascadeSymbolSet, action CascadeAction)
+	if needed.count() == 0 'noneReferenced'
 		return
-	end 'noCloners'
+	end 'noneReferenced'
 
 	// ⭐⭐ **THE TUPLES ARE IN THE ROSTER, AND THEY WERE MISSING (W180).** `project.structTypes` carries every
 	// tuple the source SPELLS and no tuple minted by SUBSTITUTION, because
@@ -3462,64 +3568,76 @@ export function installStructCloners(module StdModule, project Project, signatur
 	// no `typealias` at all. A drop and a clone that disagree about which layouts exist is the same defect
 	// twice — so the roster is `installStructRuntimeEntries`, derived once, and neither side can grow a
 	// registry the other does not see.
-	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed, kind: StructRuntimeEntryKind.cloner)
-end 'installStructCloners'
+	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed, kind: structEntryKindOf(action))
+end 'installStructCascades'
 
-// One layout's cloner, or nothing when it is unreferenced — `installOneStructDestructor`'s twin, and it exists
+// Which entry of the shared struct roster `action` installs. The roster is walked once per KIND, so the two
+// non-drop actions are two kinds over one walk rather than two walks.
+function structEntryKindOf(action CascadeAction) returns StructRuntimeEntryKind
+	return match action 'action'
+		clone gives StructRuntimeEntryKind.cloner
+		soleWalk gives StructRuntimeEntryKind.soleWalk
+	end 'action'
+end 'structEntryKindOf'
+
+// One layout's cascade, or nothing when it is unreferenced — `installOneStructDestructor`'s twin, and it exists
 // for that one's reason: the project walk and the substituted-tuple walk above share ONE admission test rather
 // than each spelling it, which is the shape where one of them comes to admit a layout the other would decline.
+// ONE test for BOTH actions, for the same reason one door out: a clone and a walk that admitted different
+// layouts would let a strategy name a symbol no installer builds.
 //
 // ⚠ There is NO managed-field gate here and the drop twin has one, which is not an omission: a scalar-only box
 // still needs a fresh-box clone, because a clone must ALLOCATE where a trivial drop is just `__mm_decref`.
-function installOneStructCloner(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, needed ClonerSet)
-	if not needed.contains(clonerSymbol(layout.name)) 'notReferenced'
+function installOneStructCascade(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, needed CascadeSymbolSet, action CascadeAction)
+	if not needed.contains(perTypeCascadeSymbol(action, typeName: layout.name)) 'notReferenced'
 		return
 	end 'notReferenced'
 
-	synthesizeStructCloner(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures)
-end 'installOneStructCloner'
+	synthesizeStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, action: action)
+end 'installOneStructCascade'
 
-// The union twin of `installStructCloners`.
-export function installUnionCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
-	if needed.count() == 0 'noCloners'
+// The union twin of `installStructCascades`.
+export function installUnionCascades(module StdModule, project Project, signatures ProgramSignatures, needed CascadeSymbolSet, action CascadeAction)
+	if needed.count() == 0 'noneReferenced'
 		return
-	end 'noCloners'
+	end 'noneReferenced'
 	for (_, layout) in project.enumTypes 'each'
-		if needed.contains(clonerSymbol(layout.name)) 'referenced'
-			synthesizeUnionCloner(module, layout: layout, project: project, signatures: signatures)
+		if needed.contains(perTypeCascadeSymbol(action, typeName: layout.name)) 'referenced'
+			synthesizeUnionCascade(module, layout: layout, project: project, signatures: signatures, action: action)
 		end 'referenced'
 	end 'each'
-end 'installUnionCloners'
+end 'installUnionCascades'
 
-// ⭐ **THE PER-INSTANCE DEEP-CLONER INSTALLER (W162)** — the clone twin of `installGenericInstanceDestructors`,
-// and `installStructCloners`' instance twin. Synthesize `__clone_<mangled>` for every instance whose cloner is
-// REFERENCED (directly by an element-cloner stamp in a layout descriptor's `copyFunc@32`, or through a nested
-// cascade `noteClonerUsage` grew the set over). Like the struct installer there is NO managed-field gate — a
-// scalar-only instance box still needs a fresh-box clone — but the base-layout gate IS one: a layout-less
-// instance has no field list to cascade over, which `declaredInstanceSupportsDeepClone` refuses at the front end.
-export function installGenericInstanceCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
-	if needed.count() == 0 'noCloners'
+// ⭐ **THE PER-INSTANCE CASCADE INSTALLER (W162)** — the twin of `installGenericInstanceDestructors`, and
+// `installStructCascades`' instance twin. Synthesize `__clone_<mangled>` / `__sole_<mangled>` for every
+// instance whose entry is REFERENCED (directly by an element stamp in a layout descriptor's `copyFunc@32` or
+// by a transfer door's call, or through a nested cascade `noteCascadeUsage` grew the set over). Like the
+// struct installer there is NO managed-field gate — a scalar-only instance box still needs a fresh-box clone
+// and still has an owner count — but the base-layout gate IS one: a layout-less instance has no field list to
+// cascade over, which `declaredInstanceSupportsDeepClone` refuses at the front end for BOTH actions.
+export function installGenericInstanceCascades(module StdModule, project Project, signatures ProgramSignatures, needed CascadeSymbolSet, action CascadeAction)
+	if needed.count() == 0 'noneReferenced'
 		return
-	end 'noCloners'
+	end 'noneReferenced'
 	for id in 0 upto signatures.genericInstanceCount() 'each'
-		// ⭐ **A MANAGED-ELEMENT RECORD HAS NO BASE LAYOUT AND STILL HAS A CLONER (G18)** — the one-argument
+		// ⭐ **A MANAGED-ELEMENT RECORD HAS NO BASE LAYOUT AND STILL HAS AN ENTRY (G18)** — the one-argument
 		// thunk, which is why the layout gate is a disjunct here rather than the loop's first word. Asked once
 		// and reused below, so the roster and the routing read one answer.
 		let isElementRecordThunk = signatures.isManagedElementRecordInstance(id)
-		if not (isElementRecordThunk or signatures.genericInstanceHasBaseLayout(id)) 'noSynthesizedCloner'
+		if not (isElementRecordThunk or signatures.genericInstanceHasBaseLayout(id)) 'noSynthesizedCascade'
 			continue
-		end 'noSynthesizedCloner'
-		if not needed.contains(clonerSymbol(signatures.mangleGenericInstance(id))) 'notReferenced'
+		end 'noSynthesizedCascade'
+		if not needed.contains(perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id))) 'notReferenced'
 			continue
 		end 'notReferenced'
 		if isElementRecordThunk 'theOneArgumentThunk'
-			synthesizeElementRecordCloner(module, id: id, signatures: signatures)
+			synthesizeElementRecordCascade(module, id: id, signatures: signatures, action: action)
 			continue
 		end 'theOneArgumentThunk'
 
-		synthesizeGenericInstanceCloner(module, id: id, project: project, signatures: signatures)
+		synthesizeGenericInstanceCascade(module, id: id, project: project, signatures: signatures, action: action)
 	end 'each'
-end 'installGenericInstanceCloners'
+end 'installGenericInstanceCascades'
 
 // ⭐⭐ **THE ONE-ARGUMENT ELEMENT-CLONER THUNK FOR A MANAGED-ELEMENT RECORD (G18)** — what makes
 // `Array with (Array with String)` copyable at all. The record's copy is a 2-argument
@@ -3534,22 +3652,22 @@ end 'installGenericInstanceCloners'
 // here would duplicate a record header nobody owns and hand the result a second buffer pointer.
 //
 // ⚠ **NO NULL GUARD, DELIBERATELY.** The per-field cloner needs one because a moved-out slot holds 0
-// (`emitManagedFieldClone`); this thunk is reached only from `emitElementCloneRange`, which does the identical
+// (`emitManagedFieldCascade`); this thunk is reached only from `emitElementCloneRange`, which does the identical
 // test one level up and never `callIndirect`s a null element. A second guard here would be a copy of that
 // fact, and the copy is what would go stale.
 //
-// The strategy is `elementRecordFieldCopyStrategy` — the SAME answer the needs closure rooted — emitted
+// The strategy is `elementRecordFieldCascadeStrategy` — the SAME answer the needs closure rooted — emitted
 // through the SAME `emitCloneCall` a struct field takes, so the two entry points of one operation cannot come
 // to copy differently.
 function synthesizeElementRecordCloner(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	let func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
-	let newBox = emitCloneCall(module, block: entry, oldPtr: src, strategy: signatures.elementRecordFieldCopyStrategy(id), ids: ids)
+	let newBox = emitCloneCall(module, block: entry, oldPtr: src, strategy: signatures.elementRecordFieldCascadeStrategy(id, action: CascadeAction.clone), ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(newBox))
 	module.functions.push(func)
 end 'synthesizeElementRecordCloner'
@@ -3558,26 +3676,26 @@ end 'synthesizeElementRecordCloner'
 // `ManagedFieldDrop`'s clone dual, and it exists for that one's reason — the struct (P1.7 slice 3b-vi-b) and
 // generic-instance (W162) cloners each build a list of these and hand it to `emitFieldCascadeCloner`, so the
 // alloc/blit/clone/ret skeleton lives in ONE place rather than once per shape of field list.
-type ManagedFieldClone
+type ManagedFieldCascade
 	export let offset as ByteOffset
-	export let strategy as ManagedCloneStrategy
+	export let strategy as ManagedCascadeStrategy
 
-	static function create(offset ByteOffset, strategy ManagedCloneStrategy) returns ManagedFieldClone
+	static function create(offset ByteOffset, strategy ManagedCascadeStrategy) returns ManagedFieldCascade
 		return Self{offset: offset, strategy: strategy}
 	end 'create'
-end 'ManagedFieldClone'
+end 'ManagedFieldCascade'
 
-typealias ManagedFieldCloneArray = Array with ManagedFieldClone
+typealias ManagedFieldCascadeArray = Array with ManagedFieldCascade
 
 // Emit `<symbolName>(src) -> newBox` for a TAGLESS box (a struct, or a monomorphized generic instance):
 // `__mm_alloc` a fresh box, BLIT the whole record (every scalar field copied for free), then DEEP-CLONE each
 // managed field in place — the blit's shallow pointer is replaced by an independent copy through the field's
-// `ManagedCloneStrategy`. A tagless box has no case discriminant, so every field is always present; the
-// per-field null-guard (`emitManagedFieldClone`) skips a moved-out (null) slot exactly as the destructor
+// `ManagedCascadeStrategy`. A tagless box has no case discriminant, so every field is always present; the
+// per-field null-guard (`emitManagedFieldCascade`) skips a moved-out (null) slot exactly as the destructor
 // cascade's null-guard does. `emitFieldCascadeDestructor`'s dual, minus the refcount check: a clone never
 // frees, it always allocates.
-function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize ByteOffset, tagName String, clones ManagedFieldCloneArray, project Project)
-	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize ByteOffset, tagName String, clones ManagedFieldCascadeArray, project Project)
+	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -3591,30 +3709,56 @@ function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize 
 	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 
 	for spec in clones 'eachField'
-		cur = emitManagedFieldClone(module, func: func, cur: cur, box: newBox, offset: spec.offset, strategy: spec.strategy, ids: ids)
+		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: newBox, offset: spec.offset, strategy: spec.strategy, action: CascadeAction.clone, ids: ids)
 	end 'eachField'
 
 	module.setTerminator(cur, op: StdOp.ret(newBox))
 	module.functions.push(func)
 end 'emitFieldCascadeCloner'
 
-// The managed field list of declared struct `layout`, resolved through the shared `managedFieldCloneStrategy`
-// over `project.typeNames` — the ONE interner that layout's field-type ids live in.
-function synthesizeStructCloner(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures)
-	var clones = ManagedFieldCloneArray.create()
+// ⭐⭐ **WHICH FIELDS OF DECLARED STRUCT `layout` A CASCADE VISITS, AND HOW — ONE DERIVATION FOR EVERY
+// ACTION.** Resolved through the shared `managedFieldCascadeStrategy` over `project.typeNames`, the ONE
+// interner that layout's field-type ids live in. Written once because the LIST is the thing that must not
+// diverge: a field a clone deep-copies and a soleness walk skipped would be a co-owned record crossing to
+// another green thread with nothing that reads as a bug at either site.
+function structManagedFieldCascades(layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, action CascadeAction) returns ManagedFieldCascadeArray
+	var specs = ManagedFieldCascadeArray.create()
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
-		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructCloner: fieldTypes.get OOB at {i}")
-		clones.push(ManagedFieldClone.create(layout.offsetOfField(i), strategy: managedFieldCloneStrategy(signatures, typeNames: typeNames, fieldType: fieldType, asElement: false)))
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("structManagedFieldCascades: fieldTypes.get OOB at {i}")
+		specs.push(ManagedFieldCascade.create(layout.offsetOfField(i), strategy: managedFieldCascadeStrategy(signatures, typeNames: typeNames, fieldType: fieldType, asElement: false, action: action)))
 	end 'eachField'
 
-	emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: String.from(layout.name), clones: clones, project: project)
-end 'synthesizeStructCloner'
+	return specs
+end 'structManagedFieldCascades'
+
+// The instance twin of `structManagedFieldCascades`, over each SUBSTITUTED managed field. It needs no
+// `project`: every fact about an instance is answered inside `signatures`, over `signatures`' own interner.
+function instanceManagedFieldCascades(id GenericInstanceId, signatures ProgramSignatures, action CascadeAction) returns ManagedFieldCascadeArray
+	var specs = ManagedFieldCascadeArray.create()
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+			continue
+		end 'scalar'
+		specs.push(ManagedFieldCascade.create(signatures.genericInstanceFieldOffset(id, index: i), strategy: signatures.genericInstanceFieldCascadeStrategy(id, index: i, action: action)))
+	end 'eachField'
+
+	return specs
+end 'instanceManagedFieldCascades'
+
+// One declared struct's cascade for `action`, over the shared field list above.
+function synthesizeStructCascade(module StdModule, layout StructLayout, typeNames TypeNameInterner, project Project, signatures ProgramSignatures, action CascadeAction)
+	let specs = structManagedFieldCascades(layout, typeNames: typeNames, signatures: signatures, action: action)
+	match action 'action'
+		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: String.from(layout.name), clones: specs, project: project)
+		soleWalk then emitFieldCascadeSoleWalk(module, symbolName: soleWalkSymbol(layout.name), walks: specs)
+	end 'action'
+end 'synthesizeStructCascade'
 
 // ⭐⭐ **THE PER-INSTANCE DEEP-CLONER CASCADE (W162)** — the exact clone dual of
-// `synthesizeGenericInstanceDestructor`, and the same relationship to `synthesizeStructCloner` that one has to
+// `synthesizeGenericInstanceDestructor`, and the same relationship to `synthesizeStructCascade` that one has to
 // `synthesizeStructDestructor`. A generic instance is a monomorphized base struct that OWNS its managed type
 // arguments, so `__clone_<mangled>` allocates a fresh box of the BASE's size and deep-clones each SUBSTITUTED
 // managed field — `Box with String` clones the String, `Box with Holder` clones the Holder (through its own
@@ -3647,18 +3791,18 @@ end 'synthesizeStructCloner'
 //
 // The MM tag is the instance's own mangled name, so a cloned box decodes in `MXDS_TAGS` as the instance it is
 // — the same name `__mm_alloc` interns at the concrete construction site.
-function synthesizeGenericInstanceCloner(module StdModule, id GenericInstanceId, project Project, signatures ProgramSignatures)
-	var clones = ManagedFieldCloneArray.create()
-	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
-		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
-			continue
-		end 'scalar'
-		clones.push(ManagedFieldClone.create(signatures.genericInstanceFieldOffset(id, index: i), strategy: signatures.genericInstanceFieldCloneStrategy(id, index: i)))
-	end 'eachField'
-
+//
+// ⚠ The SOLENESS arm emits nothing for a field standing at the ENCLOSING body's own type parameter: the
+// substituted type is one `typeIsManaged` classifies scalar, so the shared field list above leaves it out —
+// exactly as the clone emits no field copy and the destructor no field drop.
+function synthesizeGenericInstanceCascade(module StdModule, id GenericInstanceId, project Project, signatures ProgramSignatures, action CascadeAction)
+	let specs = instanceManagedFieldCascades(id, signatures: signatures, action: action)
 	let mangled = signatures.mangleGenericInstance(id)
-	emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: String.from(mangled), clones: clones, project: project)
-end 'synthesizeGenericInstanceCloner'
+	match action 'action'
+		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: String.from(mangled), clones: specs, project: project)
+		soleWalk then emitFieldCascadeSoleWalk(module, symbolName: soleWalkSymbol(mangled), walks: specs)
+	end 'action'
+end 'synthesizeGenericInstanceCascade'
 
 // Emit `__clone_<Union>(src) -> newBox`: `__mm_alloc` a fresh box, BLIT the whole box (the tag and every payload
 // slot copied for free), then — behind a per-managed-case tag guard chain (the same shape
@@ -3666,7 +3810,7 @@ end 'synthesizeGenericInstanceCloner'
 // (no case owns a managed payload) is a pure blit, which is exactly the fresh independent box its element copy
 // needs.
 function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -3678,66 +3822,100 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: String.from(layout.name), debugStream: module.debugStream), ids: ids)
-	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
+	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 
-	let tag = emitLoadField(module, block: cur, record: newBox, offset: UnionTagOffset, ids: ids)
+	let fellThrough = emitUnionManagedCaseChain(module, func: func, cur: copied, box: newBox, layout: layout, dest: done, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
+
+	module.setTerminator(fellThrough, op: StdOp.branch(done.id))
+	module.setTerminator(done, op: StdOp.ret(newBox))
+	module.functions.push(func)
+end 'synthesizeUnionCloner'
+
+// ⭐⭐ **THE TAG-GUARD CHAIN EVERY UNION CASCADE WALKS — ONE DERIVATION FOR EVERY ACTION.** Load `box`'s tag,
+// then for each case that owns a managed payload emit `tag == <case>` guarding that case's own field walk,
+// every arm ending at `dest`. Returns the block the chain FALLS THROUGH in, which the caller terminates: a
+// clone returns its fresh box there and a walk returns void.
+//
+// The skip rule (`caseHasManagedField`) and the payload list below it are the facts that must not diverge —
+// a case a clone deep-copies and a soleness walk skipped is a co-owned payload crossing to another green
+// thread, which reads as nothing at either site.
+function emitUnionManagedCaseChain(module StdModule, func IrFunction, cur IrBlock, box ValueId, layout EnumLayout, dest IrBlock, project Project, signatures ProgramSignatures, action CascadeAction, ids ValueMinter) returns IrBlock
+	let tag = emitLoadField(module, block: cur, record: box, offset: UnionTagOffset, ids: ids)
+	var chain = cur
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'scalarCase'
 			continue
 		end 'scalarCase'
 		let caseBlock = module.addBlock(func, label: b"case")
 		let nextTest = module.addBlock(func, label: b"casetest")
-		let tagConst = emitConst(module, block: cur, value: layout.tagOfIndex(ci), ids: ids)
-		let isCase = emitCmp(module, block: cur, a: tag, b: tagConst, pred: StdCmpPred.eq, ids: ids)
-		module.setTerminator(cur, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
-		emitManagedFieldClones(module, func: func, startBlock: caseBlock, box: newBox, layout: layout, ci: ci, dest: done, project: project, signatures: signatures, ids: ids)
-		cur = nextTest
+		let tagConst = emitConst(module, block: chain, value: layout.tagOfIndex(ci), ids: ids)
+		let isCase = emitCmp(module, block: chain, a: tag, b: tagConst, pred: StdCmpPred.eq, ids: ids)
+		module.setTerminator(chain, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
+		emitManagedFieldCascades(module, func: func, startBlock: caseBlock, box: box, layout: layout, ci: ci, dest: dest, project: project, signatures: signatures, action: action, ids: ids)
+		chain = nextTest
 	end 'eachCase'
 
-	module.setTerminator(cur, op: StdOp.branch(done.id))
-	module.setTerminator(done, op: StdOp.ret(newBox))
-	module.functions.push(func)
-end 'synthesizeUnionCloner'
+	return chain
+end 'emitUnionManagedCaseChain'
 
-// Deep-clone every MANAGED payload of case `ci` in place (its blit-copied shallow pointer replaced by an
-// independent copy), then branch to `dest`. The clone twin of `emitManagedFieldDrops`.
-function emitManagedFieldClones(module StdModule, func IrFunction, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, ids ValueMinter)
+// Cascade over every MANAGED payload of case `ci`, then branch to `dest`. The non-drop twin of
+// `emitManagedFieldDrops`, and ONE walk for both actions: the payload classification decides WHICH slots a
+// cascade touches, so a second copy of it could touch a different set.
+function emitManagedFieldCascades(module StdModule, func IrFunction, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, action CascadeAction, ids ValueMinter)
 	let payloads = layout.payloadsAt(ci)
 	var cur = startBlock
 	for fi in 0 upto payloads.count() 'eachField'
-		let field = try payloads.get(fi) otherwise panic("emitManagedFieldClones: payloadsAt count disagrees with get at {fi}")
+		let field = try payloads.get(fi) otherwise panic("emitManagedFieldCascades: payloadsAt count disagrees with get at {fi}")
 		if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
 			continue
 		end 'scalar'
-		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false)
-		cur = emitManagedFieldClone(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), strategy: strategy, ids: ids)
+		let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action)
+		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), strategy: strategy, action: action, ids: ids)
 	end 'eachField'
 	module.setTerminator(cur, op: StdOp.branch(dest.id))
-end 'emitManagedFieldClones'
+end 'emitManagedFieldCascades'
 
-// Load the blit-copied shallow pointer at `box + offset` and, when it is NON-NULL, replace it with an
-// independent deep clone (via the field's `strategy`); a moved-out (null) slot is left as-is (the blit already
-// copied its 0). The one null-guarded field-clone shape both the struct cascade and the union tag-case cascade
-// emit, so the load/clone/store geometry lives in ONE place. Returns the CONTINUATION block.
-function emitManagedFieldClone(module StdModule, func IrFunction, cur IrBlock, box ValueId, offset ByteOffset, strategy ManagedCloneStrategy, ids ValueMinter) returns IrBlock
+// Load the pointer at `box + offset` and, when it is NON-NULL, spend the field's `strategy` on it; a
+// moved-out (null) slot is skipped — the clone leaves the blit's own 0 in place and the walk has nothing to
+// prove. The one null-guarded field shape the struct cascade and the union tag-case cascade both emit, for
+// both actions, so the load/guard geometry and the null rule live in ONE place. Returns the CONTINUATION
+// block.
+function emitManagedFieldCascade(module StdModule, func IrFunction, cur IrBlock, box ValueId, offset ByteOffset, strategy ManagedCascadeStrategy, action CascadeAction, ids ValueMinter) returns IrBlock
 	let oldPtr = emitLoadField(module, block: cur, record: box, offset: offset, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let nonNull = emitCmp(module, block: cur, a: oldPtr, b: zero, pred: StdCmpPred.ne, ids: ids)
-	var cloneBlock = module.addBlock(func, label: b"clonefld")
+	var visitBlock = module.addBlock(func, label: cascadeFieldBlockLabel(action))
 	let contBlock = module.addBlock(func, label: b"cont")
-	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: cloneBlock.id, elseBlockId: contBlock.id))
+	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: visitBlock.id, elseBlockId: contBlock.id))
 
-	let newPtr = emitCloneCall(module, block: cloneBlock, oldPtr: oldPtr, strategy: strategy, ids: ids)
-	emitStoreField(module, block: cloneBlock, record: box, offset: offset, value: newPtr)
-	module.setTerminator(cloneBlock, op: StdOp.branch(contBlock.id))
+	match action 'action'
+		clone then emitClonedFieldStore(module, block: visitBlock, box: box, offset: offset, oldPtr: oldPtr, strategy: strategy, ids: ids)
+		soleWalk then emitSoleCall(module, block: visitBlock, ptr: oldPtr, strategy: strategy, ids: ids)
+	end 'action'
+	module.setTerminator(visitBlock, op: StdOp.branch(contBlock.id))
 
 	return contBlock
-end 'emitManagedFieldClone'
+end 'emitManagedFieldCascade'
+
+// The fresh copy REPLACES the blit's shallow pointer in place, which is what makes the cloned box independent
+// of the source.
+function emitClonedFieldStore(module StdModule, block IrBlock, box ValueId, offset ByteOffset, oldPtr ValueId, strategy ManagedCascadeStrategy, ids ValueMinter)
+	let newPtr = emitCloneCall(module, block: block, oldPtr: oldPtr, strategy: strategy, ids: ids)
+	emitStoreField(module, block: block, record: box, offset: offset, value: newPtr)
+end 'emitClonedFieldStore'
+
+// The label the guarded field block wears, so a dumped body still says which cascade it belongs to.
+function cascadeFieldBlockLabel(action CascadeAction) returns ByteArray
+	return match action 'action'
+		clone gives b"clonefld"
+		soleWalk gives b"solefld"
+	end 'action'
+end 'cascadeFieldBlockLabel'
 
 // Emit the clone call for a managed field's `strategy` and return the fresh pointer. A `direct` callee is a
 // plain 1-arg call; a `managedElements` field takes the element's `funcAddr` and calls its container's own
 // per-element copy entry (`__managed_clone_managed` for the record, `__list_clone_managed` for the chain).
-function emitCloneCall(module StdModule, block IrBlock, oldPtr ValueId, strategy ManagedCloneStrategy, ids ValueMinter) returns ValueId
+function emitCloneCall(module StdModule, block IrBlock, oldPtr ValueId, strategy ManagedCascadeStrategy, ids ValueMinter) returns ValueId
 	match strategy 'strategy'
 		direct(callee) then return emitDirectClone(module, block: block, oldPtr: oldPtr, callee: callee, ids: ids)
 		managedElements(containerClone, elementClone) then return emitManagedElementsFieldClone(module, block: block, oldPtr: oldPtr, containerClone: containerClone, elementClone: elementClone, ids: ids)
@@ -3758,6 +3936,112 @@ function emitManagedElementsFieldClone(module StdModule, block IrBlock, oldPtr V
 	module.appendOp(block, op: StdOp.call(newPtr, callee: containerClone, args: twoArgs(oldPtr, second: elemFn)))
 	return newPtr
 end 'emitManagedElementsFieldClone'
+
+// --- The per-type SOLENESS WALK cascade: the THIRD action over the drop side's node space ---
+//
+// ⭐⭐ **IT IS THE CLONE CASCADE'S SHAPE WITHOUT THE ALLOCATION.** `__sole_<T>(box)` proves `box` has one
+// owner, then walks the SAME managed field list the cloner copies and the destructor releases — one
+// classifier (`managedFieldCascadeStrategy`) routes all three, so a field a clone deep-copies is a field a
+// move proves and a field a drop releases, and none of them can come to disagree about what a type holds.
+//
+// ⚠ **THE WALK NEITHER RETAINS NOR RELEASES ANYTHING.** It reads refcounts, may DETACH a shared
+// copy-on-write buffer (`__managed_sole`), and otherwise leaves the graph exactly as it found it — which is
+// what lets the sender's own `+1` ride into the mailbox untouched afterwards.
+
+// One declared union's cascade for `action`. The two bodies differ in what they leave behind — a fresh box or
+// nothing — and share the tag-guard chain and the payload list through `emitUnionManagedCaseChain`.
+function synthesizeUnionCascade(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
+	match action 'action'
+		clone then synthesizeUnionCloner(module, layout: layout, project: project, signatures: signatures)
+		soleWalk then synthesizeUnionSoleWalk(module, layout: layout, project: project, signatures: signatures)
+	end 'action'
+end 'synthesizeUnionCascade'
+
+// A managed-element record's ONE-ARGUMENT thunk for `action`. Both bodies are the FIELD-position strategy of
+// the same instance, read here so the two entry points cannot resolve it two ways.
+function synthesizeElementRecordCascade(module StdModule, id GenericInstanceId, signatures ProgramSignatures, action CascadeAction)
+	match action 'action'
+		clone then synthesizeElementRecordCloner(module, id: id, signatures: signatures)
+		soleWalk then synthesizeElementRecordSoleWalk(module, id: id, signatures: signatures)
+	end 'action'
+end 'synthesizeElementRecordCascade'
+
+// ⭐ **THE ONE-ARGUMENT ELEMENT-WALK THUNK for a managed-element record** — `synthesizeElementRecordCloner`'s
+// twin, and it exists for that one's reason: an ARRAY ELEMENT is reached through `callIndirect(fn, elem)`,
+// which passes exactly one argument, while the record's own walk is the 2-argument
+// `<containerSole>(box, funcAddr(elementSole))`. No null guard, deliberately: `emitElementSoleRange` and
+// `emitListElementSole` each test the slot one level up and never `callIndirect` a null element.
+function synthesizeElementRecordSoleWalk(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(soleWalkSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	emitSoleCall(module, block: entry, ptr: src, strategy: signatures.elementRecordFieldCascadeStrategy(id, action: CascadeAction.soleWalk), ids: ids)
+	module.setTerminator(entry, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'synthesizeElementRecordSoleWalk'
+
+// Emit `<symbolName>(box)` for a TAGLESS box (a struct, or a monomorphized generic instance): prove the box
+// itself sole, then prove each managed field behind the per-field null-guard a moved-out slot needs.
+// `emitFieldCascadeDestructor`'s shape minus the free, and `emitFieldCascadeCloner`'s minus the allocation.
+function emitFieldCascadeSoleWalk(module StdModule, symbolName ByteArray, walks ManagedFieldCascadeArray)
+	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitSoleBoxCall(module, block: entry, box: box, ids: ids)
+
+	var cur = entry
+	for spec in walks 'eachField'
+		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: spec.offset, strategy: spec.strategy, action: CascadeAction.soleWalk, ids: ids)
+	end 'eachField'
+	module.setTerminator(cur, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'emitFieldCascadeSoleWalk'
+
+// Emit `__sole_<Union>(box)`: the box itself, then — behind the tag-guard chain `synthesizeUnionCloner`
+// walks — the LIVE case's managed payloads. A scalar-only union is the box test alone.
+function synthesizeUnionSoleWalk(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(soleWalkSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let done = module.addBlock(func, label: b"done")
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitSoleBoxCall(module, block: entry, box: box, ids: ids)
+	let fellThrough = emitUnionManagedCaseChain(module, func: func, cur: entry, box: box, layout: layout, dest: done, project: project, signatures: signatures, action: CascadeAction.soleWalk, ids: ids)
+
+	module.setTerminator(fellThrough, op: StdOp.branch(done.id))
+	module.setTerminator(done, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'synthesizeUnionSoleWalk'
+
+// Emit the soleness call for a managed field's `strategy` — `emitCloneCall`'s twin. A `direct` callee is a
+// plain 1-arg call; a `managedElements` field takes the element's `funcAddr` and calls its container's own
+// per-element walk entry.
+function emitSoleCall(module StdModule, block IrBlock, ptr ValueId, strategy ManagedCascadeStrategy, ids ValueMinter)
+	match strategy 'strategy'
+		direct(callee) then emitVoidBoxCall(module, block: block, box: ptr, callee: callee, ids: ids)
+		managedElements(containerSole, elementSole) then emitManagedElementsFieldSole(module, block: block, ptr: ptr, containerSole: containerSole, elementSole: elementSole, ids: ids)
+		unsupported then panic("emitSoleCall: an unsupported managed field strategy reached the soleness-walk synthesis — typeSupportsDeepClone gates the front end for both actions, the strategy's `unsupported` arms being action-independent")
+	end 'strategy'
+end 'emitSoleCall'
+
+function emitManagedElementsFieldSole(module StdModule, block IrBlock, ptr ValueId, containerSole ByteArray, elementSole ByteArray, ids ValueMinter)
+	let elemFn = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(elemFn, funcName: elementSole))
+	let proved = ids.mint()
+	module.appendOp(block, op: StdOp.call(proved, callee: containerSole, args: twoArgs(ptr, second: elemFn)))
+end 'emitManagedElementsFieldSole'
 
 // `__mm_leak_check(exitCode) -> exitCode` — the gate.
 //

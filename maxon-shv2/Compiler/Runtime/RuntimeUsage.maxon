@@ -58,10 +58,15 @@ export typealias DestructorSet = Set with ByteArray
 
 // The set of `__clone_<T>` symbols a module references (P1.7 slice 3b-vi-b) — the CLONE twin of
 // `DestructorSet`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over nesting by
-// `noteClonerUsage`, so `installStructCloners`/`installUnionCloners`/`installGenericInstanceCloners`
+// `noteCascadeUsage`, so `installStructCascades`/`installUnionCascades`/`installGenericInstanceCascades`
 // synthesize only the referenced cloners. The SAME `Set with ByteArray` type is reused by `typeSupportsDeepClone` as its VISITED-name set (a
 // cycle-breaker over struct/union names), since both are membership sets of `ByteArray` names.
 export typealias ClonerSet = Set with ByteArray
+
+// The same set seen from the SOLENESS side — `RuntimeUsage.neededSoleWalks`, whose members are
+// `__sole_<T>` symbols. Named for its own family for `ClonerSet`'s reason: the three cascade closures
+// share an engine, not a set. `CascadeSymbolSet` is what a reader holding EITHER takes it as.
+export typealias SoleWalkSet = Set with ByteArray
 
 // The set of `__enum_from_raw_<Enum>` symbols a module references — the `DestructorSet` shape a third time,
 // for the third installer that walks EVERY declared enum and asks "is this one's helper referenced?"
@@ -258,10 +263,20 @@ export type RuntimeUsage
 	export var usesOpaqueElementCopy as bool
 	// The `__clone_<T>` symbols this module references (P1.7 slice 3b-vi-b) — the CLONE twin of
 	// `neededDestructors`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over
-	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners`/
-	// `installGenericInstanceCloners` synthesize only the referenced cloners. `usesHeap` follows any cloner
+	// nesting by `noteCascadeUsage`, so `installStructCascades`/`installUnionCascades`/
+	// `installGenericInstanceCascades` synthesize only the referenced cloners. `usesHeap` follows any cloner
 	// (the box it allocates).
 	export var neededCloners as ClonerSet
+	// ⭐ The `__sole_<T>` symbols this module references — the third twin of `neededDestructors` and
+	// `neededCloners`, collected from the walk calls the transfer doors emit and closed over nesting by
+	// `noteCascadeUsage`, so `installStructCascades`/`installUnionCascades`/`installGenericInstanceCascades`
+	// synthesize only the referenced walks.
+	export var neededSoleWalks as SoleWalkSet
+	// ⭐ The program proves a moved graph SOLE at run time — any `__sole_<T>` walk, `__managed_sole`,
+	// `__list_sole` or a bare handle box. It gates `__mm_sole_box`, the refcount leaf they all reach.
+	// DECOUPLED from `usesHeap`, which every one of them also implies: the leaf is the one entry a program
+	// that crosses nothing to a green thread must not carry.
+	export var usesSoleWalk as bool
 	// The `__enum_from_raw_<Enum>` symbols this module CALLS — the `neededDestructors` shape with no closure
 	// pass, so `installEnumLookupHelpers` synthesizes only the referenced helpers. See `EnumLookupSet`.
 	export var neededEnumLookups as EnumLookupSet
@@ -484,7 +499,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1043,12 +1058,34 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// A per-type CLONER (`__clone_<T>`, P1.7 slice 3b-vi-b) — the CLONE twin of the `__destruct_<T>` arm above,
 	// referenced through a `funcAddr(__clone_<T>)` element-cloner stamp. It frees no memory but ALLOCATES a box
 	// (`usesHeap`), and its transitive `__str_clone`/`__managed_clone`/nested-cloner needs close through
-	// `noteClonerUsage` (which has the signatures/interner to classify the fields).
+	// `noteCascadeUsage` (which has the signatures/interner to classify the fields).
 	if bytesStartWith(callee, prefix: ClonerPrefix) 'structcloner'
 		usage.usesHeap = true
 		usage.neededCloners.insert(callee)
 	end 'structcloner'
+	// A per-type SOLENESS WALK (`__sole_<T>`) — the third twin of the two arms above, referenced by a
+	// transfer door's emitted call or by a `funcAddr(__sole_<E>)` element stamp. It allocates nothing and
+	// frees nothing, so it declares no `usesHeap` of its own; what it does need is the refcount leaf every
+	// walk bottoms out in. Its transitive nested-walk needs close through `noteCascadeUsage`.
+	if bytesStartWith(callee, prefix: SoleWalkPrefix) 'soleWalk'
+		usage.usesSoleWalk = true
+		usage.neededSoleWalks.insert(callee)
+	end 'soleWalk'
+	// The two container soleness entries and the plain-box leaf. Each is reached only from a walk, and each
+	// needs that leaf; `isManagedMemoryRuntimeCallee`/`isRuntimeCallee` above have already taken the
+	// managed-memory and heap bits the `__managed_`/`__mm_` prefixes carry.
+	if isSoleWalkRuntimeCallee(callee) 'soleWalkEntry'
+		usage.usesSoleWalk = true
+	end 'soleWalkEntry'
 end 'recordCallUsage'
+
+// ⭐ **THE FIXED SOLENESS ENTRIES — every callee of a walk that is not itself a per-type walk.**
+// `__sole_<T>` is decided by prefix above; these five are what a walk bottoms out in: the plain-box refcount
+// leaf, the two container-record walks and the two chain walks. Named as one roster because they turn on ONE
+// bit and a caller of any of them reaches all it needs through that bit.
+function isSoleWalkRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(MmSoleBoxName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName)
+end 'isSoleWalkRuntimeCallee'
 
 // ⚠⚠ **`recordCharacterSetUsage` AND `closeCharacterSetNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME
 // (W129).** The pair is worth one paragraph because what it declared is the obligation any future synthesized
