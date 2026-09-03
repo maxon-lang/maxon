@@ -1,0 +1,164 @@
+// Test: a-keyword-named-function-after-a-case-list-spelling-match
+typealias Idx = int(0 to 100)
+
+enum Kw
+	while
+	match
+	for
+	omega
+end 'Kw'
+
+function gives(x Idx) returns Idx
+	return x * 10
+end 'gives'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function tagOf(k Kw) returns Idx
+	match k 'm'
+		while then return 1
+		match then return 2
+		for then return 3
+		omega then return 4
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	return (gives(tagOf(Kw.omega)) + pick(Victim.found(2))) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @gives {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-keyword-named-function-after-a-case-list-spelling-match.test:11: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-keyword-named-function-after-a-case-list-spelling-match.test:12: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 3
+  __il_body#7:
+    arm64.jumpTable x0, default=matchdead#12 [[0]=matcharm#8, [1]=matcharm#9, [2]=matcharm#10, [3]=matcharm#11] @__jumptable_3
+  matchdead#12:
+  matcharm#8:
+    arm64.movImm x0, 1
+    arm64.b __il_body#14
+  matcharm#9:
+    arm64.movImm x0, 2
+    arm64.b __il_body#14
+  matcharm#10:
+    arm64.movImm x0, 3
+    arm64.b __il_body#14
+  matcharm#11:
+    arm64.movImm x0, 4
+  __il_body#14:
+    arm64.cmp x0, 0
+    arm64.b.lt __il_slow
+  __rc_chk#16:
+    arm64.cmp x0, 100
+    arm64.b.gt __il_slow
+  __rc_ok#15:
+    arm64.movImm x16, 10
+    arm64.mul x19, x0, x16
+    arm64.cmp x19, 0
+    arm64.b.lt __il_slow
+  __rc_chk#18:
+    arm64.cmp x19, 100
+    arm64.b.le __il_cont#5
+  __il_slow:
+    arm64.bl gives
+    arm64.movRegReg x19, x0
+  __il_cont#5:
+    arm64.movImm x20, 2
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#21:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b __il_cont#4
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#23
+  matcharm#22:
+    arm64.movImm x1, 0
+  __il_cont#4:
+    arm64.add x19, x19, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-keyword-named-function-after-a-case-list-spelling-match.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead#23:
+  matchcont#13:
+  matchcont#25:
+}

@@ -1,0 +1,93 @@
+// Test: a-keyword-case-arm-with-a-parenthesized-value-keeps-the-next-top-level-binding
+enum Marker
+	function
+	other
+end 'Marker'
+
+function classify(m Marker) returns Idx
+	return match m 'm'
+		function gives (1 + 1)
+		other gives 3
+	end 'm'
+end 'classify'
+
+let counter = 42
+
+function main() returns ExitCode
+	if classify(Marker.function) == 2 'ok'
+		return counter as ExitCode
+	end 'ok'
+	return 1
+end 'main'
+typealias Idx = int(0 to 100)
+---
+ExitCode: 42
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.movRegImm32 r8, 3
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-keyword-case-arm-with-a-parenthesized-value-keeps-the-next-top-level-binding.test:8: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+  matcharm:
+    x64.movRegImm32 rax, 2
+  matchcont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc lessEqual, __rc_ok
+  __il_slow:
+    x64.callDirect classify
+    x64.jmp __il_cont
+  __rc_ok:
+    x64.movRegReg r8, rax
+  __il_cont:
+    x64.cmpRegImm32 r8, 2
+    x64.jcc notEqual, ifcont
+  ok:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

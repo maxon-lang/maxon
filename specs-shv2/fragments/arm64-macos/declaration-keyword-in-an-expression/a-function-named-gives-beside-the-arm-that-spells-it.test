@@ -1,0 +1,190 @@
+// Test: a-function-named-gives-beside-the-arm-that-spells-it
+typealias Idx = int(0 to 100)
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function classify(m Marker) returns Idx
+	return match m 'm'
+		function gives (1 + 1)
+		other gives 3
+	end 'm'
+end 'classify'
+
+function gives(x Idx) returns Idx
+	return x * 10
+end 'gives'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	return (gives(classify(Marker.function) * 2) + pick(Victim.found(2))) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.movImm x0, 3
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-function-named-gives-beside-the-arm-that-spells-it.test:10: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+}
+
+func @gives {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok#1
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-named-gives-beside-the-arm-that-spells-it.test:16: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#1:
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x0, 100
+    arm64.b.le __rc_ok#4
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-function-named-gives-beside-the-arm-that-spells-it.test:17: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+  matcharm#8:
+    arm64.movImm x1, 2
+  matchcont:
+    arm64.cmp x1, 0
+    arm64.b.lt __il_slow#15
+  __rc_chk#14:
+    arm64.cmp x1, 100
+    arm64.b.le __rc_ok#13
+  __il_slow#15:
+    arm64.bl classify
+    arm64.b __il_cont#6
+  __rc_ok#13:
+    arm64.movRegReg x0, x1
+  __il_cont#6:
+    arm64.lsl x0, x0, 1
+  __il_body#16:
+    arm64.cmp x0, 0
+    arm64.b.lt __il_slow#21
+  __rc_chk#18:
+    arm64.cmp x0, 100
+    arm64.b.gt __il_slow#21
+  __rc_ok#17:
+    arm64.movImm x16, 10
+    arm64.mul x19, x0, x16
+    arm64.cmp x19, 0
+    arm64.b.lt __il_slow#21
+  __rc_chk#20:
+    arm64.cmp x19, 100
+    arm64.b.le __il_cont#5
+  __il_slow#21:
+    arm64.bl gives
+    arm64.movRegReg x19, x0
+  __il_cont#5:
+    arm64.movImm x20, 2
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+  __il_body#22:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#23:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.b __il_cont#4
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#24:
+    arm64.movImm x1, 0
+  __il_cont#4:
+    arm64.add x19, x19, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.le __rc_ok#1
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-function-named-gives-beside-the-arm-that-spells-it.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok#1:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}

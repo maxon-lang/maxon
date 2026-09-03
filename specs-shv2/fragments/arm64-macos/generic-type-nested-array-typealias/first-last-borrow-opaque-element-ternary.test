@@ -1,0 +1,400 @@
+// Test: first-last-borrow-opaque-element-ternary
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function peekEnds() returns Element throws ArrayError
+		let front = try self.items.first()
+		let back = try self.items.last()
+		return front if self.items.count() == 2 else back
+	end 'peekEnds'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var pair = StringContainer.create()
+	pair.push("front element, long enough to force a heap allocation")
+	pair.push("back element, also long enough to force a heap allocation")
+	let fromBorrowedArm = try pair.peekEnds() otherwise return 1
+
+	var trio = StringContainer.create()
+	trio.push("front element, long enough to force a heap allocation")
+	trio.push("middle element, long enough to force a heap allocation")
+	trio.push("back element, also long enough to force a heap allocation")
+	let fromOwnedArm = try trio.peekEnds() otherwise return 2
+
+	if not fromBorrowedArm.equals("front element, long enough to force a heap allocation") 'wrongFront'
+		return 3
+	end 'wrongFront'
+
+	if not fromOwnedArm.equals("back element, also long enough to force a heap allocation") 'wrongBack'
+		return 4
+	end 'wrongBack'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @Container.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Container.push {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_push
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Container.peekEnds {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __managed_first
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#1:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movRegReg x1, x20
+    arm64.bl Array.last
+    arm64.movRegReg x22, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#3:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 2
+    arm64.b.ne ternaryfalse
+  ternarytrue:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __retain_type_param
+    arm64.movRegReg x19, x0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_incref
+    arm64.movRegReg x19, x22
+  matchcont:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl __drop_type_param
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Container_String
+    arm64.bl Container.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_3  ; "front element, long enough to force a heap allocation"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x2, __layout_Container_String
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl Container.push
+    arm64.leaRdata x0, __str_rec_4  ; "back element, also long enough to force a heap allocation"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x2, __layout_Container_String
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl Container.push
+    arm64.leaRdata x1, __layout_Container_String
+    arm64.movRegReg x0, x19
+    arm64.bl Container.peekEnds
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  tryok#1:
+    arm64.leaRdata x0, __layout_Container_String
+    arm64.bl Container.create
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __str_rec_3  ; "front element, long enough to force a heap allocation"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x25, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.leaRdata x2, __layout_Container_String
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.bl Container.push
+    arm64.leaRdata x0, __str_rec_5  ; "middle element, long enough to force a heap allocation"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x25, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.leaRdata x2, __layout_Container_String
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.bl Container.push
+    arm64.leaRdata x0, __str_rec_4  ; "back element, also long enough to force a heap allocation"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x25, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.leaRdata x2, __layout_Container_String
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.bl Container.push
+    arm64.leaRdata x1, __layout_Container_String
+    arm64.movRegReg x0, x21
+    arm64.bl Container.peekEnds
+    arm64.movRegReg x22, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x22, 2
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  tryok#3:
+    arm64.leaRdata x1, __str_rec_3  ; "front element, long enough to force a heap allocation"
+    arm64.movRegReg x0, x20
+    arm64.bl String.equals
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#6
+  wrongFront:
+    arm64.movImm x23, 3
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#6:
+    arm64.leaRdata x1, __str_rec_4  ; "back element, also long enough to force a heap allocation"
+    arm64.movRegReg x0, x22
+    arm64.bl String.equals
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#8
+  wrongBack:
+    arm64.movImm x23, 4
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x23, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+}
