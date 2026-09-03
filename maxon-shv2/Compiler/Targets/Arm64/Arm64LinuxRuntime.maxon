@@ -189,6 +189,25 @@ let Arm64LinuxSyscallExecve = 221
 let Arm64LinuxSyscallWait4 = 260
 let Arm64LinuxSyscallChdir = 49
 
+// --- The SOCKET band's syscalls ---
+//
+// ⚠ **MEASURED ON THIS LANE, not transcribed, and END TO END**: a probe on an aarch64 Ubuntu guest called
+// these four BY NUMBER and nothing else — `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` answered a live
+// descriptor, `connect` to a port nothing listens on answered `-ECONNREFUSED` and to a listening one
+// answered 0, `sendto` moved five bytes and `recvfrom` read the same five back on the accepted end, and a
+// second `close` of the same descriptor answered `-EBADF` (the control that says the first one took).
+// ⛔ **NEGATIVE CONTROL: x86-64's numbers (41/42/44/45) on this arch answered `-EFAULT` at the very first
+// call** — a different observable, which is what makes the positive run evidence rather than agreement.
+//
+// ⛔⛔ **THERE IS NO `send` OR `recv` SYSCALL ON AArch64 AT ALL**, only `sendto`/`recvfrom` with a peer
+// address a connected stream socket does not use (`LinuxSocketNoPeerAddress`). That is the OPPOSITE
+// constraint from the macOS lane, where libSystem exports the four-argument forms and the six-argument ones
+// would cost two more registers for nothing.
+export let Arm64LinuxSyscallSocket = 198
+export let Arm64LinuxSyscallConnect = 203
+export let Arm64LinuxSyscallSendto = 206
+export let Arm64LinuxSyscallRecvfrom = 207
+
 // ⭐⭐ **THE WAIT OBJECT ON THIS LANE — ONE `mmap`'d PAGE, AND `Arm64PosixRuntime` OWNS EVERY FIELD IN IT.**
 // Darwin's twin carries a `pthread_mutex_t` and a `pthread_cond_t` ABOVE the shared prefix, because a
 // condvar needs a mutex to be correct; a futex needs NEITHER — the compare-and-sleep is atomic inside the
@@ -2673,7 +2692,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// a path, so a subprocess program that touches no `File` still branches here. The Darwin lane needs no
 	// such widening because an `open` lowers INLINE there (`lowerOsFileOpenDarwin` carries the vararg reason)
 	// — this is a gate list that differs because the two CHUNK lists differ, not because the two Std graphs do.
-	if usage.usesManagedFile or usage.usesIocp 'fileOpen'
+	if linuxOpensFiles(usage) 'fileOpen'
 		chunks.push(buildArm64LinuxFileOpenChunk())
 	end 'fileOpen'
 
@@ -2694,7 +2713,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// descriptors like any other here — so gating it on `usesManagedFile` alone would leave a stdin-only
 	// program branching to a symbol nothing emitted, and pushing it under each bit would lay the same symbol
 	// out more than once.
-	if usage.usesManagedFile or usage.usesConsoleStdin or usage.usesIocp 'transferIn'
+	if linuxReadsFiles(usage) 'transferIn'
 		chunks.push(buildArm64LinuxTransferChunk(HostReadFileName, syscallNumber: Arm64LinuxSyscallRead))
 	end 'transferIn'
 

@@ -421,20 +421,27 @@ end 'main'
 error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
-<!-- test: stdlib-loading.target-refusal-blames-the-crossing-call-arm64 -->
-<!-- targets: arm64-macos -->
-The attribution is a property of the crossing, not of one backend: a program compiled for
-arm64 is refused at the same user span, naming the stdlib function it wrote and the runtime entry
-that has no lowering there.
+<!-- test: stdlib-loading.target-refusal-blames-the-crossing-call-second-entry -->
+<!-- targets: wasm32-wasi -->
+The attribution is a property of the CROSSING and not of one runtime entry: a second stdlib function
+reaching a second entry is refused at the same user span, naming what the author wrote and the entry that
+has no lowering.
 
-⚠ **THE SUBJECT IS THE ATTRIBUTION, AND THE CROSSING IT USES HAD TO MOVE.** This case was written over
-`Clock.nowMs` → `__gt_now_ns`, and the arm64-macOS monotonic clock landed — so the program stopped being
-refused at all and the case went red, pinning a diagnostic the compiler was right not to emit. It is now
-written over `TcpClient.connect` → `__ms_tcp_connect`, a band that lane still does not serve (`ws2_32` is
-a Win32 library). The wasm twin above keeps `Clock.nowMs`, which WASI still refuses, so the pair still
-shows the same mechanism through two entries on two lanes. ⇒ **Whichever crossing this case names, it has
-to be one the target genuinely lacks; a landed facility makes the case red rather than stale, which is the
-outcome to want.**
+⚠⚠ **THE SUBJECT IS THE ATTRIBUTION, AND THE CROSSING IT USES HAS MOVED TWICE — EACH TIME BECAUSE A
+FACILITY LANDED.** It was written over `Clock.nowMs` → `__gt_now_ns` on arm64-macOS, and that lane's
+monotonic clock landed; it was rewritten over `TcpClient.connect` → `__ms_tcp_connect` on the same lane,
+and the socket band landed there too. **There is no third crossing to move it to on any NATIVE lane**, and
+that is a fact about the table rather than about this case: `TargetFacilities.targetProvidesFacility` now
+answers `true` for every `HostFacility` on arm64-macOS and on arm64-linux, so
+`targetProvidesEveryFacility` short-circuits `checkCalls` there and NO `E3104` can be raised on either.
+The one native gap left is x64-linux's `processPriority`, whose only door is a `__Builtins` intrinsic
+rather than a stdlib function — so it cannot show a stdlib CROSSING at all.
+
+⇒ Both cases now run on wasm32-wasi, and what the pair still shows is the half that has a subject: two
+different stdlib functions reaching two different entries produce the same attribution. ⚠ **The half it
+can no longer show is "not of one backend"** — which is worth recording rather than papering over, because
+it is the shape a completed lane leaves behind, and the day a native lane grows a new facility this case
+should move back to it.
 ```maxon
 function main() returns ExitCode
 	let c = try TcpClient.connect("127.0.0.1", port: 9) otherwise return 4
@@ -442,7 +449,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: 'TcpClient.connect' lowers to the runtime entry '__ms_tcp_connect', which has no arm64-macos implementation
+error E3104: <fragment>:3:24: this construct is x64-windows only at this rung: 'TcpClient.connect' lowers to the runtime entry '__ms_tcp_connect', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-loading.target-refusal-is-transitive -->

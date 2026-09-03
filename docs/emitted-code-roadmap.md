@@ -785,9 +785,13 @@ materialising the stride into the IP scratch and following with a register `MUL`
 where this is one. But `LDR Xt, [Xn, Xm, LSL #3]` is **NOT** `loadRegBaseIndexScale`'s equivalent: its
 `S` bit selects a shift of 0 or exactly log2(access size) — there is no `LSL #1`/`#2` for a 64-bit
 access — and the register-offset form carries **no displacement field at all**, over three more
-encodings (LDR Xt / LDR Dt / LDRB Wt and their stores). ⇒ the isel asks for `foldsIntoMemoryOps:
-false` on that lane. ⚠ **UNVERIFIED: this host cannot run the arm64 suite, and that lane's goldens
-will move when one does.**
+encodings (LDR Xt / LDR Dt / LDRB Wt and their stores). ⇒ the fold is NARROWED on that lane
+rather than declined: `IndexedMemoryForm.accessWidthScaleAtZeroOffset` admits it only where
+`scale == accessWidth` and the displacement is zero, which is exactly the `S`-bit form. It reuses the
+SHARED `loadRegBaseIndexScale`/`storeBaseIndexScaleReg` — as `loadRegBaseDisp` already is, each ISA
+folding what its own field reaches — so no arm64-specific op was minted. MEASURED on this host, which
+runs all three native lanes: one instruction removed per array element access, 42 shifted-adds down to
+7 with 39 indexed loads/stores in their place.
 
 **Left open**: the arm64 memory fold above; a CROSS-BLOCK chain (bounded by the pressure argument, not
 by soundness); an ADDRESS with two memory readers, where folding into both would delete the `add`
@@ -1528,11 +1532,11 @@ stated reason the guard cost seven instructions. Both guards now pass `operandTy
 
 **Why seven and not five**: a `bitOr` is not a compare, so `StdToX64Conversion`'s
 `recordFusableCompare` could not fuse the branch on it and it paid its own `cmp $0`. One compare
-fuses, so the whole guard is `cmp`/`jae`. ⚠ **Two lanes were EXECUTED and the third was only READ**:
-x64 emits `cmpRegReg` + `jcc aboveEqual` (`temp/codegen-probe/guard.ir`) and wasm emits `i64.ge_u`
-(two of them in `guard.maxon`, disassembled with `wasm-tools`, suite green under wasmtime); arm64
-should be `cmp` / `cset hs` / `cbnz` — three, because that lane fuses no branch — but that is read off
-`arm64UnsignedCondForPred` and `arm64Cset`, NOT run, and arm64 already owes a golden mint on a Mac.
+fuses, so the whole guard is `cmp`/`jae`. **All three lanes are EXECUTED**: x64 emits `cmpRegReg` +
+`jcc aboveEqual` and wasm emits `i64.ge_u` (disassembled with `wasm-tools`, suite green under
+wasmtime); arm64 emits `cmp` + a fused `b.cond`, two instructions rather than the three a
+materializing lane would pay, because the compare/branch census now serves both native isels from
+`Targets/Shared/StdLoweringShared.maxon` and arm64 no longer spells a boolean into a GPR first.
 
 ⛔⛔ **THE PRECONDITION IS `length >= 0` AND IT IS THE WHOLE OF THE CORRECTNESS ARGUMENT** — for a
 negative limit the two readings are OPPOSITE, and the unsigned one ADMITS every index instead of
@@ -1712,8 +1716,11 @@ source, so its producers are only the passes); `EC21` (interval match dispatch �
   successors**. `BranchCleanup` closes the hole locally; liveness, loop depth and critical-edge
   classification would all be wrong if such a block ever became reachable. **Rank this by risk, not
   by win.**
-- **arm64** owes a golden mint — EC11's adoption moved every fragment on both arm64 lanes — and carries real `EC16`/`EC18` codegen **never executed on that lane**.
-  `EC18`'s `SMULH` is all that lane needs for its half of strength reduction.
+- ✅ **arm64 is CURRENT, and both rungs now execute there.** `EC18`'s `SMULH` landed with the
+  three-address op AArch64 spells it as, so `StrengthReduceDivision` no longer declines the lane;
+  `EC16`'s memory half landed narrowed to the `S`-bit form; and `EC11` runs from
+  `Targets/Shared/BranchCleanup.maxon`, which both backends call. Both arm64 golden lanes were minted
+  on a Mac that runs them, so the codegen is compared against a reference rather than read.
 - ✅ **CLOSED 2026-08-30 — `f(obj.managedField)` WHERE THE CALLEE FREES THAT FIELD.** shv2 handed a managed
   field read straight to a call with no refcount at all (`emitFieldLoad`: *"a receiver load, an argument, a
   chain hop are all transient and owe nothing"* — the ARGUMENT clause was false), and nothing checked that
@@ -1758,14 +1765,15 @@ source, so its producers are only the passes); `EC21` (interval match dispatch �
   through another argument's contents; a WITNESS dispatch, whose receiver the door is not given; and a record
   freed while a LATER argument of the same call is being evaluated. See
   `Parser.callReachesBorrowedArgumentStorage`.
-- ⛔ **THE THREE NON-HOST GOLDEN LANES ARE STALE AND `A2` ADDED TO ONE OF THEM.** `specs-shv2/fragments/`
-  holds four lanes and only `x64-windows` is ever re-minted here. **All three others hold ZERO
-  `__im_slow`**, so they predate `EC1`'s inline-primitives pass entirely — `x64-linux` 6,403 fragments,
-  `arm64-macos` 4,161, `arm64-linux` 2,588, against `x64-windows`' 6,961 of which 677 carry one. And
-  **1,202 of `x64-linux`'s show `orRegReg`** — the pre-`A2` bounds guard, on the same backend, so
-  `A2` is one more reason they are stale rather than the first. Any run of a lane other than
-  `x64-windows` goes red on contact. This is the standing `block-label-not-identity-remint` debt;
-  recording it with numbers so it is not silently inherited a third time.
+- ✅ **ALL FOUR GOLDEN LANES ARE CURRENT.** `specs-shv2/fragments/` holds four, and three of them are
+  minted on this Mac, which runs arm64-macos natively and both Linux lanes through OrbStack. MEASURED:
+  `x64-windows` 7,189 fragments / 694 carrying `__im_slow`, `arm64-macos` 7,086 / 684, `arm64-linux`
+  7,083 / 684, `x64-linux` 7,117 / 688 — so every lane carries `EC1`'s inline-primitives output rather
+  than predating it, and the counts track each other. `orRegReg` survives in 28 `x64-linux` fragments,
+  not 1,202: the pre-`A2` bounds guard is gone from the corpus.
+  ⚠ **`x64-windows` is the one lane that CANNOT be minted here** — the frontend's `os()` follows the
+  host, so a regen on this machine writes the wrong values — which is why a change that moves its
+  goldens has to be minted on a Windows checkout, and why nothing in this session touches them.
 - **The bootstrap's argument placement is now written down in TWO SHAPES**, which drifts worse than two
   identical copies: `A2` factored x64's into `ClassifyGprArgSources` + `PlaceGprArgs`
   (`RegisterManager.cs`) and `ARM64RegisterManager.cs:645-735` still holds the same algorithm inline —
@@ -1823,8 +1831,8 @@ range checks. **Measure the corpus first**; this may be a row with nothing behin
 - **arm64-macos and wasm32-wasi as first-class rows.** Design and measure on x64-windows (the host
   lane); each row states what it owes the other lanes. `EC16` was filed as the exception — "the arm64
   instruction is the same instruction" — and that held for the ADDRESS and NOT for the ACCESS; see the
-  row for what AArch64's register-offset load actually encodes. It landed on both lanes anyway, at
-  different depths, and owes arm64 a golden mint on a Mac.
+  row for what AArch64's register-offset load actually encodes. It is landed on both lanes, at
+  different depths: the address half unrestricted, the access half narrowed to the `S`-bit form.
 - **Compiler-speed work.** `scale-test` and `docs/optimization-log.md` are a different axis; a row
   here is judged by `self-host-ab.sh` and `--emit-ir`, not by the ladder.
 

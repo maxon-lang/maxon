@@ -5,10 +5,15 @@
 // `run_program compiler=csharp` crashes (`E9001`) on a standalone `__Managed*` call, so the committed cases
 // are the whole of what can be asked of the reference.
 //
-// ⭐ **HOST-ONLY ON THE SAME TERMS AS THE TWO FILESYSTEM FAMILIES.** `x64-windows` is real; every other
-// target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` via
-// `SemanticCheck.calleeNeedsWin32Substrate`, which matches on the `__ms_` PREFIX — so a method added later is
+// ⭐ **EVERY NATIVE LANE SERVES IT; `wasm32-wasi` REFUSES IT.** Which is which is one row —
+// `TargetFacilities.targetProvidesFacility`'s `managedSocket` — and the refusal reaches a program at its own
+// call site as `E3104 targetUnsupportedConstruct`, keyed on the `__ms_` PREFIX, so a method added later is
 // gated by construction rather than by memory.
+//
+// ⚠ **ONE SURFACE, TWO Std GRAPHS, AND THE FORK IS THE RESOLVE** (`SocketResolveShape`): Windows and macOS
+// call `getaddrinfo`, and the two libc-less Linux lanes run this file's own resolver over the file and
+// socket ops it already has. Everything else in this file is target-neutral — the box, the guards, the
+// ownership, the parks — which is what keeps the divergence to the one question the platforms differ on.
 //
 // ---
 //
@@ -92,7 +97,49 @@ export let IpprotoTcp = 6
 // `sizeof(struct sockaddr_in)` — the length `connect` is given (by the lowering) and the size this file
 // ALLOCATES for the address it builds. One fact: a box smaller than the length handed to `connect` is a read
 // past the end of an `__mm_alloc`'d block.
+//
+// ⚠ It is also the MINIMUM either POSIX kernel accepts: a shorter `addrlen` is refused with `EINVAL`
+// (MEASURED on Darwin at 8), so the allocation size and the `connect` argument are not merely consistent by
+// convention.
 export let SockaddrInBytes = 16
+
+// The `flags` argument of `send`/`recv` when there are none: no `MSG_OOB`, no `MSG_PEEK`.
+// `specs/managed-socket.md` documents a plain stream send and receive, and a partial transfer is a normal
+// answer rather than a flag.
+//
+// ⚠ **THE POSIX LANES PASS IT ON THE RECEIVE SIDE ONLY.** `MSG_NOSIGNAL` is a SEND-only flag there and its
+// value is per-OS, so each isel names its own (`StdToArm64Conversion.DarwinMsgNoSignal`,
+// `LinuxRuntime.LinuxMsgNoSignal`); Windows needs no counterpart because it has no SIGPIPE to suppress.
+export let SendRecvNoFlags = 0
+
+// `getaddrinfo`'s SERVICE argument, always NULL — see `StdOp.osSocketResolve`'s own header for why no port
+// is ever formatted as a string for it. Read by both lanes that have a `getaddrinfo` to call.
+export let SocketNoServiceName = 0
+
+// ⭐⭐ **THE FIRST HALFWORD OF A `sockaddr_in`, AND DARWIN DOES NOT AGREE WITH THE OTHER TWO.** Windows and
+// Linux begin the record with a 16-bit `sin_family`; the BSDs begin it with a one-byte `sin_len` and put
+// `sin_family` in BYTE 1 (MEASURED with `offsetof` on this host: `sin_family` at 1 on Darwin, at 0 on an
+// aarch64 Linux guest). ⇒ the halfword is `AF_INET` on two platforms and `sizeof(sockaddr_in) |
+// (AF_INET << 8)` on Darwin, and this is the one place that difference is written down.
+//
+// ⛔⛔ **THE WINDOWS SPELLING PASSES ON DARWIN BY ACCIDENT, WHICH IS EXACTLY WHY IT MAY NOT BE RELIED ON —
+// MEASURED, WITH CONTROLS.** Writing 2 into byte 0 there sets `sin_len = 2` and leaves `sin_family` 0
+// (`AF_UNSPEC`), which Darwin's `connect` accepts on an already-`AF_INET` socket: a probe connected with
+// byte 1 zero, and connected again with byte 0 set to 30 (`AF_INET6`) — while ANY other value in byte 1 was
+// refused with `EAFNOSUPPORT`. So byte 1 is the load-bearing one and byte 0 is ignored, and the record the
+// Windows lane writes is right about neither.
+function sockaddrFamilyHalfword(target Target) returns ParsedInt
+	return match target.os 'os'
+		windows to linux gives AfInet
+		macos gives SockaddrInBytes + (AfInet * SockaddrFamilyByteScale)
+		wasi gives AfInet
+	end 'os'
+end 'sockaddrFamilyHalfword'
+
+// `1 shl 8` as a multiplier, so `sin_family` can be placed in BYTE 1 of the halfword above by an arithmetic
+// the constant folder settles. Named rather than spelled 256 for `ByteTwoScale`'s reason: a bare power of
+// two at a field position says nothing about which byte it encodes.
+let SockaddrFamilyByteScale = 256
 
 // `sizeof(WSADATA)` on Win64. `WSAStartup` fills it and nothing here reads it back — it is a scratch buffer
 // the API demands, freed the moment the call returns.
@@ -191,6 +238,11 @@ let ManagedSocketRuntimePrefix = b"__ms_"
 // (`maxon-sharp/Compiler/2-Parser.cs:1574-1583`) — and `__ms_destruct` is the compiler-INSERTED one: the drop
 // a box takes when its last owner goes away (`SignatureIndex.managedNameDropCallee`), which is the whole of
 // the RAII half.
+//
+// ⚠ They are the ENTRY points and not every function this file installs: a lane running the built-in
+// resolver carries ten more, all `__ms_`-prefixed and none reachable from source (see that section's own
+// header). The prefix is what puts them inside `isManagedSocketRuntimeCallee`, and therefore inside the
+// drift guard's walk.
 export let ManagedSocketTcpConnectName = b"__ms_tcp_connect"
 export let ManagedSocketSendFromName = b"__ms_send_from"
 export let ManagedSocketRecvName = b"__ms_recv"
@@ -268,7 +320,10 @@ end 'emitStoreDwordPair'
 // and the one this function exists to state once. `htons` is the byte swap of the low 16 bits; `sin_addr`
 // arrives ALREADY in network order (it is copied straight out of the `sockaddr` `getaddrinfo` filled), so it
 // is placed and never swapped.
-function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip ValueId, ids ValueMinter) returns ValueId
+//
+// ⚠ The FAMILY half is the caller's, because it is the one field whose byte position is per-platform — see
+// `sockaddrFamilyHalfword`, which carries the measurement.
+function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip ValueId, familyHalfword ParsedInt, ids ValueMinter) returns ValueId
 	// htons: `((port and 0xFF) shl 8) or ((port shrLogical 8) and 0xFF)`.
 	let lowMask = emitConst(module, block: block, value: 0xFF, ids: ids)
 	let byteBits = emitConst(module, block: block, value: 8, ids: ids)
@@ -278,8 +333,8 @@ function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip Va
 	let highByte = emitBin(module, block: block, a: highShifted, b: lowMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let netPort = emitBin(module, block: block, a: lowMoved, b: highByte, opcode: StdBinOpcode.bitOr, ids: ids)
 
-	// `sin_family` at byte 0, `sin_port` at byte 2, `sin_addr` at byte 4.
-	let family = emitConst(module, block: block, value: AfInet, ids: ids)
+	// The family halfword at bytes 0..1, `sin_port` at byte 2, `sin_addr` at byte 4.
+	let family = emitConst(module, block: block, value: familyHalfword, ids: ids)
 	let portScale = emitConst(module, block: block, value: ByteTwoScale, ids: ids)
 	let portPlaced = emitBin(module, block: block, a: netPort, b: portScale, opcode: StdBinOpcode.mul, ids: ids)
 	let familyAndPort = emitBin(module, block: block, a: family, b: portPlaced, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -287,6 +342,112 @@ function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip Va
 	let addrPlaced = emitBin(module, block: block, a: ip, b: addrScale, opcode: StdBinOpcode.mul, ids: ids)
 	return emitBin(module, block: block, a: familyAndPort, b: addrPlaced, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitSockaddrInWord'
+
+// ==========================================================================
+// WHICH RESOLVER A LANE HAS — the one fact this family forks the Std graph on
+// ==========================================================================
+
+// ⭐⭐ **THE TWO WAYS A PLATFORM CAN TURN A HOST NAME INTO AN IPv4 ADDRESS, ASKED ONCE AT INSTALL.** It is
+// `CommandLineRuntime.CommandLineShape`'s arrangement exactly, and for the same reason: each answer builds a
+// COMPLETE Std graph, so nothing downstream of the fork ever asks which target it is compiling for.
+//
+// ⛔⛔ **THE FORK IS FORCED BY THE ABSENCE OF A LIBRARY, NOT BY A MISSING LOWERING.** `getaddrinfo` is a
+// libc FUNCTION — it reads `/etc/nsswitch.conf`, consults `/etc/hosts`, and speaks DNS to whatever
+// `/etc/resolv.conf` names — and shv2's Linux lanes are raw static images that link no libc at all. There
+// is no syscall to point `StdOp.osSocketResolve` at, in either arch's table, so those lanes cannot have a
+// different LOWERING of the same op; they need a different GRAPH.
+//
+// ⚠ **WHY THE BUILT-IN RESOLVER IS Std IR RATHER THAN A PER-LANE CHUNK.** A resolver is a text scan, two
+// file reads and a DNS exchange — several hundred instructions of loops — and a hand-assembled chunk would
+// be that written TWICE, once per Linux arch, with two chances to get a label-length check wrong. Written
+// here it is one body compiled by the isel that already lowers every op it uses, which is the same
+// arrangement that lets `mrt_host_proc_reap` serve both POSIX lanes from one place.
+enum SocketResolveShape
+	// Windows and macOS: `getaddrinfo` fills a linked list of `struct addrinfo` and the graph reads the
+	// first entry's `ai_addr`. ⚠ **THE `ai_addr` OFFSET IS THE SAME 32 ON BOTH, AND THAT IS MEASURED RATHER
+	// THAN ASSUMED** — Darwin orders `ai_canonname` before `ai_addr` exactly as Win64 does (`offsetof` on
+	// this host: 24 and 32), while LINUX REVERSES THEM (`ai_addr` at 24). So this shape's single
+	// `AddrInfoAddrOffset` is correct for both of its lanes and would be wrong for the lane that does not
+	// use it — which is one more reason the fork is a graph and not an offset table.
+	addrInfoList
+	// The Linux lanes: this file's own `__ms_resolve4`, over the existing file and socket ops.
+	builtinResolver
+end 'SocketResolveShape'
+
+// ⚠ **WASI ANSWERS `addrInfoList` AND THAT IS A SHAPE ANSWER, NOT A CAPABILITY CLAIM** —
+// `commandLineShape`'s own note, one family over. `wasi:sockets`'s `ip-name-lookup` answers a LIST of
+// addresses, so the shape really is that one; what that lane lacks is any lowering at all for the band, and
+// `targetProvidesFacility` is where that refusal lives. A shape function that lied about the shape to
+// express a capability would put the same fact in two places.
+function socketResolveShape(target Target) returns SocketResolveShape
+	return match target.os 'os'
+		windows gives SocketResolveShape.addrInfoList
+		linux gives SocketResolveShape.builtinResolver
+		macos gives SocketResolveShape.addrInfoList
+		wasi gives SocketResolveShape.addrInfoList
+	end 'os'
+end 'socketResolveShape'
+
+// ⭐ **RESOLVE `host` INTO A NETWORK-ORDER `sin_addr`, OR ROUTE TO `resolveFailed`.** Both shapes leave the
+// answer in a value the `resolved` block may read — `resolve` is the only edge into it, so a value defined
+// there is simply in scope (the dominance argument `emitLiveHandleOrClosedThrow` makes for its own) — and
+// both RELEASE the host cstring on every edge they take, which is what keeps that scratch out of the
+// caller's four-allocation ledger.
+function emitResolveHostIp(module StdModule, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, shape SocketResolveShape, ids ValueMinter) returns ValueId
+	return match shape 'shape'
+		addrInfoList gives emitResolveThroughAddrInfo(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
+		builtinResolver gives emitResolveThroughBuiltinResolver(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
+	end 'shape'
+end 'emitResolveHostIp'
+
+// `getaddrinfo(host, NULL, hints, out)`, then the first result's `sin_addr`.
+//
+// `hints` — 48 bytes, allocated ZEROED, so only the three fields `getaddrinfo` reads are written. They are
+// DWORDs at 4/8/12, two to a word (see `emitStoreDwordPair`): `ai_flags`+`ai_family` in the first,
+// `ai_socktype`+`ai_protocol` in the second.
+function emitResolveThroughAddrInfo(module StdModule, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, ids ValueMinter) returns ValueId
+	let hints = emitRawAlloc(module, block: resolve, byteCount: emitConst(module, block: resolve, value: AddrInfoBytes, ids: ids), ids: ids)
+	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoFlagsFamilyOffset, low: 0, high: AfInet, ids: ids)
+	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoSocktypeProtocolOffset, low: SockStream, high: IpprotoTcp, ids: ids)
+
+	// The out word holds the `addrinfo*` the OS allocates. Zeroed by `__mm_alloc`, so a failed resolve leaves
+	// a NULL nothing reads.
+	let out = emitWin32OutWord(module, block: resolve, ids: ids)
+	let resolveResult = ids.mint()
+	module.appendOp(resolve, op: StdOp.osSocketResolve(resolveResult, hostPtrId: host, hintsPtrId: hints, outPtrId: out))
+	emitRawFree(module, block: resolve, ptr: hints, ids: ids)
+	emitRawFree(module, block: resolve, ptr: host, ids: ids)
+	let resolveOk = emitConst(module, block: resolve, value: WinsockCallOk, ids: ids)
+	let didResolve = emitCmp(module, block: resolve, a: resolveResult, b: resolveOk, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(resolve, op: StdOp.condBranch(didResolve, thenBlockId: resolved.id, elseBlockId: resolveFailed.id))
+
+	emitRawFree(module, block: resolveFailed, ptr: out, ids: ids)
+
+	// The first result's address, then the list goes back to the OS. `sin_addr` is a DWORD, so it is read as
+	// the word containing it and masked — `emitLoadDword`'s reason, and the four bytes above it are `sin_zero`,
+	// inside the same 16-byte `sockaddr`.
+	let addrInfo = emitLoadField(module, block: resolved, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
+	emitRawFree(module, block: resolved, ptr: out, ids: ids)
+	let sockaddr = emitLoadField(module, block: resolved, record: addrInfo, offset: AddrInfoAddrOffset, ids: ids)
+	let ip = emitLoadDword(module, block: resolved, record: sockaddr, offset: SockaddrAddrOffset, ids: ids)
+	module.appendOp(resolved, op: StdOp.osSocketFreeAddrInfo(addrInfo))
+
+	return ip
+end 'emitResolveThroughAddrInfo'
+
+// `__ms_resolve4(host)` — one call, answering the address or `ResolveNoAddress`. The host cstring is
+// released on the caller's side of the branch because this shape has no OS-owned list to release and
+// therefore nothing else to do on either edge.
+function emitResolveThroughBuiltinResolver(module StdModule, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, ids ValueMinter) returns ValueId
+	let ip = ids.mint()
+	module.appendOp(resolve, op: StdOp.call(ip, callee: ManagedSocketResolveName, args: argsOf(host)))
+	emitRawFree(module, block: resolve, ptr: host, ids: ids)
+	let noAddress = emitConst(module, block: resolve, value: ResolveNoAddress, ids: ids)
+	let didResolve = emitCmp(module, block: resolve, a: ip, b: noAddress, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(resolve, op: StdOp.condBranch(didResolve, thenBlockId: resolved.id, elseBlockId: resolveFailed.id))
+
+	return ip
+end 'emitResolveThroughBuiltinResolver'
 
 // ⭐⭐ **`__ms_tcp_connect(hostRec, port) -> (box, flag)` — RESOLVE, THEN CONNECT, OR THROW.**
 //
@@ -308,7 +469,7 @@ end 'emitSockaddrInWord'
 // this function — the host cstring, the `WSADATA`, the `hints`, the `addrinfo*` out word — and each is
 // released before the block that could leave. The `addrinfo` LIST is the OS's and goes back through
 // `freeaddrinfo`, never through `__mm_free`.
-function buildManagedSocketTcpConnect(module StdModule)
+function buildManagedSocketTcpConnect(module StdModule, target Target)
 	var func = IrFunction.createFromStd(ManagedSocketTcpConnectName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedSocketThrows())
 	var ids = ValueMinter.create(2)
 
@@ -353,42 +514,20 @@ function buildManagedSocketTcpConnect(module StdModule)
 	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
 	emitErrorReturn(module, block: noWinsock, flag: ManagedSocketConnectFailedFlag, ids: ids)
 
-	// `hints` — 48 bytes, allocated ZEROED, so only the three fields `getaddrinfo` reads are written. They are
-	// DWORDs at 4/8/12, two to a word (see `emitStoreDwordPair`): `ai_flags`+`ai_family` in the first,
-	// `ai_socktype`+`ai_protocol` in the second.
-	// ⭐ **PARK 1 OF 2 — THE DNS RESOLVE.** `getaddrinfo` is the first of this function's two genuinely
-	// blocking calls: it goes to a resolver over the network and can take longer than the connect that follows
-	// it. The bootstrap gives it a park of its own by giving it a SYNC OP of its own — `SyncOpDnsResolve`,
-	// which reports under the `net_connect` operation name
+	// ⭐ **PARK 1 OF 2 — THE DNS RESOLVE.** The resolve is the first of this function's two genuinely
+	// blocking operations: it goes to a resolver over the network and can take longer than the connect that
+	// follows it. The bootstrap gives it a park of its own by giving it a SYNC OP of its own —
+	// `SyncOpDnsResolve`, which reports under the `net_connect` operation name
 	// (`maxon-sharp/Compiler/MLIR/X86CodeEmitter.Runtime.cs:6754`) — so the pair a resolve prints is spelled
 	// `[net_connect]` there too, and this is the same pair rather than a new spelling.
+	//
+	// ⚠ **THE PARK IS HERE AND NOT INSIDE EITHER SHAPE, BECAUSE IT IS ABOUT THE OPERATION AND NOT ABOUT THE
+	// MECHANISM.** Both shapes block the green thread for a network round trip; that is what a park reports,
+	// and `emitIoPark`'s once-per-entry-point invariant would be broken by a second one inside the resolver.
 	emitIoPark(module, block: resolve, operation: GtIoOperation.netConnect, ids: ids)
-	let hints = emitRawAlloc(module, block: resolve, byteCount: emitConst(module, block: resolve, value: AddrInfoBytes, ids: ids), ids: ids)
-	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoFlagsFamilyOffset, low: 0, high: AfInet, ids: ids)
-	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoSocktypeProtocolOffset, low: SockStream, high: IpprotoTcp, ids: ids)
-
-	// The out word holds the `addrinfo*` the OS allocates. Zeroed by `__mm_alloc`, so a failed resolve leaves
-	// a NULL nothing reads.
-	let out = emitWin32OutWord(module, block: resolve, ids: ids)
-	let resolveResult = ids.mint()
-	module.appendOp(resolve, op: StdOp.osSocketResolve(resolveResult, hostPtrId: host, hintsPtrId: hints, outPtrId: out))
-	emitRawFree(module, block: resolve, ptr: hints, ids: ids)
-	emitRawFree(module, block: resolve, ptr: host, ids: ids)
-	let resolveOk = emitConst(module, block: resolve, value: WinsockCallOk, ids: ids)
-	let didResolve = emitCmp(module, block: resolve, a: resolveResult, b: resolveOk, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(resolve, op: StdOp.condBranch(didResolve, thenBlockId: resolved.id, elseBlockId: resolveFailed.id))
-
-	emitRawFree(module, block: resolveFailed, ptr: out, ids: ids)
+	let ip = emitResolveHostIp(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedSocketResolveFailedFlag, ids: ids)
 
-	// The first result's address, then the list goes back to the OS. `sin_addr` is a DWORD, so it is read as
-	// the word containing it and masked — `emitLoadDword`'s reason, and the four bytes above it are `sin_zero`,
-	// inside the same 16-byte `sockaddr`.
-	let addrInfo = emitLoadField(module, block: resolved, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
-	emitRawFree(module, block: resolved, ptr: out, ids: ids)
-	let sockaddr = emitLoadField(module, block: resolved, record: addrInfo, offset: AddrInfoAddrOffset, ids: ids)
-	let ip = emitLoadDword(module, block: resolved, record: sockaddr, offset: SockaddrAddrOffset, ids: ids)
-	module.appendOp(resolved, op: StdOp.osSocketFreeAddrInfo(addrInfo))
 	let testNet = emitConst(module, block: resolved, value: TestNet1NetOrder, ids: ids)
 	let isTestNet = emitCmp(module, block: resolved, a: ip, b: testNet, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(resolved, op: StdOp.condBranch(isTestNet, thenBlockId: refused.id, elseBlockId: create.id))
@@ -417,7 +556,7 @@ function buildManagedSocketTcpConnect(module StdModule)
 	// two, which is what `specs/http-client.md` pins.
 	emitIoPark(module, block: dial, operation: GtIoOperation.netConnect, ids: ids)
 	let addr = emitRawAlloc(module, block: dial, byteCount: emitConst(module, block: dial, value: SockaddrInBytes, ids: ids), ids: ids)
-	let addrWord = emitSockaddrInWord(module, block: dial, port: port, ip: ip, ids: ids)
+	let addrWord = emitSockaddrInWord(module, block: dial, port: port, ip: ip, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
 	emitStoreField(module, block: dial, record: addr, offset: SockaddrFamilyPortAddrOffset, value: addrWord)
 	let dialResult = ids.mint()
 	module.appendOp(dial, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: addr))
@@ -717,16 +856,25 @@ end 'claimManagedSocketOrdinals'
 // and a builder that gains or loses a clause without the predicate following is a `try` that silently stops
 // being required (or an E3055 on a call that cannot fail). Checked in BOTH directions, and the source-method
 // map is asked for every throwing callee in the same traversal (see `GtRuntime.runtimeCalleeSourceMethod`).
-export function installManagedSocketRuntime(module StdModule, usage RuntimeUsage)
+export function installManagedSocketRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if not usage.usesManagedSocket 'noManagedSocket'
 		return
 	end 'noManagedSocket'
 
-	buildManagedSocketTcpConnect(module)
+	buildManagedSocketTcpConnect(module, target: target)
 	buildManagedSocketSendFrom(module)
 	buildManagedSocketRecv(module)
 	buildManagedSocketClose(module)
 	buildManagedSocketDestruct(module)
+
+	// ⚠ **THE RESOLVER IS INSTALLED ONLY WHERE ITS SHAPE IS CHOSEN**, exactly as
+	// `installCommandLineRuntime` installs one of two argv graphs: a lane with a `getaddrinfo` emits no call
+	// to `__ms_resolve4`, and laying it out anyway would be a dozen unreachable functions in every socket
+	// program on that lane.
+	match socketResolveShape(target) 'shape'
+		addrInfoList then break 'shape'
+		builtinResolver then installManagedSocketResolver(module, target: target)
+	end 'shape'
 
 	for func in module.functions 'eachFunc'
 		if not isManagedSocketRuntimeCallee(func.name) 'notOurs'
@@ -755,3 +903,1117 @@ end 'installManagedSocketRuntime'
 export function isManagedSocketRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ManagedSocketRuntimePrefix)
 end 'isManagedSocketRuntimeCallee'
+
+
+// ==========================================================================
+// THE BUILT-IN RESOLVER — the Std graph a lane with no `getaddrinfo` runs
+// ==========================================================================
+//
+// ⭐⭐⭐ **A HOST NAME BECOMES AN IPv4 ADDRESS IN THREE STEPS, IN THE ORDER EVERY POSIX RESOLVER USES:**
+// a NUMERIC address is parsed and answered without touching the network, `/etc/hosts` is consulted next,
+// and only then is a DNS query sent to the first `nameserver` in `/etc/resolv.conf`. That order is not a
+// preference — `192.0.2.1` and `localhost` must resolve on a machine with no working DNS at all, and
+// `specs/managed-socket.md`'s `connect-refused` case is exactly the first of those.
+//
+// ⭐⭐ **THE DNS EXCHANGE IS OVER TCP, WHICH IS WHY THIS NEEDS NO NEW `StdOp`.** DNS is usually spoken over
+// UDP, and a datagram socket would need `socket(SOCK_DGRAM)`, `sendto` and `recvfrom` primitives this tier
+// does not have. Every resolver MUST also accept TCP (RFC 7766 makes it a requirement, not a fallback), and
+// a TCP query is the same message behind a two-byte length prefix — so the five stream ops the socket band
+// already owns answer the whole question. MEASURED against the resolver these lanes actually run under:
+// a TCP query for a real host answered `rcode 0, ancount 1`, byte-identical in content to the UDP one.
+//
+// ⚠⚠ **WHAT THIS RESOLVER DOES NOT DO, STATED RATHER THAN IMPLIED.** It answers IPv4 (`A`) records only —
+// which is all `sockaddr_in` can carry and all `__ms_tcp_connect` builds; it reads the FIRST `nameserver`
+// line and does not fail over to a second; it does not apply the `search`/`domain` suffixes, so a bare
+// unqualified label resolves only through `/etc/hosts`; and it follows no `CNAME` chain of its own — a
+// server that answers a CNAME without the A record beside it is a miss. Every one of those is a step
+// `getaddrinfo` takes and this does not, and each would be a widening rather than a redesign.
+
+// The answer both the parser and the whole resolver give when there is no address. -1 is not a possible
+// `sin_addr` word: it would be 255.255.255.255, the limited broadcast address, which is not a connect
+// target — so the sentinel costs no legal answer.
+let ResolveNoAddress = -1 as ParsedInt
+
+// The resolver's entry point, plus the eight helpers it is built out of. All are `__ms_`-prefixed, which is
+// what puts them inside `isManagedSocketRuntimeCallee` — the drift guard walks them, and no source line can
+// name one, so the E3104 roster is unaffected.
+let ManagedSocketResolveName = b"__ms_resolve4"
+let ManagedSocketIpv4Name = b"__ms_ipv4"
+let ManagedSocketHostsName = b"__ms_hosts4"
+let ManagedSocketNameserverName = b"__ms_ns4"
+let ManagedSocketDnsName = b"__ms_dns4"
+let ManagedSocketSlurpName = b"__ms_slurp"
+let ManagedSocketBlanksName = b"__ms_blanks"
+let ManagedSocketWordName = b"__ms_word"
+let ManagedSocketEolName = b"__ms_eol"
+let ManagedSocketDnsSkipName = b"__ms_dns_skip"
+
+// The two files a POSIX resolver reads, and nothing chooses them at runtime.
+let ResolveHostsPath = b"/etc/hosts"
+let ResolveConfPath = b"/etc/resolv.conf"
+
+// The keyword whose line carries a resolver's address. Its LENGTH is compared before its bytes, which is
+// what makes the byte loop unreachable for the `search`, `options` and `domain` lines beside it.
+let ResolveNameserverKeyword = b"nameserver"
+
+// ⚠ **THE SCRATCH A CONFIGURATION FILE IS READ INTO, AND ITS SIZE IS A STATED LIMIT RATHER THAN A GUESS.**
+// One buffer serves both files, one read fills it, and a file longer than this is TRUNCATED — so a host
+// defined past 8 KiB of `/etc/hosts` is not found. Both files are conventionally a few hundred bytes; a
+// growing read loop would be a second allocator's worth of code for a case neither file reaches.
+let ResolveTextBytes = 8192 as ParsedInt
+
+// The scratch a DNS exchange is built and read in. It bounds the QUERY (a name is at most 255 bytes, so a
+// query is at most 273) and the RESPONSE, which a server may legally make far larger — an answer section
+// precedes the authority and additional sections, so an `A` record is inside this window for every response
+// a stub resolver receives in practice, and a longer one is parsed as far as it arrived.
+let DnsMessageBytes = 4096 as ParsedInt
+
+// The bytes this file's scanners test. Named because a bare 0x2E in a compare says nothing.
+let ResolveDotByte = 0x2E
+let ResolveHashByte = 0x23
+let ResolveNewlineByte = 0x0A
+let ResolveSpaceByte = 0x20
+let ResolveTabByte = 0x09
+let ResolveDigitZeroByte = 0x30
+let ResolveDigitNineByte = 0x39
+
+// ⭐ **A DOTTED QUAD'S FOUR OCTETS, AND WHAT BOUNDS EACH.** The parser accepts exactly four octets of 0..255
+// separated by three dots and NOTHING else — no shorthand `a.b`, no octal, no leading `+`. `inet_addr`'s
+// historical forms are deliberately absent: they are a source of ambiguity rather than of compatibility, and
+// no spec case reaches one.
+let Ipv4OctetCount = 4
+let Ipv4LastOctetIndex = Ipv4OctetCount - 1
+let Ipv4OctetMax = 255
+let Ipv4DecimalBase = 10
+// `256` as a MULTIPLIER, so each octet lands one byte higher than the last. The address is accumulated in
+// NETWORK order — the first octet is the LOW byte — because that is the order `sin_addr` holds it in and
+// therefore what `emitSockaddrInWord` places without swapping.
+let Ipv4OctetScale = 256
+
+// The DNS facts this file writes and reads. Every one is RFC 1035's and none is a choice.
+let DnsPort = 53
+let DnsTcpLengthPrefixBytes = 2
+let DnsHeaderBytes = 12
+let DnsQuestionTailBytes = 4
+let DnsTypeA = 1
+let DnsClassIn = 1
+let DnsRecursionDesiredFlags = 0x0100
+// The query id. A stub that opens a FRESH connection per query and reads one response cannot be answered by
+// anybody else's query, so the id carries no security here and is a constant; it is echoed back and this
+// file does not test it, exactly as it does not test the `QR` bit.
+let DnsQueryId = 0x4D58
+let DnsQdCountOne = 1
+let DnsRcodeMask = 0x0F
+let DnsRcodeNoError = 0
+// A DNS name ends at a zero LENGTH byte or at a two-byte COMPRESSION POINTER, whose top two bits are set.
+let DnsLabelPointerMask = 0xC0
+let DnsPointerBytes = 2
+let DnsLabelTerminatorBytes = 1
+// The longest a single label and a whole name may be. A query is refused rather than truncated past either.
+let DnsMaxLabelBytes = 63
+let DnsMaxNameBytes = 255
+// The fixed fields of a resource record after its name: TYPE, CLASS, TTL and RDLENGTH.
+let DnsRecordFixedBytes = 10
+let DnsRecordRdLengthOffset = 8
+let DnsAddressRdLength = 4
+
+// The offsets inside the message this file writes by hand. Every one is relative to the TCP length prefix,
+// which is why they are two higher than RFC 1035's own numbering.
+let DnsLengthHighOffset = 0 as ByteOffset
+let DnsLengthLowOffset = 1 as ByteOffset
+let DnsIdHighOffset = 2 as ByteOffset
+let DnsIdLowOffset = 3 as ByteOffset
+let DnsFlagsHighOffset = 4 as ByteOffset
+let DnsQdCountLowOffset = 7 as ByteOffset
+let DnsRcodeByteOffset = 5 as ByteOffset
+let DnsAnCountHighIndex = 8
+let DnsQuestionStart = DnsTcpLengthPrefixBytes + DnsHeaderBytes
+
+// A byte's worth of shift, as a MULTIPLIER — the tier has no narrow store, so a big-endian halfword is
+// composed rather than written (`ByteTwoScale`'s argument, one field width down).
+let ByteOneScale = 256
+let ByteMask = 0xFF
+
+// ⭐ Install the whole resolver. Its shape is chosen once, at `installManagedSocketRuntime`.
+function installManagedSocketResolver(module StdModule, target Target)
+	buildManagedSocketSpan(module, name: ManagedSocketBlanksName, skipBlanks: true)
+	buildManagedSocketSpan(module, name: ManagedSocketWordName, skipBlanks: false)
+	buildManagedSocketEol(module)
+	buildManagedSocketIpv4(module)
+	buildManagedSocketSlurp(module)
+	buildManagedSocketHosts(module)
+	buildManagedSocketNameserver(module)
+	buildManagedSocketDnsSkip(module)
+	buildManagedSocketDns(module, target: target)
+	buildManagedSocketResolve(module)
+end 'installManagedSocketResolver'
+
+// One CONSTANT byte at a CONSTANT offset — the shape the DNS header is written with, where
+// `emitStoreByte`'s runtime index would be an add of two constants at every field.
+function emitStoreConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, value ParsedInt, ids ValueMinter)
+	let byteValue = emitConst(module, block: block, value: value, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(base, offset: offset, valueId: byteValue, valueType: StdType.u8))
+end 'emitStoreConstByte'
+
+// Its dual — one byte at a CONSTANT offset, zero-extended.
+function emitLoadConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+	let loaded = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: base, offset: offset, valueType: StdType.u8))
+	return loaded
+end 'emitLoadConstByte'
+
+// A BIG-ENDIAN halfword at a runtime index — every multi-byte field in a DNS message is one, and this tier
+// has no halfword load to do it in one step.
+function emitLoadBigEndian16(module StdModule, block IrBlock, buf ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let high = emitLoadByte(module, block: block, base: buf, index: index, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let lowIndex = emitBin(module, block: block, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let low = emitLoadByte(module, block: block, base: buf, index: lowIndex, ids: ids)
+	let scale = emitConst(module, block: block, value: ByteOneScale, ids: ids)
+	let placed = emitBin(module, block: block, a: high, b: scale, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: placed, b: low, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitLoadBigEndian16'
+
+// The `int` a helper answers, straight out of a call. Every function in this section returns one i64.
+function emitResolverCall(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter) returns ValueId
+	let result = ids.mint()
+	module.appendOp(block, op: StdOp.call(result, callee: callee, args: args))
+	return result
+end 'emitResolverCall'
+
+// ⭐⭐ **ONE LOOP, TWO INSTALLED FUNCTIONS — `__ms_blanks` SKIPS A RUN OF BLANKS AND `__ms_word` SKIPS A RUN
+// OF NON-BLANKS, AND THEY DIFFER ONLY IN WHICH WAY THE PREDICATE BRANCHES.** A blank is a space or a tab; a
+// newline is not one, because every caller works inside a line whose end it has already found.
+//
+// ⚠ **THE PREDICATE HAS TO BRANCH RATHER THAN PRODUCE A VALUE.** This tier has no `setcc`
+// (`MmRuntime.emitConstReturn` carries that), so *"is this byte a blank"* is two compares and two edges
+// rather than an expression — which is exactly why the two functions share a BUILDER instead of sharing a
+// runtime argument.
+function buildManagedSocketSpan(module StdModule, name ByteArray, skipBlanks bool)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"msspan")
+	var body = module.addBlock(func, label: b"msspb")
+	var tabTest = module.addBlock(func, label: b"mssptab")
+	var step = module.addBlock(func, label: b"msspstep")
+	var done = module.addBlock(func, label: b"msspdone")
+
+	emitParams(module, block: entry, count: 3)
+	let buf = 0 as ValueId
+	let start = 1 as ValueId
+	let limit = 2 as ValueId
+
+	let onBlank = step.id if skipBlanks else done.id
+	let offBlank = done.id if skipBlanks else step.id
+
+	let pos = ids.mint()
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+
+	let atEnd = emitCmp(module, block: header, a: pos, b: limit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
+	let space = emitConst(module, block: body, value: ResolveSpaceByte, ids: ids)
+	let isSpace = emitCmp(module, block: body, a: current, b: space, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(isSpace, thenBlockId: onBlank, elseBlockId: tabTest.id))
+
+	let tab = emitConst(module, block: tabTest, value: ResolveTabByte, ids: ids)
+	let isTab = emitCmp(module, block: tabTest, a: current, b: tab, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(tabTest, op: StdOp.condBranch(isTab, thenBlockId: onBlank, elseBlockId: offBlank))
+
+	let one = emitConst(module, block: step, value: 1, ids: ids)
+	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+
+	module.setTerminator(done, op: StdOp.ret(pos))
+
+	module.functions.push(func)
+end 'buildManagedSocketSpan'
+
+// `__ms_eol(buf, pos, end)` — the index of this line's terminating newline, or `end`. Its own function
+// rather than a third `buildManagedSocketSpan` specialization because it tests ONE byte and the span tests
+// two, and a builder parameterised over the byte SET would be the set written down twice.
+function buildManagedSocketEol(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketEolName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"mseol")
+	var body = module.addBlock(func, label: b"mseolb")
+	var step = module.addBlock(func, label: b"mseolstep")
+	var done = module.addBlock(func, label: b"mseoldone")
+
+	emitParams(module, block: entry, count: 3)
+	let buf = 0 as ValueId
+	let start = 1 as ValueId
+	let limit = 2 as ValueId
+
+	let pos = ids.mint()
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+
+	let atEnd = emitCmp(module, block: header, a: pos, b: limit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
+	let newline = emitConst(module, block: body, value: ResolveNewlineByte, ids: ids)
+	let isNewline = emitCmp(module, block: body, a: current, b: newline, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(isNewline, thenBlockId: done.id, elseBlockId: step.id))
+
+	let one = emitConst(module, block: step, value: 1, ids: ids)
+	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+
+	module.setTerminator(done, op: StdOp.ret(pos))
+
+	module.functions.push(func)
+end 'buildManagedSocketEol'
+
+// The six values `__ms_ipv4`'s loop carries, in the order its header declares them. A local composer
+// because `MmRuntime`'s `argsOf`/`twoArgs`/`threeArgs`/`fourArgs` family stops at four and this loop needs
+// six — which is also why the six are named here once rather than pushed at each of the three edges.
+function ipv4LoopArgs(pos ValueId, address ValueId, scale ValueId, octet ValueId, digits ValueId, closed ValueId) returns ValueIdArray
+	var args = fourArgs(pos, second: address, third: scale, fourth: octet)
+	args.push(digits)
+	args.push(closed)
+	return args
+end 'ipv4LoopArgs'
+
+// ⭐⭐ **`__ms_ipv4(buf, len)` — A DOTTED QUAD, OR `ResolveNoAddress`.** Exactly four decimal octets of
+// 0..255 separated by three dots, over the byte range `buf[0 .. len)`, and nothing else: no `inet_addr`
+// shorthand (`a.b`, `a.b.c`), no octal, no sign, no surrounding blanks. The historical forms are refused
+// rather than supported because they are a source of ambiguity — `010` is ten here and eight there — and
+// nothing in this compiler's surface produces one.
+//
+// ⚠ **THE ADDRESS IS ACCUMULATED IN NETWORK ORDER — THE FIRST OCTET IS THE LOW BYTE** — because that is the
+// order `sin_addr` holds it in, which is what lets `emitSockaddrInWord` place it without a swap and what
+// makes `192.0.2.1` compare equal to `TestNet1NetOrder`.
+//
+// ⚠ Six values ride the loop: the cursor, the address so far, the next octet's byte SCALE, the octet being
+// read, how many digits it has (which is what refuses an EMPTY octet) and how many octets are closed.
+function buildManagedSocketIpv4(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketIpv4Name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"msip")
+	var body = module.addBlock(func, label: b"msipb")
+	var digitLow = module.addBlock(func, label: b"msipdlo")
+	var digitHigh = module.addBlock(func, label: b"msipdhi")
+	var digit = module.addBlock(func, label: b"msipdig")
+	var digitFits = module.addBlock(func, label: b"msipdfit")
+	var dot = module.addBlock(func, label: b"msipdot")
+	var dotCount = module.addBlock(func, label: b"msipdcnt")
+	var dotClosed = module.addBlock(func, label: b"msipdcl")
+	var finish = module.addBlock(func, label: b"msipfin")
+	var finishCount = module.addBlock(func, label: b"msipfcnt")
+	var finishClosed = module.addBlock(func, label: b"msipfcl")
+	var failed = module.addBlock(func, label: b"msipbad")
+
+	emitParams(module, block: entry, count: 2)
+	let buf = 0 as ValueId
+	let len = 1 as ValueId
+
+	let pos = ids.mint()
+	let address = ids.mint()
+	let scale = ids.mint()
+	let octet = ids.mint()
+	let digits = ids.mint()
+	let closed = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(address, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(scale, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(octet, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(digits, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(closed, argType: StdType.i64))
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let firstScale = emitConst(module, block: entry, value: 1, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: ipv4LoopArgs(zero, address: zero, scale: firstScale, octet: zero, digits: zero, closed: zero)))
+
+	let atEnd = emitCmp(module, block: header, a: pos, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: finish.id, elseBlockId: body.id))
+
+	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
+	let dotByte = emitConst(module, block: body, value: ResolveDotByte, ids: ids)
+	let isDot = emitCmp(module, block: body, a: current, b: dotByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(isDot, thenBlockId: dot.id, elseBlockId: digitLow.id))
+
+	let zeroDigit = emitConst(module, block: digitLow, value: ResolveDigitZeroByte, ids: ids)
+	let belowDigits = emitCmp(module, block: digitLow, a: current, b: zeroDigit, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(digitLow, op: StdOp.condBranch(belowDigits, thenBlockId: failed.id, elseBlockId: digitHigh.id))
+
+	let nineDigit = emitConst(module, block: digitHigh, value: ResolveDigitNineByte, ids: ids)
+	let aboveDigits = emitCmp(module, block: digitHigh, a: current, b: nineDigit, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(digitHigh, op: StdOp.condBranch(aboveDigits, thenBlockId: failed.id, elseBlockId: digit.id))
+
+	let base = emitConst(module, block: digit, value: Ipv4DecimalBase, ids: ids)
+	let shifted = emitBin(module, block: digit, a: octet, b: base, opcode: StdBinOpcode.mul, ids: ids)
+	let digitZero = emitConst(module, block: digit, value: ResolveDigitZeroByte, ids: ids)
+	let digitValue = emitBin(module, block: digit, a: current, b: digitZero, opcode: StdBinOpcode.sub, ids: ids)
+	let grown = emitBin(module, block: digit, a: shifted, b: digitValue, opcode: StdBinOpcode.add, ids: ids)
+	let octetMax = emitConst(module, block: digit, value: Ipv4OctetMax, ids: ids)
+	let overflowed = emitCmp(module, block: digit, a: grown, b: octetMax, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(digit, op: StdOp.condBranch(overflowed, thenBlockId: failed.id, elseBlockId: digitFits.id))
+
+	let digitStep = emitConst(module, block: digitFits, value: 1, ids: ids)
+	let digitsNext = emitBin(module, block: digitFits, a: digits, b: digitStep, opcode: StdBinOpcode.add, ids: ids)
+	let posAfterDigit = emitBin(module, block: digitFits, a: pos, b: digitStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(digitFits, op: StdOp.branch(header.id))
+	digitFits.branchEdges.push(BranchEdge.create(header.id, argIds: ipv4LoopArgs(posAfterDigit, address: address, scale: scale, octet: grown, digits: digitsNext, closed: closed)))
+
+	// A dot closes an octet, and both guards are refusals: an EMPTY octet (`1..2`, a leading dot) and a
+	// FOURTH dot. Together they are what holds the accepted grammar to exactly four octets.
+	let dotEmptyZero = emitConst(module, block: dot, value: 0, ids: ids)
+	let dotEmpty = emitCmp(module, block: dot, a: digits, b: dotEmptyZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dot, op: StdOp.condBranch(dotEmpty, thenBlockId: failed.id, elseBlockId: dotCount.id))
+
+	let lastIndex = emitConst(module, block: dotCount, value: Ipv4LastOctetIndex, ids: ids)
+	let dotsFull = emitCmp(module, block: dotCount, a: closed, b: lastIndex, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(dotCount, op: StdOp.condBranch(dotsFull, thenBlockId: failed.id, elseBlockId: dotClosed.id))
+
+	let dotScale = emitConst(module, block: dotClosed, value: Ipv4OctetScale, ids: ids)
+	let placedDot = emitBin(module, block: dotClosed, a: octet, b: scale, opcode: StdBinOpcode.mul, ids: ids)
+	let addressDot = emitBin(module, block: dotClosed, a: address, b: placedDot, opcode: StdBinOpcode.add, ids: ids)
+	let scaleNext = emitBin(module, block: dotClosed, a: scale, b: dotScale, opcode: StdBinOpcode.mul, ids: ids)
+	let dotStep = emitConst(module, block: dotClosed, value: 1, ids: ids)
+	let closedNext = emitBin(module, block: dotClosed, a: closed, b: dotStep, opcode: StdBinOpcode.add, ids: ids)
+	let posAfterDot = emitBin(module, block: dotClosed, a: pos, b: dotStep, opcode: StdBinOpcode.add, ids: ids)
+	let dotReset = emitConst(module, block: dotClosed, value: 0, ids: ids)
+	module.setTerminator(dotClosed, op: StdOp.branch(header.id))
+	dotClosed.branchEdges.push(BranchEdge.create(header.id, argIds: ipv4LoopArgs(posAfterDot, address: addressDot, scale: scaleNext, octet: dotReset, digits: dotReset, closed: closedNext)))
+
+	// The end of the range closes the LAST octet. The same empty-octet refusal, and a count that must be
+	// EXACTLY three dots — where the dot arm's is a ceiling, because a fourth dot and a fourth octet are not
+	// the same event.
+	let finishEmptyZero = emitConst(module, block: finish, value: 0, ids: ids)
+	let finishEmpty = emitCmp(module, block: finish, a: digits, b: finishEmptyZero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(finish, op: StdOp.condBranch(finishEmpty, thenBlockId: failed.id, elseBlockId: finishCount.id))
+
+	let finishLast = emitConst(module, block: finishCount, value: Ipv4LastOctetIndex, ids: ids)
+	let wrongCount = emitCmp(module, block: finishCount, a: closed, b: finishLast, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(finishCount, op: StdOp.condBranch(wrongCount, thenBlockId: failed.id, elseBlockId: finishClosed.id))
+
+	let placedLast = emitBin(module, block: finishClosed, a: octet, b: scale, opcode: StdBinOpcode.mul, ids: ids)
+	let addressLast = emitBin(module, block: finishClosed, a: address, b: placedLast, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(finishClosed, op: StdOp.ret(addressLast))
+
+	emitConstReturn(module, block: failed, value: ResolveNoAddress, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketIpv4'
+
+// ⭐ **`__ms_slurp(path, buf, cap)` — A WHOLE CONFIGURATION FILE IN ONE READ, OR 0.** Open, one read, close.
+//
+// ⚠ **ONE READ, AND THE LIMIT IS STATED RATHER THAN LOOPED AROUND.** `/etc/hosts` and `/etc/resolv.conf`
+// are regular files of a few hundred bytes, for which a single `read` returns everything; a file longer
+// than `cap` is truncated here, so a definition past that point is not found. A growing read loop would be
+// a second allocator's worth of code for a case neither file reaches.
+//
+// ⚠ A failed open answers 0 rather than throwing: this whole family reports *no address* and never *why*,
+// because `__ManagedSocketError` has one resolve variant and a missing `/etc/resolv.conf` is a resolve
+// failure like any other.
+function buildManagedSocketSlurp(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketSlurpName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var opened = module.addBlock(func, label: b"msslop")
+	var read = module.addBlock(func, label: b"msslrd")
+	var empty = module.addBlock(func, label: b"msslno")
+
+	emitParams(module, block: entry, count: 3)
+	let path = 0 as ValueId
+	let buf = 1 as ValueId
+	let cap = 2 as ValueId
+
+	let handle = ids.mint()
+	module.appendOp(entry, op: StdOp.osFileOpenRead(handle, pathPtrId: path))
+	let invalid = emitConst(module, block: entry, value: InvalidHandleValue, ids: ids)
+	let openFailed = emitCmp(module, block: entry, a: handle, b: invalid, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(openFailed, thenBlockId: empty.id, elseBlockId: opened.id))
+
+	let out = emitWin32OutWord(module, block: opened, ids: ids)
+	let readOk = ids.mint()
+	module.appendOp(opened, op: StdOp.osReadFile(readOk, handleId: handle, bufId: buf, lenId: cap, bytesOutPtrId: out))
+	module.appendOp(opened, op: StdOp.osFileClose(handle))
+	let count = emitLoadField(module, block: opened, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
+	emitRawFree(module, block: opened, ptr: out, ids: ids)
+	let readFalse = emitConst(module, block: opened, value: 0, ids: ids)
+	let readFailed = emitCmp(module, block: opened, a: readOk, b: readFalse, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(opened, op: StdOp.condBranch(readFailed, thenBlockId: empty.id, elseBlockId: read.id))
+
+	module.setTerminator(read, op: StdOp.ret(count))
+
+	emitConstReturn(module, block: empty, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketSlurp'
+
+// ⭐ **A COMPILE-TIME cstring IN A BLOCK THIS FUNCTION OWNS.** `MmRuntime.emitLiteralCString` puts the same
+// bytes in a `__slab_alloc` block and none of its callers releases one, which is sound there because each
+// runs ONCE PER PROCESS (a `MAXON_MAX_PROCS` read, a `PATH` lookup). A resolve runs once per CONNECT, so
+// its scratch has to be released — and therefore has to come from the tracked allocator `emitRawFree`
+// answers. The terminator needs no store: an `__mm_alloc` block is zeroed.
+function emitOwnedCString(module StdModule, block IrBlock, text ByteArray, ids ValueMinter) returns ValueId
+	let size = emitConst(module, block: block, value: text.count() + 1, ids: ids)
+	let buf = emitRawAlloc(module, block: block, byteCount: size, ids: ids)
+
+	for k in 0 upto text.count() 'eachByte'
+		let ch = try text.get(k) otherwise panic("emitOwnedCString: text.get out of range at {k} of {text.count()}")
+		emitStoreConstByte(module, block: block, base: buf, offset: k as ByteOffset, value: ch, ids: ids)
+	end 'eachByte'
+
+	return buf
+end 'emitOwnedCString'
+
+// ⭐⭐ **THE LINE WALK BOTH CONFIGURATION-FILE SCANNERS ARE BUILT ON — read the file, then step over it one
+// line at a time.** `/etc/hosts` and `/etc/resolv.conf` ask different questions OF a line and the same
+// question ABOUT the file, so the skeleton is written once: the path cstring and its release, the read, the
+// end-of-line for each step, and the advance past the newline.
+//
+// ⚠ **THE CALLER MINTS `linePos` AND `lineEnd` AND OWNS EVERY BLOCK**, which is `emitCStringLength`'s
+// arrangement and for its reason: a builder answering with both a block and two values would have to return
+// a record, and a record here is a heap box per call site. The caller carries on inside `lineStart` — where
+// `lineEnd` is already in scope — and terminates that block itself.
+function emitResolverLineWalk(module StdModule, entry IrBlock, lineHeader IrBlock, lineStart IrBlock, nextLine IrBlock, notFound IrBlock, path ByteArray, buf ValueId, cap ValueId, linePos ValueId, lineEnd ValueId, ids ValueMinter)
+	let pathBuf = emitOwnedCString(module, block: entry, text: path, ids: ids)
+	let count = ids.mint()
+	module.appendOp(entry, op: StdOp.call(count, callee: ManagedSocketSlurpName, args: threeArgs(pathBuf, second: buf, third: cap)))
+	emitRawFree(module, block: entry, ptr: pathBuf, ids: ids)
+	let firstLine = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(lineHeader.id))
+	lineHeader.blockArgs.push(IrBlockArg.create(linePos, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(lineHeader.id, argIds: argsOf(firstLine)))
+
+	let linesDone = emitCmp(module, block: lineHeader, a: linePos, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(lineHeader, op: StdOp.condBranch(linesDone, thenBlockId: notFound.id, elseBlockId: lineStart.id))
+
+	module.appendOp(lineStart, op: StdOp.call(lineEnd, callee: ManagedSocketEolName, args: threeArgs(buf, second: linePos, third: count)))
+
+	// The newline itself is stepped over; at the end of the buffer `lineEnd` IS the count, so the next
+	// header test ends the walk.
+	let lineStep = emitConst(module, block: nextLine, value: 1, ids: ids)
+	let nextLineStart = emitBin(module, block: nextLine, a: lineEnd, b: lineStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nextLine, op: StdOp.branch(lineHeader.id))
+	nextLine.branchEdges.push(BranchEdge.create(lineHeader.id, argIds: argsOf(nextLineStart)))
+end 'emitResolverLineWalk'
+
+// ⭐⭐ **`__ms_hosts4(host, hostLen, buf, cap)` — `/etc/hosts`, THE FIRST PLACE A NAME IS LOOKED UP AFTER A
+// NUMERIC PARSE FAILS.** A line is `address name [name…]`, a `#` begins a comment wherever it appears, and
+// the answer is the line's FIRST field parsed as a dotted quad. `localhost` resolving with no network at all
+// is what this step exists for.
+//
+// ⚠ The scratch buffer is the CALLER's, because `__ms_ns4` reads a second file into the same one and a
+// resolve should allocate it once.
+//
+// ⚠ **THE COMPARISON IS LENGTH-FIRST**, which is what keeps the byte loop off every unrelated name in the
+// file rather than only off the ones that differ early.
+function buildManagedSocketHosts(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketHostsName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lineHeader = module.addBlock(func, label: b"mshl")
+	var lineStart = module.addBlock(func, label: b"mshls")
+	var haveAddress = module.addBlock(func, label: b"mshaddr")
+	var namesStart = module.addBlock(func, label: b"mshns")
+	var nameHeader = module.addBlock(func, label: b"mshnh")
+	var nameCheck = module.addBlock(func, label: b"mshnc")
+	var lengthCheck = module.addBlock(func, label: b"mshlen")
+	var compare = module.addBlock(func, label: b"mshcmp")
+	var matched = module.addBlock(func, label: b"mshhit")
+	var nextName = module.addBlock(func, label: b"mshnn")
+	var nextLine = module.addBlock(func, label: b"mshnl")
+	var notFound = module.addBlock(func, label: b"mshno")
+
+	emitParams(module, block: entry, count: 4)
+	let host = 0 as ValueId
+	let hostLen = 1 as ValueId
+	let buf = 2 as ValueId
+	let cap = 3 as ValueId
+
+	let linePos = ids.mint()
+	let lineEnd = ids.mint()
+	emitResolverLineWalk(module, entry: entry, lineHeader: lineHeader, lineStart: lineStart, nextLine: nextLine, notFound: notFound, path: ResolveHostsPath, buf: buf, cap: cap, linePos: linePos, lineEnd: lineEnd, ids: ids)
+
+	let addressStart = emitResolverCall(module, block: lineStart, callee: ManagedSocketBlanksName, args: threeArgs(buf, second: linePos, third: lineEnd), ids: ids)
+	let addressEnd = emitResolverCall(module, block: lineStart, callee: ManagedSocketWordName, args: threeArgs(buf, second: addressStart, third: lineEnd), ids: ids)
+	let addressEmpty = emitCmp(module, block: lineStart, a: addressEnd, b: addressStart, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lineStart, op: StdOp.condBranch(addressEmpty, thenBlockId: nextLine.id, elseBlockId: haveAddress.id))
+
+	let addressFirst = emitLoadByte(module, block: haveAddress, base: buf, index: addressStart, ids: ids)
+	let hashByte = emitConst(module, block: haveAddress, value: ResolveHashByte, ids: ids)
+	let addressIsComment = emitCmp(module, block: haveAddress, a: addressFirst, b: hashByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveAddress, op: StdOp.condBranch(addressIsComment, thenBlockId: nextLine.id, elseBlockId: namesStart.id))
+
+	// The name walk's cursor rides a block arg, so the entry into it is a plain branch — a `condBranch`
+	// carries no edge arguments at this tier.
+	let nameCursor = ids.mint()
+	module.setTerminator(namesStart, op: StdOp.branch(nameHeader.id))
+	nameHeader.blockArgs.push(IrBlockArg.create(nameCursor, argType: StdType.i64))
+	namesStart.branchEdges.push(BranchEdge.create(nameHeader.id, argIds: argsOf(addressEnd)))
+
+	let nameStart = emitResolverCall(module, block: nameHeader, callee: ManagedSocketBlanksName, args: threeArgs(buf, second: nameCursor, third: lineEnd), ids: ids)
+	let nameEnd = emitResolverCall(module, block: nameHeader, callee: ManagedSocketWordName, args: threeArgs(buf, second: nameStart, third: lineEnd), ids: ids)
+	let namesDone = emitCmp(module, block: nameHeader, a: nameEnd, b: nameStart, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(nameHeader, op: StdOp.condBranch(namesDone, thenBlockId: nextLine.id, elseBlockId: nameCheck.id))
+
+	let nameFirst = emitLoadByte(module, block: nameCheck, base: buf, index: nameStart, ids: ids)
+	let nameHash = emitConst(module, block: nameCheck, value: ResolveHashByte, ids: ids)
+	let nameIsComment = emitCmp(module, block: nameCheck, a: nameFirst, b: nameHash, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(nameCheck, op: StdOp.condBranch(nameIsComment, thenBlockId: nextLine.id, elseBlockId: lengthCheck.id))
+
+	let nameLength = emitBin(module, block: lengthCheck, a: nameEnd, b: nameStart, opcode: StdBinOpcode.sub, ids: ids)
+	let sameLength = emitCmp(module, block: lengthCheck, a: nameLength, b: hostLen, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lengthCheck, op: StdOp.condBranch(sameLength, thenBlockId: compare.id, elseBlockId: nextName.id))
+
+	let namePtr = emitBin(module, block: compare, a: buf, b: nameStart, opcode: StdBinOpcode.add, ids: ids)
+	emitByteRangeCompareLoop(module, func: func, cur: compare, aBuf: namePtr, bBuf: host, len: hostLen, allMatch: matched, notEqual: nextName, ids: ids)
+
+	let addressPtr = emitBin(module, block: matched, a: buf, b: addressStart, opcode: StdBinOpcode.add, ids: ids)
+	let addressLength = emitBin(module, block: matched, a: addressEnd, b: addressStart, opcode: StdBinOpcode.sub, ids: ids)
+	let hostsAddress = emitResolverCall(module, block: matched, callee: ManagedSocketIpv4Name, args: twoArgs(addressPtr, second: addressLength), ids: ids)
+	module.setTerminator(matched, op: StdOp.ret(hostsAddress))
+
+	module.setTerminator(nextName, op: StdOp.branch(nameHeader.id))
+	nextName.branchEdges.push(BranchEdge.create(nameHeader.id, argIds: argsOf(nameEnd)))
+
+	emitConstReturn(module, block: notFound, value: ResolveNoAddress, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketHosts'
+
+// ⭐ **`__ms_ns4(buf, cap)` — THE FIRST `nameserver` IN `/etc/resolv.conf`, OR `ResolveNoAddress`.** The
+// same line walk as `/etc/hosts` with a different question of each line: the first field must be the
+// keyword, and the second must parse as a dotted quad.
+//
+// ⚠ **THE FIRST ONE ONLY.** A `resolv.conf` may list several and `getaddrinfo` fails over between them on a
+// timeout; this resolver has no timeout to fail over on (see `buildManagedSocketDns`), so a second entry
+// would be reached only when the first REFUSES a connection, and answering *no address* is the same outcome
+// one round trip sooner.
+function buildManagedSocketNameserver(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketNameserverName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lineHeader = module.addBlock(func, label: b"msnl")
+	var lineStart = module.addBlock(func, label: b"msnls")
+	var keyCompare = module.addBlock(func, label: b"msnkc")
+	var keyMatched = module.addBlock(func, label: b"msnkm")
+	var haveValue = module.addBlock(func, label: b"msnv")
+	var found = module.addBlock(func, label: b"msnhit")
+	var nextLine = module.addBlock(func, label: b"msnnl")
+	var notFound = module.addBlock(func, label: b"msnno")
+
+	emitParams(module, block: entry, count: 2)
+	let buf = 0 as ValueId
+	let cap = 1 as ValueId
+
+	let keyword = emitOwnedCString(module, block: entry, text: ResolveNameserverKeyword, ids: ids)
+	let keywordLength = emitConst(module, block: entry, value: ResolveNameserverKeyword.count(), ids: ids)
+	let linePos = ids.mint()
+	let lineEnd = ids.mint()
+	emitResolverLineWalk(module, entry: entry, lineHeader: lineHeader, lineStart: lineStart, nextLine: nextLine, notFound: notFound, path: ResolveConfPath, buf: buf, cap: cap, linePos: linePos, lineEnd: lineEnd, ids: ids)
+
+	let keyStart = emitResolverCall(module, block: lineStart, callee: ManagedSocketBlanksName, args: threeArgs(buf, second: linePos, third: lineEnd), ids: ids)
+	let keyEnd = emitResolverCall(module, block: lineStart, callee: ManagedSocketWordName, args: threeArgs(buf, second: keyStart, third: lineEnd), ids: ids)
+	let keyLength = emitBin(module, block: lineStart, a: keyEnd, b: keyStart, opcode: StdBinOpcode.sub, ids: ids)
+	let keySized = emitCmp(module, block: lineStart, a: keyLength, b: keywordLength, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lineStart, op: StdOp.condBranch(keySized, thenBlockId: keyCompare.id, elseBlockId: nextLine.id))
+
+	let keyPtr = emitBin(module, block: keyCompare, a: buf, b: keyStart, opcode: StdBinOpcode.add, ids: ids)
+	emitByteRangeCompareLoop(module, func: func, cur: keyCompare, aBuf: keyPtr, bBuf: keyword, len: keywordLength, allMatch: keyMatched, notEqual: nextLine, ids: ids)
+
+	let valueStart = emitResolverCall(module, block: keyMatched, callee: ManagedSocketBlanksName, args: threeArgs(buf, second: keyEnd, third: lineEnd), ids: ids)
+	let valueEnd = emitResolverCall(module, block: keyMatched, callee: ManagedSocketWordName, args: threeArgs(buf, second: valueStart, third: lineEnd), ids: ids)
+	let valueEmpty = emitCmp(module, block: keyMatched, a: valueEnd, b: valueStart, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(keyMatched, op: StdOp.condBranch(valueEmpty, thenBlockId: nextLine.id, elseBlockId: haveValue.id))
+
+	let valuePtr = emitBin(module, block: haveValue, a: buf, b: valueStart, opcode: StdBinOpcode.add, ids: ids)
+	let valueLength = emitBin(module, block: haveValue, a: valueEnd, b: valueStart, opcode: StdBinOpcode.sub, ids: ids)
+	let serverAddress = emitResolverCall(module, block: haveValue, callee: ManagedSocketIpv4Name, args: twoArgs(valuePtr, second: valueLength), ids: ids)
+	let noAddress = emitConst(module, block: haveValue, value: ResolveNoAddress, ids: ids)
+	let unparsed = emitCmp(module, block: haveValue, a: serverAddress, b: noAddress, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveValue, op: StdOp.condBranch(unparsed, thenBlockId: nextLine.id, elseBlockId: found.id))
+
+	emitRawFree(module, block: found, ptr: keyword, ids: ids)
+	module.setTerminator(found, op: StdOp.ret(serverAddress))
+
+	emitRawFree(module, block: notFound, ptr: keyword, ids: ids)
+	emitConstReturn(module, block: notFound, value: ResolveNoAddress, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketNameserver'
+
+// ⭐ **`__ms_dns_skip(buf, pos, end)` — PAST ONE DNS NAME, WHEREVER IT ENDS.** A name is a run of
+// length-prefixed labels closed by a zero byte, OR a two-byte COMPRESSION POINTER whose top two bits are
+// set — and an answer's name is nearly always the pointer form, because it points back at the question.
+// Neither form is FOLLOWED here: this walk only needs the byte AFTER the name.
+function buildManagedSocketDnsSkip(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketDnsSkipName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"msdn")
+	var body = module.addBlock(func, label: b"msdnb")
+	var root = module.addBlock(func, label: b"msdnr")
+	var pointerTest = module.addBlock(func, label: b"msdnpt")
+	var pointer = module.addBlock(func, label: b"msdnp")
+	var label = module.addBlock(func, label: b"msdnl")
+	var truncated = module.addBlock(func, label: b"msdnt")
+
+	emitParams(module, block: entry, count: 3)
+	let buf = 0 as ValueId
+	let start = 1 as ValueId
+	let limit = 2 as ValueId
+
+	let pos = ids.mint()
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+
+	let atEnd = emitCmp(module, block: header, a: pos, b: limit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: truncated.id, elseBlockId: body.id))
+
+	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
+	let zero = emitConst(module, block: body, value: 0, ids: ids)
+	let isRoot = emitCmp(module, block: body, a: current, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(isRoot, thenBlockId: root.id, elseBlockId: pointerTest.id))
+
+	let terminatorBytes = emitConst(module, block: root, value: DnsLabelTerminatorBytes, ids: ids)
+	let afterRoot = emitBin(module, block: root, a: pos, b: terminatorBytes, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(root, op: StdOp.ret(afterRoot))
+
+	let pointerMask = emitConst(module, block: pointerTest, value: DnsLabelPointerMask, ids: ids)
+	let masked = emitBin(module, block: pointerTest, a: current, b: pointerMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let isPointer = emitCmp(module, block: pointerTest, a: masked, b: pointerMask, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(pointerTest, op: StdOp.condBranch(isPointer, thenBlockId: pointer.id, elseBlockId: label.id))
+
+	let pointerBytes = emitConst(module, block: pointer, value: DnsPointerBytes, ids: ids)
+	let afterPointer = emitBin(module, block: pointer, a: pos, b: pointerBytes, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(pointer, op: StdOp.ret(afterPointer))
+
+	let labelPrefix = emitConst(module, block: label, value: DnsLabelTerminatorBytes, ids: ids)
+	let afterPrefix = emitBin(module, block: label, a: pos, b: labelPrefix, opcode: StdBinOpcode.add, ids: ids)
+	let afterLabel = emitBin(module, block: label, a: afterPrefix, b: current, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(label, op: StdOp.branch(header.id))
+	label.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(afterLabel)))
+
+	// A name that runs off the end of what arrived answers the end itself, which every caller then fails its
+	// own bounds check against — one refusal, at the site that knows what it was about to read.
+	module.setTerminator(truncated, op: StdOp.ret(pos))
+
+	module.functions.push(func)
+end 'buildManagedSocketDnsSkip'
+
+// ⭐⭐⭐ **`__ms_dns4(host, hostLen, server)` — ONE `A` QUERY OVER TCP, AND THE FIRST ADDRESS IT ANSWERS.**
+//
+// The exchange is RFC 1035's, over the stream transport RFC 7766 makes mandatory: a two-byte length prefix,
+// a twelve-byte header asking for RECURSION, one question of type `A` class `IN`, and a response whose
+// answer section is walked for the first four-byte `A` record. The query is built in one block, the socket
+// phase is five ops, and the parse is a bounded walk — nothing here is retried and nothing is cached.
+//
+// ⭐ **TCP RATHER THAN UDP IS WHAT MAKES THIS COST NO NEW `StdOp`.** A datagram query would need
+// `socket(SOCK_DGRAM)`, `sendto` and `recvfrom` primitives the Std tier does not define; the five STREAM ops
+// the socket band already owns answer the whole question, and every resolver must accept TCP.
+//
+// ⚠⚠ **THERE IS NO TIMEOUT, AND THAT IS THE ONE PROPERTY A CALLER CAN FEEL.** A resolver that accepts the
+// connection and never answers holds the green thread until the kernel's own TCP timeout. Bounding it needs
+// `setsockopt(SO_RCVTIMEO)` or a non-blocking connect — a primitive this tier does not have — so it is
+// recorded here rather than half-solved: the failure mode is a SLOW resolve, never a wrong address.
+//
+// ⚠ The query id is echoed and NOT checked: a fresh connection carries exactly one exchange, so there is no
+// other answer it could be confused with (see `DnsQueryId`).
+function buildManagedSocketDns(module StdModule, target Target)
+	var func = IrFunction.createFromStd(ManagedSocketDnsName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var sized = module.addBlock(func, label: b"msdsz")
+	var nameHeader = module.addBlock(func, label: b"msdq")
+	var nameByte = module.addBlock(func, label: b"msdqb")
+	var nameChar = module.addBlock(func, label: b"msdqc")
+	var nameDot = module.addBlock(func, label: b"msdqd")
+	var nameDotSized = module.addBlock(func, label: b"msdqds")
+	var nameFinish = module.addBlock(func, label: b"msdqf")
+	var nameFinishSized = module.addBlock(func, label: b"msdqfs")
+	var question = module.addBlock(func, label: b"msdqq")
+	var dial = module.addBlock(func, label: b"msddial")
+	var connectStep = module.addBlock(func, label: b"msdconn")
+	var sendStep = module.addBlock(func, label: b"msdsend")
+	var recvStart = module.addBlock(func, label: b"msdrs")
+	var recvHeader = module.addBlock(func, label: b"msdrh")
+	var recvFull = module.addBlock(func, label: b"msdrf")
+	var recvRead = module.addBlock(func, label: b"msdrr")
+	var recvEof = module.addBlock(func, label: b"msdre")
+	var recvGot = module.addBlock(func, label: b"msdrg")
+	var recvCheck = module.addBlock(func, label: b"msdrc")
+	var recvDone = module.addBlock(func, label: b"msdrd")
+	var recvMore = module.addBlock(func, label: b"msdrm")
+	var parse = module.addBlock(func, label: b"msdp")
+	var rcodeCheck = module.addBlock(func, label: b"msdrco")
+	var answerCount = module.addBlock(func, label: b"msdac")
+	var skipQuestion = module.addBlock(func, label: b"msdsq")
+	var answerHeader = module.addBlock(func, label: b"msdah")
+	var answerBody = module.addBlock(func, label: b"msdab")
+	var answerFields = module.addBlock(func, label: b"msdaf")
+	var addressRecord = module.addBlock(func, label: b"msdar")
+	var addressRoom = module.addBlock(func, label: b"msdaroom")
+	var haveAddress = module.addBlock(func, label: b"msdhit")
+	var answerNext = module.addBlock(func, label: b"msdan")
+	var closeFailed = module.addBlock(func, label: b"msdclf")
+	var releaseFailed = module.addBlock(func, label: b"msdrel")
+	var failed = module.addBlock(func, label: b"msdno")
+
+	emitParams(module, block: entry, count: 3)
+	let host = 0 as ValueId
+	let hostLen = 1 as ValueId
+	let server = 2 as ValueId
+
+	// A name longer than a DNS name may be, and the empty name, are refused before anything is allocated.
+	let nameMax = emitConst(module, block: entry, value: DnsMaxNameBytes, ids: ids)
+	let nameTooLong = emitCmp(module, block: entry, a: hostLen, b: nameMax, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(nameTooLong, thenBlockId: failed.id, elseBlockId: sized.id))
+
+	// The header. `ancount`, `nscount` and `arcount` are left as the zeroes `__mm_alloc` produced.
+	let message = emitRawAlloc(module, block: sized, byteCount: emitConst(module, block: sized, value: DnsMessageBytes, ids: ids), ids: ids)
+	emitStoreConstByte(module, block: sized, base: message, offset: DnsIdHighOffset, value: DnsQueryId / ByteOneScale, ids: ids)
+	emitStoreConstByte(module, block: sized, base: message, offset: DnsIdLowOffset, value: DnsQueryId mod ByteOneScale, ids: ids)
+	emitStoreConstByte(module, block: sized, base: message, offset: DnsFlagsHighOffset, value: DnsRecursionDesiredFlags / ByteOneScale, ids: ids)
+	emitStoreConstByte(module, block: sized, base: message, offset: DnsQdCountLowOffset, value: DnsQdCountOne, ids: ids)
+
+	// The QNAME walk carries three values: how far into the host name it has read, where the next byte is
+	// written, and where THIS label's length byte is waiting to be filled in.
+	let hostIndex = ids.mint()
+	let writeAt = ids.mint()
+	let lengthAt = ids.mint()
+	nameHeader.blockArgs.push(IrBlockArg.create(hostIndex, argType: StdType.i64))
+	nameHeader.blockArgs.push(IrBlockArg.create(writeAt, argType: StdType.i64))
+	nameHeader.blockArgs.push(IrBlockArg.create(lengthAt, argType: StdType.i64))
+	let hostFirst = emitConst(module, block: sized, value: 0, ids: ids)
+	let firstLengthAt = emitConst(module, block: sized, value: DnsQuestionStart, ids: ids)
+	let firstWriteAt = emitConst(module, block: sized, value: DnsQuestionStart + DnsLabelTerminatorBytes, ids: ids)
+	module.setTerminator(sized, op: StdOp.branch(nameHeader.id))
+	sized.branchEdges.push(BranchEdge.create(nameHeader.id, argIds: threeArgs(hostFirst, second: firstWriteAt, third: firstLengthAt)))
+
+	let nameDone = emitCmp(module, block: nameHeader, a: hostIndex, b: hostLen, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(nameHeader, op: StdOp.condBranch(nameDone, thenBlockId: nameFinish.id, elseBlockId: nameByte.id))
+
+	let hostByte = emitLoadByte(module, block: nameByte, base: host, index: hostIndex, ids: ids)
+	let dotByte = emitConst(module, block: nameByte, value: ResolveDotByte, ids: ids)
+	let atDot = emitCmp(module, block: nameByte, a: hostByte, b: dotByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(nameByte, op: StdOp.condBranch(atDot, thenBlockId: nameDot.id, elseBlockId: nameChar.id))
+
+	emitStoreByte(module, block: nameChar, base: message, index: writeAt, value: hostByte, ids: ids)
+	let charStep = emitConst(module, block: nameChar, value: 1, ids: ids)
+	let hostNext = emitBin(module, block: nameChar, a: hostIndex, b: charStep, opcode: StdBinOpcode.add, ids: ids)
+	let writeNext = emitBin(module, block: nameChar, a: writeAt, b: charStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nameChar, op: StdOp.branch(nameHeader.id))
+	nameChar.branchEdges.push(BranchEdge.create(nameHeader.id, argIds: threeArgs(hostNext, second: writeNext, third: lengthAt)))
+
+	// A dot closes a label. An EMPTY label — a leading dot, a doubled dot, a trailing dot — is a malformed
+	// name rather than a query to send, and so is one over 63 bytes.
+	let dotLabelLength = emitDnsLabelLength(module, block: nameDot, writeAt: writeAt, lengthAt: lengthAt, ids: ids)
+	emitDnsLabelGuard(module, func: func, block: nameDot, labelLength: dotLabelLength, bad: releaseFailed, ok: nameDotSized, ids: ids)
+
+	emitStoreByte(module, block: nameDotSized, base: message, index: lengthAt, value: dotLabelLength, ids: ids)
+	let dotStep = emitConst(module, block: nameDotSized, value: 1, ids: ids)
+	let hostAfterDot = emitBin(module, block: nameDotSized, a: hostIndex, b: dotStep, opcode: StdBinOpcode.add, ids: ids)
+	let writeAfterDot = emitBin(module, block: nameDotSized, a: writeAt, b: dotStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nameDotSized, op: StdOp.branch(nameHeader.id))
+	nameDotSized.branchEdges.push(BranchEdge.create(nameHeader.id, argIds: threeArgs(hostAfterDot, second: writeAfterDot, third: writeAt)))
+
+	let finalLabelLength = emitDnsLabelLength(module, block: nameFinish, writeAt: writeAt, lengthAt: lengthAt, ids: ids)
+	emitDnsLabelGuard(module, func: func, block: nameFinish, labelLength: finalLabelLength, bad: releaseFailed, ok: nameFinishSized, ids: ids)
+
+	// The last label's length, the ROOT label that closes the name, then QTYPE and QCLASS. The message ends
+	// four bytes past the root, and the TCP length prefix counts everything after itself.
+	emitStoreByte(module, block: nameFinishSized, base: message, index: lengthAt, value: finalLabelLength, ids: ids)
+	emitStoreOffsetByte(module, block: nameFinishSized, base: message, index: writeAt, delta: 0, value: 0, ids: ids)
+	emitStoreOffsetByte(module, block: nameFinishSized, base: message, index: writeAt, delta: 1, value: DnsTypeA / ByteOneScale, ids: ids)
+	emitStoreOffsetByte(module, block: nameFinishSized, base: message, index: writeAt, delta: 2, value: DnsTypeA mod ByteOneScale, ids: ids)
+	emitStoreOffsetByte(module, block: nameFinishSized, base: message, index: writeAt, delta: 3, value: DnsClassIn / ByteOneScale, ids: ids)
+	emitStoreOffsetByte(module, block: nameFinishSized, base: message, index: writeAt, delta: 4, value: DnsClassIn mod ByteOneScale, ids: ids)
+	let messageTail = emitConst(module, block: nameFinishSized, value: DnsLabelTerminatorBytes + DnsQuestionTailBytes, ids: ids)
+	let sendLength = emitBin(module, block: nameFinishSized, a: writeAt, b: messageTail, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nameFinishSized, op: StdOp.branch(question.id))
+
+	let prefixBytes = emitConst(module, block: question, value: DnsTcpLengthPrefixBytes, ids: ids)
+	let declaredLength = emitBin(module, block: question, a: sendLength, b: prefixBytes, opcode: StdBinOpcode.sub, ids: ids)
+	let lengthShift = emitConst(module, block: question, value: BitsPerByte, ids: ids)
+	let lengthHigh = emitBin(module, block: question, a: declaredLength, b: lengthShift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let lengthMask = emitConst(module, block: question, value: ByteMask, ids: ids)
+	let lengthLow = emitBin(module, block: question, a: declaredLength, b: lengthMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.appendOp(question, op: StdOp.storeIndirect(message, offset: DnsLengthHighOffset, valueId: lengthHigh, valueType: StdType.u8))
+	module.appendOp(question, op: StdOp.storeIndirect(message, offset: DnsLengthLowOffset, valueId: lengthLow, valueType: StdType.u8))
+	module.setTerminator(question, op: StdOp.branch(dial.id))
+
+	let socket = ids.mint()
+	module.appendOp(dial, op: StdOp.osSocketCreate(socket))
+	let invalidSocket = emitConst(module, block: dial, value: InvalidSocket, ids: ids)
+	let socketFailed = emitCmp(module, block: dial, a: socket, b: invalidSocket, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dial, op: StdOp.condBranch(socketFailed, thenBlockId: releaseFailed.id, elseBlockId: connectStep.id))
+
+	let address = emitRawAlloc(module, block: connectStep, byteCount: emitConst(module, block: connectStep, value: SockaddrInBytes, ids: ids), ids: ids)
+	let dnsPort = emitConst(module, block: connectStep, value: DnsPort, ids: ids)
+	let addressWord = emitSockaddrInWord(module, block: connectStep, port: dnsPort, ip: server, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
+	emitStoreField(module, block: connectStep, record: address, offset: SockaddrFamilyPortAddrOffset, value: addressWord)
+	let dialResult = ids.mint()
+	module.appendOp(connectStep, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: address))
+	emitRawFree(module, block: connectStep, ptr: address, ids: ids)
+	let dialOk = emitConst(module, block: connectStep, value: WinsockCallOk, ids: ids)
+	let dialFailed = emitCmp(module, block: connectStep, a: dialResult, b: dialOk, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(connectStep, op: StdOp.condBranch(dialFailed, thenBlockId: closeFailed.id, elseBlockId: sendStep.id))
+
+	// A short send is treated as a failure rather than looped over: the query is at most 273 bytes and a
+	// stream socket with an empty send buffer takes it whole, so a partial write here is a broken connection
+	// wearing a byte count.
+	let sent = ids.mint()
+	module.appendOp(sendStep, op: StdOp.osSocketSend(sent, sockId: socket, bufPtrId: message, lenId: sendLength))
+	let sendShort = emitCmp(module, block: sendStep, a: sent, b: sendLength, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(sendStep, op: StdOp.condBranch(sendShort, thenBlockId: closeFailed.id, elseBlockId: recvStart.id))
+
+	// ⚠ **THE READ LOOPS BECAUSE TCP IS A STREAM.** A response arrives in as many pieces as the network
+	// chooses, so the loop reads until the declared length has arrived, the peer closes, the scratch is full,
+	// or the read fails — and the parse below is bounded by what actually arrived either way.
+	let received = ids.mint()
+	recvHeader.blockArgs.push(IrBlockArg.create(received, argType: StdType.i64))
+	let receivedFirst = emitConst(module, block: recvStart, value: 0, ids: ids)
+	module.setTerminator(recvStart, op: StdOp.branch(recvHeader.id))
+	recvStart.branchEdges.push(BranchEdge.create(recvHeader.id, argIds: argsOf(receivedFirst)))
+
+	let capacity = emitConst(module, block: recvHeader, value: DnsMessageBytes, ids: ids)
+	let room = emitBin(module, block: recvHeader, a: capacity, b: received, opcode: StdBinOpcode.sub, ids: ids)
+	let empty = emitConst(module, block: recvHeader, value: 0, ids: ids)
+	let noRoom = emitCmp(module, block: recvHeader, a: room, b: empty, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(recvHeader, op: StdOp.condBranch(noRoom, thenBlockId: recvFull.id, elseBlockId: recvRead.id))
+
+	module.setTerminator(recvFull, op: StdOp.branch(parse.id))
+	recvFull.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(received)))
+
+	let readAt = emitBin(module, block: recvRead, a: message, b: received, opcode: StdBinOpcode.add, ids: ids)
+	let readCount = ids.mint()
+	module.appendOp(recvRead, op: StdOp.osSocketRecv(readCount, sockId: socket, bufPtrId: readAt, lenId: room))
+	let readZero = emitConst(module, block: recvRead, value: 0, ids: ids)
+	let readEnded = emitCmp(module, block: recvRead, a: readCount, b: readZero, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(recvRead, op: StdOp.condBranch(readEnded, thenBlockId: recvEof.id, elseBlockId: recvGot.id))
+
+	module.setTerminator(recvEof, op: StdOp.branch(parse.id))
+	recvEof.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(received)))
+
+	let receivedNext = emitBin(module, block: recvGot, a: received, b: readCount, opcode: StdBinOpcode.add, ids: ids)
+	let prefixSize = emitConst(module, block: recvGot, value: DnsTcpLengthPrefixBytes, ids: ids)
+	let prefixMissing = emitCmp(module, block: recvGot, a: receivedNext, b: prefixSize, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(recvGot, op: StdOp.condBranch(prefixMissing, thenBlockId: recvMore.id, elseBlockId: recvCheck.id))
+
+	let lengthIndex = emitConst(module, block: recvCheck, value: 0, ids: ids)
+	let declared = emitLoadBigEndian16(module, block: recvCheck, buf: message, index: lengthIndex, ids: ids)
+	let wanted = emitBin(module, block: recvCheck, a: declared, b: prefixSize, opcode: StdBinOpcode.add, ids: ids)
+	let complete = emitCmp(module, block: recvCheck, a: receivedNext, b: wanted, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(recvCheck, op: StdOp.condBranch(complete, thenBlockId: recvDone.id, elseBlockId: recvMore.id))
+
+	module.setTerminator(recvDone, op: StdOp.branch(parse.id))
+	recvDone.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(receivedNext)))
+
+	module.setTerminator(recvMore, op: StdOp.branch(recvHeader.id))
+	recvMore.branchEdges.push(BranchEdge.create(recvHeader.id, argIds: argsOf(receivedNext)))
+
+	// The socket has answered everything it is going to; the parse reads only the scratch.
+	let arrived = ids.mint()
+	parse.blockArgs.push(IrBlockArg.create(arrived, argType: StdType.i64))
+	module.appendOp(parse, op: StdOp.osSocketClose(socket))
+	let minimumBytes = emitConst(module, block: parse, value: DnsQuestionStart, ids: ids)
+	let tooShort = emitCmp(module, block: parse, a: arrived, b: minimumBytes, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(parse, op: StdOp.condBranch(tooShort, thenBlockId: releaseFailed.id, elseBlockId: rcodeCheck.id))
+
+	let rcodeByte = emitLoadConstByte(module, block: rcodeCheck, base: message, offset: DnsRcodeByteOffset, ids: ids)
+	let rcodeMask = emitConst(module, block: rcodeCheck, value: DnsRcodeMask, ids: ids)
+	let rcode = emitBin(module, block: rcodeCheck, a: rcodeByte, b: rcodeMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let noError = emitConst(module, block: rcodeCheck, value: DnsRcodeNoError, ids: ids)
+	let serverRefused = emitCmp(module, block: rcodeCheck, a: rcode, b: noError, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(rcodeCheck, op: StdOp.condBranch(serverRefused, thenBlockId: releaseFailed.id, elseBlockId: answerCount.id))
+
+	let answerCountIndex = emitConst(module, block: answerCount, value: DnsAnCountHighIndex, ids: ids)
+	let answers = emitLoadBigEndian16(module, block: answerCount, buf: message, index: answerCountIndex, ids: ids)
+	let noAnswers = emitConst(module, block: answerCount, value: 0, ids: ids)
+	let emptyAnswer = emitCmp(module, block: answerCount, a: answers, b: noAnswers, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(answerCount, op: StdOp.condBranch(emptyAnswer, thenBlockId: releaseFailed.id, elseBlockId: skipQuestion.id))
+
+	let questionStart = emitConst(module, block: skipQuestion, value: DnsQuestionStart, ids: ids)
+	let afterQuestionName = emitResolverCall(module, block: skipQuestion, callee: ManagedSocketDnsSkipName, args: threeArgs(message, second: questionStart, third: arrived), ids: ids)
+	let questionTail = emitConst(module, block: skipQuestion, value: DnsQuestionTailBytes, ids: ids)
+	let firstAnswer = emitBin(module, block: skipQuestion, a: afterQuestionName, b: questionTail, opcode: StdBinOpcode.add, ids: ids)
+	let firstIndex = emitConst(module, block: skipQuestion, value: 0, ids: ids)
+	module.setTerminator(skipQuestion, op: StdOp.branch(answerHeader.id))
+	let answerAt = ids.mint()
+	let answerIndex = ids.mint()
+	answerHeader.blockArgs.push(IrBlockArg.create(answerAt, argType: StdType.i64))
+	answerHeader.blockArgs.push(IrBlockArg.create(answerIndex, argType: StdType.i64))
+	skipQuestion.branchEdges.push(BranchEdge.create(answerHeader.id, argIds: twoArgs(firstAnswer, second: firstIndex)))
+
+	let answersDone = emitCmp(module, block: answerHeader, a: answerIndex, b: answers, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(answerHeader, op: StdOp.condBranch(answersDone, thenBlockId: releaseFailed.id, elseBlockId: answerBody.id))
+
+	let afterAnswerName = emitResolverCall(module, block: answerBody, callee: ManagedSocketDnsSkipName, args: threeArgs(message, second: answerAt, third: arrived), ids: ids)
+	let fixedBytes = emitConst(module, block: answerBody, value: DnsRecordFixedBytes, ids: ids)
+	let recordData = emitBin(module, block: answerBody, a: afterAnswerName, b: fixedBytes, opcode: StdBinOpcode.add, ids: ids)
+	let recordOverruns = emitCmp(module, block: answerBody, a: recordData, b: arrived, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(answerBody, op: StdOp.condBranch(recordOverruns, thenBlockId: releaseFailed.id, elseBlockId: answerFields.id))
+
+	let recordType = emitLoadBigEndian16(module, block: answerFields, buf: message, index: afterAnswerName, ids: ids)
+	let rdLengthOffset = emitConst(module, block: answerFields, value: DnsRecordRdLengthOffset, ids: ids)
+	let rdLengthIndex = emitBin(module, block: answerFields, a: afterAnswerName, b: rdLengthOffset, opcode: StdBinOpcode.add, ids: ids)
+	let rdLength = emitLoadBigEndian16(module, block: answerFields, buf: message, index: rdLengthIndex, ids: ids)
+	let typeA = emitConst(module, block: answerFields, value: DnsTypeA, ids: ids)
+	let notAddress = emitCmp(module, block: answerFields, a: recordType, b: typeA, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(answerFields, op: StdOp.condBranch(notAddress, thenBlockId: answerNext.id, elseBlockId: addressRecord.id))
+
+	let addressBytes = emitConst(module, block: addressRecord, value: DnsAddressRdLength, ids: ids)
+	let wrongWidth = emitCmp(module, block: addressRecord, a: rdLength, b: addressBytes, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(addressRecord, op: StdOp.condBranch(wrongWidth, thenBlockId: answerNext.id, elseBlockId: addressRoom.id))
+
+	let addressEnd = emitBin(module, block: addressRoom, a: recordData, b: addressBytes, opcode: StdBinOpcode.add, ids: ids)
+	let addressOverruns = emitCmp(module, block: addressRoom, a: addressEnd, b: arrived, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(addressRoom, op: StdOp.condBranch(addressOverruns, thenBlockId: releaseFailed.id, elseBlockId: haveAddress.id))
+
+	// ⚠ **THE FOUR RDATA BYTES ARE COMPOSED LOW-BYTE-FIRST**, which is not a byte swap: they arrive in
+	// NETWORK order and `sin_addr` holds them in network order, so the word this builds is the one
+	// `emitSockaddrInWord` places unchanged — and the one `TestNet1NetOrder` is written to match.
+	let resolved = emitDnsAddressWord(module, block: haveAddress, message: message, at: recordData, ids: ids)
+	emitRawFree(module, block: haveAddress, ptr: message, ids: ids)
+	module.setTerminator(haveAddress, op: StdOp.ret(resolved))
+
+	let recordNext = emitBin(module, block: answerNext, a: recordData, b: rdLength, opcode: StdBinOpcode.add, ids: ids)
+	let indexStep = emitConst(module, block: answerNext, value: 1, ids: ids)
+	let indexNext = emitBin(module, block: answerNext, a: answerIndex, b: indexStep, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(answerNext, op: StdOp.branch(answerHeader.id))
+	answerNext.branchEdges.push(BranchEdge.create(answerHeader.id, argIds: twoArgs(recordNext, second: indexNext)))
+
+	module.appendOp(closeFailed, op: StdOp.osSocketClose(socket))
+	module.setTerminator(closeFailed, op: StdOp.branch(releaseFailed.id))
+
+	emitRawFree(module, block: releaseFailed, ptr: message, ids: ids)
+	emitConstReturn(module, block: releaseFailed, value: ResolveNoAddress, ids: ids)
+
+	emitConstReturn(module, block: failed, value: ResolveNoAddress, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketDns'
+
+// How many bytes the label that started at `lengthAt` holds — the write cursor, less that length byte and
+// the byte it occupies. Both label boundaries compute it and neither may compute it differently.
+function emitDnsLabelLength(module StdModule, block IrBlock, writeAt ValueId, lengthAt ValueId, ids ValueMinter) returns ValueId
+	let span = emitBin(module, block: block, a: writeAt, b: lengthAt, opcode: StdBinOpcode.sub, ids: ids)
+	let prefix = emitConst(module, block: block, value: DnsLabelTerminatorBytes, ids: ids)
+	return emitBin(module, block: block, a: span, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
+end 'emitDnsLabelLength'
+
+// ⭐ **AN EMPTY LABEL AND AN OVERLONG ONE ARE BOTH REFUSALS, AND THEY ARE TWO EDGES RATHER THAN ONE
+// EXPRESSION.** A leading dot, a doubled dot and a trailing dot all produce the empty case, and every one
+// of them is a malformed name rather than a query worth sending. The two tests cannot be OR-ed into a value
+// because this tier has no `setcc` (`MmRuntime.emitConstReturn` carries that), so a compound condition is
+// blocks — which is why both boundaries call this rather than each spelling the pair.
+function emitDnsLabelGuard(module StdModule, func IrFunction, block IrBlock, labelLength ValueId, bad IrBlock, ok IrBlock, ids ValueMinter)
+	var upper = module.addBlock(func, label: b"msdqlim")
+
+	let shortest = emitConst(module, block: block, value: 1, ids: ids)
+	let belowOne = emitCmp(module, block: block, a: labelLength, b: shortest, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(belowOne, thenBlockId: bad.id, elseBlockId: upper.id))
+
+	let longest = emitConst(module, block: upper, value: DnsMaxLabelBytes, ids: ids)
+	let aboveLimit = emitCmp(module, block: upper, a: labelLength, b: longest, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(upper, op: StdOp.condBranch(aboveLimit, thenBlockId: bad.id, elseBlockId: ok.id))
+end 'emitDnsLabelGuard'
+
+// One CONSTANT byte at a RUNTIME index plus a constant delta — the shape the question's tail is written
+// with, where the index is a value and the field positions past it are compile-time.
+function emitStoreOffsetByte(module StdModule, block IrBlock, base ValueId, index ValueId, delta ParsedInt, value ParsedInt, ids ValueMinter)
+	let step = emitConst(module, block: block, value: delta, ids: ids)
+	let at = emitBin(module, block: block, a: index, b: step, opcode: StdBinOpcode.add, ids: ids)
+	let byteValue = emitConst(module, block: block, value: value, ids: ids)
+	emitStoreByte(module, block: block, base: base, index: at, value: byteValue, ids: ids)
+end 'emitStoreOffsetByte'
+
+// The four `A`-record bytes as the one word `sin_addr` holds — low byte first, because both are in NETWORK
+// order and neither is swapped.
+function emitDnsAddressWord(module StdModule, block IrBlock, message ValueId, at ValueId, ids ValueMinter) returns ValueId
+	var word = emitLoadByte(module, block: block, base: message, index: at, ids: ids)
+	var scale = 1 as ParsedInt
+
+	for byteIndex in 1 to Ipv4LastOctetIndex 'eachByte'
+		scale = scale * Ipv4OctetScale
+		let step = emitConst(module, block: block, value: byteIndex, ids: ids)
+		let index = emitBin(module, block: block, a: at, b: step, opcode: StdBinOpcode.add, ids: ids)
+		let loaded = emitLoadByte(module, block: block, base: message, index: index, ids: ids)
+		let scaleConst = emitConst(module, block: block, value: scale, ids: ids)
+		let placed = emitBin(module, block: block, a: loaded, b: scaleConst, opcode: StdBinOpcode.mul, ids: ids)
+		word = emitBin(module, block: block, a: word, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
+	end 'eachByte'
+
+	return word
+end 'emitDnsAddressWord'
+
+// ⭐⭐ **`__ms_resolve4(host)` — THE THREE STEPS, IN THE ONLY ORDER THAT WORKS.** A numeric address answers
+// without touching the filesystem or the network; `/etc/hosts` answers `localhost` and every private name a
+// machine has been told about; DNS answers the rest. `ResolveNoAddress` from all three is what
+// `__ms_tcp_connect` turns into `__ManagedSocketError.resolveFailed`.
+//
+// ⚠ One scratch buffer serves both file reads and is released before the DNS step, which allocates its own —
+// so a resolve holds one 8 KiB block at a time rather than two.
+function buildManagedSocketResolve(module StdModule)
+	var func = IrFunction.createFromStd(ManagedSocketResolveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var numericHit = module.addBlock(func, label: b"msrnum")
+	var hostsStep = module.addBlock(func, label: b"msrh")
+	var hostsHit = module.addBlock(func, label: b"msrhh")
+	var serverStep = module.addBlock(func, label: b"msrns")
+	var queryStep = module.addBlock(func, label: b"msrq")
+	var noAnswer = module.addBlock(func, label: b"msrno")
+
+	emitParams(module, block: entry, count: 1)
+	let host = 0 as ValueId
+
+	let hostLength = ids.mint()
+	var measured = emitCStringLength(module, func: func, cur: entry, cstr: host, length: hostLength, ids: ids)
+
+	let numeric = emitResolverCall(module, block: measured, callee: ManagedSocketIpv4Name, args: twoArgs(host, second: hostLength), ids: ids)
+	let noAddress = emitConst(module, block: measured, value: ResolveNoAddress, ids: ids)
+	let isNumeric = emitCmp(module, block: measured, a: numeric, b: noAddress, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(measured, op: StdOp.condBranch(isNumeric, thenBlockId: numericHit.id, elseBlockId: hostsStep.id))
+
+	module.setTerminator(numericHit, op: StdOp.ret(numeric))
+
+	let capacity = emitConst(module, block: hostsStep, value: ResolveTextBytes, ids: ids)
+	let text = emitRawAlloc(module, block: hostsStep, byteCount: capacity, ids: ids)
+	let fromHosts = emitResolverCall(module, block: hostsStep, callee: ManagedSocketHostsName, args: fourArgs(host, second: hostLength, third: text, fourth: capacity), ids: ids)
+	let hostsNoAddress = emitConst(module, block: hostsStep, value: ResolveNoAddress, ids: ids)
+	let inHosts = emitCmp(module, block: hostsStep, a: fromHosts, b: hostsNoAddress, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(hostsStep, op: StdOp.condBranch(inHosts, thenBlockId: hostsHit.id, elseBlockId: serverStep.id))
+
+	emitRawFree(module, block: hostsHit, ptr: text, ids: ids)
+	module.setTerminator(hostsHit, op: StdOp.ret(fromHosts))
+
+	let server = emitResolverCall(module, block: serverStep, callee: ManagedSocketNameserverName, args: twoArgs(text, second: capacity), ids: ids)
+	emitRawFree(module, block: serverStep, ptr: text, ids: ids)
+	let serverNoAddress = emitConst(module, block: serverStep, value: ResolveNoAddress, ids: ids)
+	let haveServer = emitCmp(module, block: serverStep, a: server, b: serverNoAddress, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(serverStep, op: StdOp.condBranch(haveServer, thenBlockId: queryStep.id, elseBlockId: noAnswer.id))
+
+	let queried = emitResolverCall(module, block: queryStep, callee: ManagedSocketDnsName, args: threeArgs(host, second: hostLength, third: server), ids: ids)
+	module.setTerminator(queryStep, op: StdOp.ret(queried))
+
+	emitConstReturn(module, block: noAnswer, value: ResolveNoAddress, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedSocketResolve'

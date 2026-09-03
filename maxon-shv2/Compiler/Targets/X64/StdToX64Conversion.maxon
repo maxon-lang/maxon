@@ -275,9 +275,6 @@ let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
 // still only this file's: nothing above the target tier reads a Winsock version.
 let WinsockVersion22 = 0x0202
 
-// The `flags` argument of `send`/`recv`, always zero: no `MSG_OOB`, no `MSG_PEEK`. `specs/managed-socket.md`
-// documents a plain stream send and receive, and a partial transfer is a normal answer rather than a flag.
-let SendRecvNoFlags = 0
 let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT — stripped from a parent pipe end, SET on a child stdio handle
 let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
 let IocpNoCompletionKey = 0x0  // CreateIoCompletionPort CompletionKey for an associate
@@ -3168,27 +3165,43 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'emitWin64CreateFileA'
 
-	// --- The socket slice: eight ws2_32 lowerings ---
+	// --- The socket band: `ws2_32` on Windows, raw syscalls on Linux ---
 	//
-	// ⭐ Each spells the Win32 constants its Std op deliberately does not carry, exactly as
-	// `emitWin64CreateFileA` spells `GENERIC_READ`. Every one guards with `requireWin64Import` first: these
-	// are Win32 imports, so a non-Windows target reaching them is a compiler bug that got past E3104 rather
-	// than a user-facing rejection.
+	// ⭐ Each spells the API constants its Std op deliberately does not carry, exactly as
+	// `emitWin64CreateFileA` spells `GENERIC_READ`. What differs between the two routes is more than the
+	// call: Win64 passes arguments in rcx/rdx/r8/r9 and the syscall ABI in rdi/rsi/rdx/r10/r8/r9, so every
+	// op below splits into two argument sequences rather than sharing one.
+	//
+	// ⛔ **TWO OF THE EIGHT HAVE NO SYSCALL ROUTE AT ALL, AND THEIR REFUSALS ARE NOT MISSING LOWERINGS.**
+	// `getaddrinfo`/`freeaddrinfo` are libc FUNCTIONS that read `/etc/nsswitch.conf` and speak DNS; a raw
+	// static image links nothing that does, so this lane resolves through a DIFFERENT Std graph
+	// (`ManagedSocketRuntime.SocketResolveShape.builtinResolver`) which emits neither op.
 
 	function lowerOsSocketStartup(resultId ValueId, wsaDataPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osSocketStartup")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSocketStartupWin64(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
+			syscall then self.targetModule.appendOp(dstBlock, op: constMaterializationOp(TargetVReg.virtual(resultId), value: PosixCallSucceeded as MachineWord))
+		end 'route'
+	end 'lowerOsSocketStartup'
+
+	// ⭐⭐ **THE SYSCALL ROUTE ANSWERS THIS OP WITHOUT CALLING ANYTHING, AND THAT IS THE HONEST LOWERING.**
+	// `WSAStartup(2.2, &wsadata)` binds a process to a `ws2_32` version; BSD sockets have no such rendezvous
+	// — the first `socket(2)` is the whole of the initialization — so there is nothing to call and nothing
+	// that can fail. The op promises *0 on success* and `PosixCallSucceeded` is that 0.
+	// ⛔ A refusal instead would refuse every socket program on this lane over a call with no work to do.
+	function lowerOsSocketStartupWin64(resultId ValueId, wsaDataPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: WinsockVersion22))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(wsaDataPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WSAStartup)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsSocketStartup'
+	end 'lowerOsSocketStartupWin64'
 
 	// `getaddrinfo(host, NULL, hints, out)` - the service argument is always NULL; see the op's own header
 	// for why no port is ever formatted as a string.
 	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstBlock IrBlock)
 		self.requireWin64Import("osSocketResolve")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(hostPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: SocketNoServiceName))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(hintsPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(outPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.getaddrinfo)))
@@ -3201,23 +3214,57 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.freeaddrinfo)))
 	end 'lowerOsSocketFreeAddrInfo'
 
+	// `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`. The three protocol values are the Std tier's
+	// (`ManagedSocketRuntime`'s protocol block owns them, because the `hints` it fills must agree with them)
+	// and all three are portable, so only the registers and the call differ between the routes.
 	function lowerOsSocketCreate(resultId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osSocketCreate")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSocketCreateWin64(resultId, dstBlock: dstBlock)
+			syscall then self.lowerOsSocketCreateLinux(resultId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsSocketCreate'
+
+	function lowerOsSocketCreateWin64(resultId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: AfInet))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: SockStream))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IpprotoTcp))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.socket)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsSocketCreate'
+	end 'lowerOsSocketCreateWin64'
 
+	function lowerOsSocketCreateLinux(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: AfInet as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: SockStream as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: IpprotoTcp as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallSocket))
+		self.emitSyscallFailureSentinel(resultId, dstBlock: dstBlock)
+	end 'lowerOsSocketCreateLinux'
+
+	// `connect(sock, addr, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
+	// also the size of the block it allocated for the address, and MEASURED to be the minimum either kernel
+	// accepts (a shorter `addrlen` is refused with `EINVAL`).
 	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osSocketConnect")
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSocketConnectWin64(resultId, sockId: sockId, addrPtrId: addrPtrId, dstBlock: dstBlock)
+			syscall then self.lowerOsSocketConnectLinux(resultId, sockId: sockId, addrPtrId: addrPtrId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsSocketConnect'
+
+	function lowerOsSocketConnectWin64(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(addrPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: SockaddrInBytes))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.connect)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsSocketConnect'
+	end 'lowerOsSocketConnectWin64'
+
+	function lowerOsSocketConnectLinux(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(sockId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(addrPtrId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: SockaddrInBytes as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallConnect))
+		self.emitSyscallFailureSentinel(resultId, dstBlock: dstBlock)
+	end 'lowerOsSocketConnectLinux'
 
 	// `send`/`recv` differ ONLY in their import slot, so the register setup is written once. Two near-identical
 	// emitters is the duplication this file's own conventions refuse.
@@ -3230,21 +3277,69 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'emitWin64SocketTransfer'
 
+	// ⭐⭐ **THE TWO TRANSFERS, AND THE ROUTES DO NOT AGREE ON THE CALL'S ARITY.** `ws2_32` exports
+	// `send`/`recv` (four arguments); x86-64's syscall table has neither, only `sendto`/`recvfrom` (six), so
+	// the syscall arm supplies the peer address a connected stream socket does not use
+	// (`LinuxSocketNoPeerAddress`). Each caller names BOTH routes' identity — the import slot and the
+	// syscall number — so a direction cannot be wired to the right slot and the wrong number.
 	function lowerOsSocketSend(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osSocketSend")
-		self.emitWin64SocketTransfer(IatSlot.send, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+		self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, slot: IatSlot.send, syscallNumber: X64LinuxSyscallSendto, suppressSigpipe: true, dstBlock: dstBlock)
 	end 'lowerOsSocketSend'
 
 	function lowerOsSocketRecv(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osSocketRecv")
-		self.emitWin64SocketTransfer(IatSlot.recv, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+		self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, slot: IatSlot.recv, syscallNumber: X64LinuxSyscallRecvfrom, suppressSigpipe: false, dstBlock: dstBlock)
 	end 'lowerOsSocketRecv'
 
+	function lowerOsSocketTransfer(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, slot IatSlot, syscallNumber MachineWord, suppressSigpipe bool, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.emitWin64SocketTransfer(slot, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+			syscall then self.emitLinuxSocketTransfer(syscallNumber, resultId: resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, suppressSigpipe: suppressSigpipe, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsSocketTransfer'
+
+	// ⛔⛔ **`MSG_NOSIGNAL` IS NOT OPTIONAL ON THE SEND SIDE.** A `sendto` on a stream socket whose peer has
+	// gone raises SIGPIPE, whose default disposition is TERMINATE, and this lane installs no handler for it —
+	// so without the flag the program dies by signal instead of reporting `sendFailed` (MEASURED: exit 141
+	// with a flag word of 0, `-EPIPE` and a clean exit with `LinuxMsgNoSignal`). It is a SEND-only flag, so
+	// the receive direction passes the same `SendRecvNoFlags` zero Windows passes for both.
+	function emitLinuxSocketTransfer(syscallNumber MachineWord, resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, suppressSigpipe bool, dstBlock IrBlock)
+		let flags = LinuxMsgNoSignal if suppressSigpipe else SendRecvNoFlags as MachineWord
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(sockId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(lenId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r10), value: flags))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r8), value: LinuxSocketNoPeerAddress as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r9), value: LinuxSocketNoPeerAddress as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(syscallNumber))
+		self.emitSyscallFailureSentinel(resultId, dstBlock: dstBlock)
+	end 'emitLinuxSocketTransfer'
+
+	// A socket is a DESCRIPTOR under POSIX, so the syscall route reaches the same `close` the file band does
+	// — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
 	function lowerOsSocketClose(sockId ValueId, dstBlock IrBlock)
-		self.requireWin64Import("osSocketClose")
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.closesocket)))
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.closesocket, arg0: sockId, dstBlock: dstBlock)
+			syscall then self.lowerOsFileCloseLinux(sockId, dstBlock: dstBlock)
+		end 'route'
 	end 'lowerOsSocketClose'
+
+	// ⭐⭐ **`answer | (answer sar 63)` — THE `-errno` A RAW SYSCALL ANSWERS BECOMING THE EXACT -1 THE Std
+	// TIER TESTS FOR.** It compares against `InvalidSocket`/`SOCKET_ERROR`, both exactly -1, because that is
+	// what Winsock reports; a syscall reports `-ECONNREFUSED`, `-EPIPE` or `-EBADF`, which are negative and
+	// almost never -1. An arithmetic shift by the sign bit's distance leaves all-ones for a negative answer
+	// and zero otherwise, so the OR collapses every failure to -1 and leaves every descriptor and byte count
+	// untouched — branchless, and needing no frame, which is why this band needs no chunk where the file band
+	// does. (The file surface must also PUBLISH the errno for `osLastError` to classify;
+	// `__ManagedSocketError` has no errno-classified variant to publish into.)
+	//
+	// ⚠ rcx is scratch here because `syscall` CLOBBERS it in hardware, so nothing live can be holding it.
+	function emitSyscallFailureSentinel(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.rax)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegImm8(x64PhysReg(X64Register.rcx), lhs: x64PhysReg(X64Register.rcx), imm: LinuxSyscallSignShift))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(x64PhysReg(X64Register.rax), lhs: x64PhysReg(X64Register.rax), rhs: x64PhysReg(X64Register.rcx)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'emitSyscallFailureSentinel'
 
 	// ⭐⭐ **`osCpuCount(result)` ⇒ `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`** — one immediate into
 	// rcx, one import call, and the count captured out of RAX. `emitCaptureRax` is the same capture

@@ -596,7 +596,9 @@ end 'loop'
 
 `TcpClient` provides TCP client networking with automatic resource cleanup. It is defined in `stdlib/TcpClient.maxon`. The socket is backed by `__ManagedSocket`, a builtin type whose destructor closes the file descriptor when the last reference goes out of scope.
 
-**Supported on `wasm32-wasi`** via the WASI Preview2 `wasi:sockets` interfaces (TCP connect/send/recv/close over the component model). The emitted artifact is a Preview2 component; running it under `wasmtime` requires the socket capability flags `-S tcp -S inherit-network -S allow-ip-name-lookup`. Only IPv4 hosts are resolved on this target; other targets without a real networking runtime (arm64/macos/linux) keep sentinel stubs that throw `NetworkError` at runtime.
+**Supported on `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux`**, over IPv4 only — `TcpClient` builds a `sockaddr_in`, so an IPv6-only host cannot be reached on any target. Windows reaches `ws2_32` and macOS reaches libSystem, so both resolve host names through the platform's own `getaddrinfo` (`/etc/hosts`, the search list, everything the C library does). The two Linux lanes link no libc and therefore have no `getaddrinfo` to call: they run a resolver built into the compiler's runtime instead, which parses a numeric address, consults `/etc/hosts`, and otherwise sends an `A` query over TCP to the first `nameserver` in `/etc/resolv.conf`. That resolver does not apply the `search`/`domain` suffixes, does not follow a `CNAME` the server did not answer alongside, does not fall over to a second nameserver, and applies no timeout of its own — so on those two lanes an unqualified name resolves only if `/etc/hosts` carries it, and an unresponsive nameserver makes a connect slow rather than wrong.
+
+**Not supported on `wasm32-wasi`.** Every `TcpClient` call is refused at compile time with `E3104` there. WASI Preview2 does define `wasi:sockets`, and this compiler is not wired to it.
 
 **NetworkPort Alias**
 

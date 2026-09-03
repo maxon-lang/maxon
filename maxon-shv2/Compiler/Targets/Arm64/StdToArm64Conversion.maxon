@@ -118,6 +118,20 @@ let PosixPriorityWhoIsSelf = 0
 // the fold still answers 10 for the one value the specs pin, and is wrong for every other.
 let LinuxGetPriorityBias = 20
 
+// ⭐⭐ **`MSG_NOSIGNAL` — AND THE TWO POSIX LANES DISAGREE ABOUT ITS VALUE, WHICH IS WHY IT IS HERE AND
+// NOT IN `PosixRuntime`.** Darwin's is **0x80000** (`MacOSX.sdk/usr/include/sys/socket.h:594`) and Linux's
+// is 0x4000 (`LinuxMsgNoSignal`); the flag word is a lowering's argument on both, so each names its own.
+//
+// ⛔⛔ **WITHOUT IT A SEND ON A CLOSED PEER KILLS THE PROCESS, AND THAT IS MEASURED ON BOTH LANES.** A
+// `send` to a socket whose peer has gone raises SIGPIPE, whose default disposition is TERMINATE — and this
+// backend installs no signal handlers, so the program dies by signal instead of reporting
+// `__ManagedSocketError.sendFailed`. MEASURED with a `socketpair` whose read end was closed: with the flag
+// the call answers -1/`EPIPE` and the probe exits 0; without it the probe dies with exit 141 on Darwin and
+// on an aarch64 Linux guest alike, and flag 0x4000 on Darwin dies the same way — the value is not shared.
+// Windows needs no counterpart: there is no SIGPIPE to suppress, which is why `SendRecvNoFlags` stands
+// unqualified on that lane.
+let DarwinMsgNoSignal = 0x80000
+
 // The nice value background work runs at. ⚠ NOT 19, the maximum, for the reason Windows does not use
 // `IDLE_PRIORITY_CLASS`: a starve long enough to trip a caller's timeout is reported as a harness bug
 // rather than as a busy machine. The bootstrap's arm64 emitter picks the same 10
@@ -967,7 +981,26 @@ type StdToArm64Lowering
 			// so the copy is the chunk's work; see `buildArm64DarwinEnvReadChunk`.
 			osEnvRead(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsEnvRead(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstRef: dstRef)
 			osProcessTerminate(handleId, exitCodeId) then self.emitHostChunkCall(dstRef, chunk: HostProcTerminateName, args: twoArgs(handleId, second: exitCodeId))
-			osSocketStartup to osSocketClose then panic("lowerStdToArm64: the socket host primitives are x64-windows only — `ws2_32` is a Win32 library, and SemanticCheck refuses such a program at its own source span (E3104), so reaching here is a compiler bug that got one past that gate rather than the user-facing rejection")
+			// ⭐⭐ **THE SOCKET BAND — SEVEN OPS, AND ONE OF THEM REACHES NO KERNEL ON EITHER LANE.** Winsock
+			// and BSD sockets are the same five verbs (`socket`/`connect`/`send`/`recv`/`close`) plus a
+			// rendezvous only Windows has, so `osSocketStartup` lowers to its own answer rather than to a call
+			// (see `lowerOsSocketStartup`).
+			//
+			// ⛔ **`osSocketResolve` AND `osSocketFreeAddrInfo` REACH THIS FILE ON macOS ONLY, AND THE LINUX
+			// REFUSAL IS NOT A MISSING LOWERING.** `getaddrinfo` is a libc FUNCTION that reads
+			// `/etc/nsswitch.conf` and speaks DNS; a raw static image has nothing to call, so the Linux lanes
+			// run a DIFFERENT Std graph — `ManagedSocketRuntime`'s own resolver, which emits neither op — and
+			// each arm states that rather than pretending to a lowering it cannot have.
+			osSocketStartup(resultId, _) then self.lowerOsSocketStartup(resultId, dstRef: dstRef)
+			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstRef: dstRef)
+			osSocketFreeAddrInfo(addrInfoPtrId) then self.lowerOsSocketFreeAddrInfo(addrInfoPtrId, dstRef: dstRef)
+			osSocketCreate(resultId) then self.lowerOsSocketCreate(resultId, dstRef: dstRef)
+			osSocketConnect(resultId, sockId, addrPtrId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, dstRef: dstRef)
+			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, importSlot: OsImportSlot.send, syscallNumber: Arm64LinuxSyscallSendto, suppressSigpipe: true, dstRef: dstRef)
+			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, importSlot: OsImportSlot.recv, syscallNumber: Arm64LinuxSyscallRecvfrom, suppressSigpipe: false, dstRef: dstRef)
+			// A socket is a DESCRIPTOR on both lanes, so this is `lowerOsFileClose` one family over and reaches
+			// the same primitive — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
+			osSocketClose(sockId) then self.lowerOsFileClose(sockId, dstRef: dstRef)
 			// ⭐ The MACHINE query: `GetActiveProcessorCount` on Windows, `sysconf(_SC_NPROCESSORS_ONLN)`
 			// here. Two APIs with two failure conventions and one question — see `lowerOsCpuCount`.
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstRef: dstRef)
@@ -2262,6 +2295,162 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(handleId)))
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.close, syscallNumber: Arm64LinuxSyscallClose)
 	end 'lowerOsFileClose'
+
+	// ==========================================================================
+	// The SOCKET band
+	// ==========================================================================
+
+	// ⭐⭐ **`osSocketStartup(result)` — THE ONE OP HERE THAT REACHES NO KERNEL, ANSWERED RATHER THAN
+	// CALLED.** `WSAStartup(2.2, &wsadata)` binds a process to a `ws2_32` version; BSD sockets have no such
+	// rendezvous — the first `socket(2)` is the whole of the initialization — so there is nothing to call and
+	// nothing that can fail. The op's contract is *0 on success*, and `PosixCallSucceeded` is that 0.
+	//
+	// ⛔ **A REFUSAL HERE WOULD REFUSE EVERY SOCKET PROGRAM ON THIS LANE OVER A CALL WITH NO WORK TO DO** —
+	// `osHandleSetInherit`'s case one band over, except that this op must still produce a VALUE, which is why
+	// it emits an instruction rather than nothing.
+	//
+	// ⚠ The `WSADATA` operand is deliberately unread: it is a scratch buffer the Windows API demands, and the
+	// Std tier frees it the moment the call returns.
+	function lowerOsSocketStartup(resultId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(TargetVReg.virtual(resultId), value: PosixCallSucceeded as MachineWord))
+	end 'lowerOsSocketStartup'
+
+	// ⭐ **`getaddrinfo(host, NULL, hints, out)` — four register arguments and macOS's alone.** The service
+	// argument is always NULL; see the op's own header for why no port is ever formatted as a string.
+	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSocketResolveDarwin(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstRef: dstRef)
+			syscall then panic("lowerStdToArm64: `osSocketResolve` asks for `getaddrinfo`, which is a libc FUNCTION rather than a syscall — it reads `/etc/nsswitch.conf` and `/etc/resolv.conf` and speaks DNS, and a raw static image links nothing that does. This lane resolves through a DIFFERENT Std graph (`ManagedSocketRuntime.SocketResolveShape.builtinResolver`) which never emits this op, so reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
+		end 'route'
+	end 'lowerOsSocketResolve'
+
+	// The libSystem arm. The `int` is WIDENED for `lowerOsFileOpenDarwin`'s reason: the Std tier compares the
+	// answer against 0, and a stale high word makes a successful resolve read as a failed one.
+	function lowerOsSocketResolveDarwin(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(hostPtrId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: SocketNoServiceName))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(hintsPtrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x3), srcReg: TargetVReg.virtual(outPtrId)))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.getaddrinfo)))
+		self.emitWidenedCallResult(resultId, dstRef: dstRef)
+	end 'lowerOsSocketResolveDarwin'
+
+	// `freeaddrinfo(list)` — one register argument, nothing captured (the call returns void). Refused on the
+	// syscall route for its producer's reason: a lane with no `getaddrinfo` allocates no list to release.
+	function lowerOsSocketFreeAddrInfo(addrInfoPtrId ValueId, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSocketFreeAddrInfoDarwin(addrInfoPtrId, dstRef: dstRef)
+			syscall then panic("lowerStdToArm64: `osSocketFreeAddrInfo` releases a list `getaddrinfo` allocated, and this lane has no `getaddrinfo` to allocate one — it resolves through `ManagedSocketRuntime.SocketResolveShape.builtinResolver`, which emits neither op. Reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
+		end 'route'
+	end 'lowerOsSocketFreeAddrInfo'
+
+	// The libSystem arm: one pointer argument and a call whose `void` return there is nothing to capture. Its
+	// own function because a `match` arm carries one statement and this is two — `lowerOsCpuCountDarwin`'s
+	// split, for its reason.
+	function lowerOsSocketFreeAddrInfoDarwin(addrInfoPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addrInfoPtrId)))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.freeaddrinfo)))
+	end 'lowerOsSocketFreeAddrInfoDarwin'
+
+	// `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` — the three protocol arguments are the Std tier's
+	// (`ManagedSocketRuntime`'s protocol block owns them, because the `hints` it fills must agree with them),
+	// and all three values are portable.
+	function lowerOsSocketCreate(resultId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: AfInet as MachineWord))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: SockStream as MachineWord))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: IpprotoTcp as MachineWord))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.socket, syscallNumber: Arm64LinuxSyscallSocket)
+		self.emitSocketIntResult(resultId, dstRef: dstRef)
+	end 'lowerOsSocketCreate'
+
+	// `connect(sock, addr, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
+	// also the size of the block it allocated for the address. ⚠ MEASURED on Darwin: an `addrlen` below 16 is
+	// refused with `EINVAL`, so the two really are one number.
+	function lowerOsSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(sockId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(addrPtrId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: SockaddrInBytes as MachineWord))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.connect, syscallNumber: Arm64LinuxSyscallConnect)
+		self.emitSocketIntResult(resultId, dstRef: dstRef)
+	end 'lowerOsSocketConnect'
+
+	// ⭐⭐ **THE TWO TRANSFERS — ONE EMITTER, AND THE TWO ROUTES DO NOT EVEN AGREE ON THE CALL'S ARITY.**
+	// libSystem exports `send`/`recv` (four arguments); AArch64's syscall table has neither, only
+	// `sendto`/`recvfrom` (six), so the Linux arm supplies the two address arguments a stream socket does not
+	// use. Each caller names BOTH routes' identity, exactly as `emitOsPrimitiveCall`'s callers do, so a
+	// direction cannot be wired to the right import slot and the wrong syscall number.
+	function lowerOsSocketTransfer(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId, importSlot OsImportSlot, syscallNumber MachineWord, suppressSigpipe bool, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(sockId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: self.socketTransferFlags(suppressSigpipe)))
+
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(importSlot)))
+			syscall then self.emitLinuxSocketTransferCall(syscallNumber, dstRef: dstRef)
+		end 'route'
+
+		self.emitSocketTransferResult(resultId, dstRef: dstRef)
+	end 'lowerOsSocketTransfer'
+
+	// The syscall arm's two extra arguments: `sendto`/`recvfrom` take a peer address and its length, and a
+	// CONNECTED stream socket has neither to give — a NULL pair is what makes the six-argument call mean the
+	// four-argument one.
+	function emitLinuxSocketTransferCall(syscallNumber MachineWord, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: LinuxSocketNoPeerAddress))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: LinuxSocketNoPeerAddress))
+		self.emit(dstRef, op: TargetOp.arm64Syscall(syscallNumber))
+	end 'emitLinuxSocketTransferCall'
+
+	// The flag word a transfer is given. ⚠ **`MSG_NOSIGNAL` IS A SEND-ONLY FLAG AND ITS VALUE IS PER-OS**
+	// (`DarwinMsgNoSignal`/`LinuxMsgNoSignal` — see the first for the SIGPIPE measurement), so the receive
+	// direction passes the same `SendRecvNoFlags` zero Windows passes for both directions.
+	function socketTransferFlags(suppressSigpipe bool) returns MachineWord
+		if not suppressSigpipe 'receiving'
+			return SendRecvNoFlags as MachineWord
+		end 'receiving'
+
+		return match arm64OsCallKind(self.target.os) 'route'
+			importCall gives DarwinMsgNoSignal as MachineWord
+			syscall gives LinuxMsgNoSignal
+		end 'route'
+	end 'socketTransferFlags'
+
+	// ⭐⭐ **A C `int` ON THE IMPORT ROUTE, A `-errno` ON THE SYSCALL ROUTE, AND THE Std TIER READS NEITHER.**
+	// It tests the answer against `InvalidSocket`/`SOCKET_ERROR` — both exactly -1 — because that is what
+	// Winsock reports. libSystem reports -1 in a 32-bit `int` whose high word AAPCS64 leaves unspecified, and
+	// a raw `svc` reports `-errno`, which is negative and almost never -1. Both are folded into the OP's
+	// vocabulary here rather than by giving the Std tier a per-lane comparison, which is the discipline
+	// `PosixRuntime`'s errno block states: one lane's vocabulary becomes the op's contract, never the reverse.
+	function emitSocketIntResult(resultId ValueId, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emitWidenedCallResult(resultId, dstRef: dstRef)
+			syscall then self.emitSyscallFailureSentinel(resultId, dstRef: dstRef)
+		end 'route'
+	end 'emitSocketIntResult'
+
+	// The same fold for the two transfers, whose import-route answer is a `ssize_t` and is therefore NOT
+	// widened: it is already 64 bits, so sign-extending from bit 31 would truncate any count above 2^31 —
+	// `emitWidenedCallResult`'s own warning about `mmap` and `write`, one band over.
+	function emitSocketTransferResult(resultId ValueId, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+			syscall then self.emitSyscallFailureSentinel(resultId, dstRef: dstRef)
+		end 'route'
+	end 'emitSocketTransferResult'
+
+	// ⭐ **`answer | (answer asr 63)` — BRANCHLESS, EXACT, AND IT NEEDS NO FRAME.** An arithmetic shift by the
+	// sign bit's distance leaves all-ones for a negative answer and zero for a non-negative one, so the OR
+	// collapses every `-errno` to -1 and leaves every descriptor and byte count untouched. That is why the
+	// socket band needs no chunk on this lane where the file band does: the file surface must also PUBLISH the
+	// errno for `osLastError` to classify, and `__ManagedSocketError` has no errno-classified variant to
+	// publish into (`ManagedSocketRuntime.emitSocketTransferOutcome` states that).
+	function emitSyscallFailureSentinel(resultId ValueId, dstRef BlockRef)
+		let answer = arm64PhysReg(Arm64IntReturnReg)
+		let sign = arm64PhysReg(Arm64Scratch)
+		self.emit(dstRef, op: TargetOp.arm64AsrImm(sign, src: answer, imm: LinuxSyscallSignShift))
+		self.emit(dstRef, op: TargetOp.arm64Orr(TargetVReg.virtual(resultId), lhs: answer, rhs: sign))
+	end 'emitSyscallFailureSentinel'
 
 	// ⭐⭐ **MAC6: `GetStdHandle(which)` ⇒ THE DESCRIPTOR ITSELF, WITH NO CALL AT ALL.** Win32 numbers its
 	// three selectors DOWNWARDS from `(DWORD)-10` while POSIX numbers its three descriptors UPWARDS from 0,

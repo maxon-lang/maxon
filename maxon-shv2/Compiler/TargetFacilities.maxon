@@ -531,8 +531,17 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `osPipePeek` asks first. A kqueue would lift that and change no answer — see
 			// `StdToArm64Conversion`'s `osReadOverlapped` arm.
 			subprocess gives true
-			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets.
-			managedSocket gives false
+			// ⭐⭐ **THE BSD SOCKET BAND, AND IT IS THE CHEAPEST ROW IN THIS BLOCK — SIX IMPORT SLOTS AND NOT ONE
+			// CHUNK.** Winsock and BSD sockets are the same five verbs; `closesocket` is `close` (a socket is a
+			// descriptor here), `WSAStartup` has no counterpart at all and lowers to its own answer, and
+			// `getaddrinfo`/`freeaddrinfo` are libSystem calls like every other family on this lane — so real DNS,
+			// with `/etc/hosts` and the search list, comes with them.
+			//
+			// ⚠ **THE `sockaddr_in` WINDOWS BUILDS IS NOT THE RECORD THIS LANE WANTS**, because Darwin puts
+			// `sin_len` in byte 0 and `sin_family` in byte 1 — see `ManagedSocketRuntime.sockaddrFamilyHalfword`,
+			// which carries the measurement and its controls. The Windows spelling is ACCEPTED here by an
+			// `AF_UNSPEC` tolerance rather than by being right.
+			managedSocket gives true
 			// ⭐ **ONE CALL RATHER THAN A DESIGN.**
 			// `Arm64DarwinRuntime.buildArm64DarwinHandleFileTypeChunk` is `isatty` on the descriptor
 			// `osStdHandle` already answers, translated into the vocabulary `StdOp.osHandleFileType` speaks
@@ -671,8 +680,26 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// and it reports the CPUs THIS PROCESS MAY ACTUALLY USE rather than the CPUs the machine has —
 			// which is what a parallelism hint wants, and what `nproc` itself answers.
 			cpuCount gives true
-			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets, exactly as macOS is not.
-			managedSocket gives false
+			// ⭐⭐⭐ **THE SOCKET BAND — FIVE INLINE `svc`s AND A RESOLVER WRITTEN IN Std IR, BECAUSE THERE IS NO
+			// `getaddrinfo` ON A LANE THAT LINKS NO LIBC.** The transfers are `sendto`/`recvfrom` with a NULL peer
+			// (AArch64 has no `send`/`recv` syscall at all) and every raw answer is folded from `-errno` to the
+			// exact -1 the Std tier tests for (`StdToArm64Conversion.emitSyscallFailureSentinel`).
+			//
+			// ⭐ **THE RESOLVE IS A DIFFERENT Std GRAPH RATHER THAN A DIFFERENT LOWERING** — the answer
+			// `commandLineShape` gives for argv, one family over. `ManagedSocketRuntime`'s
+			// `SocketResolveShape.builtinResolver` parses a numeric address, consults `/etc/hosts`, then asks the
+			// first `nameserver` in `/etc/resolv.conf` over TCP, all in Std IR — so ONE body serves both Linux
+			// lanes and the isel that already lowers every op it uses compiles it.
+			//
+			// ⚠ **WHAT THAT RESOLVER DOES NOT DO IS STATED AT ITS OWN HEADER AND IS NOT HIDDEN BY THIS `true`**:
+			// `A` records only, the first nameserver only, no `search`/`domain` suffixing, no CNAME chasing and NO
+			// TIMEOUT. A `true` here promises that every `StdOp` the facility's bodies emit is lowered, and it is;
+			// it does not promise `getaddrinfo`'s reach.
+			//
+			// ⚠ **IT MAKES THE FILE SURFACE A DEPENDENCY OF THE SOCKET ONE ON THIS LANE**, which is why
+			// `LinuxRuntime.linuxOpensFiles` names the socket bit: a socket program with no `File` call in it still
+			// lays out `mrt_host_file_open`.
+			managedSocket gives true
 			// ⭐⭐ **THE TERMINAL TEST IS THE `ioctl` `isatty` IS MADE OF, BECAUSE THIS LANE LINKS NO LIBC TO
 			// ASK.** `ioctl(fd, TCGETS, &termios)` succeeds exactly on a terminal; `ioctl` is syscall **29** on
 			// AArch64 and `TCGETS` is **0x5401** (`LinuxRuntime`), and the kernel writes **36** bytes, so
@@ -764,8 +791,13 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// lane has no `getpriority`/`setpriority` lowering at all, and writing one would be a second
 			// landing rather than a widening of this one.
 			processPriority gives false
-			// `ws2_32` is a Win32 library and this lane is not wired to BSD sockets, exactly as macOS is not.
-			managedSocket gives false
+			// ⭐⭐ **THE SOCKET BAND — the arm64-linux row's lowerings with this lane's own syscall numbers
+			// (41/42/44/45 against 198/203/206/207) and its own register ABI, and the SAME Std-IR resolver.** That
+			// resolver is why the split between the two Linux lanes here is four numbers rather than a second
+			// implementation: it is a Std graph, so the isel that already lowers every op it uses compiles it
+			// unchanged. Its reach — and what it does not reach — is stated at `ManagedSocketRuntime`'s resolver
+			// header and summarised in the arm64-linux row.
+			managedSocket gives true
 			// ⭐⭐ **THE SAME `ioctl(fd, TCGETS, &termios)` AS THE OTHER LINUX LANE, WITH THIS ONE'S OWN NUMBER.**
 			// `ioctl` is **16** on x86-64 where it is 29 on AArch64; `TCGETS` (0x5401) and the **36** bytes the
 			// kernel writes are shared, and live in `LinuxRuntime` for that reason.

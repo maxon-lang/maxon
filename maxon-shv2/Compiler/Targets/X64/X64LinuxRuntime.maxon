@@ -275,6 +275,25 @@ let X64LinuxSyscallNewfstatat = 262
 let X64LinuxSyscallUnlinkat = 263
 let X64LinuxSyscallRenameat = 264
 
+// --- The SOCKET band's syscalls ---
+//
+// ⚠ **MEASURED ON THIS LANE, not transcribed, and END TO END**: a probe run on the amd64 OrbStack guest
+// called these four BY NUMBER and nothing else — `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` answered a
+// live descriptor, `connect` to a port nothing listens on answered `-ECONNREFUSED` and to a listening one
+// answered 0, `sendto` moved five bytes and `recvfrom` read the same five back on the accepted end, and a
+// second `close` of the same descriptor answered `-EBADF`.
+// ⛔ **NEGATIVE CONTROL: AArch64's numbers (198/203/206/207) on this arch answered `-EFAULT` at the very
+// first call**, which is what makes the positive run evidence rather than agreement.
+//
+// ⛔⛔ **THERE IS NO `send` OR `recv` SYSCALL ON x86-64 EITHER** — only `sendto`/`recvfrom` with a peer
+// address a connected stream socket does not use (`LinuxSocketNoPeerAddress`). Both Linux lanes are
+// constrained the same way here and the macOS lane is constrained the opposite way, which is why the two
+// isels name an import slot AND a syscall number at every transfer site.
+export let X64LinuxSyscallSocket = 41
+export let X64LinuxSyscallConnect = 42
+export let X64LinuxSyscallSendto = 44
+export let X64LinuxSyscallRecvfrom = 45
+
 // ⛔⛔ **`O_DIRECTORY` IS THE asm-generic `0o200000` HERE, NOT THE `0o40000` AArch64 USES.**
 // `arch/arm64/include/uapi/asm/fcntl.h` overrides four flags before including the generic header and
 // shifts them all down, so the two lanes disagree about this one bit pattern and about no other flag in
@@ -3551,7 +3570,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// ⚠ **THE OPEN HAS A SECOND PRODUCER, AND IT IS NOT A `File` CALL.** `GtRuntime`'s file-backed stdio arm
 	// emits `osFileOpenRead`/`osFileOpenWrite` for a subprocess stream redirected to a path, so a program
 	// that touches no `File` still branches here.
-	if usage.usesManagedFile or usage.usesIocp 'fileOpen'
+	if linuxOpensFiles(usage) 'fileOpen'
 		chunks.push(buildX64LinuxFileOpenChunk())
 	end 'fileOpen'
 
@@ -3572,7 +3591,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// descriptors like any other here — so gating it on `usesManagedFile` alone would leave a stdin-only
 	// program calling a symbol nothing emitted, and pushing it under each bit would lay the same symbol out
 	// more than once.
-	if usage.usesManagedFile or usage.usesConsoleStdin or usage.usesIocp 'transferIn'
+	if linuxReadsFiles(usage) 'transferIn'
 		chunks.push(buildX64LinuxTransferChunk(HostReadFileName, syscallNumber: X64LinuxSyscallRead))
 	end 'transferIn'
 

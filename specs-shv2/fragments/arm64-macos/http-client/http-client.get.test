@@ -1,0 +1,110 @@
+// Test: http-client.get
+function doGet() returns ExitCode throws HttpError
+	let response = try HttpClient.get("http://httpbin.org/get")
+	if response.statusCode() == 200 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'doGet'
+
+function main() returns ExitCode
+	let p = async doGet()
+	let result = try await p otherwise 99
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_init_done@32 = i64 0
+  __gt_timer_count@40 = i64 0
+  __gt_timer_heap_base@48 = i64 0
+  __gt_timer_capacity@56 = i64 0
+  __gt_timer_seq@64 = i64 0
+  __gt_trace_counter@72 = i64 0
+  __gt_proc_count@80 = i64 0
+  __gt_proc_handles_base@88 = i64 0
+  __gt_proc_gts_base@96 = i64 0
+  __gt_proc_wait_snapshot@104 = i64 0
+  __gt_proc_poller@112 = i64 0
+  __gt_live_count@120 = i64 0
+  __sched_progress@128 = i64 0
+  __sched_active_workers@136 = i64 1
+  __sched_max_active_workers@144 = i64 1
+  __sched_tls_index@152 = i64 0
+  __sched_tls_teb_offset@160 = i64 0
+  __sched_procs@168 = i64 0
+  __sched_allm@176 = i64 0
+  __sched_midle@184 = i64 0
+  __sched_pidle@192 = i64 0
+  __sched_num_procs@200 = i64 0
+  __sched_shutdown_flag@208 = i64 0
+  __sched_lock@216 = i64 0
+  __sched_nmspinning@224 = i64 0
+  __sched_parked_drivers@232 = i64 0
+  __sched_sysmon_started@240 = i64 0
+  __slab_arena_list@248 = i64 0
+  __slab_arena_map_l1@256 = i64 0
+  __slab_state@264 = i64 0
+}
+
+func @doGet {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_31  ; "http://httpbin.org/get"
+    arm64.bl HttpClient.get
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_cont:
+    arm64.cmp x1, 200
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x19, 0
+    arm64.bl __destruct_HttpResponse
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.bl __destruct_HttpResponse
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x0, doGet
+    arm64.bl __gt_spawn
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x19
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 99
+  trycont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

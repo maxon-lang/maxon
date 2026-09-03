@@ -79,9 +79,32 @@ end 'linuxUsesHostSurface'
 // ⚠ **BOTH LINUX LANES ASK THESE TWO, AND NEITHER OWNS THEM.** The question is about `RuntimeUsage` and
 // names no instruction set; a second copy beside one assembler is a facility added to one lane's gate and
 // not the other's, which is that lane's `.data` word missing under a chunk that stashes into it.
+// ⚠ **THE SOCKET BAND IS A SECOND STASH-ONLY PRODUCER**, and for the reason `linuxOpensFiles` states: its
+// resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno nothing in a
+// socket program will ever read back.
 export function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
-	return linuxUsesHostSurface(usage) or usage.usesGt
+	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket
 end 'linuxTouchesErrnoWord'
+
+// ⭐⭐ **WHO REACHES `mrt_host_file_open`, AND THE THIRD PRODUCER IS NOT A `File` CALL.** `usesIocp` is one
+// (a subprocess stream redirected to a path is opened here), and on this lane the SOCKET band is another:
+// with no `getaddrinfo` to call, `ManagedSocketRuntime`'s built-in resolver reads `/etc/hosts` and
+// `/etc/resolv.conf` through the ordinary file ops — so a program that opens no `File` and spawns nothing
+// still branches into this chunk. Gating it on `usesManagedFile` alone is a `bl` to a symbol nothing laid
+// out, which `arm64ResolveCallFixups` reports as a PANIC rather than a diagnostic.
+//
+// ⚠ **BOTH LINUX LANES ASK IT AND NEITHER OWNS IT**, exactly as `linuxTouchesErrnoWord` records for the
+// errno word: the question is about `RuntimeUsage` and names no instruction set, and a second copy beside
+// one assembler is a producer added to one lane's gate and not the other's.
+export function linuxOpensFiles(usage RuntimeUsage) returns bool
+	return usage.usesManagedFile or usage.usesIocp or usage.usesManagedSocket
+end 'linuxOpensFiles'
+
+// The read chunk's gate — every opener above, plus standard input, which is a descriptor this surface reads
+// without ever opening one. DERIVED from its own subset so the two cannot come apart.
+export function linuxReadsFiles(usage RuntimeUsage) returns bool
+	return linuxOpensFiles(usage) or usage.usesConsoleStdin
+end 'linuxReadsFiles'
 
 // ⭐⭐ **THE `.data` WORD HOLDING THE ENVIRONMENT VECTOR, AND ONLY A LIBC-LESS LANE NEEDS ONE.** Windows asks
 // `GetEnvironmentVariableA` and macOS asks `getenv`; a static Linux image has neither, so the kernel's
@@ -648,3 +671,27 @@ export let LinuxOpenCloseOnExec = 0o2000000
 // and what `execvp` failing inside `system()` reports. The parent does not read it: the status pipe carries
 // the real reason, and this is what a program that never asked would see.
 export let LinuxExecFailedExitCode = 127
+
+// ==========================================================================
+// The SOCKET band's Linux facts — arch-neutral, and both lanes read them
+// ==========================================================================
+
+// ⭐⭐ **`MSG_NOSIGNAL` ON LINUX. ⚠ IT IS 0x4000 HERE AND 0x80000 ON DARWIN, AND MISTAKING ONE FOR THE
+// OTHER KILLS THE PROCESS.** A `sendto` on a stream socket whose peer has gone raises SIGPIPE, whose
+// default disposition is TERMINATE, and this backend installs no signal handler for it — so without the
+// flag the program dies by signal instead of reporting `__ManagedSocketError.sendFailed`. MEASURED on an
+// aarch64 Linux guest with a `socketpair` whose read end was closed: with 0x4000 the raw `sendto` answered
+// `-EPIPE` and the probe exited 0; with a flag word of 0 the identical probe died with exit 141.
+// `StdToArm64Conversion.DarwinMsgNoSignal` carries the other value and the same measurement.
+export let LinuxMsgNoSignal = 0x4000
+
+// `sendto`/`recvfrom`'s peer address and its length. A CONNECTED stream socket has neither to give, and a
+// NULL pair is what makes the six-argument call mean the four-argument `send`/`recv` AArch64 and x86-64
+// have no syscall for.
+export let LinuxSocketNoPeerAddress = 0
+
+// ⭐ **HOW FAR TO SHIFT AN ANSWER TO REPLICATE ITS SIGN** — one less than a machine word's width, spent by
+// the `answer | (answer asr 63)` fold each isel's socket band applies to a raw syscall result. A syscall
+// reports failure as `-errno` where the Std tier's socket ops promise exactly -1, and that fold is the
+// cheapest total translation between the two (see each isel's `emitSyscallFailureSentinel`).
+export let LinuxSyscallSignShift = (MachineWordBits - 1) as ShiftCount

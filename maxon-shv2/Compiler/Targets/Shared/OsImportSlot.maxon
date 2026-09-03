@@ -251,6 +251,30 @@ export enum OsImportSlot
 	// a libc-less Linux image would make that call itself and reach nothing here, exactly as `sysconf` and the
 	// six `processInfo` entries above it are reached by one lane only.
 	isatty
+	// --- The BSD SOCKET band ---
+	//
+	// ⭐⭐ **SIX SLOTS FOR SEVEN OPS, BECAUSE `closesocket` IS `close` AND THAT IS THE WHOLE POINT OF A
+	// DESCRIPTOR.** Win32 gives `ws2_32` its own closer because a `SOCKET` is not a file `HANDLE` there;
+	// POSIX has one descriptor space, so `StdOp.osSocketClose` reaches the `close` slot the file band
+	// already declares — a descriptor is an argument, not a symbol, exactly as `read`/`write` are shared.
+	//
+	// ⭐ **`getaddrinfo` IS THE ONE ENTRY WITH NO LINUX TWIN OF ANY KIND, AND ITS ABSENCE THERE IS A
+	// DESIGN DECISION RATHER THAN A MISSING NUMBER.** It is a libc FUNCTION that reads
+	// `/etc/nsswitch.conf`, `/etc/hosts` and `/etc/resolv.conf` and speaks DNS; a libc-less static image
+	// has nothing to call. The Linux lanes therefore run a DIFFERENT Std graph
+	// (`ManagedSocketRuntime.SocketResolveShape`) rather than a different lowering, which is the same
+	// answer `commandLineShape` gives for argv.
+	//
+	// ⚠ **`send`/`recv` AND NOT `sendto`/`recvfrom`**, which is the opposite of the Linux lanes' choice
+	// and forced from the other side: AArch64's syscall table has no `send`/`recv` at all, while
+	// libSystem exports the four-argument forms and a chunkless lowering wants the fewest arguments it
+	// can pass.
+	getaddrinfo
+	freeaddrinfo
+	socket
+	connect
+	send
+	recv
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor
