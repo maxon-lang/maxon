@@ -66,10 +66,10 @@ module {
     x64.mov [rax+24], rdi
     x64.xor r8d, r8d
     x64.mov [rax+32], r8
-    x64.mov [rbp-40], rax
-    x64.mov rcx, [rbp-40]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
     x64.call mm_incref
-    x64.mov r9, [rbp-40]
+    x64.mov r9, [rbp-32]
     x64.mov [rbp-8], r9
     x64.jmp main.__materialised_0
   __materialised_0:
@@ -101,22 +101,24 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call IntArray.count
     x64.mov rcx, [rbp-8]
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rax
     x64.xor edx, edx
     x64.call IntArray.get
     x64.xor ecx, ecx
-    x64.mov [rbp-24], rcx
-    x64.mov [rbp-32], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_0
+    x64.cmp rdx, rcx
+    x64.mov [rbp-40], rax
+    x64.je main.otherwise_default_success_0
   otherwise_default_error_0:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-32], rax
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-24], rax
     x64.jmp main.otherwise_default_continue_0
   otherwise_default_continue_0:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rbp-40]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-32]
     x64.add rcx, rax
     x64.xor edx, edx
     x64.mov ebx, 4294967295

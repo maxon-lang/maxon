@@ -170,6 +170,13 @@ public partial class ARM64CodeEmitter {
   }
 
   // Reload argument from stack
+  /// Argument positions of the byte-count out-parameter on the readers that report one. Each is
+  /// homed by hand rather than by the prologue, because the prologue's own slot for it collides
+  /// with a local the function already owns -- see each emitter's slot map.
+  private const int SubpStreamEmitLineOutLenArgIndex = 3;
+  private const int SubpStreamReadInnerOutLenArgIndex = 3;
+  private const int SubpResultStreamOutLenArgIndex = 1;
+
   private void EmitReloadArg(int argIndex) {
     EmitLoadStoreUnsignedImm(0xF9400000, AbiArgRegs[argIndex], ARM64Register.X29, 16 + argIndex * 8, 8);
   }
@@ -7459,8 +7466,9 @@ public partial class ARM64CodeEmitter {
     // --- Real posix implementations (attached spawn → wait-collect → decode) ---
     // posix_spawn + pipe capture of stdout/stderr, waitpid status decode. The
     // result struct holds the raw captured byte buffers; the stdout/stderr
-    // accessors return a fresh mm_raw_alloc'd cstring (RuntimeCallToManaged
-    // wraps it into a String and mm_raw_free's the cstring). No dependency on
+    // accessors return a fresh mm_raw_alloc'd buffer plus its byte count
+    // (RuntimeCallToManagedBytes wraps it into a String and mm_raw_free's the
+    // buffer). No dependency on
     // compiled stdlib symbols. Covers the Subprocess.run contract used by the
     // spec runner (stdin=none → /dev/null, stdout/stderr=collect → pipe).
     EmitSubpDrainPass();
@@ -7480,11 +7488,14 @@ public partial class ARM64CodeEmitter {
 
     // --- Streaming subprocess API (persistent-worker pool, parallel spec runner) ---
     EmitSubpStreamEmitLine();
+    EmitSubpStreamRefill();
     EmitSubpStreamReadLine();
+    EmitSubpStreamReadExact();
     EmitMaxonSubprocessSpawnStreamingPosix();
     EmitMaxonSubprocessWriteStdinAllPosix();
     EmitSubpStreamReadLineWrapper("maxon_subprocess_read_stdout_line", SubpHOffOutFd, SubpHOffOutBuf);
     EmitSubpStreamReadLineWrapper("maxon_subprocess_read_stderr_line", SubpHOffErrFd, SubpHOffErrBuf);
+    EmitSubpStreamReadExactWrapper();
     EmitMaxonSubprocessCloseStdinPosix();
     EmitMaxonSubprocessWaitExitPosix();
     EmitMaxonSubprocessKillPosix();
@@ -7522,8 +7533,10 @@ public partial class ARM64CodeEmitter {
   //   +16 stdoutBuf  +24 stdoutLen  +32 stderrBuf  +40 stderrLen  +48 durationMs
   // outReadFd/errReadFd hold -1 when that stream is not collected.
   // stdoutBuf/stderrBuf are mm_raw_alloc'd raw byte buffers (0/len 0 when empty).
-  // result_stdout/result_stderr return a FRESH mm_raw_alloc'd cstring copy
-  // (RuntimeCallToManaged wraps it into a String and mm_raw_free's the cstring).
+  // result_stdout/result_stderr return a FRESH mm_raw_alloc'd copy of the captured bytes, plus
+  // the byte COUNT through an out-parameter (RuntimeCallToManagedBytes wraps it into a String and
+  // mm_raw_free's the buffer). The count is not the terminator's business: a captured stream may
+  // hold NULs of its own.
   // result_release frees the raw buffers + the result struct.
   // ==========================================================================
 
@@ -7584,12 +7597,17 @@ public partial class ARM64CodeEmitter {
   private const int SubpWcFrame = 0xD0;
   private const string SubpCaptureOomMessage = "__subp_msg_capture_oom";
 
-  /// Result accessor that copies a captured byte buffer into a fresh
-  /// mm_raw_alloc'd, NUL-terminated cstring (RuntimeCallToManaged contract).
-  /// bufOff/lenOff are the result-struct field offsets. Empty/null → 1-byte "".
+  /// Result accessor that copies a captured byte buffer into a fresh mm_raw_alloc'd,
+  /// NUL-terminated buffer and reports its byte count through `outLen`
+  /// (RuntimeCallToManagedBytes contract). bufOff/lenOff are the result-struct field offsets.
+  /// Empty/null → 1-byte "", count 0.
   private void EmitSubpResultStreamCopy(string name, int bufOff, int lenOff) {
+    // locals: 0x18 srcBuf, 0x20 len, 0x28 dst, 0x30 outLen (arg 1, homed by hand -- the
+    // prologue's slot for it is the srcBuf local).
     EmitRuntimeFunctionStart(name, 1, 0x40);
-    // locals: 0x18 srcBuf, 0x20 len, 0x28 dst
+    EmitStoreToStack(0x30, AbiArgRegs[SubpResultStreamOutLenArgIndex], 8);
+    // Zero the length up front: both `empty` branches answer without ever storing one.
+    EmitStoreToStack(0x20, ARM64Register.Xzr, 8);
     int n = _uniqueLabelCounter++;
     string empty = $"__subp_rsc_empty_{n}";
     string done = $"__subp_rsc_done_{n}";
@@ -7623,6 +7641,11 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);          // 1-byte cstring
     EmitStoreIndirect(ARM64Register.X0, 0, ARM64Register.Xzr, 1); // [dst] = 0
     DefineLabel(done);
+    // Publish the captured byte count. A collected stream holds whatever the child wrote, NULs
+    // included, so a caller measuring the buffer with strlen would stop at the first one.
+    EmitLoadFromStack(ARM64Register.X1, 0x30, 8);
+    EmitLoadFromStack(ARM64Register.X2, 0x20, 8);
+    EmitStoreIndirect(ARM64Register.X1, 0, ARM64Register.X2, 8);
     EmitRuntimeFunctionEnd();
   }
 
@@ -8538,7 +8561,7 @@ public partial class ARM64CodeEmitter {
   /// maxon_managed_is_null(mm_buffer) -> 1 when null, 0 otherwise. The
   /// MaxonCallRuntime lowering unwraps the __ManagedMemory arg to its buffer
   /// pointer (MaxonToStandardConversion.cs), so we receive the buffer address,
-  /// not the struct — which RuntimeCallToManaged never leaves null. Mirror the
+  /// not the struct — which neither managed-return door ever leaves null. Mirror the
   /// x64 EmitMaxonManagedIsNull contract: "null" means the buffer is absent OR
   /// starts with NUL (an empty cstring — the resolve_on_path / last_error_message
   /// not-found sentinel round-trips through here).
@@ -8938,16 +8961,23 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  /// __subp_stream_emit_line(quadBase_x0, lineLen_x1, consume_x2) -> cstring.
+  /// __subp_stream_emit_line(quadBase_x0, lineLen_x1, consume_x2, outLen_x3) -> cstring.
   /// Copies quad.buf[0..lineLen) into a fresh NUL-terminated mm_raw_alloc'd
   /// cstring, then shifts the remaining quad.buf[consume..len) down to the front
   /// and updates quad.len. consume is normally lineLen+1 (drop the LF) or lineLen.
+  ///
+  /// It also stores lineLen through `outLen`. That is the whole reason the byte count survives the
+  /// return: this is the ONE site both stream readers build an answer at, and `lineLen` is a fact
+  /// only it has -- a caller re-measuring the cstring with strlen would end the answer at the first
+  /// NUL the child happened to write.
   private void EmitSubpStreamEmitLine() {
+    // slots: 0x28 quadBase, 0x30 lineLen, 0x38 consume, 0x40 result, 0x48 buf, 0x50 len,
+    // 0x58 outLen (arg 3, homed by hand -- the prologue's slot for it is the quadBase local).
     EmitRuntimeFunctionStart("__subp_stream_emit_line", 3, 0x70);
+    EmitStoreToStack(0x58, AbiArgRegs[SubpStreamEmitLineOutLenArgIndex], 8);
     int n = _uniqueLabelCounter++;
     string shiftLoop = $"__subp_el_shift_{n}";
     string shiftDone = $"__subp_el_shdone_{n}";
-    // slots: 0x28 quadBase, 0x30 lineLen, 0x38 consume, 0x40 result, 0x48 buf, 0x50 len
     EmitReloadArg(0); EmitStoreToStack(0x28, ARM64Register.X0, 8);
     EmitLoadFromStack(ARM64Register.X0, 0x18, 8); EmitStoreToStack(0x30, ARM64Register.X0, 8); // lineLen (arg1)
     EmitLoadFromStack(ARM64Register.X0, 0x20, 8); EmitStoreToStack(0x38, ARM64Register.X0, 8); // consume (arg2)
@@ -8989,11 +9019,15 @@ public partial class ARM64CodeEmitter {
     // quad.len = remaining
     EmitLoadFromStack(ARM64Register.X9, 0x28, 8);
     EmitStoreIndirect(ARM64Register.X9, SubpQuadLen, ARM64Register.X13, 8);
+    // *outLen = lineLen
+    EmitLoadFromStack(ARM64Register.X9, 0x58, 8);
+    EmitLoadFromStack(ARM64Register.X10, 0x30, 8);
+    EmitStoreIndirect(ARM64Register.X9, 0, ARM64Register.X10, 8);
     EmitLoadFromStack(ARM64Register.X0, 0x40, 8);
     EmitRuntimeFunctionEnd();
   }
 
-  /// __subp_stream_read_line(maxBytes_x0, fd_x1, quadBase_x2) -> cstring.
+  /// __subp_stream_read_line(maxBytes_x0, fd_x1, quadBase_x2, outLen_x3) -> cstring.
   /// Cooperative buffered line reader. Returns the next line (LF stripped) from
   /// the {buf,len,cap,eof} quad as a fresh NUL-terminated cstring, refilling via
   /// __io_submit_read (kqueue-parked yield) when no full line is buffered. Empty
@@ -9001,6 +9035,9 @@ public partial class ARM64CodeEmitter {
   /// and the remainder is delivered on the next call.
   private void EmitSubpStreamReadLine() {
     EmitRuntimeFunctionStart("__subp_stream_read_line", 3, 0x70);
+    // Homed first: X3 is the scan loop's index register a few instructions below. Its prologue
+    // slot would be 0x28, which the maxBytes local owns.
+    EmitStoreToStack(0x48, AbiArgRegs[SubpStreamReadInnerOutLenArgIndex], 8);
     int n = _uniqueLabelCounter++;
     string loop = $"__subp_rl_loop_{n}";
     string scanLoop = $"__subp_rl_scan_{n}";
@@ -9008,9 +9045,7 @@ public partial class ARM64CodeEmitter {
     string noNl = $"__subp_rl_nonl_{n}";
     string checkEof = $"__subp_rl_eof_{n}";
     string needMore = $"__subp_rl_more_{n}";
-    string doRead = $"__subp_rl_read_{n}";
-    string gotEof = $"__subp_rl_goteof_{n}";
-    // slots: 0x28 maxBytes, 0x30 fd, 0x38 quadBase, 0x40 (idx/newCap/n), 0x48 newBuf
+    // slots: 0x28 maxBytes, 0x30 fd, 0x38 quadBase, 0x40 idx, 0x48 outLen
     EmitReloadArg(0); EmitStoreToStack(0x28, ARM64Register.X0, 8);
     EmitLoadFromStack(ARM64Register.X0, 0x18, 8); EmitStoreToStack(0x30, ARM64Register.X0, 8); // fd (arg1)
     EmitLoadFromStack(ARM64Register.X0, 0x20, 8); EmitStoreToStack(0x38, ARM64Register.X0, 8); // quadBase (arg2)
@@ -9042,6 +9077,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadFromStack(ARM64Register.X1, 0x40, 8);
     EmitLoadFromStack(ARM64Register.X2, 0x40, 8);
     EmitAddSubImm(ARM64Register.X2, ARM64Register.X2, 1, isAdd: true); // consume = idx+1
+    EmitLoadFromStack(ARM64Register.X3, 0x48, 8);                      // outLen
     EmitBranchLink("__subp_stream_emit_line");
     EmitRuntimeFunctionEnd();
 
@@ -9055,6 +9091,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadFromStack(ARM64Register.X0, 0x38, 8);
     EmitLoadFromStack(ARM64Register.X1, 0x28, 8);
     EmitMovRegReg(ARM64Register.X2, ARM64Register.X1);
+    EmitLoadFromStack(ARM64Register.X3, 0x48, 8);                      // outLen
     EmitBranchLink("__subp_stream_emit_line");
     EmitRuntimeFunctionEnd();
 
@@ -9066,11 +9103,41 @@ public partial class ARM64CodeEmitter {
     EmitLoadIndirect(ARM64Register.X1, ARM64Register.X9, SubpQuadLen, 8);
     EmitMovRegReg(ARM64Register.X2, ARM64Register.X1);
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
+    EmitLoadFromStack(ARM64Register.X3, 0x48, 8);                      // outLen
     EmitBranchLink("__subp_stream_emit_line");
     EmitRuntimeFunctionEnd();
 
     DefineLabel(needMore);
-    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x30, 8);                   // fd
+    EmitLoadFromStack(ARM64Register.X1, 0x38, 8);                   // quadBase
+    EmitBranchLink("__subp_stream_refill");
+    EmitBranch(loop);
+  }
+
+  /// __subp_stream_refill(fd_x0, quadBase_x1) -> void.
+  ///
+  /// One chunk off the child's pipe into the {buf,len,cap,eof} quad, growing the
+  /// quad first if a read would have too little room to be worth submitting, and
+  /// latching eof when the pipe delivers nothing. This is the ONLY copy of that
+  /// step: __subp_stream_read_line and __subp_stream_read_exact differ solely in
+  /// where they stop, never in how the buffer is filled, and a second copy of the
+  /// grow-then-read would be a second place for the eof latch to drift.
+  ///
+  /// Cooperative: __io_submit_read parks the calling GT on kqueue EVFILT_READ and
+  /// yields, so N per-worker drain GTs multiplex without one OS thread blocking in
+  /// read() (which deadlocks the cooperative scheduler -- it has no sysmon to
+  /// retake a P from a blocked M).
+  ///
+  /// slots: 0x28 fd, 0x30 quadBase, 0x38 newCap, 0x40 newBuf, 0x48 n
+  private void EmitSubpStreamRefill() {
+    EmitRuntimeFunctionStart("__subp_stream_refill", 2, 0x60);
+    int n = _uniqueLabelCounter++;
+    string doRead = $"__subp_rf_read_{n}";
+    string gotEof = $"__subp_rf_goteof_{n}";
+    EmitReloadArg(0); EmitStoreToStack(0x28, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x18, 8); EmitStoreToStack(0x30, ARM64Register.X0, 8);
+
+    EmitLoadFromStack(ARM64Register.X9, 0x30, 8);
     EmitLoadIndirect(ARM64Register.X10, ARM64Register.X9, SubpQuadCap, 8); // cap
     EmitLoadIndirect(ARM64Register.X11, ARM64Register.X9, SubpQuadLen, 8); // len
     EmitAluRegReg(0xCB000000, ARM64Register.X12, ARM64Register.X10, ARM64Register.X11); // space
@@ -9078,53 +9145,129 @@ public partial class ARM64CodeEmitter {
     EmitBranchCond(ARM64ConditionCode.Ge, doRead);
     // grow: newCap = cap*2
     EmitLslImm(ARM64Register.X0, ARM64Register.X10, 1);
-    EmitStoreToStack(0x40, ARM64Register.X0, 8);                    // newCap
+    EmitStoreToStack(0x38, ARM64Register.X0, 8);                    // newCap
     EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
-    EmitStoreToStack(0x48, ARM64Register.X0, 8);                    // newBuf
-    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
+    EmitStoreToStack(0x40, ARM64Register.X0, 8);                    // newBuf
+    EmitLoadFromStack(ARM64Register.X9, 0x30, 8);
     EmitLoadIndirect(ARM64Register.X1, ARM64Register.X9, SubpQuadBuf, 8); // oldBuf
     EmitLoadIndirect(ARM64Register.X2, ARM64Register.X9, SubpQuadLen, 8); // len
-    EmitLoadFromStack(ARM64Register.X0, 0x48, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x40, 8);
     EmitBranchLink("maxon_memcpy");
-    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
+    EmitLoadFromStack(ARM64Register.X9, 0x30, 8);
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, SubpQuadBuf, 8);
     EmitBranchLink("mm_raw_free");
-    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x48, 8); EmitStoreIndirect(ARM64Register.X9, SubpQuadBuf, ARM64Register.X0, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x40, 8); EmitStoreIndirect(ARM64Register.X9, SubpQuadCap, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X9, 0x30, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x40, 8); EmitStoreIndirect(ARM64Register.X9, SubpQuadBuf, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x38, 8); EmitStoreIndirect(ARM64Register.X9, SubpQuadCap, ARM64Register.X0, 8);
     DefineLabel(doRead);
-    // n = __io_submit_read(fd, buf+len, cap-len). Cooperative: parks the drain GT
-    // on kqueue EVFILT_READ and yields, so the dispatcher's N per-worker drain GTs
-    // multiplex without one OS thread blocking in read() (which deadlocks the
-    // cooperative scheduler — it has no sysmon to retake a P from a blocked M).
-    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
+    EmitLoadFromStack(ARM64Register.X9, 0x30, 8);
     EmitLoadIndirect(ARM64Register.X10, ARM64Register.X9, SubpQuadBuf, 8);
     EmitLoadIndirect(ARM64Register.X11, ARM64Register.X9, SubpQuadLen, 8);
     EmitLoadIndirect(ARM64Register.X12, ARM64Register.X9, SubpQuadCap, 8);
     EmitAluRegReg(0x8B000000, ARM64Register.X1, ARM64Register.X10, ARM64Register.X11); // dst
     EmitAluRegReg(0xCB000000, ARM64Register.X2, ARM64Register.X12, ARM64Register.X11); // space
-    EmitLoadFromStack(ARM64Register.X0, 0x30, 8);                   // fd
+    EmitLoadFromStack(ARM64Register.X0, 0x28, 8);                   // fd
     EmitBranchLink("__io_submit_read");
-    EmitStoreToStack(0x40, ARM64Register.X0, 8);                    // n
+    EmitStoreToStack(0x48, ARM64Register.X0, 8);                    // n
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Le, gotEof);
-    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
-    EmitLoadFromStack(ARM64Register.X0, 0x40, 8);
+    EmitLoadFromStack(ARM64Register.X9, 0x30, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x48, 8);
     EmitLoadIndirect(ARM64Register.X1, ARM64Register.X9, SubpQuadLen, 8);
     EmitAluRegReg(0x8B000000, ARM64Register.X1, ARM64Register.X1, ARM64Register.X0);
     EmitStoreIndirect(ARM64Register.X9, SubpQuadLen, ARM64Register.X1, 8);
-    EmitBranch(loop);
+    EmitRuntimeFunctionEnd();
     DefineLabel(gotEof);
-    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
+    EmitLoadFromStack(ARM64Register.X9, 0x30, 8);
     EmitMovRegImm(ARM64Register.X0, 1);
     EmitStoreIndirect(ARM64Register.X9, SubpQuadEof, ARM64Register.X0, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// __subp_stream_read_exact(want_x0, fd_x1, quadBase_x2, outLen_x3) -> cstring.
+  ///
+  /// EXACTLY `want` bytes off the child's stdout as a fresh NUL-terminated
+  /// cstring, blocking until it has them. Shorter ONLY at EOF, and then only what
+  /// remained; `want == 0` answers empty without touching the pipe, and a second
+  /// call after EOF answers empty off the same latched flag the line reader uses.
+  ///
+  /// A count is a different question from a line: a framed body -- the LSP
+  /// `Content-Length` payload -- ends at a count and carries no newline, so
+  /// __subp_stream_read_line asked for one blocks for ever on a terminator the
+  /// sender never writes.
+  ///
+  /// It reads the SAME quad the line reader fills, which is what lets a client
+  /// alternate them: headers by line, body by count. A second buffer would be
+  /// blind to every byte the line reader had already pulled off the pipe.
+  ///
+  /// slots: 0x28 want, 0x30 fd, 0x38 quadBase, 0x40 outLen (arg 3, homed by hand -- the
+  /// prologue's slot for it is the want local).
+  private void EmitSubpStreamReadExact() {
+    EmitRuntimeFunctionStart("__subp_stream_read_exact", 3, 0x50);
+    EmitStoreToStack(0x40, AbiArgRegs[SubpStreamReadInnerOutLenArgIndex], 8);
+    int n = _uniqueLabelCounter++;
+    string loop = $"__subp_rx_loop_{n}";
+    string checkEof = $"__subp_rx_eof_{n}";
+    string needMore = $"__subp_rx_more_{n}";
+    string emptyRet = $"__subp_rx_empty_{n}";
+    EmitReloadArg(0); EmitStoreToStack(0x28, ARM64Register.X0, 8);
+    EmitLoadFromStack(ARM64Register.X0, 0x18, 8); EmitStoreToStack(0x30, ARM64Register.X0, 8); // fd
+    EmitLoadFromStack(ARM64Register.X0, 0x20, 8); EmitStoreToStack(0x38, ARM64Register.X0, 8); // quadBase
+    // A negative count has no answer; refusing it keeps mm_raw_alloc off a
+    // negative size in __subp_stream_emit_line.
+    EmitLoadFromStack(ARM64Register.X0, 0x28, 8);
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Lt, emptyRet);
+
+    DefineLabel(loop);
+    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
+    EmitLoadIndirect(ARM64Register.X10, ARM64Register.X9, SubpQuadLen, 8);
+    EmitLoadFromStack(ARM64Register.X11, 0x28, 8);                  // want
+    EmitCmpRegReg(ARM64Register.X10, ARM64Register.X11);
+    EmitBranchCond(ARM64ConditionCode.Lt, checkEof);
+    // Enough buffered: consume exactly `want`. want == 0 lands here on the first
+    // pass, which is what makes a zero-byte request cost no system call.
+    EmitLoadFromStack(ARM64Register.X0, 0x38, 8);
+    EmitLoadFromStack(ARM64Register.X1, 0x28, 8);
+    EmitLoadFromStack(ARM64Register.X2, 0x28, 8);
+    EmitLoadFromStack(ARM64Register.X3, 0x40, 8);                      // outLen
+    EmitBranchLink("__subp_stream_emit_line");
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel(checkEof);
+    EmitLoadFromStack(ARM64Register.X9, 0x38, 8);
+    EmitLoadIndirect(ARM64Register.X0, ARM64Register.X9, SubpQuadEof, 8);
+    EmitCbz(ARM64Register.X0, needMore);
+    // EOF: hand back whatever remains (possibly empty).
+    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X9, SubpQuadLen, 8);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X1);
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
+    EmitLoadFromStack(ARM64Register.X3, 0x40, 8);                      // outLen
+    EmitBranchLink("__subp_stream_emit_line");
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel(needMore);
+    // The refill either appends at least one byte or latches eof, so the loop
+    // terminates.
+    EmitLoadFromStack(ARM64Register.X0, 0x30, 8);
+    EmitLoadFromStack(ARM64Register.X1, 0x38, 8);
+    EmitBranchLink("__subp_stream_refill");
     EmitBranch(loop);
+
+    DefineLabel(emptyRet);
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
+    EmitStoreIndirect(ARM64Register.X0, 0, ARM64Register.Xzr, 1);
+    // A refusal answers zero bytes, and says so rather than leaving the caller's slot unwritten.
+    EmitLoadFromStack(ARM64Register.X1, 0x40, 8);
+    EmitStoreIndirect(ARM64Register.X1, 0, ARM64Register.Xzr, 8);
+    EmitRuntimeFunctionEnd();
   }
 
   /// Emit a read_stdout_line / read_stderr_line wrapper around the shared inner
   /// reader, selecting the fd field + line-buffer quad for the chosen stream.
   private void EmitSubpStreamReadLineWrapper(string name, int fdOff, int bufOff) {
-    EmitRuntimeFunctionStart(name, 2, 0x40);
+    EmitRuntimeFunctionStart(name, 3, 0x40);
     int n = _uniqueLabelCounter++;
     string emptyRet = $"__subp_rlw_empty_{n}";
     EmitReloadArg(0);
@@ -9133,12 +9276,43 @@ public partial class ARM64CodeEmitter {
     EmitLoadFromStack(ARM64Register.X0, 0x18, 8);                   // maxBytes (arg1 home)
     EmitLoadIndirect(ARM64Register.X1, ARM64Register.X9, fdOff, 8); // fd
     EmitAddSubImm(ARM64Register.X2, ARM64Register.X9, bufOff, isAdd: true); // quadBase
+    EmitLoadFromStack(ARM64Register.X3, 0x20, 8);                   // outLen (arg2 home)
     EmitBranchLink("__subp_stream_read_line");
     EmitRuntimeFunctionEnd();
     DefineLabel(emptyRet);
     EmitMovRegImm(ARM64Register.X0, 1);
     EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
     EmitStoreIndirect(ARM64Register.X0, 0, ARM64Register.Xzr, 1);
+    // A handle that was never spawned answers zero bytes, and says so.
+    EmitLoadFromStack(ARM64Register.X1, 0x20, 8);
+    EmitStoreIndirect(ARM64Register.X1, 0, ARM64Register.Xzr, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// maxon_subprocess_read_stdout_bytes(handle, want) -> cstring. The exact-count
+  /// twin of the read_*_line wrappers, and stdout-only: nothing in the language
+  /// asks stderr for a byte count, and an uninstalled twin would be a second body
+  /// to keep right with no caller to say when it stopped being right.
+  private void EmitSubpStreamReadExactWrapper() {
+    EmitRuntimeFunctionStart("maxon_subprocess_read_stdout_bytes", 3, 0x40);
+    int n = _uniqueLabelCounter++;
+    string emptyRet = $"__subp_rxw_empty_{n}";
+    EmitReloadArg(0);
+    EmitCbz(ARM64Register.X0, emptyRet);
+    EmitMovRegReg(ARM64Register.X9, ARM64Register.X0);              // handle
+    EmitLoadFromStack(ARM64Register.X0, 0x18, 8);                   // want (arg1 home)
+    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X9, SubpHOffOutFd, 8);
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X9, SubpHOffOutBuf, isAdd: true);
+    EmitLoadFromStack(ARM64Register.X3, 0x20, 8);                   // outLen (arg2 home)
+    EmitBranchLink("__subp_stream_read_exact");
+    EmitRuntimeFunctionEnd();
+    DefineLabel(emptyRet);
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
+    EmitStoreIndirect(ARM64Register.X0, 0, ARM64Register.Xzr, 1);
+    // A handle that was never spawned answers zero bytes, and says so.
+    EmitLoadFromStack(ARM64Register.X1, 0x20, 8);
+    EmitStoreIndirect(ARM64Register.X1, 0, ARM64Register.Xzr, 8);
     EmitRuntimeFunctionEnd();
   }
 

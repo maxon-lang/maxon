@@ -300,3 +300,288 @@ end 'main'
 ```exitcode
 4
 ```
+
+<!-- test: try-otherwise-value-flow.nested-try-default-with-record-result -->
+Regression guard for E9001 `value %N has no register and no stack home`.
+
+⚠ **THE SHAPE THIS GUARD WAS MINTED FOR NO LONGER ARISES FROM THIS SPELLING, AND THE RATIONALE
+BELOW IS KEPT AS HISTORY RATHER THAN AS A CLAIM ABOUT TODAY.** It read: *"`try first(x) otherwise
+try second(x)` lowers to TWO `func.try_call`s in one block: the fallback's own call is emitted
+eagerly beside the first"* — and that eagerness was itself a defect, fixed 2026-09-02. The default
+is now parsed INSIDE the error block, so `@pick` emits `call first; je success` in `entry` and
+`call second` in `otherwise_default_error_0`: two blocks, not one.
+
+**What still holds, and why the case stays:** the underlying defect was that a `func.try_call`
+defines TWO values — the result and the error flag — while the def-block index the cross-block
+spill analysis is built from named only one, so a use whose definition was missing read as "not an
+SSA value" and the block was never marked. That index is now complete (`StandardOp.ResultIds`), and
+this case exercises a nested `try` default returning a record, which is the family the ICE came
+from. It passes.
+
+⛔ **WHAT IS OPEN, STATED AS OPEN:** whether any spelling still reaches the original one-block
+two-try-calls shape has NOT been re-derived. So this case is a live test of a real family, but it
+is no longer known to be a test of the exact configuration that produced E9001 — and a guard whose
+premise has quietly expired is worth less than one that says so. Re-deriving that is the next
+person's job, and it is a smaller job than the one that would follow trusting this paragraph.
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Box
+	export let n as Tally
+
+	export static function create(n Tally) returns Box
+		return Box{n: n}
+	end 'create'
+end 'Box'
+
+enum LookupError implements Error
+	nothingThere
+end 'LookupError'
+
+function first(x Tally) returns Box throws LookupError
+	if x == 0 'none'
+		throw LookupError.nothingThere
+	end 'none'
+
+	return Box.create(1)
+end 'first'
+
+function second(x Tally) returns Box throws LookupError
+	if x == 5 'none'
+		throw LookupError.nothingThere
+	end 'none'
+
+	return Box.create(2)
+end 'second'
+
+function pick(x Tally) returns Box throws LookupError
+	return try first(x) otherwise try second(x)
+end 'pick'
+
+function main() returns ExitCode
+	let fellBack = try pick(0) otherwise return 1
+	let straight = try pick(7) otherwise return 2
+	print("{fellBack.n}\n")
+	print("{straight.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+1
+```
+
+<!-- test: try-otherwise-value-flow.otherwise-default-not-evaluated-on-success -->
+When the guarded call SUCCEEDS the `otherwise` expression must not run at all.
+The default here prints, so an eager evaluation shows up in stdout while the
+selected value stays right — which is exactly how eager evaluation hid: the
+answer was never wrong, only the trace.
+```maxon
+enum E
+	bad
+end 'E'
+
+function good(x ExitCode) returns ExitCode throws E
+	if x < 0 'neg'
+		throw E.bad
+	end 'neg'
+
+	return x + 106
+end 'good'
+
+function fallback() returns ExitCode
+	print("fallback\n")
+	return 222
+end 'fallback'
+
+function main() returns ExitCode
+	let v = try good(5) otherwise fallback()
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+111
+```
+
+<!-- test: try-otherwise-value-flow.otherwise-try-default-does-not-escape-a-successful-primary -->
+The `otherwise` arm is itself a `try`, and it throws. The primary SUCCEEDED, so
+the arm is never reached and `pick` cannot throw. Evaluating the arm eagerly
+published the fallback's error through the enclosing function's error flag, and a
+call that succeeded was reported to its caller as a throw.
+```maxon
+enum E
+	bad
+end 'E'
+
+function good(x ExitCode) returns ExitCode throws E
+	if x < 0 'neg'
+		throw E.bad
+	end 'neg'
+
+	return x + 106
+end 'good'
+
+function alwaysThrows(x ExitCode) returns ExitCode throws E
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+
+	return x
+end 'alwaysThrows'
+
+function pick(n ExitCode) returns ExitCode throws E
+	return try good(n) otherwise try alwaysThrows(n)
+end 'pick'
+
+function main() returns ExitCode
+	return try pick(5) otherwise 77
+end 'main'
+```
+```exitcode
+111
+```
+
+<!-- test: try-otherwise-value-flow.let-bound-otherwise-try-default-on-success -->
+The same shape bound with `let` instead of returned directly. The binding is the
+form the workaround at `LspDefinition` was written around, and it fails for the
+same one reason: where the arm is EVALUATED, not how its value is consumed.
+```maxon
+enum E
+	bad
+end 'E'
+
+function good(x ExitCode) returns ExitCode throws E
+	if x < 0 'neg'
+		throw E.bad
+	end 'neg'
+
+	return x + 106
+end 'good'
+
+function alwaysThrows(x ExitCode) returns ExitCode throws E
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+
+	return x
+end 'alwaysThrows'
+
+function pick(n ExitCode) returns ExitCode throws E
+	let v = try good(n) otherwise try alwaysThrows(n)
+	return v
+end 'pick'
+
+function main() returns ExitCode
+	return try pick(5) otherwise 77
+end 'main'
+```
+```exitcode
+111
+```
+
+<!-- test: try-otherwise-value-flow.managed-otherwise-try-default-on-success -->
+A managed (`String`) result takes a different lowering from a scalar one, and it
+was wrong in its own way: the arm's ops were parsed into the entry block and
+RELOCATED into the error block afterwards, which a nested `try` defeats because
+its call sits in a block of its own that no relocation lifts. Same rule, both
+lowerings: the arm does not run.
+```maxon
+enum E
+	bad
+end 'E'
+
+function goodStr(x ExitCode) returns String throws E
+	if x < 0 'neg'
+		throw E.bad
+	end 'neg'
+
+	return "primary"
+end 'goodStr'
+
+function throwsStr(x ExitCode) returns String throws E
+	print("arm\n")
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+
+	return "never"
+end 'throwsStr'
+
+function pick(n ExitCode) returns String throws E
+	let s = try goodStr(n) otherwise try throwsStr(n)
+	return s
+end 'pick'
+
+function main() returns ExitCode
+	let s = try pick(5) otherwise "fell-back"
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+primary
+```
+
+<!-- test: try-otherwise-value-flow.otherwise-default-runs-when-the-primary-throws -->
+The control for the three above: laziness must not be bought by never running the
+arm. The primary throws in all four forms here — scalar default, scalar `try`
+default, managed default and managed literal default — and every one of them
+falls back.
+```maxon
+enum E
+	bad
+end 'E'
+
+function throwsInt(x ExitCode) returns ExitCode throws E
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+
+	return x
+end 'throwsInt'
+
+function recover(x ExitCode) returns ExitCode throws E
+	print("recover\n")
+	return x + 30
+end 'recover'
+
+function throwsStr(x ExitCode) returns String throws E
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+
+	return "no"
+end 'throwsStr'
+
+function recoverStr() returns String
+	print("recoverStr\n")
+	return "recovered"
+end 'recoverStr'
+
+function main() returns ExitCode
+	let v = try throwsInt(5) otherwise try recover(5) otherwise 0
+	let w = try throwsInt(5) otherwise 7
+	let s = try throwsStr(5) otherwise recoverStr()
+	let t = try throwsStr(5) otherwise "literal"
+	print("{v} {w} {s} {t}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+recover
+recoverStr
+35 7 recovered literal
+```

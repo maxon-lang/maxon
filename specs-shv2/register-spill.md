@@ -1384,7 +1384,7 @@ fourteen three, twenty five; twenty-eight is a legitimate E5001. So twelve sits 
 of the window rather than on its edge — which is the point, since the pool size is what both
 edges are measured against and arm64 has a larger one. Re-check the width against any change
 to a register file, and re-confirm it still RE-SPACES rather than merely still passing.
-`Testing/ladders/genrespace.sh` is the same shape with N humps, for measuring rather than
+`tests/ladders/genrespace.sh` is the same shape with N humps, for measuring rather than
 gating.
 
 Each hump pairs `(0,1) (2,3) (4,5) (6,7) (8,9) (10,11)` into `1 + 5 + 9 + 13 + 17 + 21 = 66`,

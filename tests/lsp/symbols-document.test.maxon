@@ -1,0 +1,87 @@
+// symbols-document.test.maxon — the recovered `documentSymbol` test: the flat, top-level outline an
+// editor draws from a file.
+//
+// ⚠ **NO REFERENCE IMPLEMENTATION OF THIS METHOD EXISTS ANYWHERE.** `maxon-sharp/Lsp/` has no
+// DocumentSymbol handler, so the bootstrap cannot even be consulted as a protocol oracle for the field
+// values; the only implementation this behaviour ever had was the deleted Zig one, and the numbers below
+// are what survives of it. They are transcribed, not re-derived.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+let SymbolsUri = "file:///test.maxon"
+
+// SymbolKind: struct = 23, function = 12
+// Both are LSP's OWN numbers, not indices into anything this server declares — which is what makes the
+// literals the assertion rather than a restatement of whatever the server happens to send.
+let SymbolsStructKind = 23 as SymbolKindCode
+let SymbolsFunctionKind = 12 as SymbolKindCode
+
+let SymbolsUnreportedSession = "the session ended without saying how"
+
+union SymbolsOutlineOutcome
+	observed(symbols DocumentSymbolArray)
+	broke(detail String)
+end 'SymbolsOutlineOutcome'
+
+test 'documentSymbol returns symbols'
+	var client = LspClient.start()
+	var outcome = SymbolsOutlineOutcome.broke(SymbolsUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(SymbolsUri, content: symbolsPointAndMainFixture())
+		outcome = SymbolsOutlineOutcome.observed(client.documentSymbols(SymbolsUri).symbols)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = SymbolsOutlineOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = SymbolsOutlineOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = SymbolsOutlineOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'outline'
+		observed(symbols) then try assertSymbolsOutline(symbols)
+		broke(detail) then try Expect.fail("the document-symbol request did not complete: {detail}")
+	end 'outline'
+end 'documentSymbol returns symbols'
+
+function assertSymbolsOutline(symbols DocumentSymbolArray) throws TestFailure
+	// Should have exactly Point type and main function
+	//
+	// ⚠ The struct's FIELDS `x` and `y` are deliberately not counted: this pins a FLAT, top-level-only
+	// outline, so a server that flattened nested members into the same list would fail here.
+	let observedCount = symbols.count()
+	let expectedCount = 2
+	try Expect.equal(observedCount, expected: expectedCount, message: "the outline of a file declaring one type and one function did not hold exactly two top-level symbols.")
+
+	try Expect.isTrue(symbolsContain(symbols, name: "Point", kind: SymbolsStructKind), message: "the outline did not carry `Point` as a struct (SymbolKind 23). The name and the kind are asserted together because a symbol with the right name and the wrong kind draws the wrong icon and sorts into the wrong group.")
+	try Expect.isTrue(symbolsContain(symbols, name: "main", kind: SymbolsFunctionKind), message: "the outline did not carry `main` as a function (SymbolKind 12).")
+end 'assertSymbolsOutline'
+
+function symbolsContain(symbols DocumentSymbolArray, name String, kind SymbolKindCode) returns bool
+	for symbol in symbols 'eachSymbol'
+		if symbol.name == name and symbol.kind == kind 'hit'
+			return true
+		end 'hit'
+	end 'eachSymbol'
+
+	return false
+end 'symbolsContain'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: it is byte-exact,
+// a raw newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
+// newline.
+function symbolsPointAndMainFixture() returns String
+	return String.from(b"type Point
+    var x int
+    var y int
+end 'Point'
+
+function main() returns int
+    return 0
+end 'main'")
+end 'symbolsPointAndMainFixture'

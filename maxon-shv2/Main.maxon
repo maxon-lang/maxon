@@ -12,6 +12,7 @@
 // CLI (documented):
 //   maxon-shv2 build <file|directory>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,…] [--target=<cpu>-<os>]
 //   maxon-shv2 verify-warm-rebuild <file>
+//   maxon-shv2 lsp-server
 //   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>]
 
 // How wide the flag column of the usage listing below is. Every other line pads to it by hand; the one
@@ -196,6 +197,7 @@ function main() returns ExitCode
 		verifyWarmRebuild gives runVerifyWarmRebuild(args)
 		verifyRecheck gives runVerifyRecheck(args)
 		lspSelfTest gives runLspSelfTest()
+		lspServer gives runLspServer()
 		specTest gives runSpecTest(args)
 		scaleTest gives runScaleTest(args)
 		test gives runTest(args)
@@ -1057,6 +1059,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		verifyWarmRebuild gives 1
 		verifyRecheck gives 1
 		lspSelfTest gives 1
+		lspServer gives 1
 		specTest gives 1
 		scaleTest gives 1
 		fmt gives 1
@@ -1086,6 +1089,9 @@ function printUsage()
 	print("                                <-> LSP Position where `character` counts UTF-16 CODE UNITS. Covers\n")
 	print("                                2-, 3- and 4-byte characters, CRLF and the buffer edges. Compiler-\n")
 	print("                                internal, so no specs-shv2 case can reach it.\n")
+	print("  lsp-server                    Speak the Language Server Protocol over stdio: JSON-RPC\n")
+	print("                                bodies under Content-Length framing, the initialize /\n")
+	print("                                shutdown / exit lifecycle, and full text-document\n")
 	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
 	print("  test [dir]                    Run a PROJECT's own `test` declarations (default dir: the\n")
 	print("                                working directory). Every test found is compiled into ONE\n")
@@ -1200,6 +1206,7 @@ enum MaxonCommand
 	verifyWarmRebuild
 	verifyRecheck
 	lspSelfTest
+	lspServer
 	specTest
 	scaleTest
 	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
@@ -1420,7 +1427,9 @@ module type MaxonArgs
 				parsed.command = MaxonCommand.verifyRecheck
 			end 'recheckCmd' else if arg == "lsp-selftest" 'lspSelfTestCmd'
 				parsed.command = MaxonCommand.lspSelfTest
-			end 'lspSelfTestCmd' else if arg == SpecTestCommandName 'specTestCmd'
+			end 'lspSelfTestCmd' else if arg == "lsp-server" 'lspServerCmd'
+				parsed.command = MaxonCommand.lspServer
+			end 'lspServerCmd' else if arg == SpecTestCommandName 'specTestCmd'
 				parsed.command = MaxonCommand.specTest
 			end 'specTestCmd' else if arg == "scale-test" 'scaleTestCmd'
 				parsed.command = MaxonCommand.scaleTest

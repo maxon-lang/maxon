@@ -1580,12 +1580,95 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// One byte of C-string terminator carried past the data. A record built here is handed to
+  /// runtime functions that expect a NUL-terminated string, so the room is always reserved.
+  private const int CStringTerminatorBytes = 1;
+
+  /// A __ManagedMemory built out of raw bytes strides one byte per element.
+  private const int ByteRecordElementSize = 1;
+
+  /// <summary>
+  /// Build a __ManagedMemory holding exactly `byteLength` bytes copied from `dataPtr`, terminated
+  /// with a NUL the record's capacity accounts for.
+  /// </summary>
+  /// <remarks>
+  /// THE LENGTH IS A PARAMETER BECAUSE IT IS NOT ALWAYS RECOVERABLE FROM THE DATA. A C string
+  /// carries its own end and LowerCStringToManagedCore measures it; a byte buffer read off a child
+  /// process does not, and `strlen` applied to one stops at the first embedded NUL -- which is how
+  /// the five bytes `ab\0cd` were answered as two, with no error and exit 0.
+  ///
+  /// It copies `byteLength` bytes and writes the terminator itself rather than copying
+  /// `byteLength + 1` from the source, so the read stays inside exactly the range the length
+  /// describes: a producer is required to hold the bytes it says it holds, and nothing past them.
+  /// </remarks>
+  internal static StdHeapPtr LowerBytesToManagedCore(
+    StdI64 dataPtr,
+    StdI64 byteLength,
+    int resultId,
+    IrBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    VarRegistry temps,
+    string? inlineTarget = null) {
+    // Park both in slots: every mm_raw_alloc below clobbers the caller-saved registers they
+    // would otherwise live in.
+    var lenVar = $"__mm_bytes_len_{resultId}";
+    EmitStore(block, byteLength, lenVar, varTypes);
+    var srcVar = MmBytesSourceVar(resultId);
+    EmitStore(block, dataPtr, srcVar, varTypes);
+
+    // Allocate __ManagedMemory struct, then raw buffer.
+    var tempName = inlineTarget
+      ?? temps.CreateTemp("from_bytes", resultId, "__ManagedMemory", OwnershipFlags.None);
+    var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
+    EmitStore(block, managedPtr, tempName, varTypes);
+
+    var lenReload1 = (StdI64)EmitLoad(block, lenVar, varTypes);
+    var terminatorConst = new StdConstI64Op(CStringTerminatorBytes);
+    block.AddOp(terminatorConst);
+    var allocSize = new StdAddI64Op(lenReload1, terminatorConst.Result);
+    block.AddOp(allocSize);
+    var allocResult = EmitRawAlloc(block, allocSize.Result, label: "Bytes.buf", scopeName: _currentFuncName);
+
+    var bufVar = $"__mm_bytes_buf_{resultId}";
+    EmitStore(block, allocResult, bufVar, varTypes);
+
+    var bufReload = (StdI64)EmitLoad(block, bufVar, varTypes);
+    var srcReload = (StdI64)EmitLoad(block, srcVar, varTypes);
+    var lenReload2 = (StdI64)EmitLoad(block, lenVar, varTypes);
+    var copyResult = new StdI64(IrContext.Current.NextStdId());
+    block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [bufReload, srcReload, lenReload2], copyResult));
+
+    // Terminate at buf[len].
+    var bufForNul = (StdI64)EmitLoad(block, bufVar, varTypes);
+    var lenForNul = (StdI64)EmitLoad(block, lenVar, varTypes);
+    var nulAddr = new StdAddI64Op(bufForNul, lenForNul);
+    block.AddOp(nulAddr);
+    var nulByte = new StdConstI64Op(0);
+    block.AddOp(nulByte);
+    block.AddOp(new StdStoreIndirectOp(nulByte.Result, nulAddr.Result, 0, IrType.I8));
+
+    var bufFinal = (StdI64)EmitLoad(block, bufVar, varTypes);
+    var lenFinal = (StdI64)EmitLoad(block, lenVar, varTypes);
+    var capOp = new StdAddI64Op(lenFinal, terminatorConst.Result);
+    block.AddOp(capOp);
+    var elemSizeOp = new StdConstI64Op(ByteRecordElementSize);
+    block.AddOp(elemSizeOp);
+    var parentZero = new StdConstI64Op(0);
+    block.AddOp(parentZero);
+    EmitInitManagedMemory(block, tempName, bufFinal, lenFinal, capOp.Result, elemSizeOp.Result, parentZero.Result, varTypes);
+    return new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
+  }
+
+  /// The slot LowerBytesToManagedCore parks its source pointer in. Named once because a caller
+  /// that owns the source buffer reads it back from here to free it, and the two spellings drifting
+  /// apart would free whatever else that name resolved to.
+  private static string MmBytesSourceVar(int resultId) => $"__mm_bytes_src_{resultId}";
+
   /// <summary>
   /// __cstring_to_managed(cstrPtr): convert a null-terminated C string to __ManagedMemory.
-  /// Computes strlen, allocates buffer, copies bytes, returns managed struct.
+  /// Measures the string with strlen, then builds the record through the shared byte core.
   /// </summary>
-  /// Converts a raw cstring pointer to a __ManagedMemory struct. Used both by
-  /// MaxonCStringToManagedOp lowering and directly by directory builtins.
+  /// Used both by MaxonCStringToManagedOp lowering and directly by directory builtins.
   internal static StdHeapPtr LowerCStringToManagedCore(
     StdI64 cstrPtr,
     int resultId,
@@ -1593,50 +1676,52 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     VarRegistry temps,
     string? inlineTarget = null) {
-    // Get string length
     var lenResult = new StdI64(IrContext.Current.NextStdId());
     block.AddOp(new StdCallRuntimeOp("maxon_strlen", [cstrPtr], lenResult));
+    return LowerBytesToManagedCore(cstrPtr, lenResult, resultId, block, varTypes, temps, inlineTarget);
+  }
 
-    // Store length so it survives alloc calls
-    var lenVar = $"__cstr_len_{resultId}";
-    EmitStore(block, lenResult, lenVar, varTypes);
-    var cstrVar = $"__cstr_ptr_{resultId}";
-    EmitStore(block, cstrPtr, cstrVar, varTypes);
+  /// <summary>
+  /// Lower a runtime call whose answer is a byte buffer of a length the runtime REPORTS, into a
+  /// __ManagedMemory holding exactly those bytes. See MaxonRuntimeBytesToManagedOp for why the
+  /// length cannot be recovered at this end.
+  /// </summary>
+  private static void LowerRuntimeBytesToManaged(
+    MaxonRuntimeBytesToManagedOp op,
+    IrBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    VarRegistry temps,
+    IrModule<MaxonOp> module,
+    string? inlineTarget = null) {
+    var stdArgs = LowerRuntimeCallArgs(op.FunctionName, op.Args, block, valueMap, varTypes, module);
 
-    // Allocate __ManagedMemory struct, then raw buffer.
-    var tempName = inlineTarget
-      ?? temps.CreateTemp("from_cstring", resultId, "__ManagedMemory", OwnershipFlags.None);
-    var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
-    EmitStore(block, managedPtr, tempName, varTypes);
+    // The out-parameter slot. Zeroing it first both declares the slot and gives the call a defined
+    // length to overwrite, so a runtime path that failed to report one answers an empty record
+    // rather than whatever the frame happened to hold.
+    var byteLengthVar = $"__mm_bytes_outlen_{op.Result.Id}";
+    var zero = new StdConstI64Op(0);
+    block.AddOp(zero);
+    EmitStore(block, zero.Result, byteLengthVar, varTypes);
+    var lengthLea = new StdLeaOp(byteLengthVar);
+    block.AddOp(lengthLea);
+    var lengthPtr = new StdPtrToI64Op(lengthLea.Result);
+    block.AddOp(lengthPtr);
+    stdArgs.Add(lengthPtr.Result);
 
-    var lenReload1 = (StdI64)EmitLoad(block, lenVar, varTypes);
-    var oneConst = new StdConstI64Op(1);
-    block.AddOp(oneConst);
-    var allocSize = new StdAddI64Op(lenReload1, oneConst.Result);
-    block.AddOp(allocSize);
-    var allocResult = EmitRawAlloc(block, allocSize.Result, label: "CString.buf", scopeName: _currentFuncName);
+    var bufPtr = new StdI64(IrContext.Current.NextStdId());
+    block.AddOp(new StdCallRuntimeOp(op.FunctionName, stdArgs, bufPtr));
 
-    var bufVar = $"__cstr_buf_{resultId}";
-    EmitStore(block, allocResult, bufVar, varTypes);
+    var byteLength = (StdI64)EmitLoad(block, byteLengthVar, varTypes);
+    var hp = LowerBytesToManagedCore(bufPtr, byteLength, op.Result.Id, block, varTypes, temps, inlineTarget);
 
-    var bufReload = (StdI64)EmitLoad(block, bufVar, varTypes);
-    var cstrReload = (StdI64)EmitLoad(block, cstrVar, varTypes);
-    var lenReload2 = (StdI64)EmitLoad(block, lenVar, varTypes);
-    var copySize = new StdAddI64Op(lenReload2, oneConst.Result);
-    block.AddOp(copySize);
-    var copyResult = new StdI64(IrContext.Current.NextStdId());
-    block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [bufReload, cstrReload, copySize.Result], copyResult));
+    // The raw buffer never escapes this op: the runtime allocated it, the record above owns a copy
+    // of its bytes, and the source slot the core parked it in is where the free reads it back from
+    // (the intervening allocations clobber every caller-saved register).
+    var bufToFree = (StdI64)EmitLoad(block, MmBytesSourceVar(op.Result.Id), varTypes);
+    EmitRawFree(block, bufToFree);
 
-    var bufFinal = (StdI64)EmitLoad(block, bufVar, varTypes);
-    var lenFinal = (StdI64)EmitLoad(block, lenVar, varTypes);
-    var capOp = new StdAddI64Op(lenFinal, oneConst.Result);
-    block.AddOp(capOp);
-    var elemSizeOp = new StdConstI64Op(1);
-    block.AddOp(elemSizeOp);
-    var cstrParentZero = new StdConstI64Op(0);
-    block.AddOp(cstrParentZero);
-    EmitInitManagedMemory(block, tempName, bufFinal, lenFinal, capOp.Result, elemSizeOp.Result, cstrParentZero.Result, varTypes);
-    return new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
+    valueMap[op.Result] = hp;
   }
 
   private static void LowerCStringToManaged(

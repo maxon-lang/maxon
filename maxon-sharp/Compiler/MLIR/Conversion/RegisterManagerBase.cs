@@ -627,8 +627,10 @@ public static class BlockAnalysis {
     var valueDefBlock = new Dictionary<int, int>();
     for (int bi = 0; bi < sourceBlocks.Count; bi++) {
       foreach (var op in sourceBlocks[bi].Operations) {
-        int resultId = op.AnyResultId;
-        if (resultId >= 0)
+        // EVERY id the op defines, not one of them: a `func.try_call` defines a result AND an
+        // error flag, and an index missing the flag makes the lookups below fail OPEN — a use
+        // whose definition is absent is indistinguishable from a use of nothing.
+        foreach (int resultId in op.ResultIds)
           valueDefBlock[resultId] = bi;
       }
     }

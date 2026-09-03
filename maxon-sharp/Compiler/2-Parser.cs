@@ -11504,9 +11504,50 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _currentBlock!.AddOp(new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false));
   }
 
+  /// <summary>
+  /// Emit `try CALL otherwise EXPR` — the default-value form.
+  ///
+  /// THE DEFAULT IS LAZY, AND THAT IS THE LANGUAGE, NOT AN OPTIMIZATION. `EXPR` is parsed straight
+  /// into the error block, so it runs only when the guarded call actually threw. This method used to
+  /// parse it into the entry block and then decide what to do with the ops, on the premise that
+  /// hoisting was "fine (no refcounting involved)" for non-struct results. Refcounting was never the
+  /// only thing a default can do: an eager default ran every side effect it performs on the SUCCESS
+  /// path, and when the default was itself a `try` its propagation branch escaped a call that had
+  /// succeeded — the caller saw a throw from a program that cannot throw there.
+  ///
+  /// A `try` default is also why the ops cannot be parsed here and RELOCATED afterwards, which is
+  /// what the struct arm did: a nested `try` opens BLOCKS, and the call sits in one of them rather
+  /// than in the run of ops after the try-call op that a relocation loop can lift. Parsing where the
+  /// value belongs leaves nothing to move and no shape to get wrong.
+  ///
+  /// Both arms bind the result in a block of their own, which is the shape the struct arm already
+  /// used and its stated reason — assigning the call's result unconditionally would bind, and for a
+  /// managed kind incref, a result the error path never produced. Applying it uniformly costs the
+  /// scalar form one extra jump on the success path, which is what the moved goldens show.
+  /// </summary>
   private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken, IrType? errorType = null) {
-    var defaultExpr = ParseExpression();
-    var defaultValue = ResolveExprValue(defaultExpr);
+    // The block the try-call itself lives in. The result temp is declared against it rather than
+    // against the arm that first assigns it, because `VarInfo.DefinedInBlock == _currentBlock` is
+    // what lets a read reuse the cached register: naming an arm here would let the continue block
+    // reuse a register only one edge defines.
+    var entryBlock = _currentBlock!;
+    var resultVarName = $"__try_result_{_blockCounter++}";
+
+    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType);
+    var errorFlagVar = needsErrorCleanup ? StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag) : null;
+
+    var errorBlockLabel = UniqueLabel("otherwise_default_error");
+    var successBlockLabel = UniqueLabel("otherwise_default_success");
+    var continueBlockLabel = UniqueLabel("otherwise_default_continue");
+
+    EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlockLabel, successBlockLabel);
+
+    // Error block: the default expression is PARSED here, so its ops, its calls and any blocks it
+    // opens all land on the only path that reaches them.
+    _currentBlock = _currentFunction!.Body.AddBlock(errorBlockLabel);
+    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
+
+    var defaultValue = ResolveExprValue(ParseExpression());
 
     // Range-check the otherwise default value against the callee's return type.
     // The default value must be within the ranged type's bounds.
@@ -11522,7 +11563,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
 
-    var resultVarName = $"__try_result_{_blockCounter++}";
     var defaultKind = DetermineValueKind(defaultValue);
     var expectedKind = tryInfo.ResultKind ?? MaxonValueKind.Integer;
 
@@ -11553,127 +11593,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ?? (defaultValue is MaxonStruct s ? s.TypeName : null)
       ?? (defaultValue is MaxonEnum e ? e.TypeName : null);
 
-    bool isStructResult = resultKind == MaxonValueKind.Struct && structTypeName != null;
-
-    if (isStructResult) {
-      // For struct results: lazy evaluation — default is only created on error path,
-      // try result is only stored on success path. This avoids incref'ing the invalid
-      // error code on the error path and avoids allocating the default on the success path.
-      return EmitTryOtherwiseDefaultStruct(tryInfo, resultVarName, defaultValue, resultKind, structTypeName!, errorType);
-    }
-
-    // For non-struct results: the original eager pattern is fine (no refcounting involved)
-    var defaultVarName = $"__try_default_{_blockCounter++}";
-    _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
-    _variables.Declare(defaultVarName, resultKind, true, defaultValue, _currentBlock!, structTypeName: structTypeName);
-
-    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType);
-    string? errorFlagVar = null;
-    if (needsErrorCleanup) {
-      errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
-    }
-
-    if (tryInfo.Result != null) {
-      _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryInfo.Result, true, true, resultKind));
-      _variables.Declare(resultVarName, resultKind, true, tryInfo.Result, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: structTypeName);
-    }
-
-    var errorBlock = UniqueLabel("otherwise_default_error");
-    var continueBlock = UniqueLabel("otherwise_default_continue");
-
-    EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
-
-    // Error block: adopt default value as the result
-    var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
-    _currentBlock = errBlock;
-    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
-    var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
-    _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
-    _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
-
-    // Continue block: load result
-    var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
-    _currentBlock = contBlock;
-
-    var loadedResult = EmitVarRefOp(resultVarName, resultKind, structTypeName);
-    return new ExprResult.Direct(loadedResult);
-  }
-
-  /// <summary>
-  /// Emit try/otherwise default for struct-typed results. Uses lazy evaluation:
-  /// the default is only materialized on the error path, and the try result is only
-  /// stored on the success path. This prevents incref'ing the invalid error code and
-  /// avoids allocating unused defaults.
-  /// </summary>
-  private ExprResult.Direct EmitTryOtherwiseDefaultStruct(
-    TryResultInfo tryInfo, string resultVarName, MaxonValue defaultValue,
-    MaxonValueKind resultKind, string structTypeName, IrType? errorType = null) {
-
-    // Move the default expression ops from the current block to the error block.
-    // The default expression was parsed into _currentBlock — we need to extract those ops.
-    // Strategy: save the ops added by ParseExpression, remove them from entry block,
-    // and re-add them to the error block.
-
-    // Find which ops were added by the default expression parsing. We know the try call/await op
-    // was the last op before ParseExpression started. Look for ops after the try call/await.
-    var entryBlock = _currentBlock!;
-    var tryOpIndex = -1;
-    for (int i = entryBlock.Operations.Count - 1; i >= 0; i--) {
-      if (entryBlock.Operations[i] is MaxonTryCallOp or MaxonTryAwaitOp) {
-        tryOpIndex = i;
-        break;
-      }
-    }
-
-    // Extract default expression ops (everything after the try call/await)
-    var defaultOps = new List<MaxonOp>();
-    if (tryOpIndex >= 0) {
-      for (int i = tryOpIndex + 1; i < entryBlock.Operations.Count; i++) {
-        defaultOps.Add((MaxonOp)entryBlock.Operations[i]);
-      }
-      entryBlock.Operations.RemoveRange(tryOpIndex + 1, defaultOps.Count);
-    }
-
-    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType);
-    string? errorFlagVar = null;
-    if (needsErrorCleanup) {
-      errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
-    }
-
-    var errorBlockLabel = UniqueLabel("otherwise_default_error");
-    var successBlockLabel = UniqueLabel("otherwise_default_success");
-    var continueBlock = UniqueLabel("otherwise_default_continue");
-
-    // Branch: error → error block, success → success block
-    EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlockLabel, successBlockLabel);
-
-    // Error block: replay default expression ops, then assign to result var
-    var errBlock = _currentFunction!.Body.AddBlock(errorBlockLabel);
-    _currentBlock = errBlock;
-    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
-    foreach (var op in defaultOps) {
-      _currentBlock!.AddOp(op);
-    }
+    // `_currentBlock` is whatever the default expression finished in — its own continue block when
+    // the default opened control flow of its own — never assumed to still be the error block.
     _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, defaultValue, true, true, resultKind));
-    _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+    _currentBlock!.AddOp(new MaxonBrOp(continueBlockLabel));
 
-    // Success block: assign try result to result var
-    var sucBlock = _currentFunction!.Body.AddBlock(successBlockLabel);
-    _currentBlock = sucBlock;
+    // Success block: bind the call's result.
+    _currentBlock = _currentFunction!.Body.AddBlock(successBlockLabel);
     if (tryInfo.Result != null) {
       _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryInfo.Result, true, true, resultKind));
     }
-    _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+    _currentBlock!.AddOp(new MaxonBrOp(continueBlockLabel));
 
-    // Register variable from entry scope for later lookups
-    _variables.Declare(resultVarName, resultKind, true, tryInfo.Result ?? defaultValue, entryBlock, OwnershipFlags.IsTemp, structTypeName: structTypeName);
+    _variables.Declare(resultVarName, resultKind, true, tryInfo.Result ?? defaultValue, entryBlock,
+      OwnershipFlags.IsTemp, structTypeName: structTypeName);
 
     // Continue block: load result
-    var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
-    _currentBlock = contBlock;
+    _currentBlock = _currentFunction!.Body.AddBlock(continueBlockLabel);
 
-    var loadedResult = EmitVarRefOp(resultVarName, resultKind, structTypeName);
-    return new ExprResult.Direct(loadedResult);
+    return new ExprResult.Direct(EmitVarRefOp(resultVarName, resultKind, structTypeName));
   }
 
   private void ParseAnnotatedDecl() {
@@ -12461,12 +12399,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["subprocessWriteStdinAll"] = RuntimeCallIntrinsic(
       "Writes the entire contents of a cstring to a streaming subprocess's stdin, blocking until all bytes are flushed. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessWriteStdinAll(handle, data_cstr) returns int`",
       "maxon_subprocess_write_stdin_all", ["i64", "cstring"], true),
-    ["subprocessReadStdoutLine"] = RuntimeCallToManaged(
+    ["subprocessReadStdoutLine"] = RuntimeCallToManagedBytes(
       "Reads one line (LF-terminated) from a streaming subprocess's stdout, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStdoutLine(handle, maxBytes) returns __ManagedMemory`",
-      "maxon_subprocess_read_stdout_line", ["i64", "i64"], freeFunc: "mm_raw_free"),
-    ["subprocessReadStderrLine"] = RuntimeCallToManaged(
+      "maxon_subprocess_read_stdout_line", ["i64", "i64"]),
+    ["subprocessReadStderrLine"] = RuntimeCallToManagedBytes(
       "Reads one line (LF-terminated) from a streaming subprocess's stderr, blocking until a line is available or EOF is reached. Returns a fresh __ManagedMemory containing the line (without the trailing newline); a zero-length result signals EOF. Lines longer than maxBytes are truncated and the remainder is delivered on the next call.\n\n`__Builtins.subprocessReadStderrLine(handle, maxBytes) returns __ManagedMemory`",
-      "maxon_subprocess_read_stderr_line", ["i64", "i64"], freeFunc: "mm_raw_free"),
+      "maxon_subprocess_read_stderr_line", ["i64", "i64"]),
+    // The EXACT-COUNT stdout reader. Its second argument is a LENGTH where the two line readers' is a
+    // ceiling, and that is the whole difference: a framed body -- the LSP `Content-Length` payload, which
+    // carries no trailing newline -- cannot be read by a reader that stops at one. It consumes from the
+    // SAME per-handle pushback buffer the line reader fills, so a client may alternate them on one stream.
+    //
+    // BYTES, NOT TEXT, and that is why it is on RuntimeCallToManagedBytes: a framed payload may carry any
+    // byte including NUL, and a length recovered with strlen would end the answer at the first one.
+    ["subprocessReadStdoutBytes"] = RuntimeCallToManagedBytes(
+      "Reads exactly n bytes from a streaming subprocess's stdout, blocking until it has them. Returns a fresh __ManagedMemory holding those bytes; a SHORTER result means EOF was reached first, and a zero-length result means EOF with nothing left. n == 0 returns empty without touching the pipe. Shares the per-handle pushback buffer with subprocessReadStdoutLine, so the two readers may be interleaved on one stream.\n\n`__Builtins.subprocessReadStdoutBytes(handle, n) returns __ManagedMemory`",
+      "maxon_subprocess_read_stdout_bytes", ["i64", "i64"]),
     ["subprocessCloseStdin"] = RuntimeCallIntrinsic(
       "Closes the stdin pipe of a streaming subprocess, signalling EOF to the child without terminating it.\n\n`__Builtins.subprocessCloseStdin(handle)`",
       "maxon_subprocess_close_stdin", ["i64"], false),
@@ -12485,12 +12433,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["subprocessResultStatusCode"] = RuntimeCallIntrinsic(
       "Returns the exit code or signal number from a waitCollect result.\n\n`__Builtins.subprocessResultStatusCode(resultPtr) returns int`",
       "maxon_subprocess_result_status_code", ["i64"], true),
-    ["subprocessResultStdout"] = RuntimeCallToManaged(
+    // Captured child output, so both are on the byte door rather than the cstring one: a collect
+    // that caught a binary payload holds whatever the child wrote, NUL included.
+    ["subprocessResultStdout"] = RuntimeCallToManagedBytes(
       "Returns a fresh __ManagedMemory containing captured stdout from a waitCollect result.\n\n`__Builtins.subprocessResultStdout(resultPtr) returns __ManagedMemory`",
-      "maxon_subprocess_result_stdout", ["i64"], freeFunc: "mm_raw_free"),
-    ["subprocessResultStderr"] = RuntimeCallToManaged(
+      "maxon_subprocess_result_stdout", ["i64"]),
+    ["subprocessResultStderr"] = RuntimeCallToManagedBytes(
       "Returns a fresh __ManagedMemory containing captured stderr from a waitCollect result.\n\n`__Builtins.subprocessResultStderr(resultPtr) returns __ManagedMemory`",
-      "maxon_subprocess_result_stderr", ["i64"], freeFunc: "mm_raw_free"),
+      "maxon_subprocess_result_stderr", ["i64"]),
     ["subprocessResultDurationMs"] = RuntimeCallIntrinsic(
       "Returns the subprocess's wall-clock duration in milliseconds from a waitCollect result.\n\n`__Builtins.subprocessResultDurationMs(resultPtr) returns int`",
       "maxon_subprocess_result_duration_ms", ["i64"], true),
@@ -12888,9 +12838,37 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return (enclosingKind, null, null);
   }
 
+  /// Calls a runtime function whose answer is a BYTE BUFFER -- bytes a child process wrote, which
+  /// may include NUL -- and converts it to __ManagedMemory using the length the runtime reports
+  /// through a trailing out-parameter this door appends.
+  ///
+  /// THE CHOICE BETWEEN THIS AND RuntimeCallToManaged IS ABOUT THE DATA, NOT THE CALL. A runtime
+  /// function answering a NAME -- an argv entry, a path, an environment entry, a diagnostic
+  /// message -- answers a genuine C string whose length IS its first NUL, and `strlen` is the
+  /// right measure for it. A runtime function answering a child's OUTPUT answers bytes, and a
+  /// length recovered with `strlen` truncates at the first zero byte with no error and exit 0.
+  /// MEASURED against a child emitting the five bytes `ab\0cd`: through RuntimeCallToManaged this
+  /// compiler answered TWO where the shv2 compiler answered five.
+  ///
+  /// There is no `freeFunc` parameter: the raw buffer never escapes the op, which frees it once
+  /// the bytes have been copied into the record.
+  private static BuiltinInfo RuntimeCallToManagedBytes(string doc, string runtimeName,
+      List<string> paramTypeNames) {
+    return new(doc, p => {
+      var args = p.ParseTypedRuntimeArgs(runtimeName, paramTypeNames);
+      p.Expect(TokenType.RightParen);
+      var op = new MaxonRuntimeBytesToManagedOp(runtimeName, args);
+      p._currentBlock!.AddOp(op);
+      return op.Result;
+    });
+  }
+
   /// Calls a runtime function returning a cstring, converts to managed, optionally frees the cstring.
   /// Each arg is parsed and type-checked against paramTypeNames[i].
   /// Supported type names: "i64", "cstring", "__ManagedMemory" (extend on demand).
+  ///
+  /// The result's length is `strlen`, so this door is for runtime functions that genuinely answer
+  /// a C string. A byte buffer belongs on RuntimeCallToManagedBytes above.
   private static BuiltinInfo RuntimeCallToManaged(string doc, string runtimeName,
       List<string> paramTypeNames, string? freeFunc = null) {
     return new(doc, p => {
@@ -18870,7 +18848,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // Ternary expression: <true_value> if <condition> else <false_value>
-    if (Check(TokenType.If)) {
+    //
+    // ⚠ ONLY IN A FULL-EXPRESSION CONTEXT, WHICH IS WHAT `minPrecedence == 0` MEANS. The
+    // conditional is the LOWEST-precedence construct in the language — `docs/WRITING_MAXON_CODE.md`
+    // puts `if`…`else` on the "Lowest" row of the operator table and states it outright: "Binds
+    // looser than all binary operators", so `a + b if cond else c` is `(a + b) if cond else c`.
+    //
+    // This test used to run at EVERY level, and the precedence climber's operand recursions are
+    // levels: the `ParseExpression(entry.Precedence + 1)` that reads a binary operator's RIGHT
+    // OPERAND would reach here with the `if` still ahead of it and swallow the whole conditional,
+    // leaving the caller to compute `a + (b if cond else c)`. That is a DIFFERENT PROGRAM, and it
+    // agrees with the documented one whenever the condition is true — so an unparenthesized site
+    // computes the right answer under test and the wrong one on the arm nobody exercised.
+    //
+    // `or`, the loosest binary operator, sits at precedence 0, and every operand recursion passes
+    // at least 1 (`ParseRefIdentity` passes 4). So `minPrecedence == 0` holds for the outermost
+    // call and for nothing else, which is exactly the question the conditional has to ask.
+    if (minPrecedence == 0 && Check(TokenType.If)) {
       lhs = ParseTernaryExpression(lhs, armOrigin);
     }
 

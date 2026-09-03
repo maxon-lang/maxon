@@ -400,7 +400,7 @@ public class Compiler {
   /// raises `DirectoryNotFoundException`, which the catch below would report as a locked artifact and
   /// fail a build that should have succeeded. (shv2 needs no such guard — it ignores the delete
   /// outright and re-reads existence instead, and an `exists` probe there was MEASURED to cost more
-  /// than the failing delete it would save. See `maxon-shv2/Testing/ladders/README.md`.) A delete
+  /// than the failing delete it would save. See `tests/ladders/README.md`.) A delete
   /// that genuinely FAILS is a build error and not a warning: the write that follows would fail for
   /// the same reason (a running or read-only exe), and a build that cannot remove the old binary must
   /// not go on to claim it replaced it.</para>

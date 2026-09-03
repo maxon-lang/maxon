@@ -1,0 +1,46 @@
+// The ONE answer to "which token is the cursor on", and a file of its own because TWO features read it.
+// `textDocument/hover` renders what a position names and `textDocument/definition` jumps to where that
+// name is declared; a second resolver would let an editor jump to a name the hover on that very position
+// describes as something else. It sits apart from `LspSymbols.maxon`'s document-structure model because
+// it answers about a POSITION rather than about the document's blocks.
+
+/// No token lies at the offset asked about. ⭐ A THROW rather than an index standing for "none": a real
+/// token at index 0 and "there is none" would otherwise be the same answer.
+module enum LspCursorLookupError implements Error
+	nothingThere
+end 'LspCursorLookupError'
+
+/// ⭐⭐ **WHICH TOKEN THE CURSOR NAMES — THE ONE ANSWER `textDocument/hover` AND `textDocument/definition`
+/// BOTH READ.** Two resolvers would let an editor jump to a name the hover on that very position
+/// describes as something else.
+///
+/// ⭐ **A CARET IS A POINT BETWEEN CHARACTERS, SO AT A BOUNDARY IT TOUCHES TWO TOKENS AND THE LEFT ONE
+/// WINS.** One past the end of a name is where an editor leaves the caret the moment that name is typed —
+/// and it is also where `.`, a `///` comment or a `#if` begins. The token that BEGINS there has not been
+/// reached yet; the name just typed is what the user is pointing at. Restricted to an identifier, because
+/// a caret past a `)` or past a keyword is past an expression rather than on a name.
+///
+/// ⚠ **THE TWO PASSES DECIDE ONLY THAT BOUNDARY.** A token the offset is strictly INSIDE can never be one
+/// an identifier ends at — spans do not overlap — so scanning for the ending name first cannot take a
+/// containing token away from a caret that is genuinely within it.
+///
+/// ⚠ **A LINEAR SCAN, AND A BINARY SEARCH WOULD BE WRONG.** The lexer records a span only for tokens whose
+/// text it sliced — identifiers, keywords, literals, doc comments — so every punctuator, `newline` and EOF
+/// carries `startByte == endByte == 0`. The array is therefore NOT ascending in `startByte`, and that same
+/// zero span is what correctly makes those tokens unreachable: no offset satisfies `0 <= offset < 0`.
+module function lspTokenAtCursor(tokens TokenArray, offset LspByteOffset) returns TokenIndex throws LspCursorLookupError
+	for (cursor, token) in tokens.withIterator() 'theNameJustTyped'
+		if token.kind == TokenKind.identifier and token.endByte == offset 'endsHere'
+			return cursor.index()
+		end 'endsHere'
+	end 'theNameJustTyped'
+
+	// Half-open `[startByte, endByte)`, the interval convention `LspSpan` states.
+	for (cursor, token) in tokens.withIterator() 'underTheCursor'
+		if token.startByte <= offset and offset < token.endByte 'covers'
+			return cursor.index()
+		end 'covers'
+	end 'underTheCursor'
+
+	throw LspCursorLookupError.nothingThere
+end 'lspTokenAtCursor'

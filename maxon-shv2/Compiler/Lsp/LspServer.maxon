@@ -1,0 +1,310 @@
+// `maxon-shv2 lsp-server` — the Language Server Protocol session over stdio.
+//
+// It runs the lifecycle (`initialize`, `shutdown`, `exit`), keeps the open documents in sync, and routes
+// every language method through the registry in `LspMethod.maxon`. A method whose area answers nothing
+// yet is refused with `-32601` and is not advertised.
+//
+// ⛔ **NOTHING IN THIS FILE IS PER-AREA.** The dispatch table and the capability builder below are
+// COMPLETE — every method LSP defines for this server already has its arm — so an area is brought live
+// by editing its own handler file alone. See `LspMethod.maxon`'s header for the whole seam.
+
+// The open documents: uri -> the document's full current text.
+//
+// FULL sync (`textDocumentSync` kind 1) — every `didChange` carries the whole document, so the store is
+// a replace-or-drop map with no patching to do. Incremental sync is a separate mechanism and no method
+// this server answers needs one.
+typealias LspDocumentTextMap = Map with (String, String)
+
+// `textDocumentSync` kind 1 — the client sends whole documents.
+let FullTextDocumentSync = 1
+
+// LSP's own rule: the process exits 0 only when the client asked for a shutdown before the session
+// ended. `exit` out of order, a client that vanished, and a stream this server can no longer frame are
+// all abnormal ends and must not report success.
+let LspCleanExitCode = 0
+let LspAbnormalExitCode = 1
+
+let MethodInitialize = "initialize"
+let MethodShutdown = "shutdown"
+let MethodExit = "exit"
+let MethodDidOpen = "textDocument/didOpen"
+let MethodDidChange = "textDocument/didChange"
+let MethodDidClose = "textDocument/didClose"
+
+let CapabilitiesKey = "capabilities"
+let TextDocumentSyncKey = "textDocumentSync"
+let TextDocumentKey = "textDocument"
+let ContentChangesKey = "contentChanges"
+let TextKey = "text"
+
+// Run the server until the client ends the session, and report how it ended.
+export function runLspServer() returns ExitCode
+	var session = LspSession.create()
+	return session.run()
+end 'runLspServer'
+
+type LspSession
+	var documents as LspDocumentTextMap
+	var shutdownRequested = false
+	var stopped = false
+	var streamBroken = false
+
+	static function create() returns LspSession
+		return Self{documents: LspDocumentTextMap.create()}
+	end 'create'
+
+	// The message pump. One turn reads one framed message; the session ends when the client says so
+	// (`exit`), when it closes the stream, or when a message arrives this server cannot frame.
+	function run() returns ExitCode
+		while not self.stopped 'pump'
+			match readLspMessage() 'incoming'
+				message(body) then handleMessage(body)
+				endOfStream then self.stopped = true
+				framingError(detail) then failOnBrokenStream(detail)
+			end 'incoming'
+		end 'pump'
+
+		return exitCode()
+	end 'run'
+
+	function exitCode() returns ExitCode
+		if self.streamBroken 'brokenStream'
+			return LspAbnormalExitCode
+		end 'brokenStream'
+
+		return LspCleanExitCode if self.shutdownRequested else LspAbnormalExitCode
+	end 'exitCode'
+
+	// ⚠ ONE LINE, ONCE, AND ONLY ON THE PATH THAT ENDS THE SESSION. A client that is not draining this
+	// server's stderr blocks once the pipe buffer fills, and both sides then wait on each other forever —
+	// so chatter here is a hang, not noise.
+	function failOnBrokenStream(detail String)
+		printError("maxon-shv2 lsp-server: {detail}\n")
+		self.streamBroken = true
+		self.stopped = true
+	end 'failOnBrokenStream'
+
+	function handleMessage(body String)
+		let doc = try Json.parse(body) otherwise 'notJson'
+			writeLspError(LspRequestId.absent, code: LspJsonRpcErrorCode.parseError, message: "Parse error - request body is not valid JSON")
+			return
+		end 'notJson'
+
+		let id = readRequestId(doc)
+
+		let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise 'noMethod'
+			self.refuse(id, code: LspJsonRpcErrorCode.invalidRequest, message: "Invalid Request - no 'method' member")
+			return
+		end 'noMethod'
+
+		// Whether a message is a request or a notification is decided by the id, not by the method name:
+		// JSON-RPC says a message without an id gets no reply of any kind.
+		match id 'addressee'
+			absent then self.handleNotification(method, doc: doc)
+			number or text then self.handleRequest(method, id: id, doc: doc)
+		end 'addressee'
+	end 'handleMessage'
+
+	function handleRequest(method String, id LspRequestId, doc JsonDoc)
+		if method == MethodInitialize 'initialize'
+			respondInitialize(id)
+			return
+		end 'initialize'
+
+		if method == MethodShutdown 'shutdown'
+			self.shutdownRequested = true
+			respondShutdown(id)
+			return
+		end 'shutdown'
+
+		match lspMethodNamed(method) 'known'
+			found(language) then self.answerLanguageRequest(language, id: id, doc: doc)
+			unknown then self.refuseMethod(method, id: id)
+		end 'known'
+	end 'handleRequest'
+
+	// ⭐ A method with a home in `LspMethod` but no answer yet is refused EXACTLY as one this server has
+	// never heard of. From the client's side there is no difference: it asked for something that is not
+	// answered, and a second spelling of "no" would be a distinction only this file can see.
+	//
+	// The wording is the reference server's, byte for byte (`maxon lsp-server`), so a client — or a
+	// test — reading the message sees one answer from both compilers.
+	function refuseMethod(wireName String, id LspRequestId)
+		self.refuse(id, code: LspJsonRpcErrorCode.methodNotFound, message: "Method not found - {wireName}")
+	end 'refuseMethod'
+
+	function answerLanguageRequest(method LspMethod, id LspRequestId, doc JsonDoc)
+		let spelling = lspMethodSpelling(method)
+
+		if not servedMethods().contains(method) 'noAnswerYet'
+			self.refuseMethod(spelling.wireName, id: id)
+			return
+		end 'noAnswerYet'
+
+		let answer = try self.answerResolving(method, doc: doc) otherwise 'badParams'
+			self.refuse(id, code: LspJsonRpcErrorCode.invalidParams, message: "Invalid params - {spelling.wireName}")
+			return
+		end 'badParams'
+
+		writeLspResult(answer.doc, id: id, result: answer.result)
+	end 'answerLanguageRequest'
+
+	// Resolve the shape every `textDocument/*` request shares, then hand the area its request.
+	//
+	// ⭐ A request naming a document this server was never told about is ANSWERED with LSP's "nothing
+	// here" rather than refused: the client is not at fault, and every method here admits `null`. That
+	// is the reference server's behaviour too (`FormattingHandler`'s `GetDocument == null`).
+	function answerResolving(method LspMethod, doc JsonDoc) returns LspAnswer throws LspParamsError
+		let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
+		let textDocument = try lspMember(doc, of: params, key: TextDocumentKey)
+		let uri = try lspMemberText(doc, of: textDocument, key: LspUriKey)
+		let text = try self.documents.get(uri) otherwise return LspAnswer.nothing()
+
+		return try answerFor(LspRequest.of(method, incoming: doc, params: params, uri: uri, text: text))
+	end 'answerResolving'
+
+	// ⛔ NO `else` ARM, AND THAT IS THE PROTOCOL: a notification is never answered, so one this server
+	// does not know is DROPPED. `initialized` is dropped by the same silence — it is the client's
+	// handshake acknowledgement and carries nothing this server keeps. Answering `-32601` here would be a
+	// response to a message that must not get one — and it is the same rule that makes `otherwise ignore`
+	// the correct end for a notification whose params do not parse.
+	function handleNotification(method String, doc JsonDoc)
+		if method == MethodDidOpen 'didOpen'
+			try self.openDocument(doc) otherwise ignore
+		end 'didOpen' else if method == MethodDidChange 'didChange'
+			try self.changeDocument(doc) otherwise ignore
+		end 'didChange' else if method == MethodDidClose 'didClose'
+			try self.closeDocument(doc) otherwise ignore
+		end 'didClose' else if method == MethodExit 'exit'
+			self.stopped = true
+		end 'exit'
+	end 'handleNotification'
+
+	function openDocument(doc JsonDoc) throws LspParamsError
+		let (_, textDocument, uri) = try notifiedDocument(doc)
+		self.documents.upsert(uri, value: try lspMemberText(doc, of: textDocument, key: TextKey))
+	end 'openDocument'
+
+	function changeDocument(doc JsonDoc) throws LspParamsError
+		let (params, _, uri) = try notifiedDocument(doc)
+		let changes = try lspMember(doc, of: params, key: ContentChangesKey)
+		let changeCount = try doc.arrayLength(changes) otherwise throw LspParamsError.malformed
+
+		if changeCount == 0 'noChanges'
+			throw LspParamsError.malformed
+		end 'noChanges'
+
+		// Under FULL sync every entry is a whole-document replacement, so the LAST one is the document.
+		let latest = try doc.arrayAt(changes, index: changeCount - 1) otherwise throw LspParamsError.malformed
+		self.documents.upsert(uri, value: try lspMemberText(doc, of: latest, key: TextKey))
+	end 'changeDocument'
+
+	function closeDocument(doc JsonDoc) throws LspParamsError
+		let (_, _, uri) = try notifiedDocument(doc)
+		_ = self.documents.remove(uri)
+	end 'closeDocument'
+
+	// A malformed message that carries an id is refused; one without an id is a notification and gets no
+	// reply at all, however wrong it is.
+	function refuse(id LspRequestId, code LspJsonRpcErrorCode, message String)
+		match id 'addressee'
+			absent then return
+			number or text then writeLspError(id, code: code, message: message)
+		end 'addressee'
+	end 'refuse'
+end 'LspSession'
+
+// ⭐⭐ **EXACTLY WHAT THIS SERVER SERVES — THE SAME `servedMethods` THE DISPATCHER ROUTES ON, AND
+// NOTHING ELSE NARROWING IT.** A capability is a promise an editor acts on, and the two ways to break it
+// are symmetric: advertising a method that answers `-32601`, and answering one that was never advertised.
+// One reading of one roster is what makes both unspellable.
+//
+// ⛔ **A CLIENT'S OWN `capabilities` ARE NOT CONSULTED, AND THAT IS THE PROTOCOL.** LSP's client
+// capabilities say what a client can RENDER, not what a server may offer: the server advertises what it
+// serves and the client decides what to ask for. Gating advertisement on them made a client that declared
+// nothing get a hover it was never told about.
+function respondInitialize(id LspRequestId)
+	var doc = JsonDoc.create()
+	var capabilities = LspJsonObject.create(doc)
+	capabilities.put(TextDocumentSyncKey, value: JsonNode.numberNode(FullTextDocumentSync))
+
+	for method in servedMethods() 'eachMethod'
+		let spelling = lspMethodSpelling(method)
+		capabilities.putNode(spelling.providerKey, value: providerValueNode(doc, shape: spelling.providerValue))
+	end 'eachMethod'
+
+	var result = LspJsonObject.create(doc)
+	result.putNode(CapabilitiesKey, value: capabilities.finish())
+	writeLspResult(doc, id: id, result: result.finish())
+end 'respondInitialize'
+
+// The VALUE of a served method's capability. The two that LSP defines as options objects are built by
+// the area that owns those options — a completion trigger set, a semantic-token legend — because
+// nothing else knows what belongs in them.
+function providerValueNode(doc JsonDoc, shape LspProviderValue) returns JsonNodeId
+	return match shape 'shape'
+		flag gives doc.add(JsonNode.boolNode(true))
+		completionOptions gives completionCapabilityOptions(doc)
+		semanticTokensOptions gives semanticTokensCapabilityOptions(doc)
+	end 'shape'
+end 'providerValueNode'
+
+// ⛔ **THE ONE PLACE A REQUEST IS HANDED TO AN AREA, AND IT IS COMPLETE BY CONSTRUCTION.** Every area
+// has its arm whether or not it answers anything yet, which is what lets an area go live by editing only
+// its own file. A request reaches here only after `servedMethods` said its area answers the method.
+function answerFor(request LspRequest) returns LspAnswer throws LspParamsError
+	return match lspMethodArea(request.method) 'area'
+		hover gives try hoverAnswer(request)
+		definition gives try definitionAnswer(request)
+		completion gives try completionAnswer(request)
+		formatting gives try formattingAnswer(request)
+		symbols gives try symbolsAnswer(request)
+		edits gives try editsAnswer(request)
+		semanticTokens gives try semanticTokensAnswer(request)
+	end 'area'
+end 'answerFor'
+
+// What every area answers today, put together once — for BOTH the `initialize` capabilities and the
+// decision to route a request, so the two can never disagree.
+//
+// ⭐ Walked over `LspArea.allCases` rather than listed, so an area this server gains cannot be missing
+// from the roster while `answerFor` routes to it: both halves are a `match` over the same enum, and
+// neither compiles with an arm absent.
+function servedMethods() returns LspMethodArray
+	var served = LspMethodArray.create()
+
+	for area in LspArea.allCases 'eachArea'
+		for method in areaServedMethods(area) 'eachMethod'
+			served.push(method)
+		end 'eachMethod'
+	end 'eachArea'
+
+	return served
+end 'servedMethods'
+
+function areaServedMethods(area LspArea) returns LspMethodArray
+	return match area 'area'
+		hover gives hoverServedMethods()
+		definition gives definitionServedMethods()
+		completion gives completionServedMethods()
+		formatting gives formattingServedMethods()
+		symbols gives symbolsServedMethods()
+		edits gives editsServedMethods()
+		semanticTokens gives semanticTokensServedMethods()
+	end 'area'
+end 'areaServedMethods'
+
+// LSP defines shutdown's result as null.
+function respondShutdown(id LspRequestId)
+	var doc = JsonDoc.create()
+	writeLspResult(doc, id: id, result: doc.add(JsonNode.nullNode()))
+end 'respondShutdown'
+
+// `params`, `params.textDocument` and its `uri` — the walk every `textDocument/*` notification begins
+// with. All three are handed back because `didOpen` reads its text out of `textDocument` while
+// `didChange` reads its own out of `params.contentChanges`.
+function notifiedDocument(doc JsonDoc) returns (JsonNodeId, JsonNodeId, String) throws LspParamsError
+	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
+	let textDocument = try lspMember(doc, of: params, key: TextDocumentKey)
+	return (params, textDocument, try lspMemberText(doc, of: textDocument, key: LspUriKey))
+end 'notifiedDocument'

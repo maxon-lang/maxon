@@ -26,26 +26,28 @@ module {
     x64.prologue stack_size=32
     x64.movzx rax, byte [rip+Lookup.values.__initialized]
     x64.test rax, rax
-    x64.mov [rbp-32], rcx
+    x64.mov [rbp-24], rcx
     x64.je Lookup.get.__lazy_init_0
   __lazy_merge_0:
     x64.mov rax, qword [rip+Lookup.values]
     x64.mov [rbp-8], rax
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-32]
+    x64.mov rdx, [rbp-24]
     x64.call __Array_i64.get
-    x64.mov rcx, -1
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je Lookup.get.otherwise_default_continue_0
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.mov [rbp-32], rax
+    x64.je Lookup.get.otherwise_default_success_0
   otherwise_default_error_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rax
+    x64.mov rax, -1
+    x64.mov [rbp-16], rax
+    x64.jmp Lookup.get.otherwise_default_continue_0
+  otherwise_default_success_0:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-16], rax
     x64.jmp Lookup.get.otherwise_default_continue_0
   otherwise_default_continue_0:
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   __lazy_init_0:

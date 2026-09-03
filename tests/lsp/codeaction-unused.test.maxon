@@ -1,0 +1,62 @@
+// codeaction-unused.test.maxon — the recovered `codeAction` test: that an editor is offered a fix on the
+// line holding an unused variable.
+//
+// ⚠ **THE ACTION'S TITLE IS DELIBERATELY NOT PINNED.** The recovered `CodeActionResult` carried both a
+// title and a kind and the test read neither; the suggested wording ("remove unused variable") lived only
+// in a comment. Asserting it here would be inventing a specification and then passing it, so the claim
+// stays where it was: at least one action is offered. The comment's wording is recorded below so a later
+// strengthening has a starting point rather than a blank page.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+let CodeActionUri = "file:///test.maxon"
+
+let CodeActionUnreportedSession = "the session ended without saying how"
+
+union CodeActionOffersOutcome
+	observed(actions CodeActionItemArray)
+	broke(detail String)
+end 'CodeActionOffersOutcome'
+
+test 'code action offers fix for unused variable'
+	var client = LspClient.start()
+	var outcome = CodeActionOffersOutcome.broke(CodeActionUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(CodeActionUri, content: codeActionUnusedVariableFixture())
+
+		// Request code actions on the unused variable line
+		outcome = CodeActionOffersOutcome.observed(client.codeAction(CodeActionUri, startLine: 1, startCharacter: 4, endLine: 1, endCharacter: 19).actions)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = CodeActionOffersOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = CodeActionOffersOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = CodeActionOffersOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'offered'
+		observed(actions) then try assertCodeActionOffered(actions)
+		broke(detail) then try Expect.fail("the code-action request did not complete: {detail}")
+	end 'offered'
+end 'code action offers fix for unused variable'
+
+function assertCodeActionOffered(actions CodeActionItemArray) throws TestFailure
+	// Should have at least one code action (e.g., remove unused variable)
+	try Expect.greaterThan(actions.count(), than: 0, message: "no code action was offered on the line declaring an unused variable. `var unused = 42` is E3012 in Maxon, so this is the most ordinary quick fix the language has — a server offering nothing here offers nothing anywhere.")
+end 'assertCodeActionOffered'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, a raw
+// newline in one IS the byte it spells, no indentation stripped and no trailing newline. The requested
+// range 1,4 to 1,19 is counted against exactly these bytes.
+function codeActionUnusedVariableFixture() returns String
+	return String.from(b"function test() returns int
+    var unused = 42
+    return 0
+end 'test'")
+end 'codeActionUnusedVariableFixture'

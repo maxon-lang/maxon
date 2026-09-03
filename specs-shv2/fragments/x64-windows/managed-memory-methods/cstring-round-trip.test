@@ -1,0 +1,73 @@
+// Test: cstring-round-trip
+function main() returns ExitCode
+	let s = "hello world"
+	let mm = __ManagedMemory.fromCString(s.cstr())
+	let back = String.init(mm)
+	return back.byteLength()
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hello world"
+    x64.callDirect String.cstr
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_from_cstring
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.init
+    x64.movRegReg r12, r8
+  __il_body:
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc greaterEqual, __il_cont
+  __il_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect String.byteLength
+    x64.movRegReg r13, r8
+  __il_cont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at cstring-round-trip.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -141,7 +141,7 @@ module {
   }
   func @NumChain.churn(__self_ptr: i64, d: i64) -> u16 {
   entry:
-    x64.prologue stack_size=112
+    x64.prologue stack_size=96
     x64.mov [rbp-16], rdx
     x64.xor eax, eax
     x64.mov [rbp-8], rax
@@ -163,7 +163,7 @@ module {
     x64.add rdi, rsi
     x64.mov [rbp-24], rdi
     x64.mov rsi, [rbp-24]
-    x64.mov [rbp-104], rcx
+    x64.mov [rbp-96], rcx
     x64.mov rcx, [rbp-24]
     x64.call mm_incref
     x64.mov rax, [rbp-24]
@@ -219,13 +219,13 @@ module {
     x64.xor eax, eax
     x64.mov [rbp-80], rax
     x64.test r8, r8
-    x64.mov [rbp-104], rbx
+    x64.mov [rbp-96], rbx
     x64.je NumChain.churn.__div_ok_0
   __div_zero_0:
     x64.jmp NumChain.churn.__div_merge_0
   __div_ok_0:
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-104]
+    x64.mov rcx, [rbp-96]
     x64.mov rbx, rax
     x64.mov rax, rcx
     x64.xor edx, edx
@@ -235,18 +235,19 @@ module {
   __div_merge_0:
     x64.mov rax, [rbp-72]
     x64.mov rcx, [rbp-80]
-    x64.mov rdx, 9
-    x64.mov [rbp-88], rdx
-    x64.mov [rbp-96], rcx
-    x64.xor ebx, ebx
-    x64.cmp rax, rbx
-    x64.je NumChain.churn.otherwise_default_continue_1
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.je NumChain.churn.otherwise_default_success_1
   otherwise_default_error_1:
-    x64.mov rax, [rbp-88]
-    x64.mov [rbp-96], rax
+    x64.mov rax, 9
+    x64.mov [rbp-88], rax
+    x64.jmp NumChain.churn.otherwise_default_continue_1
+  otherwise_default_success_1:
+    x64.mov rax, [rbp-80]
+    x64.mov [rbp-88], rax
     x64.jmp NumChain.churn.otherwise_default_continue_1
   otherwise_default_continue_1:
-    x64.mov rax, [rbp-96]
+    x64.mov rax, [rbp-88]
     x64.xor ecx, ecx
     x64.mov rdx, 1000
     x64.cmp rax, rdx
@@ -294,7 +295,7 @@ module {
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_5
-    x64.mov rax, [rbp-96]
+    x64.mov rax, [rbp-88]
     x64.epilogue
     x64.ret
   }

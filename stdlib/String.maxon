@@ -224,6 +224,26 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return managed.toCString()
 	end 'cstr'
 
+	/// A `String` holding the NUL-terminated bytes at `cs` — `cstr()`'s inverse, and the way an
+	/// answer from a `__Builtins.*` intrinsic declared to return `cstring` becomes text.
+	///
+	/// ⚠ IT COPIES, AND IT HAS TO. A `cstring` is a bare address carrying no length, no capacity
+	/// and no ownership, so there is nothing to take a view of and no lifetime this call can see.
+	/// The bytes are measured with a `strlen` walk and blitted into a buffer the returned `String`
+	/// owns; the pointer itself is never retained. ⇒ The caller may free or overwrite the source
+	/// the moment this returns, and this `String` is unaffected — which is the whole reason to
+	/// convert rather than to keep the pointer.
+	///
+	/// ⚠ THE BYTES ARE NOT VALIDATED AS UTF-8, exactly as `from(bytes)` does not validate an
+	/// arbitrary `ByteArray`. What IS decided is whether every grapheme is one byte, which `init`
+	/// scans for and every later grapheme walk reads.
+	///
+	/// ⛔ A cstring is NUL-TERMINATED, so this cannot carry an embedded 0 and stops at the first
+	/// one. Bytes that may hold a 0 travel as a `ByteArray` through `from(bytes)`.
+	public static function fromCString(cs cstring) returns String
+		return String.init(ByteMemory.fromCString(cs))
+	end 'fromCString'
+
 	/// An independent `String` holding this one's bytes: writing to either never shows through the
 	/// other. The copy-on-write view behind it is an optimisation — see `toByteArray`, which makes
 	/// the same promise the same way.

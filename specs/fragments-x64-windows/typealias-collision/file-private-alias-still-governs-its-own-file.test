@@ -46,17 +46,19 @@ module {
     x64.call DigitArray.get
     x64.mov ecx, rax
     x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.mov [rbp-24], rcx
-    x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je roundTrip.otherwise_default_continue_0
+    x64.mov [rbp-24], rcx
+    x64.je roundTrip.otherwise_default_success_0
   otherwise_default_error_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp roundTrip.otherwise_default_continue_0
+  otherwise_default_success_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-16], rax
     x64.jmp roundTrip.otherwise_default_continue_0
   otherwise_default_continue_0:
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.xor ecx, ecx
     x64.mov rdx, 1000000
     x64.cmp rax, rdx
@@ -75,7 +77,7 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }

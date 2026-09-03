@@ -1419,14 +1419,14 @@ module {
     %15 = maxon.struct_var_ref arr
     %16 = maxon.literal {value = 0 : i64}
     %19, %18 = maxon.try_call @ItemArray.get %15, %16
-    %22 = maxon.literal {value = 0 : i64}
-    %23 = maxon.binop %18, %22 {op = ne}
-    maxon.cond_br %23 [then: otherwise_default_error_0, else: otherwise_default_success_0]
-  otherwise_default_error_0:
     %20 = maxon.literal {value = 0 : i64}
-    %21 = maxon.call @Item.create %20
-    maxon.assign %21 {var = __call_tmp_2} {decl = 1 : i1}
-    maxon.assign %21 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
+    %21 = maxon.binop %18, %20 {op = ne}
+    maxon.cond_br %21 [then: otherwise_default_error_0, else: otherwise_default_success_0]
+  otherwise_default_error_0:
+    %22 = maxon.literal {value = 0 : i64}
+    %23 = maxon.call @Item.create %22
+    maxon.assign %23 {var = __call_tmp_2} {decl = 1 : i1}
+    maxon.assign %23 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br otherwise_default_continue_0
   otherwise_default_success_0:
     maxon.assign %19 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}

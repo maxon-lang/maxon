@@ -1,0 +1,556 @@
+// `textDocument/completion` — what an editor offers after a `.`.
+//
+// ⭐⭐ **TWO SOURCES, AND WHICH ONE ANSWERS IS DECIDED BY WHERE THE TYPE IS DECLARED.** That split is the
+// whole design of this file, and both halves are forced:
+//
+//   * **The OPEN BUFFER is read LEXICALLY.** A document being completed is mid-edit and in general does
+//     not compile — every recovered fixture here is refused by `resolveTypes` before it has a type at all
+//     (`returns int` is E3005, `var x int` is E2010) — so a receiver's type, and the members of a type the
+//     buffer itself declares, are read off the token stream. A completion list that appears only for files
+//     that already compile is a completion list that never appears.
+//   * **`stdlib/` IS READ FROM THE REAL COMPILE**, because the question it answers is not answerable by
+//     reading: *may this file NAME this member?* `stdlib/Array.maxon:295` declares `ensureCapacity`
+//     without `public`, and offering it teaches an author to write a call that will not compile. The tier
+//     and the declaring file are `ProgramSignatures`' own facts, asked through the one function that turns
+//     a `Visibility` into an answer (`calleeVisibilityFrom`). ⛔ Re-deriving visibility by looking for the
+//     word `public` in front of a declaration would be a second, shallower copy of the language's own
+//     rule — the exact shape this project keeps paying for.
+//
+// ⚠ **THE BUFFER IS REGISTERED WITH THAT COMPILE WITH EMPTY CONTENT, AND THAT IS DELIBERATE.** Its own
+// declarations are read lexically, so the compile needs nothing from it but its PATH: a visibility
+// question is asked ON BEHALF OF A FILE, and `ProgramSignatures.moduleDirectoryOf` PANICS for a path the
+// sweep never saw. Registering the real text instead would put a document that does not parse into the
+// merge and cost the stdlib roster as well.
+
+let LabelKey = "label"
+let TriggerCharactersKey = "triggerCharacters"
+
+// The one character that raises this completion. It is also what makes the answer well-defined: this
+// server completes a MEMBER of something, never an identifier prefix in open code.
+let MemberAccessTrigger = "."
+
+// LSP's `CompletionItemKind`. The protocol's own numbers; an editor draws an icon from them.
+typealias LspCompletionKind = int(1 to 25)
+
+let MethodCompletionKind = 2 as LspCompletionKind
+let StaticFunctionCompletionKind = 3 as LspCompletionKind
+let FieldCompletionKind = 5 as LspCompletionKind
+let EnumMemberCompletionKind = 20 as LspCompletionKind
+
+// The type an array literal and a string literal denote. They are the two literal forms whose type is
+// fixed by the language rather than by a name the author wrote, so they are the two this file spells.
+let ArrayRecordName = "Array"
+let StringRecordName = "String"
+
+// D7 registers a later overload of one member name under a mangled key (`Array.contains#type parameter`).
+// An editor offers the SOURCE spelling, which is the part in front of the marker.
+let OverloadMangleMarker = "#"
+
+// `<Type>.<member>` — how every method is registered, and the only shape this file reads a roster by.
+let CompletionMemberSeparator = "."
+
+// The compiler's reserved prefix. A name an author may not write is a name an editor must not offer.
+let CompletionReservedNamePrefix = "__"
+
+let CompletionFileUriScheme = "file://"
+
+module function completionServedMethods() returns LspMethodArray
+	var served = LspMethodArray.create()
+	served.push(LspMethod.completion)
+	return served
+end 'completionServedMethods'
+
+// This server's `CompletionOptions`. Declaring the trigger character is what makes an editor ask the
+// moment a `.` is typed rather than only when the user asks for the list by hand.
+module function completionCapabilityOptions(doc JsonDoc) returns JsonNodeId
+	var triggers = JsonNodeIdArray.create()
+	triggers.push(doc.add(JsonNode.stringNode(MemberAccessTrigger)))
+
+	var options = LspJsonObject.create(doc)
+	options.putNode(TriggerCharactersKey, value: doc.add(JsonNode.arrayNode(triggers)))
+	return options.finish()
+end 'completionCapabilityOptions'
+
+module function completionAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+	if request.method != LspMethod.completion 'notThisArea'
+		panic("completionAnswer: {lspMethodSpelling(request.method).wireName} is not this area's — `completionServedMethods` names the one method it answers")
+	end 'notThisArea'
+
+	let tokens = lspDocumentTokens(request.text)
+	let index = LspLineIndex.build(request.text)
+	let offset = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey))
+
+	var doc = JsonDoc.create()
+	var items = JsonNodeIdArray.create()
+
+	for offer in offersAt(tokens, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri) 'eachOffer'
+		var item = LspJsonObject.create(doc)
+		item.put(LabelKey, value: JsonNode.stringNode(offer.label))
+		item.put(LspKindKey, value: JsonNode.numberNode(offer.kind))
+		items.push(item.finish())
+	end 'eachOffer'
+
+	return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(items)))
+end 'completionAnswer'
+
+// One thing an editor may insert.
+type CompletionOffer
+	export let label as String
+	export let kind as LspCompletionKind
+
+	export static function create(label String, kind LspCompletionKind) returns CompletionOffer
+		return Self{label: label, kind: kind}
+	end 'create'
+end 'CompletionOffer'
+
+typealias CompletionOfferArray = Array with CompletionOffer
+
+// Which labels have already been offered. One member may be registered under several keys — an interface
+// extension publishes a method the conformer also declares — and an editor showing a name twice is a list
+// the author has to read twice.
+typealias OfferedLabelSet = Set with String
+
+// What the cursor is asking about.
+union CompletionSubject
+	// `Color.` — the receiver names a TYPE, so its STATIC surface is what an author may write next.
+	staticSurfaceOf(typeName String)
+	// `arr.` — the receiver names a VALUE of some type, so its INSTANCE surface is offered.
+	instanceSurfaceOf(typeName String)
+	nothingToOffer
+end 'CompletionSubject'
+
+function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset LspByteOffset, uri String) returns CompletionOfferArray
+	var offers = CompletionOfferArray.create()
+	var offered = OfferedLabelSet.create()
+
+	let subject = subjectAt(tokens, blocks: blocks, offset: offset)
+	let typeName = subjectTypeName(subject)
+	if typeName.isEmpty() 'nothingToComplete'
+		return offers
+	end 'nothingToComplete'
+
+	// A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
+	// type of the same name: the author is looking at the declaration in front of them.
+	match blockDeclaring(blocks, typeName: typeName) 'declaredHere'
+		found(block) then addBufferMembers(offers, offered: offered, tokens: tokens, blocks: blocks, block: block, subject: subject)
+		notInThisBuffer then addStdlibMembers(offers, offered: offered, typeName: typeName, uri: uri, subject: subject)
+	end 'declaredHere'
+
+	return offers
+end 'offersAt'
+
+function subjectTypeName(subject CompletionSubject) returns String
+	return match subject 'subject'
+		staticSurfaceOf(typeName) gives typeName
+		instanceSurfaceOf(typeName) gives typeName
+		nothingToOffer gives ""
+	end 'subject'
+end 'subjectTypeName'
+
+// --- What the cursor is on --------------------------------------------------------------------
+
+// ⭐ **THE RECEIVER IS FOUND BY TOKEN ORDER AND NOT BY BYTE RANGE, BECAUSE THE `.` HAS NO BYTES.** A
+// punctuator's `startByte`/`endByte` are both 0 (`Token`), so a dot cannot be located by offset at all.
+// What CAN be: the last token carrying source bytes that ends at or before the cursor — which, after
+// `arr.` and after `arr.pu`, is the receiver either way.
+function subjectAt(tokens TokenArray, blocks LspDocumentBlockArray, offset LspByteOffset) returns CompletionSubject
+	let receiver = receiverIndexBefore(tokens, offset: offset)
+	if receiver >= tokens.count() 'noReceiver'
+		return CompletionSubject.nothingToOffer
+	end 'noReceiver'
+
+	let name = String.from(lspTokenAt(tokens, index: receiver).value)
+
+	// A name the buffer declares as a type is a STATIC access; anything else is a value whose type has to
+	// be read off the binding that introduced it.
+	return match blockDeclaring(blocks, typeName: name) 'namesAType'
+		found gives CompletionSubject.staticSurfaceOf(name)
+		notInThisBuffer gives valueSubject(tokens, before: receiver, name: name)
+	end 'namesAType'
+end 'subjectAt'
+
+// The receiver is not a type this buffer declares, so it is a VALUE whose binding says what it is — or,
+// when nothing binds it, a name the corpus may declare as a type. A name nothing declares at all simply
+// offers nothing, which is what both routes answer for it.
+function valueSubject(tokens TokenArray, before TokenIndex, name String) returns CompletionSubject
+	let bound = completionBoundTypeName(tokens, before: before, name: name)
+	if bound.isEmpty() 'nothingBindsIt'
+		return CompletionSubject.staticSurfaceOf(name)
+	end 'nothingBindsIt'
+
+	return CompletionSubject.instanceSurfaceOf(bound)
+end 'valueSubject'
+
+// The index of the receiver token, or `tokens.count()` when the cursor is not after a member access. The
+// count is not a sentinel inside the index domain: it is one past the last index, which no token has.
+function receiverIndexBefore(tokens TokenArray, offset LspByteOffset) returns TokenIndex
+	var candidate = tokens.count()
+
+	for (position, token) in tokens.withIterator() 'eachToken'
+		if token.endByte <= token.startByte or token.endByte > offset 'notBeforeTheCursor'
+			continue
+		end 'notBeforeTheCursor'
+
+		candidate = position.index() as TokenIndex
+	end 'eachToken'
+
+	if candidate >= tokens.count() 'nothingBefore'
+		return tokens.count()
+	end 'nothingBefore'
+
+	let receiver = lspTokenAt(tokens, index: candidate)
+	if receiver.kind != TokenKind.identifier 'notANameToCompleteOn'
+		return tokens.count()
+	end 'notANameToCompleteOn'
+
+	// A member access and nothing else: the very next token must be the `.` the author just typed.
+	if candidate + 1 >= tokens.count() 'nothingFollows'
+		return tokens.count()
+	end 'nothingFollows'
+
+	if lspTokenAt(tokens, index: candidate + 1).kind != TokenKind.dot 'notAMemberAccess'
+		return tokens.count()
+	end 'notAMemberAccess'
+
+	return candidate
+end 'receiverIndexBefore'
+
+// ⭐ **THE TYPE OF A LOCAL BINDING, READ FROM THE SHAPE OF ITS INITIALIZER.** Three forms, and each is a
+// form whose type the language fixes without any inference: an array literal is an `Array`, a string
+// literal is a `String`, and `Point{…}` is a `Point`. Anything else answers EMPTY and offers nothing —
+// a completion list built on a guess is worse than none.
+function completionBoundTypeName(tokens TokenArray, before TokenIndex, name String) returns String
+	var found = ""
+
+	for tokenLine in lspTokenLines(tokens) 'eachLine'
+		if tokenLine.firstIndex >= before 'pastTheCursor'
+			break
+		end 'pastTheCursor'
+
+		let keyword = lspTokenAt(tokens, index: tokenLine.firstIndex)
+		if keyword.kind != TokenKind.let and keyword.kind != TokenKind.var 'notABinding'
+			continue
+		end 'notABinding'
+
+		if tokenLine.lastIndex < tokenLine.firstIndex + 3 'noInitializer'
+			continue
+		end 'noInitializer'
+
+		if String.from(lspTokenAt(tokens, index: tokenLine.firstIndex + 1).value) != name 'bindsSomethingElse'
+			continue
+		end 'bindsSomethingElse'
+
+		if lspTokenAt(tokens, index: tokenLine.firstIndex + 2).kind != TokenKind.equals 'noAssignment'
+			continue
+		end 'noAssignment'
+
+		// The LAST binding before the cursor wins: a later one shadows an earlier one at every scope this
+		// walk can see.
+		found = initializerTypeName(tokens, at: tokenLine.firstIndex + 3, tokenLine: tokenLine)
+	end 'eachLine'
+
+	return found
+end 'completionBoundTypeName'
+
+function initializerTypeName(tokens TokenArray, at TokenIndex, tokenLine LspTokenLine) returns String
+	let first = lspTokenAt(tokens, index: at)
+
+	if first.kind == TokenKind.leftBracket 'arrayLiteral'
+		return ArrayRecordName
+	end 'arrayLiteral'
+
+	if first.kind == TokenKind.stringLiteral or first.kind == TokenKind.stringInterpStart 'stringLiteral'
+		return StringRecordName
+	end 'stringLiteral'
+
+	// `Point{x: 0, y: 0}` — a record literal names its own type, and the brace is what tells it from a
+	// bare reference to a constant of the same spelling.
+	if first.kind == TokenKind.identifier and at < tokenLine.lastIndex and lspTokenAt(tokens, index: at + 1).kind == TokenKind.leftBrace 'recordLiteral'
+		return String.from(first.value)
+	end 'recordLiteral'
+
+	return ""
+end 'initializerTypeName'
+
+// --- Members of a type the BUFFER declares ----------------------------------------------------
+
+union DeclaringBlock
+	found(block LspDocumentBlock)
+	notInThisBuffer
+end 'DeclaringBlock'
+
+function blockDeclaring(blocks LspDocumentBlockArray, typeName String) returns DeclaringBlock
+	for block in blocks 'eachBlock'
+		if block.kind == LspBlockKind.functionBody or block.kind == LspBlockKind.labelled 'declaresNoType'
+			continue
+		end 'declaresNoType'
+
+		if String.from(block.name) == typeName 'thisOne'
+			return DeclaringBlock.found(block)
+		end 'thisOne'
+	end 'eachBlock'
+
+	return DeclaringBlock.notInThisBuffer
+end 'blockDeclaring'
+
+// ⚠ **ONLY THE BLOCK'S OWN LINES, NOT EVERY LINE BETWEEN ITS ENDS.** A `var` written inside a method body
+// is a local and not a field, and `directlyInside` is what tells the two apart — without it a type's
+// completion list would carry every temporary its methods declare.
+function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, blocks LspDocumentBlockArray, block LspDocumentBlock, subject CompletionSubject)
+	let wantsStatics = subjectIsStatic(subject)
+	let caseList = block.kind == LspBlockKind.enumBody or block.kind == LspBlockKind.unionBody
+
+	for tokenLine in lspTokenLines(tokens) 'eachLine'
+		let line = lspLineOf(tokenLine.line)
+		if not lspBlockHoldsLine(block, line: line) 'outsideTheBody'
+			continue
+		end 'outsideTheBody'
+
+		if not directlyInside(blocks, line: line, block: block) 'nestedDeeper'
+			continue
+		end 'nestedDeeper'
+
+		if caseList 'aCaseName'
+			// A case is reached through the TYPE (`Color.red`), never through a value of it.
+			if wantsStatics 'staticAccess'
+				addOffer(offers, offered: offered, label: String.from(lspTokenAt(tokens, index: tokenLine.firstIndex).value), kind: EnumMemberCompletionKind)
+			end 'staticAccess'
+			continue
+		end 'aCaseName'
+
+		addMemberOnLine(offers, offered: offered, tokens: tokens, tokenLine: tokenLine, wantsStatics: wantsStatics)
+	end 'eachLine'
+end 'addBufferMembers'
+
+// A member declaration line of a `type`: a field (`var`/`let`) or a method (`function`), each possibly
+// behind a tier keyword. A STATIC method is reached through the type and an instance one through a value,
+// which is the one thing that decides whether this line belongs in this list.
+function addMemberOnLine(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, tokenLine LspTokenLine, wantsStatics bool)
+	var index = tokenLine.firstIndex
+	var isStatic = false
+
+	while index <= tokenLine.lastIndex 'skipModifiers'
+		let token = lspTokenAt(tokens, index: index)
+
+		if token.kind == TokenKind.static 'staticMember'
+			isStatic = true
+		end 'staticMember'
+
+		if not lspIsDeclarationModifier(token) 'theDeclarationKeyword'
+			break
+		end 'theDeclarationKeyword'
+
+		index = index + 1
+	end 'skipModifiers'
+
+	if isStatic != wantsStatics 'wrongAccessForm'
+		return
+	end 'wrongAccessForm'
+
+	if index >= tokenLine.lastIndex 'nothingNamed'
+		return
+	end 'nothingNamed'
+
+	let keyword = lspTokenAt(tokens, index: index)
+	let name = lspTokenAt(tokens, index: index + 1)
+	if name.kind != TokenKind.identifier 'unnamed'
+		return
+	end 'unnamed'
+
+	if keyword.kind == TokenKind.function 'aMethod'
+		addOffer(offers, offered: offered, label: String.from(name.value), kind: StaticFunctionCompletionKind if isStatic else MethodCompletionKind)
+		return
+	end 'aMethod'
+
+	if keyword.kind == TokenKind.var or keyword.kind == TokenKind.let 'aField'
+		addOffer(offers, offered: offered, label: String.from(name.value), kind: FieldCompletionKind)
+	end 'aField'
+end 'addMemberOnLine'
+
+// Is `line` a direct member line of `block` — inside it, and inside nothing that is itself inside it?
+function directlyInside(blocks LspDocumentBlockArray, line LspLineNumber, block LspDocumentBlock) returns bool
+	for other in blocks 'eachBlock'
+		if other.startLine < block.startLine or other.endLine > block.endLine 'notWithinTheType'
+			continue
+		end 'notWithinTheType'
+
+		if other.startLine == block.startLine and other.endLine == block.endLine 'theTypeItself'
+			continue
+		end 'theTypeItself'
+
+		if lspBlockHoldsLine(other, line: line) 'insideAMember'
+			return false
+		end 'insideAMember'
+	end 'eachBlock'
+
+	return true
+end 'directlyInside'
+
+// --- Members of a type the CORPUS declares ----------------------------------------------------
+
+// ⭐⭐ **THE VISIBILITY FILTER IS THE POINT OF THIS HALF.** Every name here is asked about through
+// `ProgramSignatures.calleeVisibilityFrom`, which is the compiler's own tier decision, so a member the
+// open document may not name is a member it is not offered.
+function addStdlibMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, uri String, subject CompletionSubject)
+	let readerPath = documentPath(uri)
+
+	match corpusDeclarations(readerPath) 'corpus'
+		loaded(project, signatures) then addDeclaredMembers(offers, offered: offered, project: project, signatures: signatures, typeName: typeName, readerPath: readerPath, subject: subject)
+		unavailable then return
+	end 'corpus'
+end 'addStdlibMembers'
+
+function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, project Project, signatures ProgramSignatures, typeName String, readerPath FilePath, subject CompletionSubject)
+	let wantsStatics = subjectIsStatic(subject)
+	let prefix = "{typeName}{CompletionMemberSeparator}"
+
+	for (registered, signature) in project.funcSignatures 'eachFunction'
+		let qualified = String.from(registered)
+		if not qualified.startsWith(prefix) 'anotherType'
+			continue
+		end 'anotherType'
+
+		// A receiverless declaration is reached through the type and a receiver-taking one through a
+		// value. `takesReceiver` is the compiler's own bit for that, so the two lists cannot drift.
+		if signature.takesReceiver() == wantsStatics 'wrongAccessForm'
+			continue
+		end 'wrongAccessForm'
+
+		if not nameableFrom(signatures, registered: registered, readerPath: readerPath) 'hiddenFromThisFile'
+			continue
+		end 'hiddenFromThisFile'
+
+		addOffer(offers, offered: offered, label: memberNameIn(qualified, prefix: prefix), kind: StaticFunctionCompletionKind if wantsStatics else MethodCompletionKind)
+	end 'eachFunction'
+
+	if wantsStatics 'casesAndStaticsOnly'
+		addDeclaredCases(offers, offered: offered, project: project, typeName: typeName)
+		return
+	end 'casesAndStaticsOnly'
+
+	addDeclaredFields(offers, offered: offered, project: project, signatures: signatures, typeName: typeName, readerPath: readerPath)
+end 'addDeclaredMembers'
+
+// ⭐ **THE ONE VISIBILITY DECISION, ASKED OF THE COMPILER.** `calleeVisibilityFrom` reads the tier and
+// the declaring file the declaration sweep recorded and runs the same `isVisibleFrom` every other reader
+// of a `Visibility` runs — so a member this document may not call is a member it is not offered, without
+// this file knowing what the tiers are.
+function nameableFrom(signatures ProgramSignatures, registered ByteArray, readerPath FilePath) returns bool
+	return match signatures.calleeVisibilityFrom(registered, readerFilePath: readerPath) 'tier'
+		visible gives true
+		hidden gives false
+	end 'tier'
+end 'nameableFrom'
+
+function addDeclaredFields(offers CompletionOfferArray, offered OfferedLabelSet, project Project, signatures ProgramSignatures, typeName String, readerPath FilePath)
+	let layout = try project.structTypes.get(typeName.toByteArray()) otherwise return
+
+	for index in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.isVisibleFrom(layout.fieldTier(index), declFilePath: layout.declFilePath, readerFilePath: readerPath) 'hiddenHere'
+			continue
+		end 'hiddenHere'
+
+		addOffer(offers, offered: offered, label: String.from(layout.fieldNameAt(index)), kind: FieldCompletionKind)
+	end 'eachField'
+end 'addDeclaredFields'
+
+function addDeclaredCases(offers CompletionOfferArray, offered OfferedLabelSet, project Project, typeName String)
+	let layout = try project.enumTypes.get(typeName.toByteArray()) otherwise return
+
+	for caseName in layout.caseNames 'eachCase'
+		addOffer(offers, offered: offered, label: String.from(caseName), kind: EnumMemberCompletionKind)
+	end 'eachCase'
+end 'addDeclaredCases'
+
+// The declarations of the corpus this compiler ships with, or nothing when they cannot be loaded. A
+// failure here costs the corpus half of the list and leaves the buffer half standing, which is what an
+// editor should see: fewer offers, never a refused request.
+union CorpusDeclarations
+	loaded(project Project, signatures ProgramSignatures)
+	unavailable
+end 'CorpusDeclarations'
+
+function corpusDeclarations(readerPath FilePath) returns CorpusDeclarations
+	let stdlibDir = try locateStdlibDir() otherwise return CorpusDeclarations.unavailable
+	var project = createProject(Directory.currentPath(), target: detectHostTarget(), stdlibDir: stdlibDir)
+
+	// See this file's header: the PATH is registered and the text is not.
+	fileChanged(project, path: readerPath, content: "")
+
+	try loadStdlibSources(project) otherwise return CorpusDeclarations.unavailable
+	_ = try queryAllModule(project) otherwise return CorpusDeclarations.unavailable
+	let signatures = try queryProgramSignatures(project) otherwise return CorpusDeclarations.unavailable
+
+	return CorpusDeclarations.loaded(project, signatures: signatures)
+end 'corpusDeclarations'
+
+// The member half of a `<Type>.<member>` registration name.
+function memberNameIn(qualified String, prefix String) returns String
+	let afterType = qualified.split(prefix)
+	let member = try afterType.get(1) otherwise panic("memberNameIn: '{qualified}' was admitted by `startsWith('{prefix}')`, so splitting on it yields a second part")
+	let unmangled = member.split(OverloadMangleMarker)
+	return try unmangled.get(0) otherwise panic("memberNameIn: a split on a non-empty separator always yields at least one part")
+end 'memberNameIn'
+
+// --- Offering ---------------------------------------------------------------------------------
+
+function addOffer(offers CompletionOfferArray, offered OfferedLabelSet, label String, kind LspCompletionKind)
+	if label.isEmpty() or offered.contains(label) 'nothingNewToShow'
+		return
+	end 'nothingNewToShow'
+
+	// A nested member (`Map.Entry.get`) is not a member of the type the cursor is on, and a reserved name
+	// is one an author may not write at all.
+	if label.contains(CompletionMemberSeparator) or label.startsWith(CompletionReservedNamePrefix) 'notWritableHere'
+		return
+	end 'notWritableHere'
+
+	offered.insert(label)
+	offers.push(CompletionOffer.create(label, kind: kind))
+end 'addOffer'
+
+function subjectIsStatic(subject CompletionSubject) returns bool
+	return match subject 'subject'
+		staticSurfaceOf gives true
+		instanceSurfaceOf gives false
+		nothingToOffer gives false
+	end 'subject'
+end 'subjectIsStatic'
+
+// ⚠ **THE PATH IS AN IDENTITY, NOT A LOCATION.** Nothing ever opens it — the document's text arrived over
+// the wire — and the one question it answers is `isVisibleFrom`'s: is the file asking the same file that
+// declared the member, and is it in the same module directory. So the scheme is stripped and a Windows
+// drive letter is un-rooted (`file:///C:/x` names `C:/x`, not `/C:/x`), and percent-escapes are left
+// exactly as the client wrote them: two uris that differ by an escape name two different documents to
+// this server either way.
+function documentPath(uri String) returns FilePath
+	var text = uri
+
+	if text.startsWith(CompletionFileUriScheme) 'fileScheme'
+		text = text.replaceFirst(CompletionFileUriScheme, with: "")
+	end 'fileScheme'
+
+	if driveRooted(text) 'windowsDriveLetter'
+		text = text.replaceFirst(CompletionRootSlash, with: "")
+	end 'windowsDriveLetter'
+
+	return try FilePath.from(text) otherwise panic("documentPath: '{uri}' does not spell a path, and every request that reaches here named a document this server has open")
+end 'documentPath'
+
+let CompletionRootSlash = "/"
+
+// `/C:/…` — a `file:` uri roots an absolute Windows path with a slash the path itself does not have.
+function driveRooted(text String) returns bool
+	let parts = text.split(CompletionDriveLetterSeparator)
+	if parts.count() < 2 'noDriveLetter'
+		return false
+	end 'noDriveLetter'
+
+	let head = try parts.get(0) otherwise panic("driveRooted: a split yielding two parts has a first one")
+	return head.startsWith(CompletionRootSlash) and head.count() == RootedDriveLetterLength
+end 'driveRooted'
+
+let CompletionDriveLetterSeparator = ":"
+
+// `/C` — the slash and the one letter in front of a `file:` uri's drive-letter colon.
+let RootedDriveLetterLength = 2

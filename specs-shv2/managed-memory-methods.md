@@ -139,8 +139,10 @@ end 'main'
 11
 ```
 
-<!-- disabled-test: cstring-round-trip -->
-<!-- TWO blockers, and the note named only the SECOND. (1) `__ManagedMemory.fromCString(cstr)` is not built — it is the FIRST thing the case reaches, and it takes a `cstring`, a type shv2 has no producer for at all. (2) `String.cstr()` is not built either. Neither is R4.4's: a member whose only argument type does not exist cannot be given a reachable caller, so building it would be a mechanism no spec can exercise. They arrive together, with the rung that gives shv2 a `cstring`. -->
+<!-- test: cstring-round-trip -->
+Out and back through a raw pointer. `specs-shv2/string-from-cstring.md` owns the conversion's own cases —
+the copy, the empty source, the embedded NUL; this one is here because it is the `__ManagedMemory` surface's
+own round trip, asked without the `String.fromCString` forwarder.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"

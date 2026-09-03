@@ -179,7 +179,7 @@ public static class SemanticCheckPass {
   /// the most obvious member there is.
   ///
   /// Entries are the LOWERED runtime symbols and the synthetic `__managed_*` callee names, because
-  /// CheckAsyncYielding matches MaxonCallRuntimeOp.FunctionName and MaxonCallOp.Callee — not the
+  /// CheckAsyncYielding matches IMaxonRuntimeCallOp.FunctionName and MaxonCallOp.Callee — not the
   /// `__Builtins.foo` spelling (the self-hosted mirror, SemanticCheck.ioYieldBuiltinSet, keys off the
   /// qualified name instead and is therefore spelled differently on purpose).
   private static readonly HashSet<string> YieldingRuntimeEntries = [
@@ -221,6 +221,14 @@ public static class SemanticCheckPass {
     "maxon_subprocess_write_stdin_all",
     "maxon_subprocess_read_stdout_line",
     "maxon_subprocess_read_stderr_line",
+    // The byte-exact reader parks on exactly the pipe its two line siblings above park on — it is the
+    // same `__subp_read_line_inner` refill under a different stopping rule — so omitting it here made
+    // `async` over a `readStdoutBytes` caller a FALSE REJECTION. MEASURED 2026-09-02: the same program
+    // was E3073 here and compiled, ran and answered `n=4` under shv2, whose summary reaches the
+    // opposite verdict because an unresolvable runtime callee there resolves toward "yields". Two
+    // compilers disagreeing about whether a correct program is legal is the roster failing CLOSED,
+    // which is the direction the author cannot work around.
+    "maxon_subprocess_read_stdout_bytes",
     "maxon_subprocess_close_stdin",
     "maxon_subprocess_wait_exit",
     // Synthetic __ManagedSocket builtin callees (MaxonCallOp/MaxonTryCallOp names) that
@@ -250,7 +258,7 @@ public static class SemanticCheckPass {
     // It is not I/O, but hand-written CPU-bound `async` task functions must still
     // satisfy the E3073 "this function legitimately yields" contract, so the
     // lowered runtime-symbol name is listed here — CheckAsyncYielding matches
-    // MaxonCallRuntimeOp.FunctionName, which carries this symbol, not the
+    // IMaxonRuntimeCallOp.FunctionName, which carries this symbol, not the
     // "__Builtins.parallelBoundary" spelling (the self-hosted mirror keys off the
     // qualified name instead). `maxon_cpu_count` is deliberately NOT listed: it
     // does not yield; only parallelBoundary is a yield marker.
@@ -297,7 +305,9 @@ public static class SemanticCheckPass {
               else
                 callees.Add(call.Callee);
               break;
-            case MaxonCallRuntimeOp rtCall:
+            // Every op that issues a runtime call, not one named class of them: a reader whose
+            // answer needs post-processing is still the call that parks on the pipe.
+            case IMaxonRuntimeCallOp rtCall:
               if (YieldingRuntimeEntries.Contains(rtCall.FunctionName))
                 yields.Add(func.Name);
               break;

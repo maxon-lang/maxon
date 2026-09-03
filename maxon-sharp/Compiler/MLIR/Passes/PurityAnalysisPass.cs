@@ -116,7 +116,8 @@ public static class PurityAnalysisPass {
           case MaxonManagedWriteStderrOp:
           case MaxonManagedReadStdinOp:
           case MaxonGlobalStoreOp:
-          case MaxonCallRuntimeOp:
+          // Any op that issues a runtime call, whatever it does with the answer.
+          case IMaxonRuntimeCallOp:
             return true;
           case MaxonManagedMemAppendOp:
           case MaxonManagedMemClearOp:

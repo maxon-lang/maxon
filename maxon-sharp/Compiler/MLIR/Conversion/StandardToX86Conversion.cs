@@ -414,8 +414,8 @@ public static class StandardToX86Conversion {
         var opList = srcBlock.Operations;
         var resultToOp = new Dictionary<int, StandardOp>();
         foreach (var scanOp in opList) {
-          if (scanOp.AnyResultId >= 0)
-            resultToOp[scanOp.AnyResultId] = scanOp;
+          foreach (int resultId in scanOp.ResultIds)
+            resultToOp[resultId] = scanOp;
         }
         foreach (var scanOp in opList) {
           if (scanOp is not StdCondBrOp condBrScan) continue;

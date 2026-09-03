@@ -16,10 +16,24 @@
 // several tokens here and one there, `sizeof`/`countof` are keywords here and identifiers there, `---`
 // is not end-of-source here — the difference is written down beside the code that handles it.
 
-// How deep the emitter is indented. ONE TAB per level: the bootstrap carries `indentSize`/`useTabs`
-// parameters for an LSP formatting request that can ask for spaces, and shv2 has no such caller — the
-// `fmt` command is the only entry point and it always wants tabs, which is the language's own rule.
+// How deep the emitter is indented, counted in levels. What one level is SPELLED as is `FormatOptions`'
+// business — `maxon fmt` always wants a tab, an LSP client may ask for spaces.
 typealias IndentDepth = int(0 to u64.max)
+
+// How wide one indent level is when it is spent on SPACES — LSP's `tabSize`. Bounded because the
+// emitter writes this many characters per level on every indented line: no editor offers an indent
+// wider than this, so a request beyond it is a client fault rather than a preference.
+typealias IndentWidth = int(1 to 64)
+
+// ⚠ `IndentWidth`'s OWN BOUNDS, spelled here because a range's endpoints cannot be read back off the
+// alias (`IndentWidth.min` is E2010 — only sized numeric types carry those). They are `IndentWidth`
+// VALUES, so a bound the alias would refuse does not compile — which is what keeps the two spellings
+// from drifting apart. `spacesIndent` is the only reader.
+let NarrowestIndentWidth = 1 as IndentWidth
+let WidestIndentWidth = 64 as IndentWidth
+
+// A `tabSize` a caller asked for, before it is known to be one this formatter will spend.
+typealias RequestedIndentWidth = int(i64.min to i64.max)
 
 // How many `newline` tokens have arrived since the last real one. 1 terminates a line; every further
 // one is a blank line the author wrote, whose fate the forced-blank rule decides.
@@ -367,10 +381,12 @@ end 'CommentScan'
 
 // --- Token classification ---------------------------------------------------------------------
 
-// Keywords that start a block declaration on the line they appear on, with no trailing label.
-function labellessBlockOpener(kind TokenKind) returns bool
+/// Keywords that open a block DECLARING something — closed by `end '<the declared name>'` and never by a
+/// label. ⚠ `export`, because `Compiler/Lsp/`'s document-structure walk asks the same six-keyword
+/// question of the same token stream, and two lists would be two lists free to disagree.
+module function kindOpensADeclarationBlock(kind TokenKind) returns bool
 	return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.union or kind == TokenKind.enum or kind == TokenKind.interface or kind == TokenKind.extension
-end 'labellessBlockOpener'
+end 'kindOpensADeclarationBlock'
 
 // Keywords that open a block whose body is named by a trailing character literal.
 function labeledBlockOpener(kind TokenKind) returns bool
@@ -538,6 +554,7 @@ end 'needsSpaceBefore'
 /// so the emit loop carries ONE value however much state the layout rules grow.
 type FormatState
 	var out as StringBuilder
+	let options as FormatOptions
 	let tokens as TokenArray
 	// The source bytes, for the one construct re-emitted from raw source rather than from tokens: an
 	// interpolated string literal. See `interpolatedLiteralOpensAt`.
@@ -581,8 +598,8 @@ type FormatState
 	// before it.
 	var blankDecisionPending as bool
 
-	static function create(tokens TokenArray, source ByteArray, comments SourceCommentMap, lineCount LineNumber) returns FormatState
-		return Self{out: StringBuilder.create(), tokens: tokens, source: source, comments: comments, lineCount: lineCount, consumed: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: "", pendingGroupKey: "", currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false}
+	static function create(tokens TokenArray, options FormatOptions, source ByteArray, comments SourceCommentMap, lineCount LineNumber) returns FormatState
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, source: source, comments: comments, lineCount: lineCount, consumed: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: "", pendingGroupKey: "", currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file always ends with exactly one
@@ -828,7 +845,7 @@ type FormatState
 		// `match` as `TokenKind` variants) or a real nested declaration (an instance method
 		// `function toString(…)`). A real declaration is followed by the name it declares.
 		if self.inDataBlock() 'insideACaseList'
-			if not (labellessBlockOpener(tok.kind) or labeledBlockOpener(tok.kind)) 'notAKeywordCase'
+			if not (kindOpensADeclarationBlock(tok.kind) or labeledBlockOpener(tok.kind)) 'notAKeywordCase'
 				// Case names, arguments and raw values never affect block-level indent; only
 				// `end 'label'`, handled above, does.
 				return index + 1
@@ -848,7 +865,7 @@ type FormatState
 		// so it is matched by its WORD; `Parser.ModuleModifierName` is where that word is written down.
 		let prevWasModuleKeyword = priorKind == TokenKind.identifier and priorValue.equals(ModuleModifierName)
 		let openerPositionAllows = wasAtLineStart or priorKind == TokenKind.export or priorKind == TokenKind.public or priorKind == TokenKind.static or prevWasModuleKeyword
-		if labellessBlockOpener(tok.kind) and openerPositionAllows and not self.inMatchBlock() 'labellessOpener'
+		if kindOpensADeclarationBlock(tok.kind) and openerPositionAllows and not self.inMatchBlock() 'labellessOpener'
 			// Inside an interface body a `function` is a bodyless signature and opens nothing.
 			let bodylessSignature = self.inInterfaceBlock() and tok.kind == TokenKind.function
 			if not bodylessSignature 'opensABody'
@@ -1276,10 +1293,13 @@ type FormatState
 
 	// --- Output ---
 
+	// ⭐ THE ONE SITE THAT WRITES INDENTATION. The two comment paths that bypass it (`emitEof`'s
+	// comment-only file and `emitHeadComments`) are level-0 contexts by construction, which is what lets
+	// the indent unit be a single fact rather than one per emitter.
 	function appendIndent()
 		var level = 0 as IndentDepth
 		while level < self.indentLevel 'eachLevel'
-			self.out.append("\t")
+			self.out.append(self.options.indentUnit)
 			level = level + 1
 		end 'eachLevel'
 	end 'appendIndent'
@@ -1309,6 +1329,51 @@ end 'blockKindOpenedBy'
 
 // --- The public entry points ------------------------------------------------------------------
 
+/// How `format` spells one level of indentation.
+///
+/// ⭐ **IT CARRIES THE RESOLVED TEXT, NOT A `(width, useTabs)` PAIR** — the departure from the
+/// bootstrap's `MaxonFormatter.Format(indentSize:, useTabs:)`, which rebuilds a run of spaces at every
+/// indent of every line. One level's text is the only thing the emitter needs, and resolving it once
+/// here keeps `tabSize`'s domain beside the request that carries it.
+///
+/// The two constructors are the only way in, so no caller can hand the emitter an indent unit that is
+/// not whitespace.
+module type FormatOptions
+	module let indentUnit as String
+
+	/// One tab per level — the language's own rule, and what `maxon fmt` always wants.
+	export static function tabs() returns FormatOptions
+		return Self{indentUnit: "\t"}
+	end 'tabs'
+
+	static function spaces(width IndentWidth) returns FormatOptions
+		var unit = ""
+
+		for _ in 1 to width 'eachColumn'
+			unit.append(" ")
+		end 'eachColumn'
+
+		return Self{indentUnit: unit}
+	end 'spaces'
+end 'FormatOptions'
+
+// A `tabSize` this formatter will not spend. See `spacesIndent`.
+module enum IndentWidthError implements Error
+	unspendable
+end 'IndentWidthError'
+
+/// `FormatOptions` for a caller-supplied `tabSize` — an LSP client's `FormattingOptions.tabSize`.
+///
+/// ⭐ **REFUSED, NEVER CLAMPED.** A client asking for an indent no editor offers has a bug, and
+/// formatting to a width it did not ask for would hide that bug inside a file its author then commits.
+module function spacesIndent(width RequestedIndentWidth) returns FormatOptions throws IndentWidthError
+	if width < NarrowestIndentWidth or width > WidestIndentWidth 'noEditorAsksForThis'
+		throw IndentWidthError.unspendable
+	end 'noEditorAsksForThis'
+
+	return FormatOptions.spaces(width as IndentWidth)
+end 'spacesIndent'
+
 // Where a source stops being Maxon and becomes committed golden text.
 union SectionSeparator
 	at(offset ByteOffset)
@@ -1323,21 +1388,21 @@ end 'SectionSeparator'
 /// everything after it. **shv2's lexer has no such rule — it lexes `---` as three `minus` tokens** — so
 /// the failure this split prevents is the mirror image: shv2 would happily walk on and RE-LAY-OUT the
 /// golden sections as though they were Maxon. Same split, opposite reason, and both destroy the tail.
-export function format(source String) returns String
+export function format(source String, options FormatOptions = FormatOptions.tabs()) returns String
 	let bytes = source.toByteArray()
 
 	return match findSectionSeparator(bytes) 'separator'
-		at(offset) gives "{formatCore(sliceOf(bytes, from: 0, to: offset))}{sliceOf(bytes, from: offset, to: bytes.count())}"
-		absent gives formatCore(source)
+		at(offset) gives "{formatCore(sliceOf(bytes, from: 0, to: offset), options: options)}{sliceOf(bytes, from: offset, to: bytes.count())}"
+		absent gives formatCore(source, options: options)
 	end 'separator'
 end 'format'
 
-function formatCore(source String) returns String
+function formatCore(source String, options FormatOptions) returns String
 	let tokens = try tokenize(source) otherwise return source
 	let bytes = source.toByteArray()
 	let lines = SourceLines.of(bytes)
 	var scan = CommentScan.create(lines)
-	var state = FormatState.create(tokens, source: bytes, comments: scan.run(), lineCount: lines.count())
+	var state = FormatState.create(tokens, options: options, source: bytes, comments: scan.run(), lineCount: lines.count())
 	return state.run()
 end 'formatCore'
 

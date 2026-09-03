@@ -12,6 +12,13 @@ public partial class X86CodeEmitter {
     X86Register.Rsi, X86Register.Rdi, X86Register.Rax, X86Register.Rbx
   ];
 
+  /// Argument positions of the byte-count out-parameter on the three runtime readers that report
+  /// one. Each is homed by hand rather than by the prologue, because the prologue's own slot for it
+  /// collides with a local the function already owns -- see each emitter's stack map.
+  private const int SubpReadLineInnerOutLenArgIndex = 5;
+  private const int SubpReadBytesOutLenArgIndex = 2;
+  private const int SubpResultStreamOutLenArgIndex = 1;
+
   /// Load tag_index=0 into the given register (runtime allocations don't have tag indices).
   private void EmitTagZero(X86Register dest) {
     EmitXorRegReg(dest, dest);
@@ -8484,6 +8491,11 @@ public partial class X86CodeEmitter {
   private const int SubpOffHStderrLineBufLen = 0xC8;
   private const int SubpHandleStructSize = 0xD0;
 
+  // Bytes asked of a child pipe in one ReadFile. Every reader over a child stream uses it: the attached
+  // collector's drain loop, the streaming line reader and the streaming exact reader. It is a request
+  // size, not a limit on what a caller may receive -- each reader loops.
+  private const int SubpStreamChunkBytes = 4096;
+
   // DrainCtx field offsets
   private const int DrainCtxOffHRead = 0x00;
   private const int DrainCtxOffBufPtrOut = 0x08;
@@ -8552,6 +8564,7 @@ public partial class X86CodeEmitter {
     DefineSymdata("__subp_err_invalid_handle", "invalid subprocess handle\0"u8.ToArray());
     DefineSymdata("__subp_err_wait_failed", "WaitForSingleObject failed\0"u8.ToArray());
     DefineSymdata("__subp_err_signal_unsupported", "signal not supported on this platform\0"u8.ToArray());
+    DefineSymdata("__subp_err_negative_count", "negative byte count\0"u8.ToArray());
     DefineSymdata("__subp_nul_devname", "NUL\0\0"u8.ToArray()); // ANSI "NUL", padded
     // UTF-16 "NUL\0" for CreateFileW
     DefineSymdata("__subp_nul_devname_w", [(byte)'N', 0, (byte)'U', 0, (byte)'L', 0, 0, 0]);
@@ -8605,8 +8618,11 @@ public partial class X86CodeEmitter {
     EmitMaxonSubprocessReleaseHandle();
     EmitMaxonSubprocessReadLineAppend();
     EmitMaxonSubprocessReadLineInner();
-    EmitMaxonSubprocessReadStdoutLine();
-    EmitMaxonSubprocessReadStderrLine();
+    EmitMaxonSubprocessReadLineWrapper("maxon_subprocess_read_stdout_line",
+      SubpOffHStdoutRead, SubpOffHStdoutLineBufPtr, SubpOffHStdoutLineBufLen);
+    EmitMaxonSubprocessReadLineWrapper("maxon_subprocess_read_stderr_line",
+      SubpOffHStderrRead, SubpOffHStderrLineBufPtr, SubpOffHStderrLineBufLen);
+    EmitMaxonSubprocessReadStdoutBytes();
     EmitMaxonSubprocessWriteStdinAll();
     EmitMaxonSubprocessCloseStdin();
     EmitMaxonSubprocessWaitExit();
@@ -8627,8 +8643,8 @@ public partial class X86CodeEmitter {
   // __ManagedMemory arg down to its buffer pointer (see
   // MaxonToStandardConversion.cs:2083), so we receive *just* the buffer
   // address, not the struct. The struct itself is never null because
-  // RuntimeCallToManaged always wraps results in a freshly-allocated
-  // __ManagedMemory. So we treat "null" as "the underlying buffer starts
+  // neither managed-return door leaves one unallocated. So we treat
+  // "null" as "the underlying buffer starts
   // with NUL" — i.e. an empty cstring. resolve_on_path and
   // last_error_message both return a freshly-allocated 1-byte "\0" for
   // their not-found sentinel (an mm_raw_alloc, not the rdata
@@ -9477,8 +9493,9 @@ public partial class X86CodeEmitter {
   //   [rbp-0x58]  pushback len
   //   [rbp-0x60]  bytesRead scratch for ReadFile
   //   [rbp-0x68]  chunk read buffer (mm_raw_alloc'd, reused across iterations)
-  //   [rbp-0x70]  chunk capacity (constant 4096 bytes)
+  //   [rbp-0x70]  chunk capacity (SubpStreamChunkBytes)
   //   [rbp-0x78]  scratch for memcpy / scan loops
+  //   [rbp-0x80]  outLen -- the caller's i64 slot for the byte count (arg 6, homed by hand)
   //
   // Pipe reads use maxon_pipe_overlapped_read (FILE_FLAG_OVERLAPPED + IOCP on
   // the parent-side named-pipe handle, created in __subp_create_overlapped_pipe).
@@ -9487,7 +9504,17 @@ public partial class X86CodeEmitter {
   // would otherwise serialise N parallel persistent-worker dispatchers.
   // --------------------------------------------------------------------------
   private void EmitMaxonSubprocessReadLineInner() {
+    // Five args homed by the prologue; the sixth by hand. The prologue's own slot for arg 6 would
+    // be [rbp-0x30], which this function's result-buffer local already owns, so renumbering ten
+    // locals is the alternative to naming one free slot here.
     EmitRuntimeFunctionStart("__subp_read_line_inner", 5, 0xA0);
+    EmitMovMemReg(-0x80, _abiArgRegs[SubpReadLineInnerOutLenArgIndex], 8);
+
+    // The byte count is zero on every path that leaves before a byte is read -- the two early
+    // refusals below jump past the allocation that would otherwise initialise this slot, and the
+    // single exit publishes whatever it holds.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x40, X86Register.Rax, 8);
 
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
@@ -9523,15 +9550,15 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovMemReg(-0x40, X86Register.Rax, 8);
 
-    // Chunk buffer: fixed 4 KiB scratch reused across ReadFile calls. Owned
-    // by us; freed at function exit.
-    EmitMovRegImm(X86Register.Rcx, 4096);
+    // Chunk buffer: fixed scratch reused across ReadFile calls. Owned by us;
+    // freed at function exit.
+    EmitMovRegImm(X86Register.Rcx, SubpStreamChunkBytes);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
     EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("z", "rt_subp_rli_free_result_bad");
     EmitMovMemReg(-0x68, X86Register.Rax, 8);
-    EmitMovRegImm(X86Register.Rax, 4096);
+    EmitMovRegImm(X86Register.Rax, SubpStreamChunkBytes);
     EmitMovMemReg(-0x70, X86Register.Rax, 8);
 
     // -------- Phase 1: drain pushback into the result --------
@@ -9725,7 +9752,8 @@ public partial class X86CodeEmitter {
 
     DefineLabel("rt_subp_rli_eof_initial");
     // No hRead → EOF before we even allocated. Return a fresh 1-byte "\0"
-    // managed buffer (RuntimeCallToManaged frees this; cannot return rdata).
+    // managed buffer (the byte door frees this; cannot return rdata). The count published at
+    // rt_subp_rli_done is 0, zeroed at entry for exactly this path.
     EmitMovRegImm(X86Register.Rcx, 1);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
     EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
@@ -9774,9 +9802,8 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_subp_rli_bad");
     EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_invalid_handle");
     EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
-    // Even on hard error, return a fresh 1-byte "\0" managed buffer so the
-    // caller has something to mm_raw_free in RuntimeCallToManaged. last_error
-    // signals the failure separately.
+    // Even on hard error, return a fresh 1-byte "\0" managed buffer so the byte door has
+    // something to mm_raw_free, and a count of 0. last_error signals the failure separately.
     EmitMovRegImm(X86Register.Rcx, 1);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
     EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
@@ -9786,6 +9813,14 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_subp_rli_done");
     // Every reachable predecessor (success finish + the three error
     // branches) has parked the result buffer pointer at [rbp-0x30].
+    //
+    // Publish the byte count through the caller's out-slot. It is the one fact the caller cannot
+    // recover from the buffer: a line carrying an embedded NUL is shorter to strlen than it is to
+    // the reader, and a child's stdout is bytes.
+    EmitMovRegMem(X86Register.Rcx, -0x80, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x40, 8);
+    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.Rdx);
+
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitRuntimeFunctionEnd();
   }
@@ -9894,33 +9929,294 @@ public partial class X86CodeEmitter {
   }
 
   // --------------------------------------------------------------------------
-  // read_stdout_line(handle, maxBytes) — thin wrapper around the inner
-  // helper. The constants pinned in here select the stdout side of the
-  // handle struct (read handle + line-buffer fields).
+  // read_{stdout,stderr}_line(handle, maxBytes, outLen) — thin wrapper around
+  // the inner helper. The field offsets passed in select which side of the
+  // handle struct (read handle + line-buffer fields) this stream reads, and
+  // they are the ONLY difference between the two entry points.
   // --------------------------------------------------------------------------
-  private void EmitMaxonSubprocessReadStdoutLine() {
-    EmitRuntimeFunctionStart("maxon_subprocess_read_stdout_line", 2, 0x30);
+  private void EmitMaxonSubprocessReadLineWrapper(string name, long readOff, long bufPtrOff, long bufLenOff) {
+    EmitRuntimeFunctionStart(name, 3, 0x30);
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);                    // handle
-    EmitMovRegImm(X86Register.Rdx, SubpOffHStdoutRead);
-    EmitMovRegImm(X86Register.R8, SubpOffHStdoutLineBufPtr);
-    EmitMovRegImm(X86Register.R9, SubpOffHStdoutLineBufLen);
+    EmitMovRegImm(X86Register.Rdx, readOff);
+    EmitMovRegImm(X86Register.R8, bufPtrOff);
+    EmitMovRegImm(X86Register.R9, bufLenOff);
     EmitMovRegMem(X86Register.Rsi, -0x10, 8);                    // maxBytes
+    EmitMovRegMem(X86Register.Rdi, -0x18, 8);                    // outLen
     EmitCallRuntimeLabel("__subp_read_line_inner");
     EmitRuntimeFunctionEnd();
   }
 
   // --------------------------------------------------------------------------
-  // read_stderr_line(handle, maxBytes) — stderr-side companion to
-  // read_stdout_line; same shape, different field offsets.
+  // read_stdout_bytes(handle, want) -> mm_raw_alloc'd NUL-terminated buffer.
+  //
+  // EXACTLY `want` bytes off the child's stdout, blocking until it has them.
+  // Shorter ONLY at EOF, and then only what remained; `want == 0` answers empty
+  // without touching the pipe.
+  //
+  // WHY A COUNT IS A DIFFERENT QUESTION FROM A LINE
+  // ----------------------------------------------
+  // A framed protocol carries its body length in a header -- `Content-Length:
+  // N\r\n\r\n<body>`, the LSP framing -- and the body ends at a COUNT, not at a
+  // newline. __subp_read_line_inner asked for a body would block for ever on a
+  // terminator the sender never writes, and its maxBytes is a truncation
+  // CEILING rather than a length.
+  //
+  // IT SHARES THE LINE READER'S PUSHBACK BUFFER, AND THAT IS LOAD-BEARING
+  // --------------------------------------------------------------------
+  // Such a client alternates the two -- headers by line, body by count -- and
+  // the line reader pulls a whole chunk off the pipe to find its newline. A
+  // reader with a buffer of its own would be blind to every byte already
+  // pulled: it would block on a pipe holding nothing more, and those bytes
+  // would be silently lost. Both readers therefore address the SAME
+  // hStdoutLineBufPtr/Len pair, drain it first, and re-stash their surplus in
+  // it -- exactly the shape __subp_read_line_inner's Phase 1 uses.
+  //
+  // Stack:
+  //   [rbp-0x08]  handle
+  //   [rbp-0x10]  want
+  //   [rbp-0x18]  result buf (mm_raw_alloc'd want+1, never grown -- the length
+  //               is known before the first read, which is the whole point)
+  //   [rbp-0x20]  result length (excludes the trailing NUL)
+  //   [rbp-0x28]  hRead (cached from the handle struct)
+  //   [rbp-0x30]  pushback buf ptr
+  //   [rbp-0x38]  pushback len
+  //   [rbp-0x40]  chunk read buffer (allocated on the first read; 0 until then,
+  //               so a request the pushback already satisfies allocates nothing)
+  //   [rbp-0x48]  bytes delivered by the last read
+  //   [rbp-0x50]  bytes taken from the current source
+  //   [rbp-0x58]  outLen -- the caller's i64 slot for the byte count (arg 3, homed by hand)
   // --------------------------------------------------------------------------
-  private void EmitMaxonSubprocessReadStderrLine() {
-    EmitRuntimeFunctionStart("maxon_subprocess_read_stderr_line", 2, 0x30);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    EmitMovRegImm(X86Register.Rdx, SubpOffHStderrRead);
-    EmitMovRegImm(X86Register.R8, SubpOffHStderrLineBufPtr);
-    EmitMovRegImm(X86Register.R9, SubpOffHStderrLineBufLen);
-    EmitMovRegMem(X86Register.Rsi, -0x10, 8);
-    EmitCallRuntimeLabel("__subp_read_line_inner");
+  private void EmitMaxonSubprocessReadStdoutBytes() {
+    // Two args homed by the prologue; the third by hand, because the prologue's slot for it would
+    // be [rbp-0x18] and the result-buffer local already owns that.
+    EmitRuntimeFunctionStart("maxon_subprocess_read_stdout_bytes", 2, 0x80);
+    EmitMovMemReg(-0x58, _abiArgRegs[SubpReadBytesOutLenArgIndex], 8);
+
+    // Zero the length before the two refusals below, which leave without reaching the allocation
+    // that would otherwise initialise it.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_bad");
+    // A negative count has no answer: refusing it here keeps mm_raw_alloc from
+    // being handed a negative size, and reports through last_error like every
+    // other refusal in this family.
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitCmpRegImm(X86Register.Rax, 0);
+    EmitJcc("l", "rt_subp_rxb_badcount");
+
+    // result = mm_raw_alloc(want + 1). want+1 is exact: nothing here grows it.
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitAddRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_allocfail");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);                     // result length = 0
+    EmitMovMemReg(-0x40, X86Register.Rax, 8);                     // chunk buf = none yet
+
+    // Cache hRead + the shared pushback pair.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, SubpOffHStdoutRead);
+    EmitMovMemReg(-0x28, X86Register.Rdx, 8);
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, SubpOffHStdoutLineBufPtr);
+    EmitMovMemReg(-0x30, X86Register.Rdx, 8);
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, SubpOffHStdoutLineBufLen);
+    EmitMovMemReg(-0x38, X86Register.Rdx, 8);
+
+    // -------- Phase 1: drain the pushback the line reader may have filled ----
+    // take = min(want, pushbackLen).
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("le", "rt_subp_rxb_pb_take");
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
+    DefineLabel("rt_subp_rxb_pb_take");
+    EmitMovMemReg(-0x50, X86Register.Rax, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_loop");
+
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);                     // dst = result
+    EmitMovRegMem(X86Register.Rdx, -0x30, 8);                     // src = pushback
+    EmitMovRegMem(X86Register.R8, -0x50, 8);
+    EmitCallRuntimeLabel("maxon_memcpy");
+    EmitMovRegMem(X86Register.Rax, -0x50, 8);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);                     // result length = take
+
+    // Compact the pushback: tail = len - take, moved to the front.
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_loop");
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);                     // dst = pushback start
+    EmitMovRegMem(X86Register.Rdx, -0x30, 8);
+    EmitMovRegMem(X86Register.R8, -0x50, 8);
+    EmitAddRegReg(X86Register.Rdx, X86Register.R8);               // src = pushback + take
+    EmitMovRegMem(X86Register.R8, -0x38, 8);                      // count = tail
+    // maxon_memcpy is REP MOVSB (forward); dst < src, so each destination byte
+    // is written before its source slot is read.
+    EmitCallRuntimeLabel("maxon_memcpy");
+
+    // -------- Phase 2: read until the count is met or the pipe ends ----------
+    DefineLabel("rt_subp_rxb_loop");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ge", "rt_subp_rxb_finish");
+    // A handle whose stdout is already closed reads as EOF, after the pushback
+    // has been drained -- the same answer the line reader gives it.
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_finish");
+
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_subp_rxb_have_chunk");
+    EmitMovRegImm(X86Register.Rcx, SubpStreamChunkBytes);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_oom");
+    EmitMovMemReg(-0x40, X86Register.Rax, 8);
+    DefineLabel("rt_subp_rxb_have_chunk");
+
+    // maxon_pipe_overlapped_read parks the green thread on IOCP for a pending
+    // read, exactly as the line reader's does -- see __subp_read_line_inner.
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x40, 8);
+    EmitMovRegImm(X86Register.R8, SubpStreamChunkBytes);
+    EmitCallRuntimeLabel("maxon_pipe_overlapped_read");
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("le", "rt_subp_rxb_finish");                          // 0 = EOF, <0 = error
+
+    // take = min(want - resultLen, bytesRead).
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("le", "rt_subp_rxb_take");
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
+    DefineLabel("rt_subp_rxb_take");
+    EmitMovMemReg(-0x50, X86Register.Rax, 8);
+
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8);
+    EmitAddRegReg(X86Register.Rcx, X86Register.Rdx);              // dst = result + length
+    EmitMovRegMem(X86Register.Rdx, -0x40, 8);                     // src = chunk
+    EmitMovRegMem(X86Register.R8, -0x50, 8);
+    EmitCallRuntimeLabel("maxon_memcpy");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitAddRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+
+    // Surplus past the count goes back on the pushback, where the NEXT reader
+    // of either kind will find it. The pushback is empty whenever we get here:
+    // Phase 1 drained it, and a surplus can only arise on the read that
+    // completes the count.
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_loop");
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);                     // pushback len = surplus
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_rxb_pb_alloc");
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    DefineLabel("rt_subp_rxb_pb_alloc");
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_subp_rxb_pb_lost");
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);              // dst = new pushback
+    EmitMovRegMem(X86Register.Rdx, -0x40, 8);
+    EmitMovRegMem(X86Register.R8, -0x50, 8);
+    EmitAddRegReg(X86Register.Rdx, X86Register.R8);               // src = chunk + take
+    EmitMovRegMem(X86Register.R8, -0x38, 8);
+    EmitCallRuntimeLabel("maxon_memcpy");
+    EmitJmp("rt_subp_rxb_loop");
+
+    DefineLabel("rt_subp_rxb_pb_lost");
+    // The surplus cannot be retained. The old buffer is already freed, so the
+    // pair MUST be zeroed together: a length over a freed pointer is what the
+    // next reader would walk. The bytes are gone and last_error says why.
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_alloc");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+
+    DefineLabel("rt_subp_rxb_finish");
+    // Publish the pushback back to the handle for the next reader of EITHER kind.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x30, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, SubpOffHStdoutLineBufPtr, X86Register.Rdx);
+    EmitMovRegMem(X86Register.Rdx, -0x38, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, SubpOffHStdoutLineBufLen, X86Register.Rdx);
+
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_subp_rxb_no_chunk");
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
+    DefineLabel("rt_subp_rxb_no_chunk");
+
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitBytes(0xC6, 0x04, 0x08, 0x00);                            // MOV byte [RAX+RCX], 0
+    EmitJmp("rt_subp_rxb_done");
+
+    DefineLabel("rt_subp_rxb_oom");
+    // The chunk buffer could not be allocated. Keep what the pushback gave us
+    // and report through last_error; finish still publishes and terminates.
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_alloc");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitJmp("rt_subp_rxb_finish");
+
+    DefineLabel("rt_subp_rxb_allocfail");
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_alloc");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitJmp("rt_subp_rxb_empty");
+
+    DefineLabel("rt_subp_rxb_badcount");
+    // A distinct message because the noun is distinct: reporting a bad COUNT as a
+    // bad HANDLE would send a caller looking at the wrong argument.
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_negative_count");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+    EmitJmp("rt_subp_rxb_empty");
+
+    DefineLabel("rt_subp_rxb_bad");
+    EmitLeaRegSymdataRel(X86Register.Rax, "__subp_err_invalid_handle");
+    EmitGlobalStoreReg(X86Register.Rax, "__subp_last_error");
+
+    DefineLabel("rt_subp_rxb_empty");
+    // Even on a refusal the answer is a fresh 1-byte "\0" and a count of 0: the byte door
+    // copies and mm_raw_free's whatever comes back, so a null or an rdata pointer would fault or
+    // underflow the alloc count. last_error carries the failure instead.
+    EmitMovRegImm(X86Register.Rcx, 1);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
+    EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
+    EmitBytes(0xC6, 0x00, 0x00);                                  // MOV byte [RAX], 0
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    DefineLabel("rt_subp_rxb_done");
+    // Publish the byte count: a framed payload may hold any byte, so strlen at the other end would
+    // end the answer at the first NUL the child wrote.
+    EmitMovRegMem(X86Register.Rcx, -0x58, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8);
+    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.Rdx);
+
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
     EmitRuntimeFunctionEnd();
   }
 
@@ -10068,14 +10364,14 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x20, X86Register.Rax, 8);                     // length = 0
 
     DefineLabel("__subp_drain_loop");
-    // Read up to (capacity - length) bytes, capped at 4 KiB per ReadFile so
-    // we don't ask for more than the OS pipe buffer can deliver in one go.
+    // Read up to (capacity - length) bytes, capped at SubpStreamChunkBytes per
+    // ReadFile so we don't ask for more than the OS pipe buffer can deliver in one go.
     EmitMovRegMem(X86Register.Rax, -0x18, 8);                    // capacity
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);                    // length
     EmitBytes(0x48, 0x29, 0xC8);                                  // SUB RAX, RCX → remaining
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("le", "__subp_drain_eof");                            // out of room → stop
-    EmitMovRegImm(X86Register.Rcx, 4096);
+    EmitMovRegImm(X86Register.Rcx, SubpStreamChunkBytes);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("le", "__subp_drain_have_chunk");
     EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
@@ -10562,12 +10858,12 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // The Stdout/Stderr accessors return a fresh mm_raw_alloc'd cstring
-  // (cstring_to_managed copies it). The result struct's stored buffer is
-  // raw bytes — we must null-terminate before returning. We copy into a
-  // new alloc so the caller-side `mm_raw_free(cstring)` invoked by the
-  // parser's RuntimeCallToManaged lowering is safe (the original buffer
-  // is freed by result_release).
+  // The Stdout/Stderr accessors return a fresh mm_raw_alloc'd buffer holding the captured bytes,
+  // NUL-terminated, plus the byte COUNT through an out-parameter. The count is not redundant with
+  // the terminator: a captured stream is whatever the child wrote, so it may hold NULs of its own,
+  // and the caller would otherwise have to recover the length with strlen and stop at the first.
+  // We copy into a new alloc so the caller-side mm_raw_free is safe (the original buffer is freed
+  // by result_release).
   private void EmitMaxonSubprocessResultStdout() {
     EmitMaxonSubprocessResultStreamCopy(
       "maxon_subprocess_result_stdout",
@@ -10585,8 +10881,15 @@ public partial class X86CodeEmitter {
   }
 
   private void EmitMaxonSubprocessResultStreamCopy(string name, int bufOff, int lenOff, string lblPrefix) {
+    // [rbp-0x08] result ptr; [rbp-0x10] src buf; [rbp-0x18] len; [rbp-0x20] dest;
+    // [rbp-0x28] outLen (arg 2, homed by hand -- the prologue's slot for it is the src-buf local).
     EmitRuntimeFunctionStart(name, 1, 0x40);
-    // [rbp-0x08] result ptr; [rbp-0x10] src buf; [rbp-0x18] len; [rbp-0x20] dest
+    EmitMovMemReg(-0x28, _abiArgRegs[SubpResultStreamOutLenArgIndex], 8);
+
+    // Zero the length: the two `_empty` branches below answer an empty buffer without touching it.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("z", $"{lblPrefix}_empty");
@@ -10615,21 +10918,28 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x18, 8);
     EmitBytes(0xC6, 0x04, 0x08, 0x00);                            // MOV byte [RAX+RCX], 0
 
-    EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitJmp($"{lblPrefix}_done");
 
     DefineLabel($"{lblPrefix}_empty");
-    // Allocate a fresh 1-byte zero cstring rather than returning the
-    // static rdata sentinel. RuntimeCallToManaged-style callers always
-    // mm_raw_free the returned pointer, so handing back the rdata
-    // sentinel would decrement __mm_raw_alloc_count without a matching
-    // alloc and trip the leak detector.
+    // Allocate a fresh 1-byte zero buffer rather than returning the
+    // static rdata sentinel. The byte door always mm_raw_free's the
+    // returned pointer, so handing back the rdata sentinel would
+    // decrement __mm_raw_alloc_count without a matching alloc and trip
+    // the leak detector.
     EmitMovRegImm(X86Register.Rcx, 1);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring");
     EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: !Compiler.MmTrace);
     EmitBytes(0xC6, 0x00, 0x00);                                  // MOV byte [RAX], 0
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
 
     DefineLabel($"{lblPrefix}_done");
+    // Publish the byte count. [rbp-0x18] is 0 on the empty branches and the captured length on the
+    // copy branch, so this single store covers every path.
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8);
+    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.Rdx);
+
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitRuntimeFunctionEnd();
   }
 

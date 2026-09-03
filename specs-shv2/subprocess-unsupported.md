@@ -1,7 +1,7 @@
 ---
 feature: subprocess-unsupported
 status: selfhosted
-status-reason: its one case is restricted to `targets: wasm32-wasi` and this compiler has no wasm emitter, so on every target it can build this file holds ZERO selectable tests (measured 2026-08-06, BATCH29/A3a). shv2 emits wasm and selects the case there, but answers E2015 for the missing Subprocess surface where the case pins E3074 - so neither live runner takes it, and the diagnostic itself is the missing mechanism.
+status-reason: the C# bootstrap declares no member for E3074 (`docs/error-codes.txt` lists it `notEmittedBy: csharp`), so the bootstrap can never take this case - that, and only that, is what `selfhosted` means here. SHV2 TAKES IT AND PASSES IT: measured 2026-09-02, `spec-test --filter=subprocess-unsupported --target=wasm32-wasi` reports 1 passed, 0 failed. The previous reason claimed shv2 answered E2015 for a missing Subprocess surface and that "neither live runner takes it"; both halves were FALSE and had been since the port landed 2026-08-20 (`0e79da94c4`). They were v1's text, measured 2026-08-06 against v1's runner and carried across byte-identically - which is why this line now DIVERGES from `specs/subprocess-unsupported.md` deliberately: a status-reason describes THIS suite's runner, and copying one across compilers is how a stale measurement outlives the tree it was taken on.
 keywords: [subprocess, wasm, wasi, diagnostics, target]
 category: diagnostics
 ---

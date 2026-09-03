@@ -153,9 +153,21 @@ public abstract class StandardOp : IPrintableOp {
   /// when its result is unused), or -1 if it has side effects.
   public abstract int PureResultId { get; }
 
-  /// Returns the result ID of any value defined by this op, or -1 if it defines no value.
-  /// Unlike PureResultId, this includes non-pure ops that produce results (e.g., calls, params).
-  public virtual int AnyResultId => PureResultId;
+  /// EVERY SSA value this op defines, by id — empty when it defines none. Unlike PureResultId
+  /// this includes impure ops that produce results (calls, params).
+  ///
+  /// ⚠ AN OP CAN DEFINE MORE THAN ONE, WHICH IS WHY THIS IS A LIST, AND THREE ALREADY DO:
+  /// `func.try_call` and `std.try_call_runtime` each define a result AND an error flag, and
+  /// `func.call` defines a second result for a two-register value-tuple return. This replaced a
+  /// single-slot `AnyResultId` (now deleted) that could name only one of them — its answer was
+  /// `Result?.Id ?? ErrorFlag.Id`, which named the error flag only for a call whose result was
+  /// discarded, so for every OTHER try_call the flag was MISSING from the def-block index
+  /// `BlockAnalysis` builds out of this. That index's `TryGetValue` miss reads as "not an SSA
+  /// value" rather than as "unknown", so `FindCrossBlockSpillBlocks` skipped the block defining
+  /// the flag, the block was never marked for spill preservation, and a flag read in a LATER
+  /// block reached the register allocator with no stack home:
+  /// `E9001 value %N has no register and no stack home`.
+  public virtual IReadOnlyList<int> ResultIds => PureResultId >= 0 ? [PureResultId] : [];
 }
 
 public abstract class StdUnaryF64Op(StdF64 input) : StandardOp {
@@ -1106,7 +1118,7 @@ public sealed class StdParamOp(int index, string name, StdValue result) : Standa
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
-  public override int AnyResultId => Result.Id;
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
 }
 
 public sealed class StdCallOp(string callee, List<StdValue> args, StdValue? result = null,
@@ -1129,7 +1141,12 @@ public sealed class StdCallOp(string callee, List<StdValue> args, StdValue? resu
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
-  public override int AnyResultId => Result?.Id ?? -1;
+  // `Result2` counts, and its own doc above names the reason: it is a second SSA result in a named
+  // register, "the same shape as StdTryCallOp.ErrorFlag". Reporting only `Result` here is the hole
+  // that hid the error flag, one op over — a two-register tuple return read in a later block would
+  // reach the allocator with no stack home for exactly the same reason.
+  public override IReadOnlyList<int> ResultIds =>
+    Result == null ? [] : Result2 == null ? [Result.Id] : [Result.Id, Result2.Id];
 }
 
 // Gets the address of a function (function reference/pointer)
@@ -1156,7 +1173,7 @@ public sealed class StdIndirectCallOp(StdValue callee, List<StdValue> args, StdV
     [Callee.ToString(), .. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => [Callee, .. Args];
   public override int PureResultId => -1;
-  public override int AnyResultId => Result?.Id ?? -1;
+  public override IReadOnlyList<int> ResultIds => Result != null ? [Result.Id] : [];
 }
 
 public sealed class StdReturnOp(StdValue? value = null, StdValue? value2 = null) : StandardOp {
@@ -1201,7 +1218,7 @@ public sealed class StdTryCallOp(string callee, List<StdValue> args, StdValue? r
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
-  public override int AnyResultId => Result?.Id ?? ErrorFlag.Id;
+  public override IReadOnlyList<int> ResultIds => Result != null ? [Result.Id, ErrorFlag.Id] : [ErrorFlag.Id];
 }
 
 // === Struct pointer operations (for sret convention) ===
@@ -1213,6 +1230,12 @@ public sealed class StdLeaOp(string varName) : StandardOp {
   public string VarName { get; } = varName;
   public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  // `PureResultId` is -1 because the address escapes and the op must not be DCE'd — but it is ALSO
+  // the base class's only source of `ResultIds`, so leaving it at that reported arity 0 for an op
+  // whose printed IR shows `%N = memref.lea`. Every consumer that walks `ResultIds` to learn which
+  // values an op defines (`RegisterManagerBase`, `StandardToX86Conversion`) then saw nothing and
+  // failed OPEN. State the result here so purity and definedness stop sharing one field.
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Address escape — removing would change semantics
 }
@@ -1355,7 +1378,7 @@ public sealed class StdGlobalLoadI64Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
-  public override int AnyResultId => Result.Id;
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
 }
 
 public sealed class StdGlobalLoadF64Op(string globalName) : StandardOp {
@@ -1366,7 +1389,7 @@ public sealed class StdGlobalLoadF64Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
-  public override int AnyResultId => Result.Id;
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
 }
 
 public sealed class StdGlobalLoadF32Op(string globalName) : StandardOp {
@@ -1377,7 +1400,7 @@ public sealed class StdGlobalLoadF32Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
-  public override int AnyResultId => Result.Id;
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
 }
 
 public sealed class StdGlobalLoadI1Op(string globalName) : StandardOp {
@@ -1388,7 +1411,7 @@ public sealed class StdGlobalLoadI1Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
-  public override int AnyResultId => Result.Id;
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
 }
 
 public sealed class StdGlobalStoreI64Op(StdI64 value, string globalName) : StandardOp {
@@ -1439,7 +1462,7 @@ public sealed class StdGlobalLoadI8Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
-  public override int AnyResultId => Result.Id;
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
 }
 
 public sealed class StdGlobalStoreI8Op(StdI64 value, string globalName) : StandardOp {
@@ -1460,7 +1483,7 @@ public sealed class StdGlobalLoadI16Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
-  public override int AnyResultId => Result.Id;
+  public override IReadOnlyList<int> ResultIds => [Result.Id];
 }
 
 public sealed class StdGlobalStoreI16Op(StdI64 value, string globalName) : StandardOp {
@@ -1489,7 +1512,7 @@ public sealed class StdCallRuntimeOp(string callee, List<StdValue> args, StdValu
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
-  public override int AnyResultId => Result?.Id ?? -1;
+  public override IReadOnlyList<int> ResultIds => Result != null ? [Result.Id] : [];
 }
 
 /// Calls a runtime function that returns both a result (RAX) and an error flag (RDX).
@@ -1507,7 +1530,7 @@ public sealed class StdTryCallRuntimeOp(string callee, List<StdValue> args, StdV
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
-  public override int AnyResultId => Result?.Id ?? ErrorFlag.Id;
+  public override IReadOnlyList<int> ResultIds => Result != null ? [Result.Id, ErrorFlag.Id] : [ErrorFlag.Id];
 }
 
 /// <summary>
@@ -1528,7 +1551,7 @@ public sealed class StdCallRuntimeIfNonnullOp(string callee, List<StdValue> args
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
-  public override int AnyResultId => Result?.Id ?? -1;
+  public override IReadOnlyList<int> ResultIds => Result != null ? [Result.Id] : [];
 }
 
 /// <summary>

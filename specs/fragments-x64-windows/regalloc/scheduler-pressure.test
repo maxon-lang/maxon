@@ -132,7 +132,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.call stdlib.CommandLine.args
@@ -150,7 +150,7 @@ module {
     x64.mov rdx, 1
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-56], rcx
+    x64.mov [rbp-48], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 48
     x64.mov r8, 5
@@ -160,7 +160,7 @@ module {
     x64.mov r8, 1
     x64.xor r9d, r9d
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-56]
+    x64.mov rdx, [rbp-48]
     x64.mov [rcx+0], rdx
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 1
@@ -191,18 +191,20 @@ module {
     x64.mov rcx, [rbp-32]
     x64.call stdlib.__int_fromString
     x64.xor ecx, ecx
-    x64.mov [rbp-40], rcx
+    x64.cmp rdx, rcx
     x64.mov [rbp-48], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_1
+    x64.je main.otherwise_default_success_1
   otherwise_default_error_1:
-    x64.mov rax, [rbp-40]
-    x64.mov [rbp-48], rax
+    x64.xor eax, eax
+    x64.mov [rbp-40], rax
+    x64.jmp main.otherwise_default_continue_1
+  otherwise_default_success_1:
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-40], rax
     x64.jmp main.otherwise_default_continue_1
   otherwise_default_continue_1:
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-48]
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
     x64.call kernel
     x64.mov rcx, 127
     x64.and rax, rcx
@@ -231,7 +233,7 @@ module {
     x64.call mrt_panic
   __range_ok_1:
     x64.mov rdi, [rbp-32]
-    x64.mov [rbp-56], rax
+    x64.mov [rbp-48], rax
     x64.test rdi, rdi
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-32]
@@ -248,7 +250,7 @@ module {
     x64.jz __nonnull_skip_2
     x64.call mm_decref
     x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-56]
+    x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
   }

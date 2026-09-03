@@ -1,0 +1,107 @@
+// definition-scope.test.maxon — `textDocument/definition` where the ANSWER depends on more than the name
+// under the cursor: which of two scopes declares it, whether the position names anything at all, and the
+// same type name reached through a return type rather than through a literal. Six of the thirteen
+// recovered definition tests; `definition-symbols.test.maxon` holds the other seven and owns the probe,
+// the session lifetime and the release discipline all of them run through.
+//
+// ⭐⭐ **PORTED RED, THEN GREENED** against a server that once answered `textDocument/definition` with
+// `-32601`; `definition-symbols.test.maxon`'s header owns why, and its refusal sentence is what says so
+// when one fails.
+//
+// ⭐ **THE TWO "RETURNS NOTHING" TESTS ARE THE ONLY ONES IN THIS PORT THAT WERE REWRITTEN.** The
+// recovered pair asserted a result whose URI was EMPTY. An empty-string uri meaning "nothing here" is a
+// sentinel inside its own domain — it fails silently the day a real result carries an empty uri — so
+// both now assert absence through the one shape every result uses.
+
+// The only fixture in the definition set that DISCRIMINATES between two scopes: `outer` is declared in
+// the function body and `inner` inside the `if`, so a resolver that answered with the first declaration
+// in the file, or with the innermost declaration of ANY name, lands on the wrong line.
+function nestedScopeFixture() returns String
+	return String.from(b"function test() returns int
+    var outer = 1
+    if outer == 1 'check'
+        var inner = 2
+        return inner + outer
+    end 'check'
+    return outer
+end 'test'")
+end 'nestedScopeFixture'
+
+// Shared by both absence tests: one document holding a keyword and a number literal, neither of which
+// defines anything.
+function returnLiteralFixture() returns String
+	return String.from(b"function test() returns int
+    return 42
+end 'test'")
+end 'returnLiteralFixture'
+
+function factorialFixture() returns String
+	return String.from(b"function factorial(n int) returns int
+    if n <= 1 'base'
+        return 1
+    end 'base'
+    return n * factorial(n - 1)
+end 'factorial'")
+end 'factorialFixture'
+
+function createPointFixture() returns String
+	return String.from(b"type Point
+    var x int
+    var y int
+end 'Point'
+
+function createPoint() returns Point
+    return Point{x: 0, y: 0}
+end 'createPoint'")
+end 'createPointFixture'
+
+function pointReturnLiteralFixture() returns String
+	return String.from(b"type Point
+    var x int
+    var y int
+end 'Point'
+
+function test() returns Point
+    return Point{x: 0, y: 0}
+end 'test'")
+end 'pointReturnLiteralFixture'
+
+test 'definition for variable in nested scope'
+	// Go to definition on 'inner' usage (line 4, col 15)
+	// Line 3 is the INNER declaration; line 1 declares `outer` in the enclosing scope.
+	let source = nestedScopeFixture()
+	try expectDefinitionAt(source, line: 4, character: 15, startLine: 3, note: "a usage inside a nested block did not resolve to the declaration in that block.")
+end 'definition for variable in nested scope'
+
+test 'definition on keyword returns nothing'
+	// Try go to definition on 'return' keyword (line 1, col 4)
+	let source = returnLiteralFixture()
+	try expectNoDefinitionAt(source, line: 1, character: 4)
+end 'definition on keyword returns nothing'
+
+test 'definition on number literal returns nothing'
+	// Try go to definition on '42' literal (line 1, col 11)
+	let source = returnLiteralFixture()
+	try expectNoDefinitionAt(source, line: 1, character: 11)
+end 'definition on number literal returns nothing'
+
+test 'definition for recursive function call'
+	// Go to definition on recursive 'factorial' call (line 4, col 16)
+	let source = factorialFixture()
+	try expectDefinitionAt(source, line: 4, character: 16, startLine: 0, note: "a call to the enclosing function did not resolve to that function's own declaration.")
+end 'definition for recursive function call'
+
+test 'definition for struct in return type'
+	// Go to definition on 'Point' return type (line 5, col 31)
+	let source = createPointFixture()
+	try expectDefinitionAt(source, line: 5, character: 31, startLine: 0, note: "a type named in a `returns` clause did not resolve to the type's declaration.")
+end 'definition for struct in return type'
+
+test 'definition for struct literal type'
+	// Go to definition on 'Point' in struct literal (line 6, col 11)
+	// The pair with `definition for struct in return type` is the point: the SAME name is resolved from
+	// a return-type position and from a literal position, and a resolver can get one right and the other
+	// wrong.
+	let source = pointReturnLiteralFixture()
+	try expectDefinitionAt(source, line: 6, character: 11, startLine: 0, note: "a type name opening a struct literal did not resolve to the type's declaration.")
+end 'definition for struct literal type'

@@ -143,18 +143,20 @@ module {
     x64.mov rcx, [rbp-88]
     x64.xor edx, edx
     x64.call Inner.get
-    x64.mov rbx, -1
-    x64.mov [rbp-96], rbx
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
     x64.mov [rbp-104], rax
-    x64.xor esi, esi
-    x64.cmp rdx, rsi
-    x64.je main.otherwise_default_continue_1
+    x64.je main.otherwise_default_success_1
   otherwise_default_error_1:
-    x64.mov rax, [rbp-96]
-    x64.mov [rbp-104], rax
+    x64.mov rax, -1
+    x64.mov [rbp-96], rax
+    x64.jmp main.otherwise_default_continue_1
+  otherwise_default_success_1:
+    x64.mov rax, [rbp-104]
+    x64.mov [rbp-96], rax
     x64.jmp main.otherwise_default_continue_1
   otherwise_default_continue_1:
-    x64.mov rax, [rbp-104]
+    x64.mov rax, [rbp-96]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
@@ -214,7 +216,7 @@ module {
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_8
-    x64.mov rax, [rbp-104]
+    x64.mov rax, [rbp-96]
     x64.epilogue
     x64.ret
   }

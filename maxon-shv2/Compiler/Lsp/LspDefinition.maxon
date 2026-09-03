@@ -1,0 +1,318 @@
+// `textDocument/definition` — the declaration the name under a cursor refers to.
+//
+// ⭐⭐ **THIS RESOLVES OVER THE TOKEN STREAM, NOT OVER A COMPILED PROJECT, AND THAT IS THE DESIGN
+// RATHER THAN A SHORTCUT.** An editor asks for a definition while the buffer is mid-edit, so the text
+// a server holds usually does not compile — and every fixture in `tests/lsp/definition-*.test.maxon`
+// is such a buffer (`returns int`, `var x int`: E3005 and E2010 respectively). A resolver built on
+// `loadProject` + `queryAllModule` would answer nothing for exactly the buffers an editor asks about.
+// `tokenize` succeeds on all of them, so the names, the keywords and the block labels are all there.
+//
+// ⇒ **What `LspDeclarationSelfTest` contributes is the shape of the ANSWER, not the lookup: a name
+// nobody declares THROWS rather than resolving to a position.** That test exists to pin exactly that —
+// an answer carrying `0:0` is indistinguishable from a real declaration at `0:0` — and the same rule
+// holds one layer up, where LSP's own spelling for "nothing here" is a `null` result.
+
+// Nothing under the cursor, or nothing that declares what is. ⭐ A THROW rather than a token standing
+// for "none", for the reason `TypeNameRegistry.declarationOf` throws and `LspDeclarationSelfTest`
+// pins: a not-found token would carry a real `0:0` position that a synthesized declaration also has.
+// Every lookup below fails the same way, so there is one arm and not four spellings of absence.
+enum DefinitionLookupError implements Error
+	nothingThere
+end 'DefinitionLookupError'
+
+module function definitionServedMethods() returns LspMethodArray
+	var served = LspMethodArray.create()
+	served.push(LspMethod.definition)
+	return served
+end 'definitionServedMethods'
+
+module function definitionAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+	let position = try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey)
+
+	// A buffer that does not LEX has no name under the cursor to resolve — an answer, not a refusal.
+	let tokens = try tokenize(request.text) otherwise return LspAnswer.nothing()
+	let lines = LspLineIndex.build(request.text)
+	let offset = lines.offsetOf(request.text, position: position)
+
+	let target = try definitionTarget(tokens, at: offset) otherwise return LspAnswer.nothing()
+
+	return definitionLocationAnswer(request, lines: lines, name: target)
+end 'definitionAnswer'
+
+// The token that DECLARES whatever the cursor is on.
+function definitionTarget(tokens TokenArray, at LspByteOffset) returns Token throws DefinitionLookupError
+	// Which token the cursor is on is `lspTokenAtCursor`'s answer and not one taken here: `textDocument/hover`
+	// renders the same one, and an editor that jumped to a name that hover described as something else would
+	// be reading two different rules.
+	let cursor = try lspTokenAtCursor(tokens, offset: at) otherwise throw DefinitionLookupError.nothingThere
+	let cursorToken = lspTokenAt(tokens, index: cursor)
+
+	// Only an identifier can name a declaration — a keyword, a literal or a punctuator defines nothing,
+	// and jumping from one takes an editor somewhere arbitrary.
+	if cursorToken.kind != TokenKind.identifier 'notAName'
+		throw DefinitionLookupError.nothingThere
+	end 'notAName'
+
+	let name = cursorToken.value
+
+	// `p.x` names a MEMBER: the enclosing function's locals are the wrong place to look, and a local of
+	// the same name would be a confident wrong line rather than a miss.
+	if definitionNamesAMember(tokens, cursor: cursor) 'aMember'
+		return try definitionDeclarationOf(tokens, name: name)
+	end 'aMember'
+
+	// A binding in scope shadows any declaration of the same name elsewhere in the document, so the
+	// local walk answers first and the whole-document search is what it falls through to.
+	return try definitionLocalBinding(tokens, before: cursor, name: name) otherwise try definitionDeclarationOf(tokens, name: name)
+end 'definitionTarget'
+
+function definitionNamesAMember(tokens TokenArray, cursor TokenIndex) returns bool
+	if cursor == 0 'nothingBefore'
+		return false
+	end 'nothingBefore'
+
+	let before = try tokens.get(cursor - 1) otherwise return false
+	return before.kind == TokenKind.dot
+end 'definitionNamesAMember'
+
+// ⭐⭐ **THE SCOPE WALK. Backwards from the cursor, and what makes it a SCOPE walk rather than a
+// nearest-name search is that it steps OVER blocks that had already closed.** Without that, a use
+// after an inner block resolves to the inner block's shadowing declaration instead of the enclosing
+// one — the same wrong line a resolver that merely matched names would give.
+//
+// A `function` or `type` opener is not counted and does not need to be: any EARLIER function body is
+// enclosed by an `end` the walk has already stepped over, while a genuinely enclosing one (a closure's,
+// whose body does capture the outer locals) has none.
+function definitionLocalBinding(tokens TokenArray, before TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+	var closedLabels = TokenIndexArray.create()
+	var i = before
+
+	while i > 0 'walkBack'
+		i = i - 1
+		let token = try tokens.get(i) otherwise throw DefinitionLookupError.nothingThere
+
+		if token.kind == TokenKind.charLiteral 'blockLabel'
+			definitionTrackBlockNesting(closedLabels, tokens: tokens, at: i)
+			continue
+		end 'blockLabel'
+
+		if not closedLabels.isEmpty() 'insideABlockThatAlreadyClosed'
+			continue
+		end 'insideABlockThatAlreadyClosed'
+
+		let bound = try definitionBoundName(tokens, keyword: token, at: i, name: name) otherwise continue
+		return bound
+	end 'walkBack'
+
+	throw DefinitionLookupError.nothingThere
+end 'definitionLocalBinding'
+
+// ⭐ A `'label'` is either a block's OPENER or the `end` that closes it, told apart by the token before
+// it — and matching the two BY NAME is precisely what Maxon's `end 'label'` rule is for. Walking
+// backward the closer is met first, so its label is pushed and its own opener pops it. Matching by
+// name is also what keeps an ordinary character literal (`let c = 'a'`) from being read as a block.
+function definitionTrackBlockNesting(closedLabels TokenIndexArray, tokens TokenArray, at TokenIndex)
+	if definitionClosesABlock(tokens, at: at) 'aCloser'
+		closedLabels.push(at)
+		return
+	end 'aCloser'
+
+	if closedLabels.isEmpty() 'nothingHadClosed'
+		return
+	end 'nothingHadClosed'
+
+	let pending = try closedLabels.get(closedLabels.count() - 1) otherwise panic("definitionTrackBlockNesting: the stack was tested non-empty one line above")
+	let closer = try tokens.get(pending) otherwise panic("definitionTrackBlockNesting: {pending} was pushed from this same token array")
+	let opener = try tokens.get(at) otherwise panic("definitionTrackBlockNesting: the caller read the token at {at} before calling")
+
+	if not closer.value.equals(opener.value) 'notTheBlockThatClosed'
+		return
+	end 'notTheBlockThatClosed'
+
+	_ = try closedLabels.pop() otherwise panic("definitionTrackBlockNesting: the stack was tested non-empty above")
+end 'definitionTrackBlockNesting'
+
+function definitionClosesABlock(tokens TokenArray, at TokenIndex) returns bool
+	if at == 0 'nothingBefore'
+		return false
+	end 'nothingBefore'
+
+	let before = try tokens.get(at - 1) otherwise return false
+	return before.kind == TokenKind.end
+end 'definitionClosesABlock'
+
+// The local binding forms this resolver knows: the three a KEYWORD introduces, plus a function's
+// parameter list.
+//
+// ⚠ **A PATTERN binding is deliberately absent** — a union arm's `success(value)`, a handler's
+// `otherwise (e)`. Those are introduced by punctuation rather than by a keyword, and reading a `(` as a
+// declaration would be answering from shape. They resolve to nothing, which is a miss rather than a
+// confident wrong line.
+function definitionBoundName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'oneBinding'
+		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
+	end 'oneBinding'
+
+	if keyword.kind == TokenKind.for 'loopVariables'
+		return try definitionLoopVariableNamed(tokens, from: at + 1, name: name)
+	end 'loopVariables'
+
+	if keyword.kind == TokenKind.function 'parameters'
+		return try definitionParameterNamed(tokens, from: at, name: name)
+	end 'parameters'
+
+	throw DefinitionLookupError.nothingThere
+end 'definitionBoundName'
+
+function definitionIdentifierNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+	let token = try tokens.get(at) otherwise throw DefinitionLookupError.nothingThere
+
+	if token.kind != TokenKind.identifier or not token.value.equals(name) 'notThatName'
+		throw DefinitionLookupError.nothingThere
+	end 'notThatName'
+
+	return token
+end 'definitionIdentifierNamed'
+
+// A loop's variables are every name between `for` and its `in` — one for `for item in items`, two for
+// `for (key, value) in map`. A line break ends the search as well: an `in` that never arrives means the
+// buffer is mid-edit, not that the rest of the file is the binding list.
+function definitionLoopVariableNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+	var i = from
+
+	while i < tokens.count() 'scan'
+		let token = try tokens.get(i) otherwise throw DefinitionLookupError.nothingThere
+		i = i + 1
+
+		if token.kind == TokenKind.in or token.kind == TokenKind.newline 'theBindingsEnd'
+			throw DefinitionLookupError.nothingThere
+		end 'theBindingsEnd'
+
+		if token.kind == TokenKind.identifier and token.value.equals(name) 'thisOne'
+			return token
+		end 'thisOne'
+	end 'scan'
+
+	throw DefinitionLookupError.nothingThere
+end 'definitionLoopVariableNamed'
+
+// A parameter name is the first token inside the parentheses and the one after each top-level comma;
+// everything else between them is a type, a default value, or a nested list.
+function definitionParameterNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+	var i = from
+	var depth = 0
+	var sawTheList = false
+	var expectingAName = false
+
+	while i < tokens.count() 'scanList'
+		let token = try tokens.get(i) otherwise throw DefinitionLookupError.nothingThere
+		i = i + 1
+
+		if token.kind == TokenKind.leftParen 'opensAList'
+			depth = depth + 1
+			sawTheList = true
+			expectingAName = depth == 1
+			continue
+		end 'opensAList'
+
+		if token.kind == TokenKind.rightParen 'closesAList'
+			depth = depth - 1
+
+			if depth == 0 'theListEnds'
+				throw DefinitionLookupError.nothingThere
+			end 'theListEnds'
+
+			continue
+		end 'closesAList'
+
+		// A declaration's parameters open on the keyword's own line, so a line break before any `(` is a
+		// truncated buffer rather than a list to walk.
+		if not sawTheList and token.kind == TokenKind.newline 'noListAtAll'
+			throw DefinitionLookupError.nothingThere
+		end 'noListAtAll'
+
+		if depth == 1 and token.kind == TokenKind.comma 'nextParameter'
+			expectingAName = true
+			continue
+		end 'nextParameter'
+
+		if not expectingAName 'notANamePosition'
+			continue
+		end 'notANamePosition'
+
+		expectingAName = false
+
+		if token.kind == TokenKind.identifier and token.value.equals(name) 'thisParameter'
+			return token
+		end 'thisParameter'
+	end 'scanList'
+
+	throw DefinitionLookupError.nothingThere
+end 'definitionParameterNamed'
+
+// Where the document declares `name`, in the order the file states it.
+function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws DefinitionLookupError
+	for (iter, keyword) in tokens.withIterator() 'eachToken'
+		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index(), name: name) otherwise continue
+		return declared
+	end 'eachToken'
+
+	throw DefinitionLookupError.nothingThere
+end 'definitionDeclarationOf'
+
+function definitionDeclaredName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+	if definitionDeclaresAType(keyword.kind) 'aType'
+		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
+	end 'aType'
+
+	if keyword.kind == TokenKind.function 'aFunction'
+		return try definitionIdentifierNamed(tokens, at: try definitionFunctionNameIndex(tokens, at: at), name: name)
+	end 'aFunction'
+
+	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'aBinding'
+		return try definitionFieldNamed(tokens, at: at + 1, name: name)
+	end 'aBinding'
+
+	throw DefinitionLookupError.nothingThere
+end 'definitionDeclaredName'
+
+// ⚠ `extension` is NOT here: it names a type declared elsewhere rather than declaring one.
+function definitionDeclaresAType(kind TokenKind) returns bool
+	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias
+end 'definitionDeclaresAType'
+
+// `function Printable.print()` declares `print`; the name before the dot is the interface's, and it is
+// declared where the interface is.
+function definitionFunctionNameIndex(tokens TokenArray, at TokenIndex) returns TokenIndex throws DefinitionLookupError
+	let afterTheFirstName = try tokens.get(at + 2) otherwise throw DefinitionLookupError.nothingThere
+	return at + 3 if afterTheFirstName.kind == TokenKind.dot else at + 1
+end 'definitionFunctionNameIndex'
+
+// ⭐ **A `var`/`let` reaches the whole-document search only as a type's MEMBER, and the LANGUAGE tells a
+// member from a local: a local binding never carries a type (E2010), so a name followed by anything
+// other than `=` is a field.** Without that rule `p.x` resolves to an unrelated function's `var x = …` —
+// a confident wrong line where nothing is the honest answer. A field carrying a declaration DEFAULT
+// (`var value = 0`) falls on the far side of it and resolves to nothing; the reference server draws the
+// same boundary, from indentation rather than from the annotation.
+function definitionFieldNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+	let named = try definitionIdentifierNamed(tokens, at: at, name: name)
+	let afterTheName = try tokens.get(at + 1) otherwise throw DefinitionLookupError.nothingThere
+
+	if afterTheName.kind == TokenKind.equals 'aLocalBinding'
+		throw DefinitionLookupError.nothingThere
+	end 'aLocalBinding'
+
+	return named
+end 'definitionFieldNamed'
+
+function definitionLocationAnswer(request LspRequest, lines LspLineIndex, name Token) returns LspAnswer
+	var doc = JsonDoc.create()
+
+	// The range an editor highlights on arrival is the declared NAME, not its line and not the whole
+	// declaration.
+	var location = LspJsonObject.create(doc)
+	location.put(LspUriKey, value: JsonNode.stringNode(request.uri))
+	location.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: request.text, index: lines, span: LspSpan.create(name.startByte, endByte: name.endByte)))
+
+	return LspAnswer.of(doc, result: location.finish())
+end 'definitionLocationAnswer'

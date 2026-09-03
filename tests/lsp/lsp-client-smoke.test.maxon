@@ -1,0 +1,128 @@
+// lsp-client-smoke.test.maxon — ONE session that proves the client in `LspClient.maxon` actually talks
+// to a real server: lifecycle, document sync, the refusal an unimplemented method answers, and the exit
+// code LSP defines for a clean shutdown.
+//
+// ⭐⭐ **THE REFUSAL IS PART OF THE ASSERTION, NOT A GAP.** LSP requires a method the server does not
+// serve to answer `-32601`, and this file pins that rule against a name reserved for the purpose. It is
+// what a client relies on to tell "not implemented" apart from "answered nothing".
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+//
+// ⛔ Anything that stops the session happening at all PANICS inside `LspClient.start()` (a missing
+// binary, a refused spawn). Only a genuine wrong answer reaches an `Expect`.
+
+// The document the session opens. Its URI never touches the filesystem: full-text sync carries the
+// content, and the server is told the text rather than asked to read it.
+let SmokeDocumentUri = "file:///lsp-client-smoke.maxon"
+
+// The second version `didChange` announces. LSP requires the number to increase, and `didOpen` sent 1.
+let SecondDocumentVersion = 2 as DocumentVersion
+
+
+// JSON-RPC's reserved code for a method the server does not implement, and the wording shv2's server
+// answers with. Both compilers spell the message the same way, which is what lets one client read either.
+let MethodNotFoundCode = -32601 as JsonRpcErrorCode
+let MethodNotFoundMessagePrefix = "Method not found"
+
+// LSP's own rule: the process exits 0 only when the client asked for a shutdown before the session ended.
+let CleanExitCode = 0 as ProcessExitCode
+
+// What one full session observed, or why it could not finish one.
+union SmokeOutcome
+	completed(syncAdvertised bool, refusalCode JsonRpcErrorCode, refusalMessage String, exitCode ProcessExitCode)
+	broke(detail String)
+end 'SmokeOutcome'
+
+test 'the client round-trips a whole LSP session with the shv2 server'
+	match driveSmokeSession() 'outcome'
+		completed(syncAdvertised, refusalCode, refusalMessage, exitCode) then try assertSession(syncAdvertised, refusalCode: refusalCode, refusalMessage: refusalMessage, exitCode: exitCode)
+		broke(detail) then try Expect.fail("the smoke session did not complete: {detail}. The client spawns `lsp-server` from the CHECKOUT ROOT and speaks Content-Length-framed JSON-RPC over its pipes; a break here is the transport, not a language feature.")
+	end 'outcome'
+end 'the client round-trips a whole LSP session with the shv2 server'
+
+// ⚠ **BOTH SIDES OF EVERY COMPARISON ARE BOUND TO LOCALS FIRST**, as `tests/test-command` does and for
+// its measured reason: a CALL in `Expect.equal`'s `expected:` slot makes the BOOTSTRAP report the
+// overload set as ambiguous (E3007) while shv2 resolves it, and these tests must compile under both.
+function assertSession(syncAdvertised bool, refusalCode JsonRpcErrorCode, refusalMessage String, exitCode ProcessExitCode) throws TestFailure
+	try Expect.isTrue(syncAdvertised, message: "the server's `initialize` reply did not advertise `textDocumentSync`. The client declared support for it, and a server that does not offer it cannot be sent a document at all — so every one of the ten language methods is unreachable behind this one capability.")
+
+	let observedRefusal = refusalCode
+	let expectedRefusal = MethodNotFoundCode
+	try Expect.equal(observedRefusal, expected: expectedRefusal, message: "an unserved method did not answer JSON-RPC's `method not found`. A server that answers a method it never advertised is answering something it does not implement, and a client has no way to tell. It said: {refusalMessage}")
+
+	try Expect.startsWith(refusalMessage, needle: MethodNotFoundMessagePrefix, message: "the refusal carried the right code with the wrong sentence. A client displays this text, so both compilers answer it the same way.")
+
+	let observedExit = exitCode
+	let expectedExit = CleanExitCode
+	try Expect.equal(observedExit, expected: expectedExit, message: "the server did not exit 0 after `shutdown` then `exit`. LSP reserves 0 for exactly that order, so a different code means the session ended some other way — and the exit code is the half of this a script reads.")
+end 'assertSession'
+
+// Spawn, drive, release. The release is unconditional: the outcome is a VALUE, so no assertion can run
+// before the handle is freed.
+function driveSmokeSession() returns SmokeOutcome
+	var client = LspClient.start()
+	let outcome = collectSession(client)
+	client.release()
+	return outcome
+end 'driveSmokeSession'
+
+function collectSession(client LspClient) returns SmokeOutcome
+	// Assigned on every path — the body's last statement, and each arm of its handler. The sentence is
+	// what a reader would be shown if a later edit added a path that reported nothing.
+	var outcome = SmokeOutcome.broke("the session ended without saying how")
+
+	try 'session'
+		let advertised = client.initialize()
+		client.initialized()
+		client.openDocument(SmokeDocumentUri, content: openedDocument())
+		client.changeDocument(SmokeDocumentUri, content: changedDocument(), version: SecondDocumentVersion)
+		let (refusalCode, refusalMessage) = smokeUnservedMethodRefusal(client)
+		client.closeDocument(SmokeDocumentUri)
+		client.shutdown()
+		client.exit()
+		let exitCode = client.waitForExit()
+		outcome = SmokeOutcome.completed(advertised.hasTextDocumentSync, refusalCode: refusalCode, refusalMessage: refusalMessage, exitCode: exitCode)
+	end 'session' otherwise (e) 'broke'
+		match e 'reason'
+			transportFailed(detail) then outcome = SmokeOutcome.broke("the framed stream broke — {detail}")
+			malformedResponse(detail) then outcome = SmokeOutcome.broke("a reply was not the shape LSP defines — {detail}")
+			serverRefused(code, message) then outcome = SmokeOutcome.broke("a LIFECYCLE request was refused with {code}: {message}")
+		end 'reason'
+	end 'broke'
+
+	return outcome
+end 'collectSession'
+
+// The code and sentence an UNSERVED method answers with. A method that ANSWERS instead is the finding,
+// so it is reported as one rather than passing quietly.
+//
+// ⭐ The subject is the PROTOCOL RULE, which no implementation can retire — a test whose subject is a
+// MISSING FEATURE stops being a test the moment someone supplies it. `unservedMethodRefusal` therefore
+// sends a name reserved for exactly this and deliberately not an LSP method.
+function smokeUnservedMethodRefusal(client LspClient) returns (JsonRpcErrorCode, String) throws LspClientError
+	if let answered = try client.unservedMethodRefusal(SmokeDocumentUri) 'answered'
+		throw LspClientError.malformedResponse("an UNSERVED method was ANSWERED (present: {answered.isPresent}) where the server must refuse it — a server that answers a method it never advertised is answering something it does not implement")
+	end 'answered' else (e) 'refused'
+		match e 'reason'
+			serverRefused(code, message) then return (code, message)
+			transportFailed or malformedResponse then throw e
+		end 'reason'
+	end 'refused'
+end 'smokeUnservedMethodRefusal'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: it is byte-exact,
+// a raw newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
+// newline. A representation that did either would shift every column a formatting assertion pins.
+function openedDocument() returns String
+	return String.from(b"function main() returns ExitCode
+	return 0
+end 'main'")
+end 'openedDocument'
+
+function changedDocument() returns String
+	return String.from(b"function main() returns ExitCode
+	let answer = 41 + 1
+	return 0
+end 'main'")
+end 'changedDocument'

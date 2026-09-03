@@ -1,0 +1,172 @@
+// format-constructs.test.maxon — `textDocument/formatting` on the CONSTRUCTS whose nesting the formatter
+// has to get right one at a time: top-level interfaces, a `while` body, a `match` expression's cases, a
+// `try`/`otherwise` block, and a multiline map literal both inside a function and at the top level. Six
+// of the thirteen recovered formatting tests; `format-indent.test.maxon` holds the other seven and owns
+// the session lifetime, the release discipline and the edit-list unwrapping all of them run through.
+//
+// ⭐⭐ **PORTED RED, THEN GREENED** against a server that once answered `textDocument/formatting` with
+// `-32601`; `format-indent.test.maxon`'s header owns why, and its refusal sentence is what says so when
+// one fails.
+//
+// ⭐⭐ **THIS FILE CONCENTRATES THE BYTE-EXACTNESS RISK.** `formatting indents top-level multiline map
+// literal correctly` asserts on byte 0 with a `startsWith` and pins a `"\n]"` at the end — so a fixture
+// representation that added a leading newline or stripped indentation would break both, and no other
+// test in the port would notice. `formatting indents try-otherwise block correctly` carries the other
+// escaping hazard, in the opposite direction: its FIXTURE must hold a literal BACKSLASH followed by `n`
+// (two bytes, inside a Maxon string the document itself contains), while its ASSERTION holds a real
+// double quote and no backslash at all.
+//
+// ⚠ **MEASURED, and it contradicts what the port brief predicted: `\\n` inside a `b"…"` does NOT spell
+// two bytes.** Both compilers decode it to a single newline (byte 10), because `\\` is not a recognised
+// byte-string escape and the unrecognised backslash is dropped. `\x5C` is what spells a backslash, so a
+// literal backslash-n is written `\x5Cn` — see `formatFileFixture` below.
+
+// Two interfaces the formatter must leave at column 0 while indenting their members. The recovered
+// comment calls this "incorrect nesting": nothing here is inside anything else, so any tab before
+// `interface` is invented.
+function interfacesFixture() returns String
+	return String.from(b"interface Hashable
+function hash() returns int
+end 'Hashable'
+
+interface Equatable
+function equals(other Self) returns bool
+end 'Equatable'")
+end 'interfacesFixture'
+
+// ⚠ `term` and `z_squared` are never declared. That is deliberate and must survive the port: a formatter
+// works on tokens, so it must indent a body it could not type-check.
+function whileLoopFixture() returns String
+	return String.from(b"function log(x float) returns float
+var k = 1
+while k < 20 'series'
+term = term * z_squared
+k = k + 1
+end 'series'
+return 0.0
+end 'log'")
+end 'whileLoopFixture'
+
+// ⚠ TWO consecutive `end 'dispatch'` lines — the match expression's and the function's — and they must
+// end up at different levels. The first is what the last assertion pins.
+function matchExpressionFixture() returns String
+	return String.from(b"function dispatch(command String) returns int
+return match command 'dispatch'
+\"compile\" gives 1
+\"run\" gives 2
+default gives 0
+end 'dispatch'
+end 'dispatch'")
+end 'matchExpressionFixture'
+
+// ⚠ `\x5Cn` is a LITERAL backslash followed by `n` — the two bytes a Maxon source file spells a newline
+// escape with. The document under format contains that escape; it does not contain a newline there.
+function formatFileFixture() returns String
+	return String.from(b"function readFile(path String) returns int
+let content = try File.readText(path) otherwise 'noFile'
+print(\"Error reading file\x5Cn\")
+return 1
+end 'noFile'
+return 0
+end 'readFile'")
+end 'formatFileFixture'
+
+function mapLiteralFixture() returns String
+	return String.from(b"function getConfig()
+var config = [
+\"width\": 100,
+\"height\": 200
+]
+return config
+end 'getConfig'")
+end 'mapLiteralFixture'
+
+// The same construct as `mapLiteralFixture`, one level shallower. Nothing encloses it, so the formatter
+// must indent its entries once and leave the `let` and the closing bracket on column 0.
+function topLevelMapFixture() returns String
+	return String.from(b"let config = [
+\"width\": 100,
+\"height\": 200
+]")
+end 'topLevelMapFixture'
+
+test 'formatting formats multiple interfaces at top level'
+	// Multiple interfaces with incorrect nesting
+	let source = interfacesFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	// Verify interfaces are NOT indented (no tab before interface keyword)
+	try Expect.isFalse(text.contains("\tinterface"), message: "an `interface` was indented. Nothing encloses a top-level interface, so a tab before the keyword is invented nesting — and the second one is where a formatter that never closes the first goes wrong.")
+	try Expect.contains(text, needle: "\tfunction hash()", message: "an interface's method signature was not indented one tab.")
+	try Expect.contains(text, needle: "\tfunction equals(", message: "the second interface's method signature was not indented one tab.")
+end 'formatting formats multiple interfaces at top level'
+
+test 'formatting indents while loop body correctly'
+	// This test reproduces the issue where while loop body was being
+	// indented with double the expected tabs (4 instead of 2)
+	let source = whileLoopFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	// The while statement should be at 1 tab (inside function)
+	try Expect.contains(text, needle: "\twhile k < 20 'series'", message: "the `while` was not indented one tab.")
+
+	// Code inside while should be at 2 tabs, NOT 4 tabs which was the bug
+	try Expect.contains(text, needle: "\t\tterm = term * z_squared", message: "the `while` body was not indented two tabs.")
+	try Expect.contains(text, needle: "\t\tk = k + 1", message: "the second statement of the `while` body was not indented two tabs.")
+
+	// Verify it's NOT using 3 or 4 tabs (the bug)
+	try Expect.isFalse(text.contains("\t\t\tterm"), message: "the `while` body was indented three tabs. This is the regression the recovered test was written for: the loop opened more than one level.")
+	try Expect.isFalse(text.contains("\t\t\t\tterm"), message: "the `while` body was indented four tabs — the exact doubling the recovered test names.")
+
+	try Expect.contains(text, needle: "\tend 'series'", message: "the `while`'s `end` did not return to the function's level.")
+end 'formatting indents while loop body correctly'
+
+test 'formatting indents match expression cases correctly'
+	// Match expression with no indentation - formatter should add proper indentation
+	let source = matchExpressionFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	try Expect.contains(text, needle: "\treturn match", message: "the `return match` was not indented one tab.")
+	try Expect.contains(text, needle: "\t\t\"compile\" gives", message: "a match case was not indented two tabs.")
+	try Expect.contains(text, needle: "\t\t\"run\" gives", message: "the second match case was not indented two tabs.")
+	try Expect.contains(text, needle: "\t\tdefault gives", message: "the `default` case was not indented two tabs.")
+
+	// Check that end 'dispatch' for match has one tab (back to function level)
+	try Expect.contains(text, needle: "\tend 'dispatch'", message: "the match expression's `end` did not return to the function's level. The fixture has two `end 'dispatch'` lines and they belong at different levels, so a formatter that indents both alike fails here.")
+end 'formatting indents match expression cases correctly'
+
+test 'formatting indents try-otherwise block correctly'
+	// try-otherwise block with no indentation - formatter should add proper indentation
+	let source = formatFileFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	try Expect.contains(text, needle: "\tlet content = try", message: "the `try` statement was not indented one tab.")
+	try Expect.contains(text, needle: "\t\tprint(\"Error", message: "the handler body was not indented two tabs.")
+	try Expect.contains(text, needle: "\t\treturn 1", message: "the handler's `return` was not indented two tabs.")
+	try Expect.contains(text, needle: "\tend 'noFile'", message: "the handler's `end` did not sit at the `let`'s own level.")
+	try Expect.contains(text, needle: "\treturn 0", message: "the statement after the handler was not indented one tab.")
+end 'formatting indents try-otherwise block correctly'
+
+test 'formatting indents multiline map literal correctly'
+	// Multiline map literal with no indentation - formatter should add proper indentation
+	let source = mapLiteralFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	try Expect.contains(text, needle: "\tvar config = [", message: "the declaration opening the map literal was not indented one tab.")
+	try Expect.contains(text, needle: "\t\t\"width\":", message: "a map entry was not indented two tabs.")
+	try Expect.contains(text, needle: "\t\t\"height\":", message: "the second map entry was not indented two tabs.")
+	try Expect.contains(text, needle: "\t]", message: "the literal's closing bracket did not return to the declaration's level.")
+end 'formatting indents multiline map literal correctly'
+
+test 'formatting indents top-level multiline map literal correctly'
+	// Top-level map literal with no indentation - formatter should add proper indentation
+	let source = topLevelMapFixture()
+	let text = try formattedDocumentText(source, insertSpaces: false)
+
+	// ⭐ A prefix assertion on byte 0, and the sharpest detector in the port of a fixture representation
+	// that trims or prepends: nothing may precede the `let`.
+	try Expect.startsWith(text, needle: "let config = [", message: "the formatted document does not begin with the declaration. A top-level `let` opens at column 0, so anything before it — an indent, a blank line — is invented.")
+	try Expect.contains(text, needle: "\t\"width\":", message: "a top-level map entry was not indented exactly one tab.")
+	try Expect.contains(text, needle: "\t\"height\":", message: "the second top-level map entry was not indented exactly one tab.")
+	try Expect.contains(text, needle: "\n]", message: "the closing bracket of a top-level literal did not sit at column 0 on its own line.")
+end 'formatting indents top-level multiline map literal correctly'

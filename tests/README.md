@@ -6,9 +6,37 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-`fmt` is the first tenant. **`maxon-shv2/Testing/test-command/` +
-`test-fixtures/` are the next** — they predate this directory and still sit under the
-compiler's own tree; moving them here is follow-up work, not a second convention.
+Eight corpora live here, one directory each, every path into one spelled from the CHECKOUT
+ROOT — the working directory every driver inherits, and the contract
+`SpecTestRunner.maxon:1666` states, along with why it is deliberately not `specDir.parent()`.
+
+The last column names the constant each corpus is reached through. Two are not one constant
+naming a directory, and both say so in the row: `fmt/`'s is written twice because its
+generator MINTS what its test file reads, and `lsp/` has no constant for itself at all —
+`maxon test` is pointed at that directory on the command line — so its constant names the
+SERVER its tests spawn.
+
+| corpus | read by | the constant it is reached through |
+|---|---|---|
+| `fmt/` | its own `fixtures.test.maxon` | `generate-expectations.py` + that file |
+| `test-fixtures/` | `test-command/fixtures.test.maxon` | `FixturesDir` |
+| `test-command/` | `maxon test`, under BOTH compilers | `ProjectDir` |
+| `harness-fixtures/` | `spec-test` → `HarnessSelfTest` | `FixturesRelativeDir` |
+| `harness-gates/` | `spec-test` → `HarnessSelfTest` | `GatesRelativeDir` |
+| `lsp/` | `maxon test`, under BOTH compilers | `TestedCompilerStem` — the server, not the dir |
+| `lsp-fixtures/` | `lsp-selftest` | `DeclFixtureRelativePath` |
+| `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
+
+⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
+measurement-provenance comments across the compiler, `maxon-sharp/` and
+`specs-shv2/register-spill.md` name a generator by path, and `docs/optimization-log.md`
+names the former path in every row minted before 2026-09-02 — a dated record, so those
+rows stay as written.
+
+⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
+command `fmt` is. They are not automatically true of the other seven: `test-fixtures/`
+deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
+them, and `lsp-fixtures/` carries a `.maxonignore` that rule 1 forbids here.
 
 ```
 tests/
@@ -21,6 +49,19 @@ tests/
       input/                     stored names only  — see rule 1
       expected-tree/             stored names only  — see rule 1
       expected-stdout.txt  expected-stderr.txt  expected-exit.txt  argv.txt?
+  test-command/
+    fixtures.test.maxon          the shared half: paths, argv, the two corpus guards
+    <case>.test.maxon            ONE spawning `test` per file - see rule 5
+  test-fixtures/<case>/
+    <name>.test.maxon            a LIVE source: `maxon test` is what compiles it
+    expected.txt  expected-exit.txt  argv.txt?
+  harness-fixtures/<case>/       malformed specs the harness must REFUSE
+  harness-gates/<case>/          well-formed specs it must ACCEPT, then partly skip
+  lsp/
+    LspClient.maxon              a live JSON-RPC client the tests import - see rule 1
+    <area>.test.maxon            one LSP method area per file
+  lsp-fixtures/type-declaration/ decl.maxon, whose LINE NUMBERS are the assertion
+  ladders/                       hand-built scaling generators + the README indexing them
 ```
 
 ## The six rules, and the hazard each one answers
@@ -43,13 +84,23 @@ Two independent reasons, and the second is the one that bites:
   tool under test rewriting its own oracle. It would re-bless every expectation here,
   including `already-formatted`, which would then be green forever by construction.
 
-The only live `.maxon` under `tests/` are the `*.test.maxon` drivers, which *should*
-be formatted like any other source.
+⚠ **This rule is `fmt/`'s, and the live `.maxon` under `tests/` are no longer only the
+drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
+`lsp/` tests import. That is fine and is not an exception being smuggled in: the hazard
+above is `fmt` rewriting an ORACLE, and `lsp/`'s oracles are `b"…"` byte literals *inside*
+its test files, not files on disk. A client that `fmt` reformats stays a correct client.
+⇒ The rule to carry forward is **"nothing `fmt` rewrites may be a stored expectation"**,
+not "no live `.maxon`". `fmt/` states it the strong way because every one of ITS fixtures
+is a stored expectation.
 
-⛔ **No `.maxonignore` in this directory.** It would hide the corpus from `fmt` — the
-very command it exists to gate — and from the `maxonignore` fixtures themselves.
-`test-command/fixtures.test.maxon:184` already records this reasoning for its own
-corpus.
+⛔ **No `.maxonignore` in this directory.** ⚠ Its original justification was wrong and was
+corrected on 2026-09-02: this said a marker "would hide the corpus from `fmt`", which
+**generalised a MEASURED `maxon test` result to `fmt` without measuring it**.
+`fmt` does not honour `.maxonignore` at all — `EnumerateFormattableFiles`
+(`maxon-sharp/Program.cs:1071`) prunes only on `.git`. The reason that survives is
+`test-command`'s, and it IS measured: a marker at a corpus root makes every case answer
+`no .maxon files found`, exit 2 — the marker excludes the subtree from the very walk under
+test. ⇒ Keep the rule; it was right for a reason nobody had checked.
 
 ### 2. stderr is compared, not just stdout
 
@@ -74,7 +125,7 @@ reproduce it.**
 
 ### 5. One file, and the per-file deadline is the only thing that would change that
 
-`maxon-shv2/Testing/test-command/` puts each spawning `test` in its own file because a file is what
+`test-command/` puts each spawning `test` in its own file because a file is what
 ONE process runs, under a 5,000 ms deadline, and its fixtures each compile a project. These format a
 tiny staged tree. **Measured merged: 26 tests, 2,718 ms — 1.8x headroom**, of which the real-sources
 census is about half. A split would only buy back process startups, which are not where the time

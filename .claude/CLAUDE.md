@@ -136,7 +136,7 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 
 - **Build:** `./bin/maxon.exe build maxon-shv2` (requires C# compiler already built)
 - **Spec tests:** `./maxon-shv2/.maxon/maxon-shv2.exe spec-test` (the `specs-shv2` suite)
-- **Unit tests (`maxon test`'s own):** `./maxon-shv2/.maxon/maxon-shv2.exe test maxon-shv2/Testing/test-command`
+- **Unit tests (`maxon test`'s own):** `./maxon-shv2/.maxon/maxon-shv2.exe test tests/test-command`
 
 > ### ⚠ `maxon test`'s OWN TESTS ARE NOT IN THE SPEC SUITE, AND THEY ARE NOT SUPPOSED TO BE
 >
@@ -145,8 +145,8 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 > PROGRAM the harness compiles and runs, so it can reach `stdlib/` and nothing else —
 > `LspPositionSelfTest.maxon:3-6` states it, and **no shv2 command is gated by a spec case, not one**.
 >
-> `maxon test` is gated by **itself**: `maxon-shv2/Testing/test-command/` holds ordinary `test`
-> declarations that spawn the command at the fixture projects in `maxon-shv2/Testing/test-fixtures/`
+> `maxon test` is gated by **itself**: `tests/test-command/` holds ordinary `test`
+> declarations that spawn the command at the fixture projects in `tests/test-fixtures/`
 > and assert its report with `Expect`. Each fixture carries an `expected.txt` / `expected-exit.txt`
 > **generated from the BOOTSTRAP's working `maxon test`**, so the contract is the reference
 > compiler's real output rather than one we invented.
@@ -155,8 +155,8 @@ The C# compiler binary is at `./bin/maxon.exe` (Windows) or `./bin/maxon` (Linux
 > enough to report green having run nothing cannot detect itself; the bootstrap's `maxon test` is an
 > independent oracle that still reports honestly. Both must pass and both must report the SAME count:
 > ```
-> ./maxon-shv2/.maxon/maxon-shv2.exe test maxon-shv2/Testing/test-command
-> ./bin/maxon.exe                    test maxon-shv2/Testing/test-command
+> ./maxon-shv2/.maxon/maxon-shv2.exe test tests/test-command
+> ./bin/maxon.exe                    test tests/test-command
 > ```
 > ⚠ **Nothing runs these automatically** — `/land`'s battery is where they belong, beside the suite and
 > the self-compile. One test per file is structural, not tidiness: a file is what ONE process runs and

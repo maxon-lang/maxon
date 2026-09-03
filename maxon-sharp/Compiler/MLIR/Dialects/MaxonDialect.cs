@@ -187,6 +187,7 @@ public enum MaxonOpKind {
   CursorIndex,
   CursorPeek,
   CStringToManaged,
+  RuntimeBytesToManaged,
   ManagedToCString,
   ManagedWriteStdout,
   ManagedWriteStderr,
@@ -1950,6 +1951,45 @@ public sealed class MaxonCStringToManagedOp(MaxonValue cstrPtr) : MaxonOp {
   public override IReadOnlyList<MaxonValue> Results => [Result];
 }
 
+/// An op that ISSUES A CALL TO A RUNTIME SYMBOL, whatever else it does with the answer.
+///
+/// The analyses that care -- purity, and the E3073 yield closure -- care about that property and
+/// nothing else, so they match this interface rather than naming the op classes that have it. They
+/// used to name one class, and the day a second op started issuing runtime calls both went quietly
+/// wrong: `maxon_subprocess_read_stdout_line` is on the yield roster, the reader that calls it
+/// moved to a new op, and the roster stopped matching anything -- so an `async` over a reader that
+/// plainly parks on a pipe was refused with E3073 for never yielding.
+public interface IMaxonRuntimeCallOp {
+  /// The runtime symbol this op calls. Rosters key off this name.
+  string FunctionName { get; }
+}
+
+/// A runtime call whose answer is a BYTE BUFFER, converted to __ManagedMemory using the byte
+/// count the runtime REPORTS rather than a count recovered with strlen.
+///
+/// ⭐ THE DIFFERENCE FROM MaxonCStringToManagedOp IS AN EMBEDDED NUL, AND IT WAS A MEASURED WRONG
+/// ANSWER. A child process's stdout is bytes, not text: `ab cd` is five of them. Wrapping that
+/// through MaxonCStringToManagedOp answered TWO — strlen stops at the NUL — with no error, no
+/// diagnostic and exit 0, so a caller reading a framed binary payload silently lost everything
+/// past the first zero byte.
+///
+/// The lowering appends the ADDRESS of a caller-owned i64 slot as a trailing out-parameter; the
+/// runtime function stores the true byte count there on every path it returns from. The length
+/// therefore travels WITH the call that knows it instead of being guessed at the other end.
+///
+/// The op owns the raw buffer's whole lifetime — the runtime allocates it, the lowering copies it
+/// into the managed record and mm_raw_free's it — so the pointer never escapes for a caller to
+/// leak or double-free.
+public sealed class MaxonRuntimeBytesToManagedOp(string functionName, List<MaxonValue> args) : MaxonOp, IMaxonRuntimeCallOp {
+  public override MaxonOpKind Kind => MaxonOpKind.RuntimeBytesToManaged;
+  public override string Mnemonic => $"maxon.runtime_bytes_to_managed.{FunctionName}";
+  public string FunctionName { get; } = functionName;
+  public List<MaxonValue> Args { get; } = args;
+  public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemory");
+  public override IReadOnlyList<MaxonValue> Operands => Args;
+  public override IReadOnlyList<MaxonValue> Results => [Result];
+}
+
 // Convert __ManagedMemory to a C string pointer
 public sealed class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.ManagedToCString;
@@ -2070,7 +2110,7 @@ public sealed class MaxonPanicDynamicOp(MaxonStruct messageStruct) : MaxonOp {
 }
 
 /// Generic runtime function call op for intrinsics that delegate to a runtime function.
-public sealed class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult) : MaxonOp {
+public sealed class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult) : MaxonOp, IMaxonRuntimeCallOp {
   public override MaxonOpKind Kind => MaxonOpKind.CallRuntime;
   public override string Mnemonic => $"maxon.call_runtime.{FunctionName}";
   public string FunctionName { get; } = functionName;

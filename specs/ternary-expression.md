@@ -1083,3 +1083,145 @@ end 'main'
 ```maxoncstderr
 error E2028: specs/fragments/ternary-expression/ternary-expression.error.function-arm-signature-mismatch.test:14:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
 ```
+
+<!-- test: ternary-expression.precedence-arithmetic-in-true-arm -->
+### A binary operator before the `if` belongs to the TRUE ARM
+The rule this file already states — *"binds looser than all binary operators"* — had no test, and
+without one it is a claim rather than a property. `a + b if flag else c` is
+`(a + b) if flag else c`. Read the other way it is `a + (b if flag else c)`, which agrees on the
+TAKEN path and quietly computes a different number on the not-taken one, with nothing to see at
+the call site.
+```maxon
+typealias Tally = int(-10000 to 10000)
+
+function plus(a Tally, b Tally, c Tally, flag bool) returns Tally
+	return a + b if flag else c
+end 'plus'
+
+function minus(a Tally, b Tally, c Tally, flag bool) returns Tally
+	return a - b if flag else c
+end 'minus'
+
+function times(a Tally, b Tally, c Tally, flag bool) returns Tally
+	return a * b if flag else c
+end 'times'
+
+function main() returns ExitCode
+	print("{plus(10, b: 1, c: 100, flag: true)}\n")
+	print("{plus(10, b: 1, c: 100, flag: false)}\n")
+	print("{minus(10, b: 3, c: 100, flag: true)}\n")
+	print("{minus(10, b: 3, c: 100, flag: false)}\n")
+	print("{times(10, b: 3, c: 100, flag: true)}\n")
+	print("{times(10, b: 3, c: 100, flag: false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11
+100
+7
+100
+30
+100
+```
+
+<!-- test: ternary-expression.precedence-comparison-in-true-arm -->
+### A COMPARISON in the true arm is the arm, not the arm's left operand
+`a < b if flag else false` is `(a < b) if flag else false` — a `bool` ternary. Bound the other
+way it is `a < (b if flag else false)`, which is not merely a different answer: it is a TYPE
+ERROR, because the inner ternary's arms are then an integer and a bool. That makes this case a
+compile/no-compile gate on the precedence rule rather than a value gate.
+```maxon
+typealias Tally = int(-10000 to 10000)
+
+function below(a Tally, b Tally, flag bool) returns bool
+	return a < b if flag else false
+end 'below'
+
+function notEqual(a Tally, b Tally, flag bool) returns bool
+	return a != b if flag else true
+end 'notEqual'
+
+function main() returns ExitCode
+	print("{below(1, b: 2, flag: true)}\n")
+	print("{below(1, b: 2, flag: false)}\n")
+	print("{notEqual(1, b: 2, flag: true)}\n")
+	print("{notEqual(1, b: 2, flag: false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+false
+true
+true
+```
+
+<!-- test: ternary-expression.precedence-short-circuit-in-true-arm -->
+### `and` / `or` in the true arm are the arm too
+The lowest-precedence binary operators are the ones a looser-binding ternary is easiest to lose
+to, and they are also the ones that do not parse as a plain binop: a bool `and`/`or` lowers to
+its own short-circuit blocks. Each call below is chosen so the two readings DISAGREE —
+`allOf(false, false, flag: false)` is `true` under the documented rule and `false` if the `and`
+swallows the ternary.
+```maxon
+function anyOf(a bool, b bool, flag bool) returns bool
+	return a or b if flag else false
+end 'anyOf'
+
+function allOf(a bool, b bool, flag bool) returns bool
+	return a and b if flag else true
+end 'allOf'
+
+function main() returns ExitCode
+	print("{anyOf(true, b: false, flag: false)}\n")
+	print("{anyOf(false, b: true, flag: true)}\n")
+	print("{allOf(false, b: false, flag: false)}\n")
+	print("{allOf(true, b: true, flag: true)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false
+true
+true
+true
+```
+
+<!-- test: ternary-expression.elision.binary-true-arm-is-not-evaluated -->
+### The WHOLE binary expression is the arm, so NONE of it runs on the false path
+The consequence of the precedence rule for evaluation, and the half a value check cannot see. In
+`track(1) + track(2) if flag else 7` the left operand and the `+` belong to the arm as much as the
+right operand does, so a false condition must run NEITHER call. Bound the other way only the RIGHT
+operand would be conditional and `track(1)` would run unconditionally — which produces the same
+number here and a different side-effect count, which is why this case counts rather than adds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var sideEffectCount = 0
+
+function track(result Integer) returns Integer
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'track'
+
+function main() returns ExitCode
+	let x = track(1) + track(2) if false else 7
+	if x != 7 'wrongValue'
+		return 99
+	end 'wrongValue'
+	return sideEffectCount
+end 'main'
+```
+```exitcode
+0
+```

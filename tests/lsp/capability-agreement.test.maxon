@@ -1,0 +1,72 @@
+// capability-agreement.test.maxon — every capability the server ADVERTISES, it also ANSWERS, and the
+// reverse.
+//
+// ⭐⭐ **THIS IS THE TEST THAT DID NOT EXIST, WHICH IS WHY THE DEFECT SURVIVED INSIDE ITS OWN COMMENT.**
+// `LspMethod.maxon` claimed `…ServedMethods` was "THE ONLY PLACE THAT FACT IS WRITTEN", so a server
+// answering a method it never promised was "unspellable". MEASURED, it was spellable: routing read
+// `servedMethods()` while advertising read `servedMethods()` AND `clientDeclared(...)` — two predicates
+// under one claim. A client declaring no features was told `{"textDocumentSync":1}` and then given a full
+// hover answer to a method that reply had not offered.
+//
+// ⛔ **A COMMENT ASSERTING AN INVARIANT IS NOT THE INVARIANT.** This file is what makes the claim
+// FALSIFIABLE: it asks the running server both halves and compares them.
+//
+// ⚠ Deliberately NOT one of the recovered 71 — the Zig suite had no such test, and the fail-open it
+// catches is one this port introduced. See `LspClient.maxon` for the release discipline.
+
+function capabilityProbeDocument() returns String
+	return String.from(b"function main() returns int
+    var total = 1
+    return total
+end 'main'")
+end 'capabilityProbeDocument'
+
+let CapabilityProbeUri = "file:///capability-agreement.maxon"
+
+test 'every advertised capability is answered, and every answered method is advertised'
+	var client = LspClient.start()
+
+	let advertised = try client.initialize() otherwise 'initFailed'
+		client.release()
+		try Expect.fail("the session could not be initialized, so the capability agreement could not be checked at all.")
+		return
+	end 'initFailed'
+
+	try client.initialized()
+	try client.openDocument(CapabilityProbeUri, content: capabilityProbeDocument())
+
+	// Every method the server has an area for, asked in the order `LspMethod` declares them.
+	let hover = try client.methodIsServed("textDocument/hover", uri: CapabilityProbeUri)
+	let definition = try client.methodIsServed("textDocument/definition", uri: CapabilityProbeUri)
+	let completion = try client.methodIsServed("textDocument/completion", uri: CapabilityProbeUri)
+	let formatting = try client.methodIsServed("textDocument/formatting", uri: CapabilityProbeUri)
+	let symbols = try client.methodIsServed("textDocument/documentSymbol", uri: CapabilityProbeUri)
+	let folding = try client.methodIsServed("textDocument/foldingRange", uri: CapabilityProbeUri)
+	let linked = try client.methodIsServed("textDocument/linkedEditingRange", uri: CapabilityProbeUri)
+	let rename = try client.methodIsServed("textDocument/rename", uri: CapabilityProbeUri)
+	let action = try client.methodIsServed("textDocument/codeAction", uri: CapabilityProbeUri)
+	let tokens = try client.methodIsServed("textDocument/semanticTokens/full", uri: CapabilityProbeUri)
+
+	client.release()
+
+	try capabilityAgrees("hoverProvider", advertised: advertised.hasHoverProvider, served: hover)
+	try capabilityAgrees("definitionProvider", advertised: advertised.hasDefinitionProvider, served: definition)
+	try capabilityAgrees("completionProvider", advertised: advertised.hasCompletionProvider, served: completion)
+	try capabilityAgrees("documentFormattingProvider", advertised: advertised.hasFormattingProvider, served: formatting)
+	try capabilityAgrees("documentSymbolProvider", advertised: advertised.hasDocumentSymbolProvider, served: symbols)
+	try capabilityAgrees("foldingRangeProvider", advertised: advertised.hasFoldingRangeProvider, served: folding)
+	try capabilityAgrees("linkedEditingRangeProvider", advertised: advertised.hasLinkedEditingRangeProvider, served: linked)
+	try capabilityAgrees("renameProvider", advertised: advertised.hasRenameProvider, served: rename)
+	try capabilityAgrees("codeActionProvider", advertised: advertised.hasCodeActionProvider, served: action)
+	try capabilityAgrees("semanticTokensProvider", advertised: advertised.hasSemanticTokensProvider, served: tokens)
+end 'every advertised capability is answered, and every answered method is advertised'
+
+// ⭐ BOTH DIRECTIONS, because the two failures are different bugs. Advertised-but-refused is a promise an
+// editor acts on and the server then breaks. Answered-but-unadvertised is the fail-open this file exists
+// for — no editor ever asks, so nothing else in the suite can see it.
+function capabilityAgrees(providerKey String, advertised bool, served bool) throws TestFailure
+	let observedServed = served
+	let observedAdvertised = advertised
+
+	try Expect.equal(observedServed, expected: observedAdvertised, message: "`{providerKey}`: the server advertised it and answered it differently. Advertised-but-refused breaks a promise an editor acts on; answered-but-unadvertised means routing and advertising are reading different facts — which is exactly what `LspMethod.maxon` claims is unspellable, and was not.")
+end 'capabilityAgrees'

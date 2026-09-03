@@ -1,0 +1,75 @@
+// folding-ranges.test.maxon — the recovered `foldingRange` test: the two collapsible regions of a
+// function that contains a labelled `if`.
+//
+// ⚠ **NO REFERENCE IMPLEMENTATION OF THIS METHOD EXISTS ANYWHERE.** `maxon-sharp/Lsp/` has no
+// FoldingRange handler, so the three numbers below are the whole surviving specification of this
+// behaviour. They are transcribed from the recovered test, not re-derived.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+let FoldingUri = "file:///test.maxon"
+
+let FoldingUnreportedSession = "the session ended without saying how"
+
+union FoldingRangesOutcome
+	observed(ranges FoldingRangeArray)
+	broke(detail String)
+end 'FoldingRangesOutcome'
+
+test 'foldingRange returns ranges'
+	var client = LspClient.start()
+	var outcome = FoldingRangesOutcome.broke(FoldingUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(FoldingUri, content: foldingFunctionWithIfBlockFixture())
+		outcome = FoldingRangesOutcome.observed(client.foldingRange(FoldingUri).ranges)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = FoldingRangesOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = FoldingRangesOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = FoldingRangesOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'folding'
+		observed(ranges) then try assertFoldingRangesOfFile(ranges)
+		broke(detail) then try Expect.fail("the folding-range request did not complete: {detail}")
+	end 'folding'
+end 'foldingRange returns ranges'
+
+function assertFoldingRangesOfFile(ranges FoldingRangeArray) throws TestFailure
+	// Should have folding ranges for function (lines 0-5) and if block (lines 1-3)
+	let observedCount = ranges.count()
+	let expectedCount = 2
+	try Expect.equal(observedCount, expected: expectedCount, message: "the file did not fold into exactly two regions. Nesting is the point: the `if` sits inside the function, so a server that reported one region collapsed them and a server that reported three invented one.")
+
+	try Expect.isTrue(foldingCoversLines(ranges, startLine: 0, endLine: 5), message: "the FUNCTION did not fold from line 0 to line 5.")
+	try Expect.isTrue(foldingCoversLines(ranges, startLine: 1, endLine: 3), message: "the labelled `if` block did not fold from line 1 to line 3.")
+end 'assertFoldingRangesOfFile'
+
+function foldingCoversLines(ranges FoldingRangeArray, startLine LspCoordinate, endLine LspCoordinate) returns bool
+	for range in ranges 'eachRange'
+		if range.startLine == startLine and range.endLine == endLine 'hit'
+			return true
+		end 'hit'
+	end 'eachRange'
+
+	return false
+end 'foldingCoversLines'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: it is byte-exact,
+// a raw newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
+// newline — and every line NUMBER above is counted against these bytes.
+function foldingFunctionWithIfBlockFixture() returns String
+	return String.from(b"function main() returns int
+    if true 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'")
+end 'foldingFunctionWithIfBlockFixture'

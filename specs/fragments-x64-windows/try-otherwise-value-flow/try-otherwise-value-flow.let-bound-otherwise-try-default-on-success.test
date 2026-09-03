@@ -1,0 +1,231 @@
+// Test: try-otherwise-value-flow.let-bound-otherwise-try-default-on-success
+enum E
+	bad
+end 'E'
+
+function good(x ExitCode) returns ExitCode throws E
+	if x < 0 'neg'
+		throw E.bad
+	end 'neg'
+
+	return x + 106
+end 'good'
+
+function alwaysThrows(x ExitCode) returns ExitCode throws E
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+
+	return x
+end 'alwaysThrows'
+
+function pick(n ExitCode) returns ExitCode throws E
+	let v = try good(n) otherwise try alwaysThrows(n)
+	return v
+end 'pick'
+
+function main() returns ExitCode
+	return try pick(5) otherwise 77
+end 'main'
+---
+ExitCode: 111
+---
+// CompiledIR
+module {
+  func @good(x: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg good.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl good.__range_panic_0
+    x64.jmp good.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-8]
+    x64.cmp rsi, rbx
+    x64.jge good.neg_0.after
+  neg_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  neg_0.after:
+    x64.mov rax, 106
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg good.__range_panic_1
+    x64.cmp rcx, rdx
+    x64.jl good.__range_panic_1
+    x64.jmp good.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rcx
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @alwaysThrows(x: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg alwaysThrows.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl alwaysThrows.__range_panic_0
+    x64.jmp alwaysThrows.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-8]
+    x64.cmp rsi, rbx
+    x64.jl alwaysThrows.always_0.after
+  always_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  always_0.after:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg alwaysThrows.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl alwaysThrows.__range_panic_1
+    x64.jmp alwaysThrows.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @pick(n: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg pick.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl pick.__range_panic_0
+    x64.jmp pick.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call good
+    x64.mov ecx, rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.mov [rbp-40], rcx
+    x64.je pick.otherwise_default_success_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call alwaysThrows
+    x64.mov ecx, rax
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je pick.try_continue_0
+  propagate_error_0:
+    x64.mov rdx, [rbp-16]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  try_continue_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.jmp pick.otherwise_default_continue_0
+  otherwise_default_success_0:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-32], rax
+    x64.jmp pick.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg pick.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl pick.__range_panic_1
+    x64.jmp pick.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call pick
+    x64.mov ecx, rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.mov [rbp-16], rcx
+    x64.je main.otherwise_default_success_0
+  otherwise_default_error_0:
+    x64.mov rax, 77
+    x64.mov [rbp-8], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-8], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

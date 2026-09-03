@@ -1,0 +1,195 @@
+// linkededit-ranges.test.maxon — the three recovered `linkedEditingRange` tests. Maxon closes every
+// block with `end 'label'`, so a name appears TWICE by construction; linked editing is what lets an
+// editor rename both halves as one edit.
+//
+// ⚠ **NO REFERENCE IMPLEMENTATION OF THIS METHOD EXISTS ANYWHERE.** `maxon-sharp/Lsp/` has no
+// LinkedEditingRange handler, so these coordinates are the whole surviving specification. They are
+// transcribed from the recovered tests, with their hand-counted rulers, not re-derived.
+//
+// ⚠ **THE REQUEST POSITION AND THE ASSERTED RANGE DELIBERATELY DISAGREE BY ONE** in the second and third
+// tests: the cursor sits INSIDE the identifier while the range covers it from its first byte. Both
+// numbers are kept as written — the discrepancy is data about what the recovered server accepted.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+let LinkedEditUri = "file:///test.maxon"
+
+let LinkedEditUnreportedSession = "the session ended without saying how"
+
+union LinkedEditRangesOutcome
+	observed(ranges LspRangeArray)
+	broke(detail String)
+end 'LinkedEditRangesOutcome'
+
+test 'linkedEditingRange returns ranges for block labels'
+	var client = LspClient.start()
+	var outcome = LinkedEditRangesOutcome.broke(LinkedEditUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(LinkedEditUri, content: linkedEditLoopLabelFixture())
+
+		// Request linked editing on the 'loop' label at line 1, character 23
+		// Should return linked ranges for both 'loop' occurrences (start and end)
+		outcome = LinkedEditRangesOutcome.observed(client.linkedEditingRange(LinkedEditUri, line: 1, character: 23).ranges)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = LinkedEditRangesOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = LinkedEditRangesOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = LinkedEditRangesOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'blockLabel'
+		observed(ranges) then try assertLinkedEditPair(ranges, subject: "the `loop` block label")
+		broke(detail) then try Expect.fail("linked editing on a block label did not complete: {detail}")
+	end 'blockLabel'
+end 'linkedEditingRange returns ranges for block labels'
+
+test 'linkedEditingRange returns ranges for function names'
+	var client = LspClient.start()
+	var outcome = LinkedEditRangesOutcome.broke(LinkedEditUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(LinkedEditUri, content: linkedEditMyFunctionFixture())
+
+		// Request linked editing on the function name "myFunction" at line 0, character 12
+		outcome = LinkedEditRangesOutcome.observed(client.linkedEditingRange(LinkedEditUri, line: 0, character: 12).ranges)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = LinkedEditRangesOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = LinkedEditRangesOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = LinkedEditRangesOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'functionName'
+		observed(ranges) then try assertLinkedEditFunctionName(ranges)
+		broke(detail) then try Expect.fail("linked editing on a function name did not complete: {detail}")
+	end 'functionName'
+end 'linkedEditingRange returns ranges for function names'
+
+test 'linkedEditingRange returns ranges for interface method names'
+	var client = LspClient.start()
+	var outcome = LinkedEditRangesOutcome.broke(LinkedEditUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(LinkedEditUri, content: linkedEditCountableFixture())
+
+		// Request linked editing on the method name "count" at line 7, character 24
+		// "    function Countable.count() returns int"
+		//                        ^^^^^
+		// Position: "    function Countable." = 23 chars, so "count" starts at 23
+		outcome = LinkedEditRangesOutcome.observed(client.linkedEditingRange(LinkedEditUri, line: 7, character: 24).ranges)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = LinkedEditRangesOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = LinkedEditRangesOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = LinkedEditRangesOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'methodName'
+		observed(ranges) then try assertLinkedEditInterfaceMethod(ranges)
+		broke(detail) then try Expect.fail("linked editing on an interface method name did not complete: {detail}")
+	end 'methodName'
+end 'linkedEditingRange returns ranges for interface method names'
+
+// ⚠ The first test asserts the COUNT ONLY, exactly as recovered — the range values were never inspected
+// there, and strengthening it would be inventing a specification the other two already state.
+function assertLinkedEditPair(ranges LspRangeArray, subject String) throws TestFailure
+	let observedCount = ranges.count()
+	let expectedCount = 2
+	try Expect.equal(observedCount, expected: expectedCount, message: "linked editing on {subject} did not return two ranges. Maxon spells a block's name twice — once to open it and once to close it — so two is the count that lets an editor rename both together.")
+end 'assertLinkedEditPair'
+
+function assertLinkedEditFunctionName(ranges LspRangeArray) throws TestFailure
+	// Should return 2 ranges: function name and end label
+	try assertLinkedEditPair(ranges, subject: "a function name")
+
+	// Range 0: function name at line 0, characters 9-19 (myFunction)
+	try Expect.isTrue(linkedEditSpans(ranges, startLine: 0, startCharacter: 9, endLine: 0, endCharacter: 19), message: "the DECLARATION half of the linked pair did not cover `myFunction` at line 0, characters 9-19.")
+
+	// Range 1: end label at line 2, characters 5-15 (myFunction inside quotes)
+	try Expect.isTrue(linkedEditSpans(ranges, startLine: 2, startCharacter: 5, endLine: 2, endCharacter: 15), message: "the END LABEL half of the linked pair did not cover `myFunction` at line 2, characters 5-15 — the name INSIDE the quotes, since renaming the quotes too would corrupt the source.")
+end 'assertLinkedEditFunctionName'
+
+function assertLinkedEditInterfaceMethod(ranges LspRangeArray) throws TestFailure
+	// Should return 2 ranges: method name and end label
+	try assertLinkedEditPair(ranges, subject: "an interface method name")
+
+	// Range 0: method name at line 7, characters 23-28 (count)
+	try Expect.isTrue(linkedEditSpans(ranges, startLine: 7, startCharacter: 23, endLine: 7, endCharacter: 28), message: "the DECLARATION half did not cover `count` at line 7, characters 23-28. The range starts at 23 while the request was made at 24: the cursor sits inside the identifier and the range covers it whole.")
+
+	// Range 1: end label at line 9, characters 9-14 (count inside quotes)
+	// "    end 'count'"
+	//          ^^^^^
+	// Position: "    end '" = 9 chars, so "count" is at 9-14
+	try Expect.isTrue(linkedEditSpans(ranges, startLine: 9, startCharacter: 9, endLine: 9, endCharacter: 14), message: "the END LABEL half did not cover `count` at line 9, characters 9-14.")
+end 'assertLinkedEditInterfaceMethod'
+
+function linkedEditSpans(ranges LspRangeArray, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns bool
+	for range in ranges 'eachRange'
+		if range.startLine == startLine and range.startCharacter == startCharacter and range.endLine == endLine and range.endCharacter == endCharacter 'hit'
+			return true
+		end 'hit'
+	end 'eachRange'
+
+	return false
+end 'linkedEditSpans'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, a raw
+// newline in one IS the byte it spells, no indentation stripped and no trailing newline. Every column
+// counted in a ruler above is counted against exactly these bytes, so one added space moves an assertion.
+function linkedEditLoopLabelFixture() returns String
+	return String.from(b"function main() returns int
+for i in range(0, 10) 'loop'
+var x = i
+end 'loop'
+return 0
+end 'main'")
+end 'linkedEditLoopLabelFixture'
+
+function linkedEditMyFunctionFixture() returns String
+	return String.from(b"function myFunction() returns int
+return 42
+end 'myFunction'")
+end 'linkedEditMyFunctionFixture'
+
+// Type with interface method implementation
+// Line 0: interface Countable
+// Line 1: function count() returns int
+// Line 2: end 'Countable'
+// Line 3: (empty)
+// Line 4: type MyStruct is Countable
+// Line 5:     var value int
+// Line 6: (empty)
+// Line 7:     function Countable.count() returns int
+// Line 8:         return value
+// Line 9:     end 'count'
+// Line 10: end 'MyStruct'
+function linkedEditCountableFixture() returns String
+	return String.from(b"interface Countable
+function count() returns int
+end 'Countable'
+
+type MyStruct is Countable
+    var value int
+
+    function Countable.count() returns int
+        return value
+    end 'count'
+end 'MyStruct'")
+end 'linkedEditCountableFixture'

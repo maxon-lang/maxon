@@ -1,0 +1,234 @@
+// lifecycle-session.test.maxon — the four recovered lifecycle tests: what `initialize` advertises, that
+// `shutdown` then `exit` terminates the process cleanly, and the two whole-session workflows.
+//
+// ⚠ These four are the suite's cross-area canaries: `initialize returns capabilities` reads the
+// COMPLETION capability, and two of the workflows drive completion and hover. So a regression in an area
+// that has no lifecycle code of its own still reddens this file — which is why they are worth reading
+// first when the suite goes red.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1. The three arms of every `otherwise` are what E3084 requires of
+// a handler that binds the error.
+
+// The single uri all 71 recovered tests use. It never touches the filesystem — full-text sync carries
+// the content, so the server is told the text rather than asked to read it.
+let LifecycleUri = "file:///test.maxon"
+
+// The version `didChange` announces. LSP requires it to increase, and `didOpen` sent 1.
+let LifecycleSecondVersion = 2 as DocumentVersion
+
+// LSP reserves exit 0 for a session the client shut down first. MEASURED against this server: `exit`
+// after `shutdown` gives 0, `exit` without gives 1, and stdin EOF gives 1.
+let LifecycleCleanExitCode = 0 as ProcessExitCode
+
+// The sentence a session that never reached its observation is reported with. It is the initial value of
+// every outcome, so a path added later that reports nothing says so instead of reading as a pass.
+let LifecycleUnreportedSession = "the session ended without saying how"
+
+union LifecycleCapabilitiesOutcome
+	observed(textDocumentSync bool, completionProvider bool)
+	broke(detail String)
+end 'LifecycleCapabilitiesOutcome'
+
+union LifecycleTerminationOutcome
+	exited(code ProcessExitCode)
+	broke(detail String)
+end 'LifecycleTerminationOutcome'
+
+union LifecycleWorkflowOutcome
+	offered(labels StringArray)
+	broke(detail String)
+end 'LifecycleWorkflowOutcome'
+
+union LifecycleDocumentOutcome
+	hovered(isPresent bool, contents String)
+	broke(detail String)
+end 'LifecycleDocumentOutcome'
+
+test 'initialize returns capabilities'
+	var client = LspClient.start()
+	var outcome = LifecycleCapabilitiesOutcome.broke(LifecycleUnreportedSession)
+
+	try 'session'
+		let advertised = client.initialize()
+		client.initialized()
+		outcome = LifecycleCapabilitiesOutcome.observed(advertised.hasTextDocumentSync, completionProvider: advertised.hasCompletionProvider)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = LifecycleCapabilitiesOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = LifecycleCapabilitiesOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = LifecycleCapabilitiesOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'advertisement'
+		observed(textDocumentSync, completionProvider) then try assertLifecycleAdvertisement(textDocumentSync, completionProvider: completionProvider)
+		broke(detail) then try Expect.fail("the `initialize` handshake did not complete: {detail}")
+	end 'advertisement'
+end 'initialize returns capabilities'
+
+test 'shutdown and exit terminate cleanly'
+	var client = LspClient.start()
+	var outcome = LifecycleTerminationOutcome.broke(LifecycleUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.shutdown()
+		client.exit()
+		outcome = LifecycleTerminationOutcome.exited(client.waitForExit())
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = LifecycleTerminationOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = LifecycleTerminationOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = LifecycleTerminationOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'termination'
+		exited(code) then try assertLifecycleCleanExit(code)
+		broke(detail) then try Expect.fail("the shutdown sequence did not complete: {detail}. `waitForExit` carries its own deadline, so this sentence also covers a server that had to be waited out rather than exiting on its own.")
+	end 'termination'
+end 'shutdown and exit terminate cleanly'
+
+test 'server handles full workflow'
+	var client = LspClient.start()
+	var outcome = LifecycleWorkflowOutcome.broke(LifecycleUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(LifecycleUri, content: lifecycleMainWithVariable())
+		client.changeDocument(LifecycleUri, content: lifecycleMainWithArray(), version: LifecycleSecondVersion)
+
+		// Request completion after "arr." (line 2, column 8)
+		let answered = client.completionWithTrigger(LifecycleUri, line: 2, character: 8, triggerCharacter: ".")
+		client.closeDocument(LifecycleUri)
+		outcome = LifecycleWorkflowOutcome.offered(lifecycleLabelsOf(answered))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = LifecycleWorkflowOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = LifecycleWorkflowOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = LifecycleWorkflowOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'workflow'
+		offered(labels) then try assertLifecycleArrayCompletion(labels)
+		broke(detail) then try Expect.fail("the open / change / complete / close workflow did not complete: {detail}")
+	end 'workflow'
+end 'server handles full workflow'
+
+test 'full lifecycle with document'
+	var client = LspClient.start()
+	var outcome = LifecycleDocumentOutcome.broke(LifecycleUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(LifecycleUri, content: lifecycleMainWithXOne())
+
+		// Request hover on 'x' variable at line 1, character 8
+		// Line 1: "    var x = 1" - 'x' is at position 8
+		let answered = client.hover(LifecycleUri, line: 1, character: 8)
+		client.changeDocument(LifecycleUri, content: lifecycleMainWithXTwo(), version: LifecycleSecondVersion)
+		client.closeDocument(LifecycleUri)
+		outcome = LifecycleDocumentOutcome.hovered(answered.isPresent, contents: answered.contents)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = LifecycleDocumentOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = LifecycleDocumentOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = LifecycleDocumentOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'session'
+		hovered(isPresent, contents) then try assertLifecycleVariableHover(isPresent, contents: contents)
+		broke(detail) then try Expect.fail("the open / hover / change / close session did not complete: {detail}")
+	end 'session'
+end 'full lifecycle with document'
+
+// ⚠ **BOTH SIDES OF EVERY COMPARISON ARE BOUND TO LOCALS FIRST**, as `tests/test-command` does and for
+// its measured reason: a CALL in `Expect.equal`'s `expected:` slot makes the BOOTSTRAP report the
+// overload set as ambiguous (E3007), and these tests must compile under both compilers.
+function assertLifecycleAdvertisement(textDocumentSync bool, completionProvider bool) throws TestFailure
+	try Expect.isTrue(textDocumentSync, message: "the `initialize` reply did not advertise `textDocumentSync`. The client declared support for it, and without it no document can be sent at all — so every language method is unreachable behind this one capability.")
+	try Expect.isTrue(completionProvider, message: "the `initialize` reply did not advertise `completionProvider`. The client declared completion support, so a server that offers completion must say so here; a client reading this field will never ask a silent server for completions.")
+end 'assertLifecycleAdvertisement'
+
+function assertLifecycleCleanExit(code ProcessExitCode) throws TestFailure
+	let observed = code
+	let expected = LifecycleCleanExitCode
+	try Expect.equal(observed, expected: expected, message: "the server did not exit 0 after `shutdown` then `exit`. LSP reserves 0 for exactly that order — `exit` without a preceding `shutdown` is 1 — so a different code means the session ended some other way, and the exit code is the half of this a script reads.")
+end 'assertLifecycleCleanExit'
+
+function assertLifecycleArrayCompletion(labels StringArray) throws TestFailure
+	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `arr.` offered nothing. The document was opened and then REPLACED by `didChange`, so this also asks whether the server completes against the changed text rather than the opened text.")
+	try Expect.isTrue(lifecycleOffersLabel(labels, label: "push"), message: "completion after `arr.` did not offer `push`. It is the method the third line of the changed document actually calls, so an Array completion list without it is not an Array completion list.")
+end 'assertLifecycleArrayCompletion'
+
+function assertLifecycleVariableHover(isPresent bool, contents String) throws TestFailure
+	try Expect.isTrue(isPresent, message: "hover over `x` answered nothing. A hover that is absent and a hover that renders emptily are different failures, so they are asserted separately.")
+	try Expect.isFalse(contents.isEmpty(), message: "hover over `x` was present but rendered nothing.")
+	try Expect.contains(contents, needle: "int", message: "hover over `x` did not name its type. `var x = 1` infers `int`, and the type is the reason an editor shows a hover at all.")
+end 'assertLifecycleVariableHover'
+
+function lifecycleOffersLabel(labels StringArray, label String) returns bool
+	for offered in labels 'eachLabel'
+		if offered == label 'hit'
+			return true
+		end 'hit'
+	end 'eachLabel'
+
+	return false
+end 'lifecycleOffersLabel'
+
+function lifecycleLabelsOf(answered CompletionResult) returns StringArray
+	var labels = StringArray.create()
+
+	for item in answered.items 'eachItem'
+		labels.push(item.label)
+	end 'eachItem'
+
+	return labels
+end 'lifecycleLabelsOf'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: it is byte-exact,
+// a raw newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
+// newline. A representation that did either would shift every hard-coded column above.
+function lifecycleMainWithVariable() returns String
+	return String.from(b"function main() returns int
+    var x = 42
+    return x
+end 'main'")
+end 'lifecycleMainWithVariable'
+
+function lifecycleMainWithArray() returns String
+	return String.from(b"function main() returns int
+    var arr = [1, 2, 3]
+    arr.push(4)
+    return 0
+end 'main'")
+end 'lifecycleMainWithArray'
+
+function lifecycleMainWithXOne() returns String
+	return String.from(b"function main() returns int
+    var x = 1
+    return x
+end 'main'")
+end 'lifecycleMainWithXOne'
+
+function lifecycleMainWithXTwo() returns String
+	return String.from(b"function main() returns int
+    var x = 2
+    return x
+end 'main'")
+end 'lifecycleMainWithXTwo'

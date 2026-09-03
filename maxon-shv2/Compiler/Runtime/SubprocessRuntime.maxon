@@ -61,6 +61,10 @@ export let SubpWaitExitName = b"__gt_subp_wait_exit"
 export let SubpWriteAllName = b"__gt_subp_write_all"
 export let SubpReadOutBytesName = b"__gt_subp_read_out_bytes"
 export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
+// The EXACT-COUNT reader's managed wrapper. It rides `buildSubpReadBytes` with every other owned-buffer
+// reader in this file because the conversion is the same one: the difference between an exact read and a
+// line read lives entirely in `GtRuntime`'s two stopping rules, and nothing about the record shape.
+export let SubpReadExactOutBytesName = b"__gt_subp_read_exact_out_bytes"
 export let SubpResultKindName = b"__gt_subp_result_kind"
 export let SubpResultCodeName = b"__gt_subp_result_code"
 export let SubpResultStdoutName = b"__gt_subp_result_stdout"
@@ -1031,19 +1035,22 @@ function emitSubpOwnedByteCopy(module StdModule, func IrFunction, ids ValueMinte
 	return copied
 end 'emitSubpOwnedByteCopy'
 
-// ⭐ `__gt_subp_read_out_bytes(handle, maxBytes)` / `__gt_subp_read_err_bytes(handle, maxBytes)` — the two
-// `__Builtins.subprocessRead*Line` readers, which want a `__ManagedMemory` where the bare-name streaming
-// builtins want a `String`.
+// ⭐ `__gt_subp_read_out_bytes` / `__gt_subp_read_err_bytes` / `__gt_subp_read_exact_out_bytes`, each
+// `(handle, count)` — the three `__Builtins.subprocessRead*` readers, which want a `__ManagedMemory` where
+// the bare-name streaming builtins want a `String`. The `count` is a truncation CEILING for the two line
+// readers and a LENGTH for the exact one; that difference lives wholly in the reader being wrapped.
 //
-// ⭐ **THEY ARE A CONVERSION OVER THE EXISTING READER, NOT A SECOND ONE.** `__gt_subp_read_line` already
-// yields the green thread on the IOCP read, scans the growable per-handle line buffer, compacts its tail and
-// latches EOF — the whole of slice 1b's debugged behaviour. Rewriting that to answer a different record shape
-// would be a second copy of it free to drift on the EOF latch. So this calls it, copies the bytes out of the
-// owned String it answers into a fresh byte-element record, and drops the String.
+// ⭐ **THEY ARE A CONVERSION OVER AN EXISTING READER, NOT A SECOND ONE.** `__gt_subp_read_line` and
+// `__gt_subp_read_exact` already yield the green thread on the IOCP read, consume from the growable
+// per-handle stream buffer, compact its tail and latch EOF — the whole of slice 1b's debugged behaviour.
+// Rewriting either to answer a different record shape would be a second copy of it free to drift on the EOF
+// latch. So this calls one, copies the bytes out of the owned String it answers into a fresh byte-element
+// record, and drops the String — which is why a THIRD entry point cost one install line and no new body.
 //
-// ⚠ The line comes back INCLUDING its trailing `\n`, and `stdlib/Subprocess.maxon`'s `stripTrailingCR` — the
+// ⚠ A LINE comes back INCLUDING its trailing `\n`, and `stdlib/Subprocess.maxon`'s `stripTrailingCR` — its
 // one consumer — strips an LF and a preceding CR whether or not they are there. Its doc-comment and its own
-// body disagree about which the runtime sends; the body is what runs, and it is correct for either.
+// body disagree about which the runtime sends; the body is what runs, and it is correct for either. An EXACT
+// read has no terminator to strip and `readStdoutBytes` does not call it.
 function buildSubpReadBytes(module StdModule, name ByteArray, readerName ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -2266,6 +2273,7 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpWriteAll(module)
 	buildSubpReadBytes(module, name: SubpReadOutBytesName, readerName: SubpReadLineName)
 	buildSubpReadBytes(module, name: SubpReadErrBytesName, readerName: SubpReadErrLineName)
+	buildSubpReadBytes(module, name: SubpReadExactOutBytesName, readerName: SubpReadExactName)
 	buildSubpWaitExit(module)
 	buildSubpWaitCollect(module)
 	buildSubpResultWordReader(module, name: SubpResultKindName, offset: ResStatus)

@@ -1,0 +1,181 @@
+// docsync-documents.test.maxon — the three recovered document-synchronization tests: that `didOpen`
+// registers a document, that `didChange` replaces its content, and that `didClose` forgets it.
+//
+// ⚠ **ALL THREE OBSERVE SYNC THROUGH `textDocument/documentSymbol`**, so a defect in THAT handler
+// reddens them for a reason none of them is named for. It is the recovered design and it is kept: a
+// document store can only be tested through a request that reads it.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+let DocSyncUri = "file:///test.maxon"
+
+// The version `didChange` announces. LSP requires it to increase, and `didOpen` sent 1.
+let DocSyncSecondVersion = 2 as DocumentVersion
+
+// LSP's own SymbolKind numbering — a value from the specification, not an index into anything this
+// server declares, which is why the literal is the assertion.
+// SymbolKind: function = 12
+let DocSyncFunctionSymbolKind = 12 as SymbolKindCode
+
+let DocSyncUnreportedSession = "the session ended without saying how"
+
+union DocSyncRoundOutcome
+	observed(symbols DocumentSymbolArray)
+	broke(detail String)
+end 'DocSyncRoundOutcome'
+
+union DocSyncRoundPairOutcome
+	observed(before DocumentSymbolArray, after DocumentSymbolArray)
+	broke(detail String)
+end 'DocSyncRoundPairOutcome'
+
+test 'didOpen registers document'
+	var client = LspClient.start()
+	var outcome = DocSyncRoundOutcome.broke(DocSyncUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(DocSyncUri, content: docSyncMainReturningZero())
+		outcome = DocSyncRoundOutcome.observed(client.documentSymbols(DocSyncUri).symbols)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = DocSyncRoundOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = DocSyncRoundOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = DocSyncRoundOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'opened'
+		observed(symbols) then try assertDocSyncOpenedDocumentIsKnown(symbols)
+		broke(detail) then try Expect.fail("the open-then-ask-for-symbols session did not complete: {detail}")
+	end 'opened'
+end 'didOpen registers document'
+
+test 'didChange updates document content'
+	var client = LspClient.start()
+	var outcome = DocSyncRoundPairOutcome.broke(DocSyncUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(DocSyncUri, content: docSyncOneFunction())
+		let before = client.documentSymbols(DocSyncUri).symbols
+		client.changeDocument(DocSyncUri, content: docSyncTwoFunctions(), version: DocSyncSecondVersion)
+		outcome = DocSyncRoundPairOutcome.observed(before, after: client.documentSymbols(DocSyncUri).symbols)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = DocSyncRoundPairOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = DocSyncRoundPairOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = DocSyncRoundPairOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'changed'
+		observed(before, after) then try assertDocSyncChangedDocumentIsReread(before, after: after)
+		broke(detail) then try Expect.fail("the open / ask / change / ask session did not complete: {detail}")
+	end 'changed'
+end 'didChange updates document content'
+
+test 'didClose removes document'
+	var client = LspClient.start()
+	var outcome = DocSyncRoundPairOutcome.broke(DocSyncUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(DocSyncUri, content: docSyncMainReturningZero())
+		let whileOpen = client.documentSymbols(DocSyncUri).symbols
+		client.closeDocument(DocSyncUri)
+		outcome = DocSyncRoundPairOutcome.observed(whileOpen, after: client.documentSymbols(DocSyncUri).symbols)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = DocSyncRoundPairOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = DocSyncRoundPairOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = DocSyncRoundPairOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'closed'
+		observed(whileOpen, afterClose) then try assertDocSyncClosedDocumentIsForgotten(whileOpen, afterClose: afterClose)
+		broke(detail) then try Expect.fail("the open / ask / close / ask session did not complete: {detail}")
+	end 'closed'
+end 'didClose removes document'
+
+// ⚠ **BOTH SIDES OF EVERY COMPARISON ARE BOUND TO LOCALS FIRST**: a CALL in `Expect.equal`'s `expected:`
+// slot makes the BOOTSTRAP report the overload set as ambiguous (E3007), and these tests must compile
+// under both compilers.
+//
+// The count is asserted BEFORE the loop, so a body that runs the wrong number of times has already
+// failed by the time it runs at all — which is why no element is reached for by index.
+function assertDocSyncOpenedDocumentIsKnown(symbols DocumentSymbolArray) throws TestFailure
+	let observedCount = symbols.count()
+	let expectedCount = 1
+	try Expect.equal(observedCount, expected: expectedCount, message: "an opened document did not report exactly one symbol. `didOpen` is a notification, so the only way to ask whether the server kept the text is to request something derived from it.")
+
+	for symbol in symbols 'eachSymbol'
+		let observedName = symbol.name
+		let expectedName = "main"
+		try Expect.equal(observedName, expected: expectedName, message: "the symbol the opened document reported was not the function it declares.")
+
+		let observedKind = symbol.kind
+		let expectedKind = DocSyncFunctionSymbolKind
+		try Expect.equal(observedKind, expected: expectedKind, message: "the symbol was reported with the wrong SymbolKind. 12 is LSP's own number for a function — it is what an editor keys its icon and its outline grouping off.")
+	end 'eachSymbol'
+end 'assertDocSyncOpenedDocumentIsKnown'
+
+function assertDocSyncChangedDocumentIsReread(before DocumentSymbolArray, after DocumentSymbolArray) throws TestFailure
+	let countBefore = before.count()
+	let expectedBefore = 1
+	try Expect.equal(countBefore, expected: expectedBefore, message: "the document as OPENED did not report exactly one symbol, so the count after the change proves nothing about `didChange`.")
+
+	for symbol in before 'eachSymbol'
+		let observedName = symbol.name
+		let expectedName = "foo"
+		try Expect.equal(observedName, expected: expectedName, message: "the opened document reported a symbol other than the function it declares.")
+	end 'eachSymbol'
+
+	let countAfter = after.count()
+	let expectedAfter = 2
+	try Expect.equal(countAfter, expected: expectedAfter, message: "the document as CHANGED did not report two symbols. Full-text sync sends the whole document on every change, so a server still answering 1 is answering from the text it was opened with.")
+end 'assertDocSyncChangedDocumentIsReread'
+
+function assertDocSyncClosedDocumentIsForgotten(whileOpen DocumentSymbolArray, afterClose DocumentSymbolArray) throws TestFailure
+	try Expect.atLeast(whileOpen.count(), than: 1, message: "the document reported no symbols while it was still OPEN, so the empty answer after the close would prove nothing.")
+
+	let observedAfterClose = afterClose.count()
+	let expectedAfterClose = 0
+	try Expect.equal(observedAfterClose, expected: expectedAfterClose, message: "a closed document still reported symbols. The result object is present and its LIST is empty — that is the claim, and it is what stops an editor showing an outline for a file the user shut.")
+end 'assertDocSyncClosedDocumentIsForgotten'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: it is byte-exact,
+// a raw newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
+// newline.
+function docSyncMainReturningZero() returns String
+	return String.from(b"function main() returns int
+    return 0
+end 'main'")
+end 'docSyncMainReturningZero'
+
+function docSyncOneFunction() returns String
+	return String.from(b"function foo() returns int
+    return 1
+end 'foo'")
+end 'docSyncOneFunction'
+
+function docSyncTwoFunctions() returns String
+	return String.from(b"function foo() returns int
+    return 1
+end 'foo'
+
+function bar() returns int
+    return 2
+end 'bar'")
+end 'docSyncTwoFunctions'

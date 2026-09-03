@@ -1,0 +1,185 @@
+// The JSON-RPC 2.0 envelope LSP rides on: how a request is addressed, and how a response is built.
+//
+// Parsing and serializing JSON is `stdlib/Json.maxon`'s job and is not repeated here; this file owns
+// only the members JSON-RPC and LSP define, and the rules for filling them.
+
+// A request id as JSON-RPC admits it. `absent` is a NOTIFICATION — a message that must never be
+// answered — and is also what an id of any other JSON type degrades to, since there is no response this
+// server could address to it.
+module union LspRequestId
+	number(value LspIdNumber)
+	text(value String)
+	absent
+end 'LspRequestId'
+
+// A numeric request id. JSON numbers arrive as floats; an id is used only to address the reply, so it is
+// carried as the integer a client actually sends.
+typealias LspIdNumber = int(i64.min to i64.max)
+
+// The reserved JSON-RPC error codes this server emits. They are the WIRE protocol's own numbers and have
+// nothing to do with Maxon's `E####` diagnostics — a client reads them, a Maxon author never does.
+module enum LspJsonRpcErrorCode
+	parseError = -32700
+	invalidRequest = -32600
+	methodNotFound = -32601
+	invalidParams = -32602
+end 'LspJsonRpcErrorCode'
+
+// Builds one JSON object into a document. `JsonNode.objectNode` wants two parallel arrays, and every
+// object this server writes was pushing onto them by hand — this is that assembly, once.
+module type LspJsonObject
+	var doc as JsonDoc
+	var keys as StringArray
+	var children as JsonNodeIdArray
+
+	module static function create(doc JsonDoc) returns LspJsonObject
+		return Self{doc: doc, keys: StringArray.create(), children: JsonNodeIdArray.create()}
+	end 'create'
+
+	/// Add `key`, whose value is a subtree already in the document.
+	module function putNode(key String, value JsonNodeId)
+		keys.push(key)
+		children.push(value)
+	end 'putNode'
+
+	/// Add `key`, whose value is a leaf this call puts into the document.
+	module function put(key String, value JsonNode)
+		putNode(key, value: doc.add(value))
+	end 'put'
+
+	/// The finished object, added to the document.
+	module function finish() returns JsonNodeId
+		return doc.add(JsonNode.objectNode(keys, children: children))
+	end 'finish'
+end 'LspJsonObject'
+
+// --- The structures LSP shares between its requests and its answers ---------------------------
+//
+// ⭐ **ONE CONSTANT PER MEMBER, BECAUSE THE PROTOCOL DEFINES ONE MEMBER.** `Position`, `Range`,
+// `Location` and `TextEdit` are LSP's own reusable structures: an area that spelled `"character"` itself
+// would be a second place one wire name could be got wrong, and a reader has no way to tell two spellings
+// of one member from two members that merely agree today. Each is as visible as its readers need — the two
+// `Position` members are written and read here alone, since every area reaches a position through
+// `lspPositionMember` and `lspPositionNode` rather than through the wire names.
+module let LspPositionKey = "position"
+
+let LspLineKey = "line"
+
+let LspCharacterKey = "character"
+
+module let LspRangeKey = "range"
+
+module let LspStartKey = "start"
+
+module let LspEndKey = "end"
+
+module let LspUriKey = "uri"
+
+module let LspNewTextKey = "newText"
+
+// LSP spells every discriminator `kind` — `MarkupContent`, `CompletionItem`, `CodeAction` and
+// `SymbolInformation` all carry one, and the protocol never renames a member.
+module let LspKindKey = "kind"
+
+/// The `Range` a byte span occupies. ⚠ It is the ONE place an `LspSpan` becomes protocol coordinates, so
+/// the UTF-16 conversion in `LspLineIndex.positionOf` cannot be skipped by one reader and applied by
+/// another.
+module function lspSpanRangeNode(doc JsonDoc, source String, index LspLineIndex, span LspSpan) returns JsonNodeId
+	let start = index.positionOf(source, offset: span.startByte)
+	let finish = index.positionOf(source, offset: span.endByte)
+	return lspRangeNode(doc, startLine: start.line, startCharacter: start.character, endLine: finish.line, endCharacter: finish.character)
+end 'lspSpanRangeNode'
+
+module function lspRangeNode(doc JsonDoc, startLine LspLineNumber, startCharacter LspCharacter, endLine LspLineNumber, endCharacter LspCharacter) returns JsonNodeId
+	var range = LspJsonObject.create(doc)
+	range.putNode(LspStartKey, value: lspPositionNode(doc, line: startLine, character: startCharacter))
+	range.putNode(LspEndKey, value: lspPositionNode(doc, line: endLine, character: endCharacter))
+	return range.finish()
+end 'lspRangeNode'
+
+function lspPositionNode(doc JsonDoc, line LspLineNumber, character LspCharacter) returns JsonNodeId
+	var position = LspJsonObject.create(doc)
+	position.put(LspLineKey, value: JsonNode.numberNode(line))
+	position.put(LspCharacterKey, value: JsonNode.numberNode(character))
+	return position.finish()
+end 'lspPositionNode'
+
+/// The `Position` held by `of` under `key` — `params.position` for a cursor, and a `Range`'s own `start`
+/// and `end`. LSP spells all three with the same two members, and a second reader of them would be a
+/// second place the 0-based, UTF-16 contract could be got wrong.
+module function lspPositionMember(incoming JsonDoc, of JsonNodeId, key String) returns LspPosition throws LspParamsError
+	let position = try lspMember(incoming, of: of, key: key)
+	let line = try incoming.getInt(position, key: LspLineKey) otherwise throw LspParamsError.malformed
+	let character = try incoming.getInt(position, key: LspCharacterKey) otherwise throw LspParamsError.malformed
+
+	// LSP defines both as non-negative. A client sending otherwise is REFUSED rather than range-panicking
+	// on the cast below, which would report a crash where the truth is a malformed request.
+	if line < 0 or character < 0 'notAPosition'
+		throw LspParamsError.malformed
+	end 'notAPosition'
+
+	return LspPosition.create(line as LspLineNumber, character: character as LspCharacter)
+end 'lspPositionMember'
+
+let JsonRpcVersion = "2.0"
+
+let JsonRpcVersionKey = "jsonrpc"
+let JsonRpcIdKey = "id"
+module let JsonRpcMethodKey = "method"
+module let JsonRpcParamsKey = "params"
+let JsonRpcResultKey = "result"
+let JsonRpcErrorKey = "error"
+let JsonRpcErrorCodeKey = "code"
+let JsonRpcErrorMessageKey = "message"
+
+// The id a message is addressed by, or `absent` when it carries none.
+module function readRequestId(doc JsonDoc) returns LspRequestId
+	let idNode = try doc.getChild(doc.root, key: JsonRpcIdKey) otherwise return LspRequestId.absent
+	let node = doc.get(idNode)
+
+	return match node.kind 'idShape'
+		jsonNumber gives LspRequestId.number(trunc(node.numberValue))
+		jsonString gives LspRequestId.text(node.stringValue)
+		jsonNull or jsonBool or jsonArray or jsonObject gives LspRequestId.absent
+	end 'idShape'
+end 'readRequestId'
+
+// Answer the request `id` with `result`, a node already added to `doc`.
+module function writeLspResult(doc JsonDoc, id LspRequestId, result JsonNodeId)
+	writeLspMessage(lspResponse(doc, id: id, memberKey: JsonRpcResultKey, payload: result))
+end 'writeLspResult'
+
+// Refuse the request `id`. `message` is the human-readable sentence the client displays; `code` is the
+// machine-readable reason it branches on.
+module function writeLspError(id LspRequestId, code LspJsonRpcErrorCode, message String)
+	var doc = JsonDoc.create()
+
+	var error = LspJsonObject.create(doc)
+	error.put(JsonRpcErrorCodeKey, value: JsonNode.numberNode(code.rawValue))
+	error.put(JsonRpcErrorMessageKey, value: JsonNode.stringNode(message))
+
+	writeLspMessage(lspResponse(doc, id: id, memberKey: JsonRpcErrorKey, payload: error.finish()))
+end 'writeLspError'
+
+// Wrap `payload` — already added to `doc` — as the `memberKey` member of a JSON-RPC response, and
+// serialize it. `memberKey` is `JsonRpcResultKey` for a success and `JsonRpcErrorKey` for a failure;
+// everything else about the envelope is identical, which is why one function writes it.
+function lspResponse(doc JsonDoc, id LspRequestId, memberKey String, payload JsonNodeId) returns String
+	var envelope = LspJsonObject.create(doc)
+	envelope.put(JsonRpcVersionKey, value: JsonNode.stringNode(JsonRpcVersion))
+	envelope.put(JsonRpcIdKey, value: idNodeFor(id))
+	envelope.putNode(memberKey, value: payload)
+
+	doc.root = envelope.finish()
+	return Json.stringify(doc)
+end 'lspResponse'
+
+function idNodeFor(id LspRequestId) returns JsonNode
+	return match id 'idShape'
+		number(value) gives JsonNode.numberNode(value)
+		text(value) gives JsonNode.stringNode(value)
+		// JSON-RPC addresses an error it could not attribute to a request — a body that did not parse —
+		// to a null id.
+		absent gives JsonNode.nullNode()
+	end 'idShape'
+end 'idNodeFor'

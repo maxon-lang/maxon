@@ -1,0 +1,1173 @@
+// `textDocument/hover` — what the symbol under the cursor IS, rendered as markdown.
+//
+// ⭐⭐ **IT READS THE TOKEN STREAM, NOT THE COMPILER'S IR, AND THAT IS THE DESIGN DECISION THIS FILE
+// EXISTS TO STATE.** An editor asks for a hover on the buffer the user is HALFWAY THROUGH TYPING, and
+// shv2's frontend parses straight to typed IR — it needs every type resolved to mint a value, so a
+// buffer with one unresolved name produces no IR at all. A hover built on `loadProject` would therefore
+// answer nothing exactly when a user most wants it, which is not a hover feature. So the question every
+// answer here is derived from is the one a broken buffer can still answer: **what does the LEXER see?**
+//
+// ⭐ **WHAT THAT BUYS, BEYOND WORKING AT ALL.** The three comment cases fall out of it rather than being
+// special-cased: `//` and `/* … */` emit NO token, so a cursor inside one lands on nothing and hover says
+// so — while code on the same line after a `*/` is an ordinary token and hovers normally. A scanner that
+// re-derived comments from the text would own that boundary; this one asks the component that already
+// decides it.
+//
+// ⚠ **AND WHAT IT COSTS, SO NOBODY READS MORE INTO AN ANSWER THAN IS THERE.** There is no scope
+// analysis, because there is no parse to take one from. A name resolves to the NEAREST DECLARATION OF
+// THAT NAME above the cursor, then to the first one below it — lexical order standing in for lexical
+// scope. Two locals of one name in two functions are therefore distinguished by distance and not by
+// block, and a `column 1` token is taken to be top-level, which is this tree's layout convention rather
+// than a rule of the language. Every heuristic is named at its own site.
+
+// The `Hover` this area answers with. Its `HoverParams` are read through `lspPositionMember`, which every
+// area's cursor comes through.
+let ContentsKey = "contents"
+let ValueKey = "value"
+let MarkdownKind = "markdown"
+
+// The markdown scaffolding an editor renders a hover through.
+let MaxonFenceOpen = "```maxon\n"
+let MaxonFenceClose = "\n```"
+let ParagraphBreak = "\n\n"
+let DocCommentLineBreak = "\n"
+
+// What a hover says about a token the language reserves. ⛔ **IT DOES NOT DESCRIBE THE KEYWORD**, and
+// that is deliberate: no keyword-documentation registry exists anywhere in this tree, and writing fifty
+// glosses here would be a specification invented by a hover handler and ruled on by nobody.
+let KeywordNote = "Maxon language keyword."
+
+// A declaration at source column 1 is top-level. ⚠ **A LAYOUT CONVENTION, NOT A LANGUAGE RULE** — Maxon
+// does not require it — but it is what every file in this tree does, and it is the only signal a token
+// stream carries about nesting once block structure is off the table (see the header).
+let TopLevelColumn = 1 as ColumnNumber
+
+// A stdlib type lives in the file named after it: `Array` in `stdlib/Array.maxon`. That convention is
+// what lets a hover on `arr.push(4)` reach the doc comment an editor user most wants without the whole
+// project a non-parsing buffer cannot produce.
+//
+// ⚠ Spelled here because `Compiler.MaxonSourceExtension` is `module`-visible to `Compiler/`, which this
+// directory is not inside.
+let MaxonSourceExtension = ".maxon"
+
+module function hoverServedMethods() returns LspMethodArray
+	var served = LspMethodArray.create()
+	served.push(LspMethod.hover)
+	return served
+end 'hoverServedMethods'
+
+module function hoverAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+	let position = try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey)
+
+	// A buffer mid-edit routinely does not even LEX — an unterminated string is enough. That is LSP's
+	// "nothing here" and not a refusal: the client asked a well-formed question about a place with
+	// nothing to say.
+	let document = try HoverDocument.of(request.text) otherwise return LspAnswer.nothing()
+
+	match document.renderingAt(position) 'answer'
+		present(markdown) then return markdownAnswer(markdown)
+		absent then return LspAnswer.nothing()
+	end 'answer'
+end 'hoverAnswer'
+
+function markdownAnswer(markdown String) returns LspAnswer
+	var doc = JsonDoc.create()
+
+	var contents = LspJsonObject.create(doc)
+	contents.put(LspKindKey, value: JsonNode.stringNode(MarkdownKind))
+	contents.put(ValueKey, value: JsonNode.stringNode(markdown))
+
+	var result = LspJsonObject.create(doc)
+	result.putNode(ContentsKey, value: contents.finish())
+
+	return LspAnswer.of(doc, result: result.finish())
+end 'markdownAnswer'
+
+// What an editor displays, or the honest absence of it. ⛔ NOT an empty string: a rendering that
+// genuinely came out empty and a position with nothing to say are different answers, and an editor
+// opening a blank popup is the first one going wrong.
+union HoverRendering
+	present(markdown String)
+	absent
+end 'HoverRendering'
+
+// What a name resolved to. Each case carries where to READ the declaration from, never a rendering —
+// the rendering is the same act for a function and for a type, and doing it once is what keeps them from
+// drifting apart.
+union HoverDeclaration
+	// A `let`/`var`, at its keyword.
+	binding(index TokenIndex)
+	// A parameter: the `function` token whose list it is in, and the name token itself.
+	parameter(functionIndex TokenIndex, nameIndex TokenIndex)
+	// A `function`, at its keyword.
+	routine(index TokenIndex)
+	// A `type`/`enum`/`union`/`interface`/`typealias`/`extension`, at its keyword.
+	typeName(index TokenIndex)
+	none
+end 'HoverDeclaration'
+
+// What a declaration sits inside, decided by the nearest declaration keyword above it.
+union HoverEnclosure
+	routine(index TokenIndex)
+	container(index TokenIndex)
+	none
+end 'HoverEnclosure'
+
+// A value expression as hover reads it: what it IS, and where it STOPS. The two are one answer because
+// the second is what makes the first trustworthy — see `inferredTypeAt`. A bracket group the buffer has
+// not closed yet is no value at all, which is why absence is a case.
+union HoverValue
+	spans(inferred HoverType, after TokenIndex)
+	none
+end 'HoverValue'
+
+// The text of a `stdlib/` module, or the honest absence of one.
+union HoverModuleSource
+	found(source String)
+	absent
+end 'HoverModuleSource'
+
+// How far a type may be chased. ⛔⛔ **THE SECOND CASE IS WHAT MAKES THE WALK FINITE, AND IT IS A
+// STRUCTURAL BOUND RATHER THAN A COUNTED ONE.** `var a = b.m()` beside `var b = a.m()` is a buffer a user
+// can type, and resolving either receiver asks for the other's type — a loop a token stream holds nothing
+// to break. So the RECEIVER of a method call is resolved `throughDeclarationsOnly`, and the one edge that
+// could close the loop is refused there. A BARE callee stays answerable under both cases because it reads
+// a declaration and recurses into nothing.
+enum HoverReceiverReach
+	throughCalls
+	throughDeclarationsOnly
+end 'HoverReceiverReach'
+
+// A type as hover knows it. `base` is the name a METHOD is looked up on; `rendered` is what the reader
+// sees, and the two differ for a container — `[1, 2, 3]` looks up on `Array` and reads as
+// `Array with int`.
+//
+// ⚠ **`rendered` IS MAXON'S OWN SPELLING OF THE TYPE, because a hover shows a reader their own
+// language.** shv2's diagnostic renderer cannot supply it: a generic instance renders there as the bare
+// word `struct` (`IrInterface.maxon` says so, and E3005 proves it), which would tell an editor user
+// nothing.
+union HoverType
+	named(base ByteArray, rendered String)
+	unknown
+end 'HoverType'
+
+// The ways a walk over this buffer finds no token. Each is routine while an editor is mid-edit rather
+// than a defect, and each is thrown rather than answered with an index: index 0 is a real token, so a
+// position standing for absence is indistinguishable from a hit at the start of the buffer.
+enum HoverLookupError implements Error
+	// A closure literal (`function(x) gives …`) declares no name.
+	declaresNoName
+	// A head that runs to the end of the buffer has no `(` yet.
+	declaresNoParameterList
+	// A bracket group the buffer never closes has no token past it.
+	unclosedBracketGroup
+	// This document declares no such member — `stdlib/` is where the lookup goes next.
+	notDeclaredHere
+end 'HoverLookupError'
+
+// One buffer, prepared for the questions a hover asks of it: its bytes (to slice source text out of),
+// its tokens, and the line index that turns an LSP position into a byte offset.
+//
+// ⭐ It is a TYPE and not a bag of free functions because a second instance is exactly how a stdlib doc
+// comment is reached: the same walks run over `stdlib/Array.maxon` as over the open document, with no
+// second spelling of any of them.
+type HoverDocument
+	let text as String
+	let bytes as ByteArray
+	let tokens as TokenArray
+	let lines as LspLineIndex
+
+	static function of(text String) returns HoverDocument throws LexerError
+		return Self{text: text, bytes: text.toByteArray(), tokens: try tokenize(text), lines: LspLineIndex.build(text)}
+	end 'of'
+
+	// --- The stream, and the cursor in it -----------------------------------------------------
+
+	// The token at `index`, or the stream's own EOF token past the end. Every walk here looks ahead,
+	// and "the stream is over" is the exact answer at the end of one — `eof` carries no text and no
+	// span, so it matches nothing any reader tests for and needs no bounds guard at each site.
+	function tokenAt(index TokenIndex) returns Token
+		return try tokens.get(index) otherwise Token.eof()
+	end 'tokenAt'
+
+	// Which token the cursor names is `lspTokenAtCursor`'s answer and not one taken here:
+	// `textDocument/definition` resolves the same position, and an editor that jumped to a name this
+	// hover described as something else would be reading two different rules.
+	function renderingAt(position LspPosition) returns HoverRendering
+		let offset = lines.offsetOf(text, position: position)
+
+		let index = try lspTokenAtCursor(tokens, offset: offset) otherwise return HoverRendering.absent
+
+		return renderingForToken(index)
+	end 'renderingAt'
+
+	function renderingForToken(index TokenIndex) returns HoverRendering
+		let tok = tokenAt(index)
+
+		// A `///` line is prose the author wrote ABOUT a declaration; the cursor is in the writing, not
+		// on a symbol.
+		if tok.kind == TokenKind.docComment 'prose'
+			return HoverRendering.absent
+		end 'prose'
+
+		if tokenIsAReservedWord(tok) 'keyword'
+			var prose = StringArray.create()
+			prose.push(KeywordNote)
+			return HoverRendering.present(hoverMarkdown(String.from(tok.value), prose: prose))
+		end 'keyword'
+
+		if tok.kind != TokenKind.identifier 'neitherANameNorAWord'
+			return HoverRendering.absent
+		end 'neitherANameNorAWord'
+
+		if index > 0 and tokenAt(index - 1).kind == TokenKind.dot 'memberAccess'
+			return memberRendering(index)
+		end 'memberAccess'
+
+		return calleeRendering(index)
+	end 'renderingForToken'
+
+	// ⭐⭐ **A MATH INTRINSIC IS THE ANSWER AT A CALL SITE WHATEVER THE BUFFER DECLARES, and that is the
+	// LANGUAGE's rule rather than a preference taken here.** `Parser.calleeTakesPositionalArgsOnly` reserves
+	// these eight names wherever a call is parsed: a user `function sqrt` is shadowed by the intrinsic and
+	// never linked. A hover that resolved the declaration instead would describe the function the compiler
+	// is not going to call, which is worse than saying nothing.
+	//
+	// ⚠ The test is the `(` and not the name alone, for the same reason the parser's is: `sqrt` used as an
+	// ordinary identifier — a field, a variable — is not a call, and the reservation does not reach it.
+	function calleeRendering(index TokenIndex) returns HoverRendering
+		if tokenAt(index + 1).kind != TokenKind.leftParen 'notACallee'
+			return nameRendering(index)
+		end 'notACallee'
+
+		match mathBuiltinNamed(tokenAt(index).value) 'reserved'
+			found(builtin) then return HoverRendering.present(mathBuiltinMarkdown(builtin))
+			absent then return nameRendering(index)
+		end 'reserved'
+	end 'calleeRendering'
+
+	// --- Resolving a name ---------------------------------------------------------------------
+
+	function nameRendering(index TokenIndex) returns HoverRendering
+		match declarationOf(tokenAt(index).value, near: index) 'resolved'
+			binding(head) then return bindingRendering(head)
+			parameter(functionIndex, nameIndex) then return parameterRendering(functionIndex, nameIndex: nameIndex)
+			routine(head) then return declarationHeadRendering(head)
+			typeName(head) then return declarationHeadRendering(head)
+			none then return HoverRendering.absent
+		end 'resolved'
+	end 'nameRendering'
+
+	// The declaration a name at `near` stands for.
+	//
+	// ⚠ **NEAREST-ABOVE-FIRST IS LEXICAL ORDER STANDING IN FOR LEXICAL SCOPE**, for the reason the file
+	// header gives: there is no parse to take a scope from. Below the cursor is searched second because
+	// a call legitimately precedes the function it names.
+	function declarationOf(name ByteArray, near TokenIndex) returns HoverDeclaration
+		let total = tokens.count()
+		var step = 0
+
+		while step < total 'eachCandidate'
+			let found = declarationHeadAt(candidateIndex(step, near: near), name: name)
+
+			match found 'hit'
+				none then step = step + 1
+				binding or parameter or routine or typeName then return found
+			end 'hit'
+		end 'eachCandidate'
+
+		return HoverDeclaration.none
+	end 'declarationOf'
+
+	// Whether the token at `index` declares `name`, and as what.
+	function declarationHeadAt(index TokenIndex, name ByteArray) returns HoverDeclaration
+		let kind = tokenAt(index).kind
+
+		if kind == TokenKind.function 'routineOrItsParameters'
+			return functionDeclaring(index, name: name)
+		end 'routineOrItsParameters'
+
+		if not namesFollowing(index, name: name) 'declaresSomethingElse'
+			return HoverDeclaration.none
+		end 'declaresSomethingElse'
+
+		if kind == TokenKind.let or kind == TokenKind.var 'bindingHead'
+			return HoverDeclaration.binding(index)
+		end 'bindingHead'
+
+		if kindDeclaresATypeName(kind) 'typeHead'
+			return HoverDeclaration.typeName(index)
+		end 'typeHead'
+
+		return HoverDeclaration.none
+	end 'declarationHeadAt'
+
+	// Whether the token after `index` is the identifier `name`.
+	function namesFollowing(index TokenIndex, name ByteArray) returns bool
+		let next = tokenAt(index + 1)
+		return next.kind == TokenKind.identifier and next.value.equals(name)
+	end 'namesFollowing'
+
+	// Whether the `function` at `functionIndex` declares `name` — as the function itself, or as one of
+	// its parameters.
+	function functionDeclaring(functionIndex TokenIndex, name ByteArray) returns HoverDeclaration
+		if signatureDeclares(functionIndex, name: name) 'thisFunction'
+			return HoverDeclaration.routine(functionIndex)
+		end 'thisFunction'
+
+		let openIndex = try signatureListIndex(functionIndex) otherwise return HoverDeclaration.none
+
+		return parameterNamed(functionIndex, openIndex: openIndex, name: name)
+	end 'functionDeclaring'
+
+	// Whether a signature's declared name is `name`. A closure literal (`function(x) gives …`) declares
+	// none, so it is never the answer to a name.
+	function signatureDeclares(functionIndex TokenIndex, name ByteArray) returns bool
+		let nameIndex = try signatureNameIndex(functionIndex) otherwise return false
+
+		return tokenAt(nameIndex).value.equals(name)
+	end 'signatureDeclares'
+
+	// The name a `function` declares — `f`, or the LAST segment of `Interface.f`, which is why this
+	// walks back from the end of the head rather than forward from the keyword.
+	function signatureNameIndex(functionIndex TokenIndex) returns TokenIndex throws HoverLookupError
+		var index = signatureHeadEnd(functionIndex)
+
+		while index > functionIndex + 1 'backToTheName'
+			index = index - 1
+
+			if tokenAt(index).kind == TokenKind.identifier 'theName'
+				return index
+			end 'theName'
+		end 'backToTheName'
+
+		throw HoverLookupError.declaresNoName
+	end 'signatureNameIndex'
+
+	// The `(` that opens a `function`'s parameter list.
+	function signatureListIndex(functionIndex TokenIndex) returns TokenIndex throws HoverLookupError
+		let after = signatureHeadEnd(functionIndex)
+
+		if tokenAt(after).kind != TokenKind.leftParen 'noList'
+			throw HoverLookupError.declaresNoParameterList
+		end 'noList'
+
+		return after
+	end 'signatureListIndex'
+
+	// Where a `function` head stops: past the dotted name path it declares, at the `(` when there is one.
+	function signatureHeadEnd(functionIndex TokenIndex) returns TokenIndex
+		let total = tokens.count()
+		var index = functionIndex + 1
+
+		while index < total 'head'
+			let kind = tokenAt(index).kind
+
+			if kind != TokenKind.identifier and kind != TokenKind.dot 'headEnds'
+				break
+			end 'headEnds'
+
+			index = index + 1
+		end 'head'
+
+		return index
+	end 'signatureHeadEnd'
+
+	// A parameter NAME is the identifier that OPENS a parameter — the one right after the `(`, or after
+	// the comma that ended the previous one, at the list's own bracket depth. Everything else in the
+	// list belongs to that parameter's type or its default.
+	function parameterNamed(functionIndex TokenIndex, openIndex TokenIndex, name ByteArray) returns HoverDeclaration
+		let total = tokens.count()
+		var depth = 0
+		var index = openIndex
+		var atParameterStart = false
+
+		while index < total 'scan'
+			let tok = tokenAt(index)
+
+			if kindOpensABracket(tok.kind) 'opens'
+				depth = depth + 1
+				atParameterStart = depth == 1
+			end 'opens' else if kindClosesABracket(tok.kind) 'closes'
+				depth = depth - 1
+
+				if depth == 0 'listEnds'
+					break
+				end 'listEnds'
+			end 'closes' else if tok.kind == TokenKind.comma and depth == 1 'nextParameter'
+				atParameterStart = true
+			end 'nextParameter' else if atParameterStart and tok.kind == TokenKind.identifier 'parameterName'
+				atParameterStart = false
+
+				if tok.value.equals(name) 'thisOne'
+					return HoverDeclaration.parameter(functionIndex, nameIndex: index)
+				end 'thisOne'
+			end 'parameterName'
+
+			index = index + 1
+		end 'scan'
+
+		return HoverDeclaration.none
+	end 'parameterNamed'
+
+	// --- Rendering a declaration --------------------------------------------------------------
+
+	// A function, a type, an interface: the head as the author wrote it, plus whatever `///` lines sit
+	// above it. ONE function for all of them, because there is one answer — the source is the best
+	// description of a declaration there is.
+	function declarationHeadRendering(keyword TokenIndex) returns HoverRendering
+		let start = declarationStart(keyword)
+		var prose = StringArray.create()
+		appendDocComment(prose, above: start)
+		return HoverRendering.present(hoverMarkdown(headText(start), prose: prose))
+	end 'declarationHeadRendering'
+
+	function bindingRendering(keyword TokenIndex) returns HoverRendering
+		let start = declarationStart(keyword)
+		var prose = StringArray.create()
+		appendDocComment(prose, above: start)
+		prose.push(bindingNote(keyword))
+		return HoverRendering.present(hoverMarkdown(headText(start), prose: prose))
+	end 'bindingRendering'
+
+	function parameterRendering(functionIndex TokenIndex, nameIndex TokenIndex) returns HoverRendering
+		var prose = StringArray.create()
+		prose.push("Parameter of {routineNamePhrase(functionIndex)}.")
+		return HoverRendering.present(hoverMarkdown(parameterText(nameIndex), prose: prose))
+	end 'parameterRendering'
+
+	// What a binding IS, in words: where it lives, whether it can change, and its type.
+	function bindingNote(keyword TokenIndex) returns String
+		var note = bindingSubject(keyword)
+
+		match bindingType(keyword, reach: HoverReceiverReach.throughCalls) 'typed'
+			named(_, rendered) then note.append(", of type `{rendered}`")
+			unknown then note.append(UninferredTypePhrase)
+		end 'typed'
+
+		note.append(SentenceEnd)
+		return note
+	end 'bindingNote'
+
+	// Where a binding lives, which is what its hover calls it.
+	//
+	// ⚠ **COLUMN 1 DECIDES TOP-LEVEL, AND THE NEAREST DECLARATION KEYWORD DECIDES THE REST.** Both are
+	// stated in the file header as heuristics; a `var count = 0` field carrying a default is the shape
+	// they get wrong, because it is spelled exactly like a local.
+	function bindingSubject(keyword TokenIndex) returns String
+		let mutability = "constant" if tokenAt(keyword).kind == TokenKind.let else "variable"
+
+		if tokenAt(declarationStart(keyword)).column == TopLevelColumn 'moduleScope'
+			return "Module-level {mutability}"
+		end 'moduleScope'
+
+		match enclosureOf(keyword) 'inside'
+			container(at) then return "Field of {declaredNamePhrase(at)}"
+			routine or none then return "Local {mutability}"
+		end 'inside'
+	end 'bindingSubject'
+
+	// What a declaration at `index` sits inside: the nearest `function` or container keyword above it.
+	function enclosureOf(index TokenIndex) returns HoverEnclosure
+		var back = 0
+
+		while back < index 'backward'
+			let at = index - back - 1
+			let kind = tokenAt(at).kind
+
+			if kind == TokenKind.function 'insideARoutine'
+				return HoverEnclosure.routine(at)
+			end 'insideARoutine'
+
+			if kindDeclaresAContainer(kind) 'insideAContainer'
+				return HoverEnclosure.container(at)
+			end 'insideAContainer'
+
+			back = back + 1
+		end 'backward'
+
+		return HoverEnclosure.none
+	end 'enclosureOf'
+
+	// --- Types --------------------------------------------------------------------------------
+
+	// The type of the binding whose keyword is at `keyword`: the one it DECLARES if it names one, and
+	// otherwise the one its initializer implies.
+	function bindingType(keyword TokenIndex, reach HoverReceiverReach) returns HoverType
+		let afterName = keyword + 2
+
+		if tokenAt(afterName).kind == TokenKind.equals 'initialized'
+			return inferredTypeAt(afterName + 1, reach: reach)
+		end 'initialized'
+
+		// `var x as Coord` — the `as` is the language's own field spelling, and the type follows it.
+		if tokenAt(afterName).kind == TokenKind.as 'spelledWithAs'
+			return declaredTypeAt(afterName + 1)
+		end 'spelledWithAs'
+
+		return declaredTypeAt(afterName)
+	end 'bindingType'
+
+	// A parameter's type is what follows its name, up to the comma or parenthesis that ends it.
+	function parameterType(nameIndex TokenIndex) returns HoverType
+		return declaredTypeAt(nameIndex + 1)
+	end 'parameterType'
+
+	// A type WRITTEN OUT, from `index` to the end of what is being declared. Rendered as the author
+	// spelled it; the name a method is looked up on is that spelling's first word.
+	function declaredTypeAt(index TokenIndex) returns HoverType
+		let opening = tokenAt(index)
+
+		if opening.endByte == opening.startByte 'noTypeHere'
+			return HoverType.unknown
+		end 'noTypeHere'
+
+		return HoverType.named(opening.value, rendered: sourceBetween(opening.startByte, endByte: typeEndByte(index)))
+	end 'declaredTypeAt'
+
+	// Where a written-out type stops: at the `=` of a default, at the `throws` clause of a signature, or
+	// at the end of its own line.
+	function typeEndByte(index TokenIndex) returns ByteOffset
+		let total = tokens.count()
+		var last = tokenAt(index).endByte
+		var at = index
+
+		while at < total 'scan'
+			let tok = tokenAt(at)
+
+			if tok.kind == TokenKind.newline or tok.kind == TokenKind.equals or tok.kind == TokenKind.comma or tok.kind == TokenKind.rightParen or tok.kind == TokenKind.throws 'typeEnds'
+				break
+			end 'typeEnds'
+
+			if tok.endByte > last 'spans'
+				last = tok.endByte
+			end 'spans'
+
+			at = at + 1
+		end 'scan'
+
+		return last
+	end 'typeEndByte'
+
+	// A function's DECLARED return type: what follows `returns` on the signature's own line.
+	//
+	// ⭐ **READING A DECLARATION IS NOT THE GUESSING `inferredTypeAt` REFUSES.** `returns cstring` is
+	// written down in the token stream by the author, and nothing here is derived from how the function is
+	// used. It is one clause of the head `declarationHeadRendering` already shows a reader, asked for alone.
+	function returnTypeOf(functionIndex TokenIndex) returns HoverType
+		let total = tokens.count()
+		var depth = 0
+		var index = functionIndex
+
+		while index < total 'signature'
+			let kind = tokenAt(index).kind
+
+			if kind == TokenKind.newline and depth == 0 'signatureEnds'
+				break
+			end 'signatureEnds'
+
+			if kind == TokenKind.returns and depth == 0 'returnClause'
+				return declaredTypeAt(index + 1)
+			end 'returnClause'
+
+			if kindOpensABracket(kind) 'opens'
+				depth = depth + 1
+			end 'opens' else if kindClosesABracket(kind) and depth > 0 'closes'
+				depth = depth - 1
+			end 'closes'
+
+			index = index + 1
+		end 'signature'
+
+		return HoverType.unknown
+	end 'returnTypeOf'
+
+	// The type an initializer expression implies.
+	//
+	// ⛔⛔ **A LITERAL DESCRIBES THE VALUE ONLY WHEN IT IS THE WHOLE EXPRESSION.**
+	// `"out.bin".toByteArray().managed` opens with a string literal and is not a `String`; reading the head
+	// token alone put that wrong type in front of a reader who had no way to tell it from a right one. So
+	// `valueAt` reports where the leading value ENDS, and anything applied to it after that — a `.`, a `(`,
+	// a `[`, an operator, an `as` — leaves the answer `unknown`, which a rendering says out loud.
+	//
+	// ⚠ **STILL NO ARITHMETIC AND NO TYPECHECKING.** A call is answered from its callee's DECLARED
+	// return type, which is a fact sitting in the token stream; nothing here infers a type from how a value
+	// is used.
+	function inferredTypeAt(index TokenIndex, reach HoverReceiverReach) returns HoverType
+		match valueAt(index, reach: reach) 'value'
+			spans(inferred, after) then return typeOfWholeExpression(inferred, after: after)
+			none then return HoverType.unknown
+		end 'value'
+	end 'inferredTypeAt'
+
+	function typeOfWholeExpression(inferred HoverType, after TokenIndex) returns HoverType
+		if kindEndsAnExpression(tokenAt(after).kind) 'nothingAppliedToIt'
+			return inferred
+		end 'nothingAppliedToIt'
+
+		return HoverType.unknown
+	end 'typeOfWholeExpression'
+
+	// What the expression starting at `index` is, and where it stops.
+	function valueAt(index TokenIndex, reach HoverReceiverReach) returns HoverValue
+		let tok = tokenAt(index)
+
+		if tok.kind == TokenKind.intLiteral 'wholeNumber'
+			return HoverValue.spans(namedPrimitive(IntTypeName), after: index + 1)
+		end 'wholeNumber'
+
+		if tok.kind == TokenKind.floatLiteral 'realNumber'
+			return HoverValue.spans(namedPrimitive(FloatTypeName), after: index + 1)
+		end 'realNumber'
+
+		if tok.kind == TokenKind.stringLiteral 'text'
+			return HoverValue.spans(namedPrimitive(StringTypeName), after: index + 1)
+		end 'text'
+
+		if tok.kind == TokenKind.true or tok.kind == TokenKind.false 'truth'
+			return HoverValue.spans(namedPrimitive(BoolTypeName), after: index + 1)
+		end 'truth'
+
+		if tok.kind == TokenKind.leftBracket 'arrayLiteral'
+			return bracketedValue(index, inferred: arrayTypeOfElementAt(index + 1, reach: reach))
+		end 'arrayLiteral'
+
+		// `Point{x: 1, y: 2}` — a struct literal names its own type.
+		if tok.kind == TokenKind.identifier and tokenAt(index + 1).kind == TokenKind.leftBrace 'structLiteral'
+			return bracketedValue(index + 1, inferred: HoverType.named(tok.value, rendered: String.from(tok.value)))
+		end 'structLiteral'
+
+		return callValueAt(index, reach: reach)
+	end 'valueAt'
+
+	// A value whose extent is a bracket group. One the buffer never closes is no value at all — mid-edit
+	// that is routine — so `none` says so rather than a position past the end standing in for it.
+	function bracketedValue(openIndex TokenIndex, inferred HoverType) returns HoverValue
+		let after = try afterBracketedGroup(openIndex) otherwise return HoverValue.none
+
+		return HoverValue.spans(inferred, after: after)
+	end 'bracketedValue'
+
+	// The token just past the bracket group opened at `openIndex`.
+	function afterBracketedGroup(openIndex TokenIndex) returns TokenIndex throws HoverLookupError
+		let total = tokens.count()
+		var depth = 0
+		var index = openIndex
+
+		while index < total 'scan'
+			let kind = tokenAt(index).kind
+
+			if kindOpensABracket(kind) 'opens'
+				depth = depth + 1
+			end 'opens' else if kindClosesABracket(kind) 'closes'
+				depth = depth - 1
+
+				if depth == 0 'groupEnds'
+					return index + 1
+				end 'groupEnds'
+			end 'closes'
+
+			index = index + 1
+		end 'scan'
+
+		throw HoverLookupError.unclosedBracketGroup
+	end 'afterBracketedGroup'
+
+	// `f(…)`, `String.from(…)`, `path.cstr(…)` — a call, and the type its callee is DECLARED to answer.
+	function callValueAt(index TokenIndex, reach HoverReceiverReach) returns HoverValue
+		if tokenAt(index).kind != TokenKind.identifier 'notACalleeName'
+			return HoverValue.none
+		end 'notACalleeName'
+
+		var lastSegment = index
+
+		while tokenAt(lastSegment + 1).kind == TokenKind.dot and tokenAt(lastSegment + 2).kind == TokenKind.identifier 'pathSegment'
+			lastSegment = lastSegment + 2
+		end 'pathSegment'
+
+		if tokenAt(lastSegment + 1).kind != TokenKind.leftParen 'notACall'
+			return HoverValue.none
+		end 'notACall'
+
+		let after = try afterBracketedGroup(lastSegment + 1) otherwise return HoverValue.none
+
+		return HoverValue.spans(calleeReturnType(index, nameIndex: lastSegment, reach: reach), after: after)
+	end 'callValueAt'
+
+	// What a callee answers. A dotted path is resolved through its RECEIVER, exactly as a member hover is,
+	// so `String.from` and `path.cstr` reach the same declaration a cursor on the method name would — unless
+	// this walk is already inside a receiver, which is the edge `HoverReceiverReach` refuses.
+	function calleeReturnType(head TokenIndex, nameIndex TokenIndex, reach HoverReceiverReach) returns HoverType
+		if nameIndex == head 'bareName'
+			return bareCalleeReturnType(nameIndex)
+		end 'bareName'
+
+		match reach 'howFar'
+			throughCalls then return methodOnReceiverReturnType(nameIndex)
+			throughDeclarationsOnly then return HoverType.unknown
+		end 'howFar'
+	end 'calleeReturnType'
+
+	function methodOnReceiverReturnType(nameIndex TokenIndex) returns HoverType
+		match receiverType(tokenAt(nameIndex - 2).value, near: nameIndex - 2, reach: HoverReceiverReach.throughDeclarationsOnly) 'receiver'
+			named(base, _) then return methodReturnType(base, method: tokenAt(nameIndex).value)
+			unknown then return HoverType.unknown
+		end 'receiver'
+	end 'methodOnReceiverReturnType'
+
+	// The math-intrinsic roster first and a declaration second, in `calleeRendering`'s order and for its
+	// reason: the intrinsic shadows any declaration wearing the same name, so answering from the
+	// declaration would describe the function the compiler is not going to call.
+	function bareCalleeReturnType(nameIndex TokenIndex) returns HoverType
+		let name = tokenAt(nameIndex).value
+
+		match mathBuiltinNamed(name) 'reserved'
+			found(builtin) then return mathBuiltinReturnType(builtin)
+			absent then return routineReturnTypeNamed(name, near: nameIndex)
+		end 'reserved'
+	end 'bareCalleeReturnType'
+
+	function routineReturnTypeNamed(name ByteArray, near TokenIndex) returns HoverType
+		match declarationOf(name, near: near) 'resolved'
+			routine(head) then return returnTypeOf(head)
+			binding or parameter or typeName or none then return HoverType.unknown
+		end 'resolved'
+	end 'routineReturnTypeNamed'
+
+	// A math intrinsic's return type, read from the SIGNATURE the roster already carries. That signature is
+	// Maxon source, so it is asked the question a declaration in a document is asked; a second table of the
+	// eight return types would be the same fact written twice.
+	function mathBuiltinReturnType(builtin MathBuiltin) returns HoverType
+		let signature = try HoverDocument.of(mathBuiltinSignature(builtin)) otherwise return HoverType.unknown
+		return signature.returnTypeOf(SignatureFunctionToken)
+	end 'mathBuiltinReturnType'
+
+	// ⚠ **`Array with int` IS MAXON'S OWN SPELLING OF THIS TYPE**, and it is what a reader would have to
+	// TYPE to declare one. See `HoverType` for why the compiler's own renderer cannot supply it.
+	function arrayTypeOfElementAt(index TokenIndex, reach HoverReceiverReach) returns HoverType
+		match inferredTypeAt(index, reach: reach) 'element'
+			named(_, rendered) then return HoverType.named(ArrayTypeName, rendered: "{ArrayTypeSpelling}{rendered}")
+			unknown then return HoverType.named(ArrayTypeName, rendered: String.from(ArrayTypeName))
+		end 'element'
+	end 'arrayTypeOfElementAt'
+
+	// --- Members ------------------------------------------------------------------------------
+
+	// `receiver.member` — the member is resolved through what the RECEIVER is, which is the only way a
+	// method call can be told from a field access or a name that merely repeats one.
+	function memberRendering(index TokenIndex) returns HoverRendering
+		if index < 2 'noReceiver'
+			return HoverRendering.absent
+		end 'noReceiver'
+
+		let receiver = tokenAt(index - 2)
+
+		if receiver.kind != TokenKind.identifier 'chainedOrComputedReceiver'
+			return HoverRendering.absent
+		end 'chainedOrComputedReceiver'
+
+		match receiverType(receiver.value, near: index - 2, reach: HoverReceiverReach.throughCalls) 'ofType'
+			named(base, _) then return methodRendering(base, method: tokenAt(index).value)
+			unknown then return HoverRendering.absent
+		end 'ofType'
+	end 'memberRendering'
+
+	// What a receiver stands for: the type of the binding it names, or — for a static call like
+	// `String.fromCString` — the type NAME itself. A name no declaration in this document claims is
+	// taken to be a type, which is what carries a static call into `stdlib/`.
+	//
+	// `reach` is `HoverReceiverReach`'s subject: what a receiver may itself be resolved through.
+	function receiverType(name ByteArray, near TokenIndex, reach HoverReceiverReach) returns HoverType
+		match declarationOf(name, near: near) 'resolved'
+			binding(head) then return bindingType(head, reach: reach)
+			parameter(_, nameIndex) then return parameterType(nameIndex)
+			typeName(head) then return declaredTypeNameAt(head)
+			routine then return HoverType.unknown
+			none then return HoverType.named(name, rendered: String.from(name))
+		end 'resolved'
+	end 'receiverType'
+
+	function declaredTypeNameAt(keyword TokenIndex) returns HoverType
+		let named = tokenAt(keyword + 1)
+
+		if named.kind != TokenKind.identifier 'unnamed'
+			return HoverType.unknown
+		end 'unnamed'
+
+		return HoverType.named(named.value, rendered: String.from(named.value))
+	end 'declaredTypeNameAt'
+
+	function methodRendering(owner ByteArray, method ByteArray) returns HoverRendering
+		let head = try methodDeclaredHere(owner, method: method) otherwise return stdlibMethodRendering(owner, method: method)
+
+		return declarationHeadRendering(head)
+	end 'methodRendering'
+
+	// A `function` declared inside a body that `owner` opens — a `type`, or an `extension` over it.
+	function methodDeclaredHere(owner ByteArray, method ByteArray) returns TokenIndex throws HoverLookupError
+		let total = tokens.count()
+		var index = 0
+
+		// A name can open more than one body — a `type` and an `extension` over it — so a body that does
+		// not declare the method is stepped over rather than ending the walk.
+		while index < total 'eachToken'
+			let at = index
+			index = index + 1
+
+			if kindDeclaresAContainer(tokenAt(at).kind) and namesFollowing(at, name: owner) 'ownerBody'
+				let member = try routineNamed(method, from: at, until: bodyEndAfter(at)) otherwise continue
+
+				return member
+			end 'ownerBody'
+		end 'eachToken'
+
+		throw HoverLookupError.notDeclaredHere
+	end 'methodDeclaredHere'
+
+	function routineNamed(method ByteArray, from TokenIndex, until TokenIndex) returns TokenIndex throws HoverLookupError
+		var index = from
+
+		while index < until 'eachToken'
+			if tokenAt(index).kind == TokenKind.function and signatureDeclares(index, name: method) 'aDeclarationOfIt'
+				return index
+			end 'aDeclarationOfIt'
+
+			index = index + 1
+		end 'eachToken'
+
+		throw HoverLookupError.notDeclaredHere
+	end 'routineNamed'
+
+	// Where the body opened at `index` closes. ⚠ **A COLUMN-1 `end` CLOSES A COLUMN-1 DECLARATION** —
+	// the layout heuristic the file header names, and the only structure a token stream offers once
+	// block nesting is off the table. Every `end` inside the body is indented.
+	function bodyEndAfter(index TokenIndex) returns TokenIndex
+		let total = tokens.count()
+		var at = index + 1
+
+		while at < total 'scan'
+			let tok = tokenAt(at)
+
+			if tok.kind == TokenKind.end and tok.column == TopLevelColumn 'closesIt'
+				return at
+			end 'closesIt'
+
+			at = at + 1
+		end 'scan'
+
+		return total
+	end 'bodyEndAfter'
+
+	function stdlibMethodRendering(owner ByteArray, method ByteArray) returns HoverRendering
+		match stdlibSourceFor(owner) 'library'
+			found(source) then return libraryMethodRendering(source, owner: owner, method: method)
+			absent then return HoverRendering.absent
+		end 'library'
+	end 'stdlibMethodRendering'
+
+	function libraryMethodRendering(source String, owner ByteArray, method ByteArray) returns HoverRendering
+		let module = try HoverDocument.of(source) otherwise return HoverRendering.absent
+
+		let head = try module.methodDeclaredHere(owner, method: method) otherwise return HoverRendering.absent
+
+		return module.declarationHeadRendering(head)
+	end 'libraryMethodRendering'
+
+	// The DECLARED return type of `owner`'s `method`, looked up where its rendering is looked up: this
+	// document first, then `stdlib/`. Splitting the two lookups would give an editor a signature from one
+	// declaration and a type from another the day they disagreed.
+	function methodReturnType(owner ByteArray, method ByteArray) returns HoverType
+		let head = try methodDeclaredHere(owner, method: method) otherwise return stdlibMethodReturnType(owner, method: method)
+
+		return returnTypeOf(head)
+	end 'methodReturnType'
+
+	function stdlibMethodReturnType(owner ByteArray, method ByteArray) returns HoverType
+		match stdlibSourceFor(owner) 'library'
+			found(source) then return libraryMethodReturnType(source, owner: owner, method: method)
+			absent then return HoverType.unknown
+		end 'library'
+	end 'stdlibMethodReturnType'
+
+	function libraryMethodReturnType(source String, owner ByteArray, method ByteArray) returns HoverType
+		let module = try HoverDocument.of(source) otherwise return HoverType.unknown
+
+		let head = try module.methodDeclaredHere(owner, method: method) otherwise return HoverType.unknown
+
+		return module.returnTypeOf(head)
+	end 'libraryMethodReturnType'
+
+	// The text of the `stdlib/` module that declares `owner`. Reached by NAME, per the convention
+	// `MaxonSourceExtension` is declared with above: nothing else about a non-parsing buffer says which file
+	// a type came from. Absence covers every way there is no such module — no `stdlib/`, no file named for
+	// the owner, or a file that cannot be read.
+	function stdlibSourceFor(owner ByteArray) returns HoverModuleSource
+		let directory = try locateStdlibDir() otherwise return HoverModuleSource.absent
+		let path = directory.join("{String.from(owner)}{MaxonSourceExtension}")
+
+		if not File.exists(path) 'notALibraryType'
+			return HoverModuleSource.absent
+		end 'notALibraryType'
+
+		let source = try File.readText(path) otherwise return HoverModuleSource.absent
+		return HoverModuleSource.found(source)
+	end 'stdlibSourceFor'
+
+	// --- Source text --------------------------------------------------------------------------
+
+	// A declaration's head begins at its first MODIFIER, not at its keyword: `public function push` and
+	// `module function push` are what an editor should show. `module` is CONTEXTUAL — an identifier the
+	// parser matches by its bytes — which is why the test takes a whole token and not a `TokenKind`.
+	function declarationStart(keyword TokenIndex) returns TokenIndex
+		var start = keyword
+
+		while start > 0 and lspIsDeclarationModifier(tokenAt(start - 1)) 'walkBack'
+			start = start - 1
+		end 'walkBack'
+
+		return start
+	end 'declarationStart'
+
+	function headText(start TokenIndex) returns String
+		return sourceBetween(tokenAt(start).startByte, endByte: headEndByte(start))
+	end 'headText'
+
+	// Where a declaration's head stops: at the first line break that is not inside brackets, so a
+	// signature broken across lines comes out whole.
+	function headEndByte(start TokenIndex) returns ByteOffset
+		let total = tokens.count()
+		var depth = 0
+		var index = start
+
+		while index < total 'scan'
+			let tok = tokenAt(index)
+
+			if tok.kind == TokenKind.newline and depth == 0 'headEnds'
+				return lineContentEnd(tok.line)
+			end 'headEnds'
+
+			if kindOpensABracket(tok.kind) 'opens'
+				depth = depth + 1
+			end 'opens' else if kindClosesABracket(tok.kind) and depth > 0 'closes'
+				depth = depth - 1
+			end 'closes'
+
+			index = index + 1
+		end 'scan'
+
+		return text.byteLength()
+	end 'headEndByte'
+
+	// One parameter as the author wrote it — its name, its type, and any default — up to the comma or
+	// the parenthesis that ends it.
+	function parameterText(nameIndex TokenIndex) returns String
+		let total = tokens.count()
+		var depth = 0
+		var last = tokenAt(nameIndex).endByte
+		var index = nameIndex
+
+		while index < total 'scan'
+			let tok = tokenAt(index)
+
+			if depth == 0 and (tok.kind == TokenKind.comma or tok.kind == TokenKind.rightParen or tok.kind == TokenKind.newline) 'parameterEnds'
+				break
+			end 'parameterEnds'
+
+			if kindOpensABracket(tok.kind) 'opens'
+				depth = depth + 1
+			end 'opens' else if kindClosesABracket(tok.kind) and depth > 0 'closes'
+				depth = depth - 1
+			end 'closes'
+
+			if tok.endByte > last 'spans'
+				last = tok.endByte
+			end 'spans'
+
+			index = index + 1
+		end 'scan'
+
+		return sourceBetween(tokenAt(nameIndex).startByte, endByte: last)
+	end 'parameterText'
+
+	// Where a source line's text stops.
+	//
+	// ⭐ `LspLineIndex` clamps a `character` past the end of a line to exactly that point, and it is the
+	// ONLY reader of it `Compiler/` has: `String.byteAt` is `module`-visible inside `stdlib/`, so
+	// nothing here can walk a line's bytes itself. That clamp is therefore asked the question rather
+	// than a second scan being written for it.
+	function lineContentEnd(line LineNumber) returns ByteOffset
+		let lspLine = 0 if line == 0 else line - 1
+		return lines.offsetOf(text, position: LspPosition.create(lspLine as LspLineNumber, character: PastEveryLine))
+	end 'lineContentEnd'
+
+	function sourceBetween(startByte ByteOffset, endByte ByteOffset) returns String
+		let piece = try bytes.slice(startByte, endIndex: endByte) otherwise panic("HoverDocument.sourceBetween: [{startByte}, {endByte}) is outside the {bytes.count()}-byte buffer the tokens were lexed from")
+		return String.from(piece)
+	end 'sourceBetween'
+
+	// --- Prose --------------------------------------------------------------------------------
+
+	// The `///` lines directly above a declaration, joined in source order, with their `/// ` prefix
+	// already stripped — the lexer keeps a doc comment as a TOKEN carrying the prose, so this is a walk
+	// over the stream and never a re-scan of the text.
+	function appendDocComment(prose StringArray, above TokenIndex)
+		var first = above
+
+		while first > 0 and kindIsDocOrLayout(tokenAt(first - 1).kind) 'walkUp'
+			first = first - 1
+		end 'walkUp'
+
+		var documentation = ""
+		var separator = ""
+		var index = first
+
+		while index < above 'collect'
+			let tok = tokenAt(index)
+
+			if tok.kind == TokenKind.docComment 'docLine'
+				documentation.append("{separator}{String.from(tok.value)}")
+				separator = DocCommentLineBreak
+			end 'docLine'
+
+			index = index + 1
+		end 'collect'
+
+		if not documentation.isEmpty() 'documented'
+			prose.push(documentation)
+		end 'documented'
+	end 'appendDocComment'
+
+	function routineNamePhrase(functionIndex TokenIndex) returns String
+		let nameIndex = try signatureNameIndex(functionIndex) otherwise return AnonymousFunctionPhrase
+
+		return "`{String.from(tokenAt(nameIndex).value)}`"
+	end 'routineNamePhrase'
+
+	function declaredNamePhrase(keyword TokenIndex) returns String
+		let named = tokenAt(keyword + 1)
+
+		if named.kind != TokenKind.identifier 'unnamed'
+			return AnonymousTypePhrase
+		end 'unnamed'
+
+		return "`{String.from(named.value)}`"
+	end 'declaredNamePhrase'
+
+	// The nearest-first candidate order `declarationOf` walks: `near`, `near - 1`, … 0, then `near + 1`
+	// to the end. One counter rather than two loops, so "above first, then below" is written once.
+	function candidateIndex(step TokenIndex, near TokenIndex) returns TokenIndex
+		if step > near 'belowTheCursor'
+			return step
+		end 'belowTheCursor'
+
+		return near - step
+	end 'candidateIndex'
+end 'HoverDocument'
+
+// --- Token classification ---------------------------------------------------------------------
+
+// Whether a token is a word the LANGUAGE reserves rather than one the author chose.
+//
+// ⭐ It asks the lexer's own invariant instead of listing ninety keywords: a token whose kind implies
+// its text — every punctuator, `newline`, EOF — carries `EmptySourceText`, while KEYWORDS are lexed as
+// identifiers and reach the stream carrying their own bytes exactly like any other word. So a token with
+// bytes that is not one of the kinds an AUTHOR names is, by construction, reserved.
+function tokenIsAReservedWord(tok Token) returns bool
+	if tok.value.count() == 0 'itsKindIsItsText'
+		return false
+	end 'itsKindIsItsText'
+
+	return not kindCarriesAuthoredText(tok.kind)
+end 'tokenIsAReservedWord'
+
+function kindCarriesAuthoredText(kind TokenKind) returns bool
+	return kind == TokenKind.identifier or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.charLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.stringFormatSpec or kind == TokenKind.docComment
+end 'kindCarriesAuthoredText'
+
+// Keywords that introduce a NAME for a type. `extension` is here because hovering the name in
+// `extension Array where …` should reach that block, even though it declares nothing new.
+function kindDeclaresATypeName(kind TokenKind) returns bool
+	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias or kind == TokenKind.extension
+end 'kindDeclaresATypeName'
+
+// Keywords that open a BODY holding members. `typealias` is absent for that reason: it names a type and
+// holds nothing.
+function kindDeclaresAContainer(kind TokenKind) returns bool
+	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.extension
+end 'kindDeclaresAContainer'
+
+// Where an expression STOPS — the property `inferredTypeAt` tests before it believes a literal.
+//
+// ⛔ **IT NAMES THE ENDINGS, NOT THE CONTINUATIONS, SO IT FAILS CLOSED.** The ways to apply something to
+// a value — a `.`, a `(`, a `[`, an operator, an `as` — are open-ended and grow with the language, and an
+// enumeration of THOSE would admit every one it had not been taught yet. Enumerating what ends an
+// expression instead leaves every unfamiliar token meaning `unknown`.
+function kindEndsAnExpression(kind TokenKind) returns bool
+	return kind == TokenKind.newline or kind == TokenKind.comma or kind == TokenKind.eof or kindClosesABracket(kind)
+end 'kindEndsAnExpression'
+
+function kindOpensABracket(kind TokenKind) returns bool
+	return kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace
+end 'kindOpensABracket'
+
+function kindClosesABracket(kind TokenKind) returns bool
+	return kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace
+end 'kindClosesABracket'
+
+// What may sit between a declaration and the `///` lines written for it: blank lines, and the doc lines
+// themselves.
+function kindIsDocOrLayout(kind TokenKind) returns bool
+	return kind == TokenKind.newline or kind == TokenKind.docComment
+end 'kindIsDocOrLayout'
+
+// --- Rendering ----------------------------------------------------------------------------------
+
+// The markdown an editor renders: the declaration as source, then any prose that belongs under it.
+function hoverMarkdown(code String, prose StringArray) returns String
+	var rendered = "{MaxonFenceOpen}{code}{MaxonFenceClose}"
+
+	for paragraph in prose 'eachParagraph'
+		rendered.append("{ParagraphBreak}{paragraph}")
+	end 'eachParagraph'
+
+	return rendered
+end 'hoverMarkdown'
+
+// A compiler builtin's hover: the signature a reader would need to call it, and the one line saying what
+// it does. Both come from `Parser`'s roster — the same enum the emit dispatches on — so an intrinsic
+// cannot be described here as something other than what it compiles to.
+//
+// ⚠ **THE HELP LINE IS THE HALF THAT MAKES HOVERING ONE WORTH DOING.** A signature alone tells an editor
+// user what they can already see from the call they are looking at; `Truncates \`value\` toward zero` is
+// the part they came for. `tests/lsp/hover-values.test.maxon` pins both halves for `sqrt` and `trunc`.
+function mathBuiltinMarkdown(builtin MathBuiltin) returns String
+	var prose = StringArray.create()
+	prose.push(mathBuiltinHelp(builtin))
+	return hoverMarkdown(mathBuiltinSignature(builtin), prose: prose)
+end 'mathBuiltinMarkdown'
+
+function namedPrimitive(name ByteArray) returns HoverType
+	return HoverType.named(name, rendered: String.from(name))
+end 'namedPrimitive'
+
+// `mathBuiltinSignature` yields a document holding one declaration, so its `function` keyword is the
+// first token in the stream.
+let SignatureFunctionToken = 0
+
+let UninferredTypePhrase = ", of a type this hover could not infer"
+let SentenceEnd = "."
+let AnonymousFunctionPhrase = "an anonymous function"
+let AnonymousTypePhrase = "an unnamed type"
+
+// `LspLineIndex.offsetOf` clamps a character past a line's content to exactly where that content stops,
+// which is how the end of a line is asked for without walking its bytes.
+let PastEveryLine = i64.max as LspCharacter
+
+// The primitive and container names a hover infers from a literal. Byte slices because that is what a
+// token's text is, and what a method lookup compares against.
+let IntTypeName = b"int"
+let FloatTypeName = b"float"
+let StringTypeName = b"String"
+let BoolTypeName = b"bool"
+let ArrayTypeName = b"Array"
+let ArrayTypeSpelling = "Array with "

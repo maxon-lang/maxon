@@ -1,0 +1,255 @@
+// `textDocument/semanticTokens/full` — what each word of the document MEANS, for an editor that colours
+// by meaning rather than by regular expression.
+//
+// ⭐⭐ **THE ONE THING A LEXER ALONE GETS WRONG, AND THE REASON THIS METHOD EARNS ITS KEEP:** inside an
+// `enum` body a case may be NAMED with a word this language uses as a keyword everywhere else —
+// `enum TokenType / function / returns / identifier` is a legal declaration of three cases. A classifier
+// that reads `TokenKind` alone paints all three as keywords, which is exactly the colouring a TextMate
+// grammar already gives and exactly the one that is wrong. The `enum` body is `LspSymbols.maxon`'s block
+// model, read here rather than re-derived.
+//
+// ⭐ **ONLY TOKENS THAT CARRY SOURCE BYTES ARE COLOURED.** A punctuator's `startByte`/`endByte` are both
+// 0 (`Token`: the kind implies the text, so nothing is sliced for it), so there is no span to convert and
+// no honest length to report — and punctuation is what an editor's own grammar colours anyway. That
+// exclusion is a fact about the token stream, not a scope decision.
+
+// ⛔⛔ **THE LEGEND IS THE CONTRACT.** A semantic-token type is an INDEX and means nothing except against
+// the list a server declares in its `initialize` response, so these numbers and that list are one fact.
+// They are written twice below — a constant and a position in an array — and `requireLegendPosition`
+// CHECKS the two agree on every `initialize`, because a legend that drifts from the indices does not
+// fail: it recolours the whole file, silently, in every editor at once.
+typealias LspSemanticTokenType = int(0 to 15)
+
+let KeywordTokenType = 0 as LspSemanticTokenType
+let TypeTokenType = 1 as LspSemanticTokenType
+let FunctionTokenType = 5 as LspSemanticTokenType
+let VariableTokenType = 7 as LspSemanticTokenType
+let ModifierTokenType = 9 as LspSemanticTokenType
+let EnumMemberTokenType = 10 as LspSemanticTokenType
+let StringTokenType = 12 as LspSemanticTokenType
+let NumberTokenType = 13 as LspSemanticTokenType
+let CommentTokenType = 14 as LspSemanticTokenType
+
+// A value on the wire. LSP encodes the whole file as one flat run of non-negative integers.
+typealias LspSemanticTokenValue = int(0 to i64.max)
+typealias LspSemanticTokenValueArray = Array with LspSemanticTokenValue
+
+// LSP's `SemanticTokensOptions` and `SemanticTokens` members.
+let LegendKey = "legend"
+let TokenTypesKey = "tokenTypes"
+let TokenModifiersKey = "tokenModifiers"
+let FullKey = "full"
+let DataKey = "data"
+
+// Every token this server reports carries no modifiers, so the bitset is always zero and the modifier
+// legend is empty. A modifier an editor cannot decode is worse than one it is never sent.
+let NoTokenModifiers = 0 as LspSemanticTokenValue
+
+module function semanticTokensServedMethods() returns LspMethodArray
+	var served = LspMethodArray.create()
+	served.push(LspMethod.semanticTokensFull)
+	return served
+end 'semanticTokensServedMethods'
+
+// This server's `SemanticTokensOptions`. `full` is the only request form it answers; a `range` form would
+// be a second classifier over the same document, and this one is a walk of an already-lexed file.
+module function semanticTokensCapabilityOptions(doc JsonDoc) returns JsonNodeId
+	var legend = LspJsonObject.create(doc)
+	legend.putNode(TokenTypesKey, value: stringArrayNode(doc, values: legendTokenTypeNames()))
+	legend.putNode(TokenModifiersKey, value: stringArrayNode(doc, values: StringArray.create()))
+
+	var options = LspJsonObject.create(doc)
+	options.putNode(LegendKey, value: legend.finish())
+	options.put(FullKey, value: JsonNode.boolNode(true))
+	return options.finish()
+end 'semanticTokensCapabilityOptions'
+
+module function semanticTokensAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+	if request.method != LspMethod.semanticTokensFull 'notThisArea'
+		panic("semanticTokensAnswer: {lspMethodSpelling(request.method).wireName} is not this area's — `semanticTokensServedMethods` names the one method it answers")
+	end 'notThisArea'
+
+	var doc = JsonDoc.create()
+	var values = JsonNodeIdArray.create()
+
+	for value in encodedTokensOf(request.text) 'eachValue'
+		values.push(doc.add(JsonNode.numberNode(value)))
+	end 'eachValue'
+
+	var result = LspJsonObject.create(doc)
+	result.putNode(DataKey, value: doc.add(JsonNode.arrayNode(values)))
+	return LspAnswer.of(doc, result: result.finish())
+end 'semanticTokensAnswer'
+
+// ⭐ **THE NAMES ARE LSP'S OWN `SemanticTokenTypes`, AND THE ORDER IS THIS SERVER'S.** A client maps each
+// name to a theme colour, so a name outside the protocol's set is a token it cannot colour at all; the
+// ORDER, by contrast, is free, and this one is chosen so that the indices the suite pins are the indices
+// this server sends.
+function legendTokenTypeNames() returns StringArray
+	let names = ["keyword", "type", "struct", "enum", "interface", "function", "method", "variable", "parameter", "modifier", "enumMember", "property", "string", "number", "comment", "operator"]
+
+	requireLegendPosition(names, index: KeywordTokenType, name: "keyword")
+	requireLegendPosition(names, index: TypeTokenType, name: "type")
+	requireLegendPosition(names, index: FunctionTokenType, name: "function")
+	requireLegendPosition(names, index: VariableTokenType, name: "variable")
+	requireLegendPosition(names, index: ModifierTokenType, name: "modifier")
+	requireLegendPosition(names, index: EnumMemberTokenType, name: "enumMember")
+	requireLegendPosition(names, index: StringTokenType, name: "string")
+	requireLegendPosition(names, index: NumberTokenType, name: "number")
+	requireLegendPosition(names, index: CommentTokenType, name: "comment")
+
+	return names
+end 'legendTokenTypeNames'
+
+// ⚠ **EVERY CONSTANT THIS SERVER EMITS IS CHECKED, NOT A SAMPLE OF THEM.** A drift in an unchecked one
+// would be invisible: the file would simply come out the wrong colours, and no test that reads a token's
+// index through the legend could ever notice.
+function requireLegendPosition(names StringArray, index LspSemanticTokenType, name String)
+	let declared = try names.get(index) otherwise panic("requireLegendPosition: the legend has {names.count()} entries and this server emits index {index}, which is outside it")
+
+	if declared != name 'drifted'
+		panic("requireLegendPosition: index {index} is '{declared}' in the legend and is named '{name}' by the constant this server emits it under — the two are one fact and they have come apart")
+	end 'drifted'
+end 'requireLegendPosition'
+
+function stringArrayNode(doc JsonDoc, values StringArray) returns JsonNodeId
+	var nodes = JsonNodeIdArray.create()
+
+	for value in values 'eachValue'
+		nodes.push(doc.add(JsonNode.stringNode(value)))
+	end 'eachValue'
+
+	return doc.add(JsonNode.arrayNode(nodes))
+end 'stringArrayNode'
+
+// --- The classification -----------------------------------------------------------------------
+
+// ⚠ **LSP ENCODES EACH TOKEN RELATIVE TO THE ONE BEFORE IT**: `[deltaLine, deltaStartChar, length,
+// tokenType, tokenModifiers]`, where `deltaStartChar` is relative to the previous token's start ONLY when
+// the two share a line and absolute otherwise. The first token's `deltaLine` is relative to nothing, so a
+// token on line 0 encodes as a delta of 0 — which is why the origin is (0, 0) rather than "unset".
+//
+// ⚠ Both the character and the length are counted in UTF-16 code units, which is why they come from
+// `LspLineIndex.positionOf` on the two ends of the token's span rather than from its byte width.
+function encodedTokensOf(source String) returns LspSemanticTokenValueArray
+	let tokens = lspDocumentTokens(source)
+	let blocks = lspDocumentBlocks(tokens)
+	let index = LspLineIndex.build(source)
+
+	var data = LspSemanticTokenValueArray.create()
+	var previousLine = 0 as LspLineNumber
+	var previousCharacter = 0 as LspCharacter
+	var lineOfPreviousToken = NoLineYet
+	var haveEmitted = false
+
+	for (position, token) in tokens.withIterator() 'eachToken'
+		if token.kind == TokenKind.eof or tokenKindIsSkippedLayout(token.kind) and token.kind != TokenKind.docComment 'notCode'
+			continue
+		end 'notCode'
+
+		let firstOnLine = token.line != lineOfPreviousToken
+		lineOfPreviousToken = token.line
+
+		if token.endByte <= token.startByte 'noSpanToColour'
+			continue
+		end 'noSpanToColour'
+
+		let start = index.positionOf(source, offset: token.startByte)
+		let finish = index.positionOf(source, offset: token.endByte)
+		let tokenType = tokenTypeOf(tokens, at: position.index() as TokenIndex, token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line))
+
+		// ⚠ **THE TWO SUBTRACTIONS ARE WRITTEN AS STATEMENTS, NOT AS `a - b if c else d`.** The two
+		// compilers do not agree on where a conditional expression binds against a binary operator —
+		// MEASURED: `a - b if flag else c` with `flag` false answers `c` on shv2 (the documented
+		// lowest-precedence reading) and `a - c` on the bootstrap. This source is compiled by BOTH, so a
+		// shape whose meaning depends on that disagreement is a stage-1/stage-2 divergence waiting to
+		// happen.
+		var deltaLine = start.line
+		var deltaCharacter = start.character
+
+		if haveEmitted 'relativeToTheTokenBefore'
+			deltaLine = start.line - previousLine
+
+			if deltaLine == 0 'sameLine'
+				deltaCharacter = start.character - previousCharacter
+			end 'sameLine'
+		end 'relativeToTheTokenBefore'
+
+		data.push(deltaLine)
+		data.push(deltaCharacter)
+		data.push(finish.character - start.character)
+		data.push(tokenType)
+		data.push(NoTokenModifiers)
+
+		previousLine = start.line
+		previousCharacter = start.character
+		haveEmitted = true
+	end 'eachToken'
+
+	return data
+end 'encodedTokensOf'
+
+// No token has been seen yet. `LineNumber` counts source lines from 1, so 0 is not one — it is the line a
+// SYNTHESIZED token carries, and no token this walk reaches is synthesized.
+let NoLineYet = 0 as LineNumber
+
+function tokenTypeOf(tokens TokenArray, at TokenIndex, token Token, firstOnLine bool, inCaseList bool) returns LspSemanticTokenType
+	// A case list is spelled one name per line, so the line's FIRST word is the case and anything after it
+	// belongs to its associated values.
+	if inCaseList and firstOnLine 'aCaseName'
+		return EnumMemberTokenType
+	end 'aCaseName'
+
+	if lspIsDeclarationModifier(token) 'modifier'
+		return ModifierTokenType
+	end 'modifier'
+
+	if token.kind == TokenKind.docComment 'prose'
+		return CommentTokenType
+	end 'prose'
+
+	if token.kind == TokenKind.intLiteral or token.kind == TokenKind.floatLiteral 'number'
+		return NumberTokenType
+	end 'number'
+
+	// A block label is lexed as a character literal and is coloured as one: telling a label from a real
+	// `'a'` needs the block model, and no editor theme colours the two differently anyway.
+	if token.kind == TokenKind.stringLiteral or token.kind == TokenKind.byteStringLiteral or token.kind == TokenKind.charLiteral or token.kind == TokenKind.stringFormatSpec 'text'
+		return StringTokenType
+	end 'text'
+
+	if token.kind == TokenKind.identifier 'aName'
+		return declaredNameTokenType(tokens, at: at)
+	end 'aName'
+
+	return KeywordTokenType
+end 'tokenTypeOf'
+
+// What an identifier NAMES, decided by the keyword in front of it. Anything else is a `variable`, which is
+// what an ordinary reference is and what an editor's default theme leaves alone.
+function declaredNameTokenType(tokens TokenArray, at TokenIndex) returns LspSemanticTokenType
+	if at == 0 'nothingBefore'
+		return VariableTokenType
+	end 'nothingBefore'
+
+	let previous = lspTokenAt(tokens, index: at - 1)
+
+	if previous.kind == TokenKind.function 'declaresAFunction'
+		return FunctionTokenType
+	end 'declaresAFunction'
+
+	if previous.kind == TokenKind.type or previous.kind == TokenKind.enum or previous.kind == TokenKind.union or previous.kind == TokenKind.interface or previous.kind == TokenKind.extension 'declaresAType'
+		return TypeTokenType
+	end 'declaresAType'
+
+	return VariableTokenType
+end 'declaredNameTokenType'
+
+// Is this line inside an `enum` or `union` BODY — strictly inside, so the header line that names the type
+// and the `end` line that closes it are ordinary code.
+function insideCaseList(blocks LspDocumentBlockArray, line LspLineNumber) returns bool
+	return match lspInnermostBlockKindAt(blocks, line: line) 'scope'
+		found(kind) gives kind == LspBlockKind.enumBody or kind == LspBlockKind.unionBody
+		absent gives false
+	end 'scope'
+end 'insideCaseList'

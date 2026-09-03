@@ -1,0 +1,138 @@
+// LSP stdio framing: `Content-Length: <n>\r\n\r\n<body>` in both directions.
+//
+// The count is the body's BYTES and the body carries no trailing newline. An editor frames the next
+// message from exactly that count, so one byte either way desynchronizes the stream permanently — which
+// is why a message this file cannot frame is reported as `framingError` and ends the session rather than
+// being skipped.
+
+// Bytes off standard input. `__Builtins.readStdin` hands back a `__ManagedMemory`, which is an array of
+// these.
+typealias LspByte = int(0 to u8.max)
+typealias LspByteArray = Array with LspByte
+
+// A `Content-Length` value: the body's size in bytes.
+typealias LspContentLength = int(0 to i64.max)
+
+// ⚠ ONE BYTE PER READ WHILE SCANNING HEADERS, DELIBERATELY. A bulk read would consume part of the BODY
+// that follows the blank line, and the body must be taken by exact count — a reader that over-reads has
+// to buffer the remainder, and `stdlib/Console.maxon`'s buffer (the one that already does this) does not
+// export the byte-exact `readBytes` that would make it reusable. Header lines are a few dozen bytes
+// against an editor-paced message rate, so the syscalls cost nothing.
+let HeaderScanByteBudget = 1
+
+// The one header this server reads, lowercased: LSP header field names are case-insensitive.
+let ContentLengthHeaderName = "content-length"
+
+let HeaderFieldSeparator = ":"
+
+// How a message can fail to arrive. Both arms are raised.
+enum LspFramingError implements Error
+	streamEnded
+	badContentLength
+end 'LspFramingError'
+
+// What one turn of the read loop produced. A union rather than a throwing read because the three
+// outcomes lead to three different ends of the session — one is handled, one is a clean close, and one
+// is fatal — and a caller that has to name all three cannot silently drop one.
+module union LspIncoming
+	message(body String)
+	endOfStream
+	framingError(detail String)
+end 'LspIncoming'
+
+// Read the next framed message off standard input.
+module function readLspMessage() returns LspIncoming
+	var haveContentLength = false
+	var contentLength = 0
+	var inHeaders = true
+
+	while inHeaders 'headers'
+		// EOF anywhere before a complete message is the same event however far in it lands: the client is
+		// gone and there is nothing left to frame.
+		let line = try readHeaderLine() otherwise return LspIncoming.endOfStream
+
+		if line.isEmpty() 'blankLine'
+			inHeaders = false
+		end 'blankLine' else 'headerField'
+			let parts = line.split(HeaderFieldSeparator)
+			let name = (try parts.get(0) otherwise "").toLower()
+
+			// Every other header is ignored, as the protocol requires of a header a peer does not know.
+			if name == ContentLengthHeaderName 'contentLengthField'
+				let raw = (try parts.get(1) otherwise "").trim()
+				contentLength = try parseContentLength(raw) otherwise return LspIncoming.framingError("Content-Length is not a byte count: '{raw}'")
+				haveContentLength = true
+			end 'contentLengthField'
+		end 'headerField'
+	end 'headers'
+
+	if not haveContentLength 'noContentLength'
+		return LspIncoming.framingError("message header carries no Content-Length")
+	end 'noContentLength'
+
+	var body = LspByteArray.create()
+	while body.count() < contentLength 'fill'
+		let chunk = LspByteArray.init(__Builtins.readStdin(contentLength - body.count()))
+
+		if chunk.count() == 0 'truncated'
+			return LspIncoming.framingError("stream ended after {body.count()} of {contentLength} body bytes")
+		end 'truncated'
+
+		body.append(chunk)
+	end 'fill'
+
+	return LspIncoming.message(String.from(body))
+end 'readLspMessage'
+
+// Frame `body` and write it to standard output.
+module function writeLspMessage(body String)
+	print("Content-Length: {body.byteLength()}\r\n\r\n{body}")
+end 'writeLspMessage'
+
+// One header line, terminated by LF and with its CR — if any — dropped.
+//
+// The only CR a header line may carry is the first half of its CRLF terminator, so a CR is never
+// content; skipping it here also reads a client that sends bare LF.
+function readHeaderLine() returns String throws LspFramingError
+	var line = LspByteArray.create()
+	var complete = false
+
+	while not complete 'scan'
+		let chunk = LspByteArray.init(__Builtins.readStdin(HeaderScanByteBudget))
+
+		if chunk.count() == 0 'streamClosed'
+			throw LspFramingError.streamEnded
+		end 'streamClosed'
+
+		let b = try chunk.get(0) otherwise panic("readHeaderLine: chunk.count() != 0 was just checked")
+
+		if b == '\n' 'terminator'
+			complete = true
+		end 'terminator' else if b != '\r' 'contentByte'
+			line.push(b)
+		end 'contentByte'
+	end 'scan'
+
+	return String.from(line)
+end 'readHeaderLine'
+
+// ⚠ `parseInt` reads whatever digits it finds and ignores every other byte, so it answers 40 for `4x0`
+// and 0 for a value with no digit at all. A header value is therefore checked to be a non-empty run of
+// ASCII digits BEFORE it is asked — otherwise a corrupt length would silently become a plausible one and
+// desynchronize the stream at the next message.
+function parseContentLength(text String) returns LspContentLength throws LspFramingError
+	let digits = text.toByteArray()
+
+	if digits.count() == 0 'noDigits'
+		throw LspFramingError.badContentLength
+	end 'noDigits'
+
+	for b in digits 'eachByte'
+		if b < '0' or b > '9' 'notADigit'
+			throw LspFramingError.badContentLength
+		end 'notADigit'
+	end 'eachByte'
+
+	let value = try parseInt(digits) otherwise throw LspFramingError.badContentLength
+	return value as LspContentLength
+end 'parseContentLength'

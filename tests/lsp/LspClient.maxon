@@ -1,0 +1,1272 @@
+// LspClient.maxon — a Language Server Protocol client for tests: it spawns a real `lsp-server`, speaks
+// `Content-Length`-framed JSON-RPC 2.0 over its pipes, and hands each language request back as a typed
+// result.
+//
+// ⭐⭐ **TWO INDEPENDENT AXES, AND CONFLATING THEM IS THE TRAP.**
+// - **The RUNNER** — which compiler runs `maxon test tests/lsp` — is BOTH, exactly as
+//   `tests/test-command/` is run both ways. A runner broken badly enough to report green having run
+//   nothing cannot detect itself, so the bootstrap's `maxon test` is the independent oracle for THE
+//   RUNNER.
+// - **The SUBJECT** — whose `lsp-server` these tests spawn — is ALWAYS shv2, named by
+//   `TestedCompilerStem` below and by nothing else. It does not move with the runner.
+//
+// ⛔ The bootstrap is a PROTOCOL oracle, never a BEHAVIOUR one: MEASURED 2026-09-02, `bin/maxon
+// lsp-server` hangs for ever on stdin EOF and exits 0 where LSP says 1. Point a session at it to settle
+// *"what does a correct LSP put in this field"*, never to decide what shv2 must answer.
+//
+// ⛔⛔ **THE WORKING DIRECTORY IS A CONTRACT, AND IT IS THE CHECKOUT ROOT.** A test binary inherits the
+// working directory of the `maxon test` process that launched it, and that command never changes
+// directory — so `TestedCompilerStem` is spelled from the root, and a run started anywhere else fails
+// LOUDLY in `start()` rather than quietly finding no server.
+//
+// ⚠ **THREE HAZARDS, ALL THREE REAL, ALL THREE ANSWERED HERE:**
+//
+// 1. **`release()` OR IT LEAKS.** `StreamingSubprocess` leaks its handle if it is not released and a
+//    leak is process exit 101 — which a test reports as a failure of the run, not of an assertion. One
+//    client per test, and the client is released before anything is asserted (see the smoke test's
+//    shape): an `Expect` that throws must not be able to skip the release.
+//
+// 2. **A STDERR WRITE CAN DEADLOCK BOTH PROCESSES.** Nothing here drains the server's stderr, and
+//    nothing can: stdlib's readers block, this client has no threads, and a blocking drain would simply
+//    hang somewhere else. That is SAFE ONLY BECAUSE THE SERVER IS QUIET — `LspServer.failOnBrokenStream`
+//    writes ONE line, ONCE, and only on the path that ends the session, which is far below any pipe
+//    buffer. It is not an assumption of silence: a server that becomes chatty (or panics with a long
+//    stack trace) fills the buffer and both sides then wait on each other for ever. The symptom is a
+//    hang that `maxon test`'s shard deadline reports as TIMED OUT, and the cure is a drain in the
+//    server's direction, not here.
+//
+// 3. **A NOTIFICATION CAN ARRIVE BEFORE THE RESPONSE.** MEASURED against the reference server: a
+//    `publishDiagnostics` notification does arrive ahead of the first reply. Correlation is therefore
+//    STRICT on the integer `id`, and any message that does not carry ours is skipped.
+//
+// ⛔ No JSON parser and no serializer live here: `stdlib/Json.maxon` is a full RFC 8259 pair, and a
+// second one would be this project's signature bug written down again.
+
+// ============================================================================================
+// THE SUBJECT
+// ============================================================================================
+
+// The server under test, relative to the checkout root, without its host suffix. ONE constant, because
+// the SUBJECT axis must not move when the RUNNER does.
+let TestedCompilerStem = "maxon-shv2/.maxon/maxon-shv2"
+
+// The subcommand that starts a session. Both compilers spell it the same way, which is what lets these
+// tests run under either runner against one server.
+let LspServerCommandName = "lsp-server"
+
+// How long the server is given to exit once its stdin is closed or `exit` has been sent. It is well
+// under `maxon test`'s 5000 ms shard deadline on purpose: a server that hangs should be reported by this
+// client, naming the request, rather than by the harness killing the whole file.
+let ServerExitDeadlineMs = 3000
+
+// ============================================================================================
+// DOMAIN TYPES
+// ============================================================================================
+
+// A zero-based LSP position component — a line, or a character offset within one. ONE alias for both
+// because they are one domain: LSP defines each as a zero-based index into the same document, and two
+// aliases would be the same bound written down twice.
+public typealias LspCoordinate = int(0 to i64.max)
+
+// A document's version as `didChange` carries it. LSP requires it to increase, not to start anywhere in
+// particular.
+public typealias DocumentVersion = int(0 to i64.max)
+
+// The `tabSize` formatting option. Zero is not a width, so it is not in the domain.
+public typealias TabWidth = int(1 to i64.max)
+
+// ⚠ **THE FOUR ALIASES BELOW CARRY THE JSON INTEGER'S OWN RANGE, DELIBERATELY.** Each names a value
+// that arrives from the SERVER, and every one of them has a narrower legal range in the specification —
+// `SymbolKind` is 1..26, a semantic-token index is bounded by the legend. Narrowing here would turn a
+// server sending a value outside its own specification into a range-check PANIC, which reports a crash
+// where the truth is a wrong answer this client should hand back for a test to fail on.
+public typealias JsonRpcErrorCode = int(i64.min to i64.max)
+public typealias SymbolKindCode = int(i64.min to i64.max)
+public typealias CompletionKindCode = int(i64.min to i64.max)
+public typealias SemanticTokenValue = int(i64.min to i64.max)
+
+// A spawned server's exit status.
+public typealias ProcessExitCode = int(i64.min to i64.max)
+
+// The `kind` a server may omit. LSP numbers both `SymbolKind` and `CompletionItemKind` from 1, so 0 is
+// outside either enumeration and cannot be mistaken for one of its members.
+public let UnspecifiedKind = 0 as SymbolKindCode
+
+public typealias CompletionItemArray = Array with CompletionItem
+public typealias TextEditArray = Array with TextEdit
+public typealias DocumentSymbolArray = Array with DocumentSymbol
+public typealias FoldingRangeArray = Array with FoldingRange
+public typealias CodeActionItemArray = Array with CodeActionItem
+public typealias LspRangeArray = Array with LspRange
+public typealias SemanticTokenValueArray = Array with SemanticTokenValue
+
+// A span of a document, flat rather than nested. LSP nests it as `{start: {…}, end: {…}}`, but `end` is
+// a Maxon keyword and cannot name a field — and the client contract already spells folding ranges and
+// code-action ranges flat, so one shape serves every range a test reads.
+public type LspRange
+	public var startLine as LspCoordinate
+	public var startCharacter as LspCoordinate
+	public var endLine as LspCoordinate
+	public var endCharacter as LspCoordinate
+
+	static function create(startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns LspRange
+		return Self{startLine: startLine, startCharacter: startCharacter, endLine: endLine, endCharacter: endCharacter}
+	end 'create'
+
+	// The span a result carries when it names no location. Only ever read behind an `isPresent` that is
+	// false — every result carrying a range says separately whether it has one.
+	static function nowhere() returns LspRange
+		return Self{startLine: 0, startCharacter: 0, endLine: 0, endCharacter: 0}
+	end 'nowhere'
+end 'LspRange'
+
+public type TextEdit
+	public var range as LspRange
+	public var newText as String
+
+	static function create(range LspRange, newText String) returns TextEdit
+		return Self{range: range, newText: newText}
+	end 'create'
+end 'TextEdit'
+
+public type CompletionItem
+	public var label as String
+	public var kind as CompletionKindCode
+
+	static function create(label String, kind CompletionKindCode) returns CompletionItem
+		return Self{label: label, kind: kind}
+	end 'create'
+end 'CompletionItem'
+
+public type DocumentSymbol
+	public var name as String
+	public var kind as SymbolKindCode
+
+	static function create(name String, kind SymbolKindCode) returns DocumentSymbol
+		return Self{name: name, kind: kind}
+	end 'create'
+end 'DocumentSymbol'
+
+public type FoldingRange
+	public var startLine as LspCoordinate
+	public var endLine as LspCoordinate
+
+	static function create(startLine LspCoordinate, endLine LspCoordinate) returns FoldingRange
+		return Self{startLine: startLine, endLine: endLine}
+	end 'create'
+end 'FoldingRange'
+
+public type CodeActionItem
+	public var title as String
+
+	static function create(title String) returns CodeActionItem
+		return Self{title: title}
+	end 'create'
+end 'CodeActionItem'
+
+// What the server advertised in its `initialize` response.
+//
+// ⛔⛔ A capability is a promise, and a server advertises a method capability only when the CLIENT
+// declared support for it — so this record is meaningless unless `initialize` sent a realistic
+// capability set. MEASURED 2026-09-02 against the reference server: with `capabilities: {}` it
+// advertises three members, with a real set it advertises nine. `clientCapabilities` below is what makes
+// these fields answerable.
+public type InitializeResult
+	public var hasTextDocumentSync = false
+	public var hasHoverProvider = false
+	public var hasCompletionProvider = false
+	public var hasDefinitionProvider = false
+	public var hasFormattingProvider = false
+	public var hasDocumentSymbolProvider = false
+	public var hasFoldingRangeProvider = false
+	public var hasLinkedEditingRangeProvider = false
+	public var hasRenameProvider = false
+	public var hasCodeActionProvider = false
+	public var hasSemanticTokensProvider = false
+
+	static function create() returns InitializeResult
+		return Self{}
+	end 'create'
+end 'InitializeResult'
+
+// ⭐ **ABSENCE IS `isPresent`, NEVER A SENTINEL.** An empty-string uri meaning "nothing here" is a
+// sentinel inside its own domain: it fails silently the day a real result is empty. Both results that
+// can be absent say so the same way.
+public type HoverResult
+	public var isPresent = false
+	public var contents as String = ""
+
+	static function nothing() returns HoverResult
+		return Self{}
+	end 'nothing'
+
+	static function of(contents String) returns HoverResult
+		return Self{isPresent: true, contents: contents}
+	end 'of'
+end 'HoverResult'
+
+public type DefinitionResult
+	public var isPresent = false
+	public var uri as String = ""
+	public var range as LspRange = LspRange.nowhere()
+
+	static function nothing() returns DefinitionResult
+		return Self{}
+	end 'nothing'
+
+	static function of(uri String, range LspRange) returns DefinitionResult
+		return Self{isPresent: true, uri: uri, range: range}
+	end 'of'
+end 'DefinitionResult'
+
+public type CompletionResult
+	public var items as CompletionItemArray
+
+	static function of(items CompletionItemArray) returns CompletionResult
+		return Self{items: items}
+	end 'of'
+end 'CompletionResult'
+
+public type FormattingResult
+	public var edits as TextEditArray
+
+	static function of(edits TextEditArray) returns FormattingResult
+		return Self{edits: edits}
+	end 'of'
+end 'FormattingResult'
+
+public type DocumentSymbolsResult
+	public var symbols as DocumentSymbolArray
+
+	static function of(symbols DocumentSymbolArray) returns DocumentSymbolsResult
+		return Self{symbols: symbols}
+	end 'of'
+end 'DocumentSymbolsResult'
+
+public type FoldingRangesResult
+	public var ranges as FoldingRangeArray
+
+	static function of(ranges FoldingRangeArray) returns FoldingRangesResult
+		return Self{ranges: ranges}
+	end 'of'
+end 'FoldingRangesResult'
+
+public type LinkedEditingRangesResult
+	public var ranges as LspRangeArray
+
+	static function of(ranges LspRangeArray) returns LinkedEditingRangesResult
+		return Self{ranges: ranges}
+	end 'of'
+end 'LinkedEditingRangesResult'
+
+public type RenameResult
+	public var edits as TextEditArray
+
+	static function of(edits TextEditArray) returns RenameResult
+		return Self{edits: edits}
+	end 'of'
+end 'RenameResult'
+
+public type CodeActionResult
+	public var actions as CodeActionItemArray
+
+	static function of(actions CodeActionItemArray) returns CodeActionResult
+		return Self{actions: actions}
+	end 'of'
+end 'CodeActionResult'
+
+public type SemanticTokensResult
+	public var data as SemanticTokenValueArray
+
+	static function of(data SemanticTokenValueArray) returns SemanticTokensResult
+		return Self{data: data}
+	end 'of'
+end 'SemanticTokensResult'
+
+// How a session can go wrong in a way that is the SERVER's answer rather than the harness's failure.
+//
+// ⛔ Nothing that merely prevents a test from running is in here — a missing binary and a failed spawn
+// PANIC, because a report that made them read like a wrong answer would send a reader looking for a
+// defect in the thing that never ran.
+public union LspClientError implements Error
+	// The framed stream broke: it ended mid-message, or a read or write failed.
+	transportFailed(detail String)
+	// A reply arrived that is not the shape LSP defines for the request it answers.
+	malformedResponse(detail String)
+	// A well-formed JSON-RPC error object. `-32601` is what an unimplemented method answers.
+	serverRefused(code JsonRpcErrorCode, message String)
+end 'LspClientError'
+
+// ============================================================================================
+// THE CLIENT
+// ============================================================================================
+
+// A request id. JSON-RPC admits any scalar; this client only ever sends integers, and it starts at 1 so
+// that "no request has been sent" is not a value it can produce.
+typealias LspRequestIdNumber = int(1 to i64.max)
+
+let FirstRequestId = 1 as LspRequestIdNumber
+
+// A framed body's length in bytes, and how many bytes the line writer appends beyond it.
+typealias FrameByteCount = int(0 to i64.max)
+
+// How many messages addressed to somebody else may arrive before this client stops waiting. Server
+// notifications are legitimate and unbounded in principle; a budget turns a server that answers nothing
+// into a named failure instead of a hang.
+typealias SkippedMessageTally = int(0 to i64.max)
+
+let UnaddressedMessageBudget = 64 as SkippedMessageTally
+
+public type LspClient
+	var server as StreamingSubprocess
+	var nextRequestId as LspRequestIdNumber
+
+	// Spawn this checkout's shv2 `lsp-server` with pipes on all three streams.
+	//
+	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
+	// missing binary nor a refused spawn is the server answering wrongly.
+	public static function start() returns LspClient
+		let binary = testedServerPath()
+		if not File.exists(binary) 'noBinary'
+			panic("LspClient: the test could not run — there is no compiler at {binary.toString()}. Paths here are relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; run it from there, and build `{TestedCompilerStem}` first.")
+		end 'noBinary'
+
+		var argv = StringArray.create()
+		argv.push(LspServerCommandName)
+
+		let spawned = try StreamingSubprocess.spawn(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
+			panic("LspClient: the test could not run — `{TestedCompilerStem} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
+		end 'spawnFailed'
+
+		return Self{server: spawned, nextRequestId: FirstRequestId}
+	end 'start'
+
+	// End the session and free the OS handle. MUST be called on every path — a dropped
+	// `StreamingSubprocess` leaks, and a leak is exit 101.
+	//
+	// Closing stdin is what lets a server still in its read loop finish; the deadline then force-
+	// terminates one that does not, because a survivor holds the pipe and every later spawn in the run
+	// inherits a machine with one more orphan on it.
+	public function release()
+		self.server.closeStdin()
+		try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise ignore
+		self.server.release()
+	end 'release'
+
+	// ----------------------------------------------------------------------------------------
+	// Lifecycle
+	// ----------------------------------------------------------------------------------------
+
+	public function initialize() returns InitializeResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodInitialize)
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNull(ProcessIdKey)
+		params.putNull(RootUriKey)
+		params.putNode(CapabilitiesKey, value: clientCapabilities(doc))
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+		let capabilities = try memberNode(replyDoc, of: result, key: CapabilitiesKey)
+
+		var advertised = InitializeResult.create()
+		advertised.hasTextDocumentSync = advertises(replyDoc, capabilities: capabilities, key: TextDocumentSyncKey)
+		advertised.hasHoverProvider = advertises(replyDoc, capabilities: capabilities, key: HoverProviderKey)
+		advertised.hasCompletionProvider = advertises(replyDoc, capabilities: capabilities, key: CompletionProviderKey)
+		advertised.hasDefinitionProvider = advertises(replyDoc, capabilities: capabilities, key: DefinitionProviderKey)
+		advertised.hasFormattingProvider = advertises(replyDoc, capabilities: capabilities, key: FormattingProviderKey)
+		advertised.hasDocumentSymbolProvider = advertises(replyDoc, capabilities: capabilities, key: DocumentSymbolProviderKey)
+		advertised.hasFoldingRangeProvider = advertises(replyDoc, capabilities: capabilities, key: FoldingRangeProviderKey)
+		advertised.hasLinkedEditingRangeProvider = advertises(replyDoc, capabilities: capabilities, key: LinkedEditingRangeProviderKey)
+		advertised.hasRenameProvider = advertises(replyDoc, capabilities: capabilities, key: RenameProviderKey)
+		advertised.hasCodeActionProvider = advertises(replyDoc, capabilities: capabilities, key: CodeActionProviderKey)
+		advertised.hasSemanticTokensProvider = advertises(replyDoc, capabilities: capabilities, key: SemanticTokensProviderKey)
+
+		return advertised
+	end 'initialize'
+
+	public function initialized() throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodInitialized)
+		message.putNode(JsonRpcParamsKey, value: JsonObjectBuilder.create(doc).finish())
+		try self.sendNotification(doc, message: message)
+	end 'initialized'
+
+	public function shutdown() throws LspClientError
+		var doc = JsonDoc.create()
+		// LSP defines `shutdown` as taking no params, and an absent member is not an empty object.
+		var message = beginMessage(doc, method: MethodShutdown)
+		let (_, _) = try self.sendRequest(doc, message: message)
+	end 'shutdown'
+
+	public function exit() throws LspClientError
+		var doc = JsonDoc.create()
+		try self.sendNotification(doc, message: beginMessage(doc, method: MethodExit))
+	end 'exit'
+
+	// Block until the server exits, and report how. A server that never exits is a defect this reports
+	// rather than a harness failure, so the deadline throws instead of panicking.
+	public function waitForExit() returns ProcessExitCode throws LspClientError
+		return try self.server.waitWithTimeout(ServerExitDeadlineMs) otherwise (e) 'neverExited'
+			throw LspClientError.transportFailed("the server did not exit within {ServerExitDeadlineMs} ms: {e.displayReason()}")
+		end 'neverExited'
+	end 'waitForExit'
+
+	// ----------------------------------------------------------------------------------------
+	// Documents — full-text sync (kind 1): every change carries the whole document
+	// ----------------------------------------------------------------------------------------
+
+	public function openDocument(uri String, content String) throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodDidOpen)
+
+		var item = JsonObjectBuilder.create(doc)
+		item.putString(UriKey, value: uri)
+		item.putString(LanguageIdKey, value: MaxonLanguageId)
+		item.putInt(VersionKey, value: InitialDocumentVersion)
+		item.putString(TextKey, value: content)
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNode(TextDocumentKey, value: item.finish())
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		try self.sendNotification(doc, message: message)
+	end 'openDocument'
+
+	public function changeDocument(uri String, content String, version DocumentVersion) throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodDidChange)
+
+		var identifier = JsonObjectBuilder.create(doc)
+		identifier.putString(UriKey, value: uri)
+		identifier.putInt(VersionKey, value: version)
+
+		var change = JsonObjectBuilder.create(doc)
+		change.putString(TextKey, value: content)
+
+		var changes = JsonNodeIdArray.create()
+		changes.push(change.finish())
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNode(TextDocumentKey, value: identifier.finish())
+		params.putNode(ContentChangesKey, value: doc.add(JsonNode.arrayNode(changes)))
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		try self.sendNotification(doc, message: message)
+	end 'changeDocument'
+
+	public function closeDocument(uri String) throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodDidClose)
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		try self.sendNotification(doc, message: message)
+	end 'closeDocument'
+
+	// ----------------------------------------------------------------------------------------
+	// Language features
+	// ----------------------------------------------------------------------------------------
+
+	// ⭐ **A METHOD THE SERVER WILL NEVER SERVE, so the refusal it draws is PERMANENT.**
+	// The smoke test needs one request that is refused, to prove the client decodes a JSON-RPC error
+	// object into `serverRefused` rather than mistaking it for a result. It used to use `hover` for
+	// that — which worked only while hover was unimplemented, and went red the day it landed. A test
+	// whose subject is "this feature is missing" expires the moment someone does their job.
+	// ⇒ The durable subject is the PROTOCOL rule: LSP requires an unknown method to answer
+	// `-32601`. This name is reserved for that and is deliberately not an LSP method.
+	public function unservedMethodRefusal(uri String) returns HoverResult throws LspClientError
+		let (doc, result) = try self.positionRequest(MethodNeverServed, uri: uri, line: DocumentStart, character: DocumentStart)
+		if isNull(doc, id: result) 'nothingHere'
+			return HoverResult.nothing()
+		end 'nothingHere'
+
+		return HoverResult.of(try renderHoverContents(doc, id: try memberNode(doc, of: result, key: ContentsKey)))
+	end 'unservedMethodRefusal'
+
+	// ⭐ **IS THIS METHOD SERVED AT ALL?** Sends `methodName` and reports only whether the server answered
+	// JSON-RPC's `method not found`. It exists because "served" is a property of the SERVER, not of any one
+	// typed method — so asking it ten times through ten typed signatures would be ten chances to ask a
+	// slightly different question.
+	// ⚠ Position params are sent whatever the method takes. A method that IS served but wants a different
+	// shape answers `-32602 invalid params`, which is still an ANSWER: the only thing this reports is the
+	// absence of `-32601`.
+	public function methodIsServed(methodName String, uri String) returns bool throws LspClientError
+		let (_, _) = try self.positionRequest(methodName, uri: uri, line: DocumentStart, character: DocumentStart) otherwise (e) 'refusedOrBroke'
+			match e 'reason'
+				serverRefused(code, _) then return code != MethodNotFoundCode
+				transportFailed or malformedResponse then throw e
+			end 'reason'
+		end 'refusedOrBroke'
+
+		return true
+	end 'methodIsServed'
+
+	public function hover(uri String, line LspCoordinate, character LspCoordinate) returns HoverResult throws LspClientError
+		let (doc, result) = try self.positionRequest(MethodHover, uri: uri, line: line, character: character)
+		if isNull(doc, id: result) 'nothingHere'
+			return HoverResult.nothing()
+		end 'nothingHere'
+
+		return HoverResult.of(try renderHoverContents(doc, id: try memberNode(doc, of: result, key: ContentsKey)))
+	end 'hover'
+
+	public function definition(uri String, line LspCoordinate, character LspCoordinate) returns DefinitionResult throws LspClientError
+		let (doc, result) = try self.positionRequest(MethodDefinition, uri: uri, line: line, character: character)
+		return try readDefinition(doc, id: result)
+	end 'definition'
+
+	public function completion(uri String, line LspCoordinate, character LspCoordinate) returns CompletionResult throws LspClientError
+		let (doc, result) = try self.positionRequest(MethodCompletion, uri: uri, line: line, character: character)
+		return try readCompletion(doc, id: result)
+	end 'completion'
+
+	// Completion as an editor raises it from a typed character rather than from an explicit invocation.
+	// The trigger kind is what tells the server which of the two happened.
+	public function completionWithTrigger(uri String, line LspCoordinate, character LspCoordinate, triggerCharacter String) returns CompletionResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodCompletion)
+
+		var context = JsonObjectBuilder.create(doc)
+		context.putInt(TriggerKindKey, value: TriggerCharacterKind)
+		context.putString(TriggerCharacterKey, value: triggerCharacter)
+
+		var params = positionParams(doc, uri: uri, line: line, character: character)
+		params.putNode(ContextKey, value: context.finish())
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+		return try readCompletion(replyDoc, id: result)
+	end 'completionWithTrigger'
+
+	public function formatting(uri String, tabSize TabWidth, insertSpaces bool) returns FormattingResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodFormatting)
+
+		var options = JsonObjectBuilder.create(doc)
+		options.putInt(TabSizeKey, value: tabSize)
+		options.putBool(InsertSpacesKey, value: insertSpaces)
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
+		params.putNode(OptionsKey, value: options.finish())
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+		return FormattingResult.of(try readTextEdits(replyDoc, id: result))
+	end 'formatting'
+
+	public function documentSymbols(uri String) returns DocumentSymbolsResult throws LspClientError
+		let (doc, result) = try self.documentRequest(MethodDocumentSymbol, uri: uri)
+		var symbols = DocumentSymbolArray.create()
+
+		for element in try optionalElements(doc, id: result) 'eachSymbol'
+			symbols.push(DocumentSymbol.create(try stringMember(doc, of: element, key: NameKey), kind: optionalKind(doc, of: element)))
+		end 'eachSymbol'
+
+		return DocumentSymbolsResult.of(symbols)
+	end 'documentSymbols'
+
+	public function foldingRange(uri String) returns FoldingRangesResult throws LspClientError
+		let (doc, result) = try self.documentRequest(MethodFoldingRange, uri: uri)
+		var ranges = FoldingRangeArray.create()
+
+		for element in try optionalElements(doc, id: result) 'eachRange'
+			let startLine = try coordinateMember(doc, of: element, key: StartLineKey)
+			ranges.push(FoldingRange.create(startLine, endLine: try coordinateMember(doc, of: element, key: EndLineKey)))
+		end 'eachRange'
+
+		return FoldingRangesResult.of(ranges)
+	end 'foldingRange'
+
+	public function linkedEditingRange(uri String, line LspCoordinate, character LspCoordinate) returns LinkedEditingRangesResult throws LspClientError
+		let (doc, result) = try self.positionRequest(MethodLinkedEditingRange, uri: uri, line: line, character: character)
+		var ranges = LspRangeArray.create()
+		if isNull(doc, id: result) 'nothingHere'
+			return LinkedEditingRangesResult.of(ranges)
+		end 'nothingHere'
+
+		for element in try elementsOf(doc, id: try memberNode(doc, of: result, key: RangesKey)) 'eachRange'
+			ranges.push(try readRange(doc, id: element))
+		end 'eachRange'
+
+		return LinkedEditingRangesResult.of(ranges)
+	end 'linkedEditingRange'
+
+	public function rename(uri String, line LspCoordinate, character LspCoordinate, newName String) returns RenameResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodRename)
+
+		var params = positionParams(doc, uri: uri, line: line, character: character)
+		params.putString(NewNameKey, value: newName)
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+		return RenameResult.of(try readWorkspaceEdit(replyDoc, id: result, uri: uri))
+	end 'rename'
+
+	public function codeAction(uri String, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns CodeActionResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodCodeAction)
+
+		// The context is required by LSP even when the client knows of no diagnostics at the range.
+		var context = JsonObjectBuilder.create(doc)
+		context.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(JsonNodeIdArray.create())))
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
+		params.putNode(RangeKey, value: rangeNode(doc, startLine: startLine, startCharacter: startCharacter, endLine: endLine, endCharacter: endCharacter))
+		params.putNode(ContextKey, value: context.finish())
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+		var actions = CodeActionItemArray.create()
+
+		for element in try optionalElements(replyDoc, id: result) 'eachAction'
+			actions.push(CodeActionItem.create(try stringMember(replyDoc, of: element, key: TitleKey)))
+		end 'eachAction'
+
+		return CodeActionResult.of(actions)
+	end 'codeAction'
+
+	public function semanticTokensFull(uri String) returns SemanticTokensResult throws LspClientError
+		let (doc, result) = try self.documentRequest(MethodSemanticTokensFull, uri: uri)
+		var data = SemanticTokenValueArray.create()
+		if isNull(doc, id: result) 'noTokens'
+			return SemanticTokensResult.of(data)
+		end 'noTokens'
+
+		for element in try elementsOf(doc, id: try memberNode(doc, of: result, key: DataKey)) 'eachValue'
+			data.push(try integerAt(doc, id: element))
+		end 'eachValue'
+
+		return SemanticTokensResult.of(data)
+	end 'semanticTokensFull'
+
+	// ----------------------------------------------------------------------------------------
+	// Request plumbing
+	// ----------------------------------------------------------------------------------------
+
+	// The shape every `textDocument/*` request that names a cursor shares.
+	function positionRequest(method String, uri String, line LspCoordinate, character LspCoordinate) returns (JsonDoc, JsonNodeId) throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: method)
+		message.putNode(JsonRpcParamsKey, value: positionParams(doc, uri: uri, line: line, character: character).finish())
+		return try self.sendRequest(doc, message: message)
+	end 'positionRequest'
+
+	// The shape every request that names only a document shares.
+	function documentRequest(method String, uri String) returns (JsonDoc, JsonNodeId) throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: method)
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		return try self.sendRequest(doc, message: message)
+	end 'documentRequest'
+
+	// Address `message` with the next id, send it, and wait for the reply that carries that id back.
+	// The reply's document is handed back with the result node because the node is an index into it.
+	function sendRequest(doc JsonDoc, message JsonObjectBuilder) returns (JsonDoc, JsonNodeId) throws LspClientError
+		let id = self.nextRequestId
+		self.nextRequestId = id + 1
+
+		message.putInt(JsonRpcIdKey, value: id)
+		doc.root = message.finish()
+		try self.writeFrame(Json.stringify(doc))
+
+		return try self.awaitReply(id)
+	end 'sendRequest'
+
+	// A notification carries no id, and JSON-RPC forbids answering one — so nothing is read back.
+	function sendNotification(doc JsonDoc, message JsonObjectBuilder) throws LspClientError
+		doc.root = message.finish()
+		try self.writeFrame(Json.stringify(doc))
+	end 'sendNotification'
+
+	// ⚠ **THE COUNT INCLUDES THE LINE WRITER'S OWN NEWLINE, AND THAT IS THE WHOLE TRICK.**
+	// `writeStdinLine` is stdlib's only stdin writer and it appends an LF. A byte left OUTSIDE the frame
+	// would be read by the server as the start of the next message — a header line that is blank and
+	// carries no `Content-Length` — which desynchronizes the stream permanently. Counting it instead puts
+	// it inside the body, where RFC 8259 allows trailing whitespace after a value, so every conforming
+	// JSON parser sees the same message.
+	function writeFrame(body String) throws LspClientError
+		try self.server.writeStdinLine("Content-Length: {body.byteLength() + LineWriterNewlineByteCount}\r\n\r\n{body}") otherwise (e) 'writeFailed'
+			throw LspClientError.transportFailed("writing a {body.byteLength()}-byte message failed: {e.displayReason()}")
+		end 'writeFailed'
+	end 'writeFrame'
+
+	// Read one framed message: header lines until a blank one, then EXACTLY `Content-Length` bytes.
+	//
+	// ⛔ The body MUST be taken by count. It carries no terminator, so a line reader blocks for ever on a
+	// newline that never arrives, and `readStdoutLineCapped`'s cap is a truncation ceiling rather than a
+	// length. `readStdoutBytes` shares the per-handle buffer with the line reader, which is what lets the
+	// headers be read by line and the body by count on one stream.
+	function readFrame() returns String throws LspClientError
+		var contentLength = 0 as FrameByteCount
+		var haveContentLength = false
+		var inHeaders = true
+
+		while inHeaders 'headers'
+			let line = try self.server.readStdoutLine() otherwise (e) 'headerReadFailed'
+				throw LspClientError.transportFailed("reading a message header failed: {e.displayReason()}")
+			end 'headerReadFailed'
+
+			if line.isEmpty() 'blankLine'
+				// EOF reads as an empty line here too, and both end the session: a blank line arriving
+				// before a `Content-Length` is not a frame this client can read either way.
+				if not haveContentLength 'noFrame'
+					throw LspClientError.transportFailed("the server's stdout ended before any Content-Length header")
+				end 'noFrame'
+
+				inHeaders = false
+			end 'blankLine' else 'headerField'
+				let parts = line.split(HeaderFieldSeparator)
+				let name = (try parts.get(0) otherwise "").toLower()
+
+				// Every other header is ignored, as the protocol requires of one a peer does not know.
+				if name == ContentLengthHeaderName 'contentLengthField'
+					let raw = (try parts.get(1) otherwise "").trim()
+					contentLength = try int.fromString(raw) otherwise 'notACount'
+						throw LspClientError.transportFailed("a Content-Length header is not a byte count: '{raw}'")
+					end 'notACount'
+					haveContentLength = true
+				end 'contentLengthField'
+			end 'headerField'
+		end 'headers'
+
+		// `readStdoutBytes` cannot throw: a runtime refusal answers "" exactly as a clean EOF does. The
+		// short-read check below is therefore the only thing separating a broken stream from a whole frame.
+		let body = self.server.readStdoutBytes(contentLength)
+
+		if body.byteLength() != contentLength 'truncated'
+			throw LspClientError.transportFailed("the server's stdout ended after {body.byteLength()} of {contentLength} body bytes")
+		end 'truncated'
+
+		return body
+	end 'readFrame'
+
+	// Read messages until the one addressed to `id` arrives. Anything else — a notification, or a reply
+	// to some other request — is skipped, under a budget so that a server answering nothing becomes a
+	// named failure rather than a hang.
+	function awaitReply(id LspRequestIdNumber) returns (JsonDoc, JsonNodeId) throws LspClientError
+		var skipped = 0 as SkippedMessageTally
+
+		while skipped < UnaddressedMessageBudget 'correlate'
+			let body = try self.readFrame()
+			let doc = try Json.parse(body) otherwise 'notJson'
+				throw LspClientError.malformedResponse("a message body is not valid JSON: {body}")
+			end 'notJson'
+
+			if addressesRequest(doc, id: id) 'ours'
+				return try replyOf(doc)
+			end 'ours'
+
+			skipped = skipped + 1
+		end 'correlate'
+
+		throw LspClientError.transportFailed("no reply to request {id} arrived within {UnaddressedMessageBudget} messages addressed elsewhere")
+	end 'awaitReply'
+end 'LspClient'
+
+// The server binary with the suffix this host can actually spawn.
+function testedServerPath() returns FilePath
+	#if os(Windows)
+		let spelled = "{TestedCompilerStem}.exe"
+	#else
+		let spelled = "{TestedCompilerStem}"
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("LspClient: the test could not run — '{TestedCompilerStem}' is not a spellable path")
+end 'testedServerPath'
+
+// ============================================================================================
+// BUILDING A MESSAGE
+// ============================================================================================
+
+// One JSON object under construction. `JsonNode.objectNode` takes parallel key and child arrays, and
+// keeping them in one place is what stops a caller pushing to one and forgetting the other. The document
+// travels with the builder because every value added is a node in that arena.
+type JsonObjectBuilder
+	var doc as JsonDoc
+	var keys as StringArray
+	var children as JsonNodeIdArray
+
+	static function create(doc JsonDoc) returns JsonObjectBuilder
+		return Self{doc: doc, keys: StringArray.create(), children: JsonNodeIdArray.create()}
+	end 'create'
+
+	function putString(key String, value String)
+		self.keys.push(key)
+		self.children.push(self.doc.add(JsonNode.stringNode(value)))
+	end 'putString'
+
+	function putInt(key String, value JsonRpcErrorCode)
+		self.keys.push(key)
+		self.children.push(self.doc.add(JsonNode.numberNode(value)))
+	end 'putInt'
+
+	function putBool(key String, value bool)
+		self.keys.push(key)
+		self.children.push(self.doc.add(JsonNode.boolNode(value)))
+	end 'putBool'
+
+	function putNull(key String)
+		self.keys.push(key)
+		self.children.push(self.doc.add(JsonNode.nullNode()))
+	end 'putNull'
+
+	function putNode(key String, value JsonNodeId)
+		self.keys.push(key)
+		self.children.push(value)
+	end 'putNode'
+
+	function finish() returns JsonNodeId
+		return self.doc.add(JsonNode.objectNode(self.keys, children: self.children))
+	end 'finish'
+end 'JsonObjectBuilder'
+
+// The envelope every message shares. The id belongs to requests only, so it is added by the sender.
+function beginMessage(doc JsonDoc, method String) returns JsonObjectBuilder
+	var message = JsonObjectBuilder.create(doc)
+	message.putString(JsonRpcVersionKey, value: JsonRpcVersion)
+	message.putString(JsonRpcMethodKey, value: method)
+	return message
+end 'beginMessage'
+
+function textDocumentIdentifier(doc JsonDoc, uri String) returns JsonNodeId
+	var identifier = JsonObjectBuilder.create(doc)
+	identifier.putString(UriKey, value: uri)
+	return identifier.finish()
+end 'textDocumentIdentifier'
+
+function positionNode(doc JsonDoc, line LspCoordinate, character LspCoordinate) returns JsonNodeId
+	var position = JsonObjectBuilder.create(doc)
+	position.putInt(LineKey, value: line)
+	position.putInt(CharacterKey, value: character)
+	return position.finish()
+end 'positionNode'
+
+function rangeNode(doc JsonDoc, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns JsonNodeId
+	var range = JsonObjectBuilder.create(doc)
+	range.putNode(StartKey, value: positionNode(doc, line: startLine, character: startCharacter))
+	range.putNode(EndKey, value: positionNode(doc, line: endLine, character: endCharacter))
+	return range.finish()
+end 'rangeNode'
+
+// The params of a `textDocument/*` request that names a cursor, left OPEN so that a caller carrying more
+// members — a completion context, a new name — adds them to the same object.
+function positionParams(doc JsonDoc, uri String, line LspCoordinate, character LspCoordinate) returns JsonObjectBuilder
+	var params = JsonObjectBuilder.create(doc)
+	params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
+	params.putNode(PositionKey, value: positionNode(doc, line: line, character: character))
+	return params
+end 'positionParams'
+
+// ⛔⛔ **A REALISTIC CAPABILITY SET, NEVER `{}`.** A spec-compliant server advertises a text-document
+// capability only when the client declared support for it, so an empty set makes every capability
+// assertion fail for a reason that is not a bug. Each feature is declared the same way — the client
+// registers statically, not dynamically — which is why the set is one list rather than eleven objects.
+function clientCapabilities(doc JsonDoc) returns JsonNodeId
+	var textDocument = JsonObjectBuilder.create(doc)
+
+	for feature in declaredTextDocumentFeatures() 'eachFeature'
+		var declaration = JsonObjectBuilder.create(doc)
+		declaration.putBool(DynamicRegistrationKey, value: false)
+		textDocument.putNode(feature, value: declaration.finish())
+	end 'eachFeature'
+
+	var workspace = JsonObjectBuilder.create(doc)
+	workspace.putBool(WorkspaceFoldersKey, value: false)
+
+	var capabilities = JsonObjectBuilder.create(doc)
+	capabilities.putNode(TextDocumentKey, value: textDocument.finish())
+	capabilities.putNode(WorkspaceKey, value: workspace.finish())
+	return capabilities.finish()
+end 'clientCapabilities'
+
+// Every text-document feature this client supports, spelled as LSP names them under
+// `capabilities.textDocument`. `synchronization` is what makes `didOpen` / `didChange` / `didClose`
+// legal; the rest are the requests the client exposes.
+function declaredTextDocumentFeatures() returns StringArray
+	return ["synchronization", "hover", "completion", "definition", "formatting", "documentSymbol", "foldingRange", "linkedEditingRange", "rename", "codeAction", "semanticTokens"]
+end 'declaredTextDocumentFeatures'
+
+// ============================================================================================
+// READING A REPLY
+// ============================================================================================
+
+// Strict correlation on the integer `id`. A notification carries none and a reply to another request
+// carries a different one; both are somebody else's message. MEASURED against the reference server: a
+// `publishDiagnostics` notification does arrive ahead of the first reply.
+function addressesRequest(doc JsonDoc, id LspRequestIdNumber) returns bool
+	let idNode = try doc.getChild(doc.root, key: JsonRpcIdKey) otherwise return false
+	let node = doc.get(idNode)
+
+	if node.kind != JsonKind.jsonNumber 'notAnIntegerId'
+		return false
+	end 'notAnIntegerId'
+
+	return trunc(node.numberValue) == id
+end 'addressesRequest'
+
+// A JSON-RPC response carries exactly one of `result` and `error`, and WHICH one is the answer.
+function replyOf(doc JsonDoc) returns (JsonDoc, JsonNodeId) throws LspClientError
+	if hasMember(doc, of: doc.root, key: JsonRpcErrorKey) 'refused'
+		let failure = try memberNode(doc, of: doc.root, key: JsonRpcErrorKey)
+		let code = try integerMember(doc, of: failure, key: JsonRpcErrorCodeKey)
+		throw LspClientError.serverRefused(code, message: try stringMember(doc, of: failure, key: JsonRpcErrorMessageKey))
+	end 'refused'
+
+	return (doc, try memberNode(doc, of: doc.root, key: JsonRpcResultKey))
+end 'replyOf'
+
+// Whether an object carries `key`. `JsonDoc` answers the lookup only by throwing, and a reply is told
+// apart by WHICH member it has — so the presence question is asked of the node's own key list.
+function hasMember(doc JsonDoc, of JsonNodeId, key String) returns bool
+	let node = doc.get(of)
+
+	for name in node.keys 'eachKey'
+		if name == key 'found'
+			return true
+		end 'found'
+	end 'eachKey'
+
+	return false
+end 'hasMember'
+
+// A capability is advertised when the server named it and did not answer `false` or `null`. LSP allows
+// either a bare `true` or an options object, and both mean the same thing to a client that only asks
+// whether the request is worth sending.
+function advertises(doc JsonDoc, capabilities JsonNodeId, key String) returns bool
+	let declared = try doc.getChild(capabilities, key: key) otherwise return false
+	let node = doc.get(declared)
+
+	return match node.kind 'shape'
+		jsonNull gives false
+		jsonBool gives node.boolValue
+		jsonNumber or jsonString or jsonArray or jsonObject gives true
+	end 'shape'
+end 'advertises'
+
+function isNull(doc JsonDoc, id JsonNodeId) returns bool
+	return doc.get(id).kind == JsonKind.jsonNull
+end 'isNull'
+
+// `stdlib/Json.maxon`'s access error is private to that file, so a walk here cannot propagate it. These
+// four translate it once into the error this client names, which is what lets every reader above use a
+// bare `try`.
+function memberNode(doc JsonDoc, of JsonNodeId, key String) returns JsonNodeId throws LspClientError
+	return try doc.getChild(of, key: key) otherwise 'absent'
+		throw LspClientError.malformedResponse("a reply is missing the '{key}' member LSP defines for it")
+	end 'absent'
+end 'memberNode'
+
+function stringMember(doc JsonDoc, of JsonNodeId, key String) returns String throws LspClientError
+	return try doc.getString(of, key: key) otherwise 'notAString'
+		throw LspClientError.malformedResponse("a reply's '{key}' member is missing or is not a string")
+	end 'notAString'
+end 'stringMember'
+
+function integerMember(doc JsonDoc, of JsonNodeId, key String) returns JsonRpcErrorCode throws LspClientError
+	return try doc.getInt(of, key: key) otherwise 'notAnInteger'
+		throw LspClientError.malformedResponse("a reply's '{key}' member is missing or is not a number")
+	end 'notAnInteger'
+end 'integerMember'
+
+function integerAt(doc JsonDoc, id JsonNodeId) returns SemanticTokenValue throws LspClientError
+	let node = doc.get(id)
+	if node.kind != JsonKind.jsonNumber 'notANumber'
+		throw LspClientError.malformedResponse("an array this reply must answer with numbers holds something else")
+	end 'notANumber'
+
+	return trunc(node.numberValue)
+end 'integerAt'
+
+// A position component off the wire. LSP defines these as non-negative, so a negative one is a server
+// defect — reported, rather than turned into a range-check panic by an unchecked cast.
+function coordinateMember(doc JsonDoc, of JsonNodeId, key String) returns LspCoordinate throws LspClientError
+	let value = try integerMember(doc, of: of, key: key)
+	if value < 0 'negative'
+		throw LspClientError.malformedResponse("a reply's '{key}' is {value}, and LSP positions are zero-based")
+	end 'negative'
+
+	return value as LspCoordinate
+end 'coordinateMember'
+
+// A `kind` a server may leave out. LSP numbers both enumerations from 1, so the absent value is outside
+// either one and cannot be read as a member of it.
+function optionalKind(doc JsonDoc, of JsonNodeId) returns SymbolKindCode
+	return try doc.getInt(of, key: KindKey) otherwise UnspecifiedKind
+end 'optionalKind'
+
+// The elements of a JSON array node.
+function elementsOf(doc JsonDoc, id JsonNodeId) returns JsonNodeIdArray throws LspClientError
+	let count = try doc.arrayLength(id) otherwise 'notAnArray'
+		throw LspClientError.malformedResponse("a member this reply must answer with an array is not one")
+	end 'notAnArray'
+
+	var elements = JsonNodeIdArray.create()
+
+	for index in 0 upto count 'eachElement'
+		elements.push(try doc.arrayAt(id, index: index) otherwise panic("LspClient.elementsOf: index below the length just measured"))
+	end 'eachElement'
+
+	return elements
+end 'elementsOf'
+
+// The elements of a result that is an array, or none when the server answered `null`. Several requests
+// share exactly this shape: LSP lets each of them return `null` instead of an empty array.
+function optionalElements(doc JsonDoc, id JsonNodeId) returns JsonNodeIdArray throws LspClientError
+	if isNull(doc, id: id) 'nothingHere'
+		return JsonNodeIdArray.create()
+	end 'nothingHere'
+
+	return try elementsOf(doc, id: id)
+end 'optionalElements'
+
+function readRange(doc JsonDoc, id JsonNodeId) returns LspRange throws LspClientError
+	let start = try memberNode(doc, of: id, key: StartKey)
+	let finish = try memberNode(doc, of: id, key: EndKey)
+
+	let startLine = try coordinateMember(doc, of: start, key: LineKey)
+	let startCharacter = try coordinateMember(doc, of: start, key: CharacterKey)
+	let endLine = try coordinateMember(doc, of: finish, key: LineKey)
+
+	return LspRange.create(startLine, startCharacter: startCharacter, endLine: endLine, endCharacter: try coordinateMember(doc, of: finish, key: CharacterKey))
+end 'readRange'
+
+function readTextEdits(doc JsonDoc, id JsonNodeId) returns TextEditArray throws LspClientError
+	var edits = TextEditArray.create()
+
+	for element in try optionalElements(doc, id: id) 'eachEdit'
+		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
+		edits.push(TextEdit.create(range, newText: try stringMember(doc, of: element, key: NewTextKey)))
+	end 'eachEdit'
+
+	return edits
+end 'readTextEdits'
+
+// Hover contents in each of the three shapes LSP admits: a bare string, a `MarkupContent`, and a list of
+// either. The list is joined with newlines, which is how an editor stacks the sections it renders.
+function renderHoverContents(doc JsonDoc, id JsonNodeId) returns String throws LspClientError
+	let node = doc.get(id)
+
+	match node.kind 'shape'
+		jsonString then return node.stringValue
+		jsonObject then return try stringMember(doc, of: id, key: ValueKey)
+		jsonArray then return try renderHoverSections(doc, id: id)
+		default throws LspClientError.malformedResponse("a hover reply's contents is neither a string, a MarkupContent nor a list of either")
+	end 'shape'
+end 'renderHoverContents'
+
+function renderHoverSections(doc JsonDoc, id JsonNodeId) returns String throws LspClientError
+	var rendered = ""
+	var separator = ""
+
+	for element in try elementsOf(doc, id: id) 'eachSection'
+		rendered.append("{separator}{try renderHoverContents(doc, id: element)}")
+		separator = HoverSectionSeparator
+	end 'eachSection'
+
+	return rendered
+end 'renderHoverSections'
+
+// A definition answer in each of the three shapes LSP admits: `null`, one `Location` or `LocationLink`,
+// or a list of them. A list answers with its first entry, which is what an editor jumps to.
+function readDefinition(doc JsonDoc, id JsonNodeId) returns DefinitionResult throws LspClientError
+	if isNull(doc, id: id) 'nothingHere'
+		return DefinitionResult.nothing()
+	end 'nothingHere'
+
+	if doc.get(id).kind == JsonKind.jsonArray 'aList'
+		let candidates = try elementsOf(doc, id: id)
+		if candidates.isEmpty() 'noCandidate'
+			return DefinitionResult.nothing()
+		end 'noCandidate'
+
+		return try readDefinition(doc, id: try candidates.get(0) otherwise panic("LspClient.readDefinition: a non-empty list has a first element"))
+	end 'aList'
+
+	// A `LocationLink` names the same two facts under different members.
+	if hasMember(doc, of: id, key: TargetUriKey) 'aLink'
+		let target = try stringMember(doc, of: id, key: TargetUriKey)
+		return DefinitionResult.of(target, range: try readRange(doc, id: try memberNode(doc, of: id, key: TargetRangeKey)))
+	end 'aLink'
+
+	let uri = try stringMember(doc, of: id, key: UriKey)
+	return DefinitionResult.of(uri, range: try readRange(doc, id: try memberNode(doc, of: id, key: RangeKey)))
+end 'readDefinition'
+
+// A completion answer as either a bare list of items or a `CompletionList` wrapping one.
+function readCompletion(doc JsonDoc, id JsonNodeId) returns CompletionResult throws LspClientError
+	var items = CompletionItemArray.create()
+	if isNull(doc, id: id) 'nothingHere'
+		return CompletionResult.of(items)
+	end 'nothingHere'
+
+	let listed = id if doc.get(id).kind == JsonKind.jsonArray else try memberNode(doc, of: id, key: ItemsKey)
+
+	for element in try elementsOf(doc, id: listed) 'eachItem'
+		items.push(CompletionItem.create(try stringMember(doc, of: element, key: LabelKey), kind: optionalKind(doc, of: element)))
+	end 'eachItem'
+
+	return CompletionResult.of(items)
+end 'readCompletion'
+
+// A `WorkspaceEdit` in either of the two shapes LSP admits, reduced to the edits that apply to `uri` —
+// which is the only document a rename test opened.
+function readWorkspaceEdit(doc JsonDoc, id JsonNodeId, uri String) returns TextEditArray throws LspClientError
+	if isNull(doc, id: id) 'noEdit'
+		return TextEditArray.create()
+	end 'noEdit'
+
+	if hasMember(doc, of: id, key: ChangesKey) 'byUri'
+		let changes = try memberNode(doc, of: id, key: ChangesKey)
+		if not hasMember(doc, of: changes, key: uri) 'untouched'
+			return TextEditArray.create()
+		end 'untouched'
+
+		return try readTextEdits(doc, id: try memberNode(doc, of: changes, key: uri))
+	end 'byUri'
+
+	var edits = TextEditArray.create()
+
+	for element in try optionalElements(doc, id: try memberNode(doc, of: id, key: DocumentChangesKey)) 'eachDocument'
+		let identifier = try memberNode(doc, of: element, key: TextDocumentKey)
+		if (try stringMember(doc, of: identifier, key: UriKey)) != uri 'otherDocument'
+			continue
+		end 'otherDocument'
+
+		for edit in try readTextEdits(doc, id: try memberNode(doc, of: element, key: EditsKey)) 'eachEdit'
+			edits.push(edit)
+		end 'eachEdit'
+	end 'eachDocument'
+
+	return edits
+end 'readWorkspaceEdit'
+
+// ============================================================================================
+// WIRE VOCABULARY
+// ============================================================================================
+
+let JsonRpcVersion = "2.0"
+let JsonRpcVersionKey = "jsonrpc"
+let JsonRpcIdKey = "id"
+let JsonRpcMethodKey = "method"
+let JsonRpcParamsKey = "params"
+let JsonRpcResultKey = "result"
+let JsonRpcErrorKey = "error"
+let JsonRpcErrorCodeKey = "code"
+let JsonRpcErrorMessageKey = "message"
+
+let MethodInitialize = "initialize"
+let MethodInitialized = "initialized"
+let MethodShutdown = "shutdown"
+let MethodExit = "exit"
+let MethodDidOpen = "textDocument/didOpen"
+let MethodDidChange = "textDocument/didChange"
+let MethodDidClose = "textDocument/didClose"
+let MethodHover = "textDocument/hover"
+let MethodDefinition = "textDocument/definition"
+let MethodCompletion = "textDocument/completion"
+let MethodFormatting = "textDocument/formatting"
+let MethodDocumentSymbol = "textDocument/documentSymbol"
+let MethodFoldingRange = "textDocument/foldingRange"
+let MethodLinkedEditingRange = "textDocument/linkedEditingRange"
+let MethodRename = "textDocument/rename"
+let MethodCodeAction = "textDocument/codeAction"
+let MethodSemanticTokensFull = "textDocument/semanticTokens/full"
+
+// JSON-RPC's reserved code for a method the server does not implement. `methodIsServed` tests for it
+// by NUMBER rather than by message text, because the sentence is a server's to word and the code is
+// the protocol's.
+let MethodNotFoundCode = -32601 as JsonRpcErrorCode
+
+// The probe's position. Any position does — the server refuses the METHOD before it reads the
+// params — so this is simply the document's first character.
+let DocumentStart = 0 as LspCoordinate
+
+// ⛔ NOT an LSP method, and never to become one. `unservedMethodRefusal` sends it to draw a
+// `-32601` that no future implementation can take away. The `maxon/` prefix is the LSP convention
+// for a server's own extensions, so it cannot collide with anything the specification adds.
+let MethodNeverServed = "maxon/aMethodNoServerServes"
+
+let CapabilitiesKey = "capabilities"
+let TextDocumentKey = "textDocument"
+let WorkspaceKey = "workspace"
+let WorkspaceFoldersKey = "workspaceFolders"
+let DynamicRegistrationKey = "dynamicRegistration"
+let ProcessIdKey = "processId"
+let RootUriKey = "rootUri"
+
+let TextDocumentSyncKey = "textDocumentSync"
+let HoverProviderKey = "hoverProvider"
+let CompletionProviderKey = "completionProvider"
+let DefinitionProviderKey = "definitionProvider"
+let FormattingProviderKey = "documentFormattingProvider"
+let DocumentSymbolProviderKey = "documentSymbolProvider"
+let FoldingRangeProviderKey = "foldingRangeProvider"
+let LinkedEditingRangeProviderKey = "linkedEditingRangeProvider"
+let RenameProviderKey = "renameProvider"
+let CodeActionProviderKey = "codeActionProvider"
+let SemanticTokensProviderKey = "semanticTokensProvider"
+
+let UriKey = "uri"
+let TextKey = "text"
+let LanguageIdKey = "languageId"
+let VersionKey = "version"
+let ContentChangesKey = "contentChanges"
+let PositionKey = "position"
+let LineKey = "line"
+let CharacterKey = "character"
+let RangeKey = "range"
+let StartKey = "start"
+let EndKey = "end"
+let ContextKey = "context"
+let TriggerKindKey = "triggerKind"
+let TriggerCharacterKey = "triggerCharacter"
+let OptionsKey = "options"
+let TabSizeKey = "tabSize"
+let InsertSpacesKey = "insertSpaces"
+let NewNameKey = "newName"
+let NewTextKey = "newText"
+let DiagnosticsKey = "diagnostics"
+let ContentsKey = "contents"
+let ValueKey = "value"
+let ItemsKey = "items"
+let LabelKey = "label"
+let KindKey = "kind"
+let NameKey = "name"
+let TitleKey = "title"
+let RangesKey = "ranges"
+let DataKey = "data"
+let StartLineKey = "startLine"
+let EndLineKey = "endLine"
+let TargetUriKey = "targetUri"
+let TargetRangeKey = "targetRange"
+let ChangesKey = "changes"
+let DocumentChangesKey = "documentChanges"
+let EditsKey = "edits"
+
+// The header field this client reads, lowercased: LSP header names are case-insensitive.
+let ContentLengthHeaderName = "content-length"
+let HeaderFieldSeparator = ":"
+
+// The one byte `writeStdinLine` appends beyond the body it is given.
+let LineWriterNewlineByteCount = 1
+
+// `CompletionTriggerKind.TriggerCharacter` — the client typed a character the server registered.
+let TriggerCharacterKind = 2
+
+// The language a `didOpen` announces, and the version a freshly opened document carries.
+let MaxonLanguageId = "maxon"
+let InitialDocumentVersion = 1 as DocumentVersion
+
+// How hover sections are stacked when a server answers with a list.
+let HoverSectionSeparator = "\n"

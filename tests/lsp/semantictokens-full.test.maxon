@@ -1,0 +1,240 @@
+// semantictokens-full.test.maxon — the two recovered `semanticTokens/full` tests: that a file produces
+// token data at all, and that a word which is a KEYWORD everywhere else is coloured as an enum member
+// where it names one.
+//
+// ⛔ **`semantic tokens returns token data` IS NOT PORTED AS WRITTEN.** Its Zig body asserted
+// `data.len > 0` and then repeated the identical line — a copy-paste, not a second check, so the test
+// made one claim and looked like it made two. What it should have checked is the WIRE FORMAT it decodes:
+// the data is quintuples, so a length that is not a multiple of five is a malformed response, and nothing
+// in the recovered suite ever asked.
+//
+// ⭐⭐ **THE `0`/`9`/`10` IN THE SECOND TEST ARE THE ONLY SERVER-PRIVATE INTEGERS IN THE WHOLE SUITE**, and
+// they stay literals on purpose. Every other pinned number here is an LSP-standard code; a semantic-token
+// type index means nothing except against the legend the server declares in its `initialize` response.
+// RULING: shv2 declares a legend whose indices match these, and the test keeps its literals. ⛔ Resolving
+// the index through the legend at runtime would make the test pass against ANY legend — which is to say it
+// would stop testing the thing it is named for. THE LEGEND IS THE CONTRACT.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is
+// stated once, in `LspClient.maxon`'s hazard 1.
+
+let SemanticTokensUri = "file:///test.maxon"
+
+let SemanticTokensUnreportedSession = "the session ended without saying how"
+
+// Semantic tokens format: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+let SemanticTokensQuintupleWidth = 5
+let SemanticTokensDeltaLineSlot = 0
+let SemanticTokensLengthSlot = 2
+let SemanticTokensTypeSlot = 3
+
+// Token types: 0=keyword, 9=modifier, 10=enumMember — indices into the legend the server declares.
+let SemanticTokensEnumMemberType = 10 as SemanticTokenValue
+
+// One decoded token: where it sits after the deltas are accumulated, how long it is, and what it is.
+//
+// ⚠ The line carries the WIRE's own integer range rather than `LspCoordinate`'s. A server sending a
+// negative delta is a wrong answer this test should FAIL on, not a range-check panic that reports a crash.
+type DecodedSemanticToken
+	export var line as SemanticTokenValue
+	export var length as SemanticTokenValue
+	export var tokenType as SemanticTokenValue
+
+	static function create(line SemanticTokenValue, length SemanticTokenValue, tokenType SemanticTokenValue) returns DecodedSemanticToken
+		return Self{line: line, length: length, tokenType: tokenType}
+	end 'create'
+end 'DecodedSemanticToken'
+
+typealias DecodedSemanticTokenArray = Array with DecodedSemanticToken
+
+// How many decoded tokens answered a question. Not `SemanticTokenValue`: that is the WIRE's range, and a
+// tally of what this file counted is a different quantity from a value the server sent.
+typealias TokenTally = int(0 to i64.max)
+
+union SemanticTokensDataOutcome
+	observed(data SemanticTokenValueArray)
+	broke(detail String)
+end 'SemanticTokensDataOutcome'
+
+test 'semantic tokens returns token data'
+	var client = LspClient.start()
+	var outcome = SemanticTokensDataOutcome.broke(SemanticTokensUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(SemanticTokensUri, content: semanticTokensVariableFixture())
+		outcome = SemanticTokensDataOutcome.observed(client.semanticTokensFull(SemanticTokensUri).data)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = SemanticTokensDataOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = SemanticTokensDataOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = SemanticTokensDataOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'tokens'
+		observed(data) then try assertSemanticTokensWellFormed(data)
+		broke(detail) then try Expect.fail("the semantic-tokens request did not complete: {detail}")
+	end 'tokens'
+end 'semantic tokens returns token data'
+
+test 'semantic tokens treats enum members as enumMember not keywords'
+	var client = LspClient.start()
+	var outcome = SemanticTokensDataOutcome.broke(SemanticTokensUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(SemanticTokensUri, content: semanticTokensEnumFixture())
+		outcome = SemanticTokensDataOutcome.observed(client.semanticTokensFull(SemanticTokensUri).data)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(text) then outcome = SemanticTokensDataOutcome.broke("the framed stream broke — {text}")
+			malformedResponse(text) then outcome = SemanticTokensDataOutcome.broke("a reply was not the shape LSP defines — {text}")
+			serverRefused(code, message) then outcome = SemanticTokensDataOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'tokens'
+		observed(data) then try assertSemanticTokensEnumMembers(data)
+		broke(detail) then try Expect.fail("the semantic-tokens request did not complete: {detail}")
+	end 'tokens'
+end 'semantic tokens treats enum members as enumMember not keywords'
+
+function assertSemanticTokensWellFormed(data SemanticTokenValueArray) throws TestFailure
+	let observedLength = data.count()
+	try Expect.greaterThan(observedLength, than: 0, message: "a four-line file produced no semantic tokens at all.")
+
+	let observedRemainder = observedLength mod SemanticTokensQuintupleWidth
+	let expectedRemainder = 0
+	try Expect.equal(observedRemainder, expected: expectedRemainder, message: "the token data was not a whole number of quintuples. LSP defines it as [deltaLine, deltaStartChar, length, tokenType, tokenModifiers] repeated, so a length that is not a multiple of five cannot be decoded at all — every client reading it would drift.")
+
+	let tokens = semanticTokensDecode(data)
+
+	// The first token's deltaLine is relative to nothing, so a first token on line 0 IS a first
+	// `deltaLine` of 0 — and `function` at (0,0) is what the fixture opens with.
+	try Expect.isTrue(semanticTokensStartOnFirstLine(tokens), message: "the first token did not sit on line 0. The fixture's first line begins with `function` at column 0, so a first token anywhere else means the deltas are being accumulated from the wrong origin.")
+
+	// The fixture is four lines and every one of them carries a token.
+	for line in 0 upto 4 'eachLine'
+		try Expect.isTrue(semanticTokensCoverLine(tokens, line: line), message: "no token landed on line {line}, though every line of the fixture carries one. A gap here is a decoder that lost a delta, not a line that has nothing on it.")
+	end 'eachLine'
+end 'assertSemanticTokensWellFormed'
+
+function assertSemanticTokensEnumMembers(data SemanticTokenValueArray) throws TestFailure
+	// At least 5 tokens * 5 values each
+	try Expect.atLeast(data.count(), than: 25, message: "the enum fixture produced fewer than five tokens.")
+
+	// Tokens are: enum(line0), TokenType(line0), function(line1), returns(line2), identifier(line3), end(line4), 'TokenType'(line4)
+	//
+	// We expect:
+	// - "enum" at line 0 to be modifier (9)
+	// - "function" at line 1 to be enumMember (10), NOT modifier (9)
+	// - "returns" at line 2 to be enumMember (10), NOT modifier (9)
+	// - "identifier" at line 3 to be enumMember (10)
+	// - "end" at line 4 to be keyword (0)
+	let tokens = semanticTokensDecode(data)
+
+	try assertSemanticTokenIsEnumMember(tokens, line: 1, length: 8, word: "function")
+	try assertSemanticTokenIsEnumMember(tokens, line: 2, length: 7, word: "returns")
+end 'assertSemanticTokensEnumMembers'
+
+// Two claims, because "the token is missing" and "the token is the wrong colour" are different defects.
+//
+// ⭐ The colour claim is UNIVERSAL: EVERY token of that width on that line must carry the type. A
+// first-match search would pass a file where one of two identical-width tokens was mis-coloured, which
+// is the very confusion this test is named for.
+function assertSemanticTokenIsEnumMember(tokens DecodedSemanticTokenArray, line SemanticTokenValue, length SemanticTokenValue, word String) throws TestFailure
+	let (matched, misTyped) = semanticTokensTypeAgreement(tokens, line: line, length: length, tokenType: SemanticTokensEnumMemberType)
+
+	try Expect.greaterThan(matched, than: 0, message: "no {length}-character token was reported on line {line}, so nothing was classified for `{word}` at all and the colour claim below could never fail.")
+
+	let observedWrong = misTyped
+	let expectedWrong = 0
+	try Expect.equal(observedWrong, expected: expectedWrong, message: "{observedWrong} of the {matched} {length}-character tokens on line {line} were not classified as enumMember (10). `{word}` is a KEYWORD everywhere else in Maxon, and a server that lexes before it parses will colour it as one. The index is read against the legend the server declares in `initialize`; that legend is the contract.")
+end 'assertSemanticTokenIsEnumMember'
+
+// Accumulate `deltaLine` into a running line, and record what each quintuple describes.
+//
+// Slots 1 (deltaStartChar) and 4 (tokenModifiers) are read by no assertion in either test, so they are
+// walked past rather than stored. The loop reaches slot 3 only for a COMPLETE quintuple, so a truncated
+// tail contributes no token — which is the bound the recovered `i + 4 < data.len` guard expressed.
+function semanticTokensDecode(data SemanticTokenValueArray) returns DecodedSemanticTokenArray
+	var tokens = DecodedSemanticTokenArray.create()
+	var currentLine = 0 as SemanticTokenValue
+	var pendingLength = 0 as SemanticTokenValue
+
+	for (position, value) in data.withIterator() 'eachValue'
+		let slot = position.index() mod SemanticTokensQuintupleWidth
+
+		if slot == SemanticTokensDeltaLineSlot 'delta'
+			currentLine = currentLine + value
+		end 'delta' else if slot == SemanticTokensLengthSlot 'length'
+			pendingLength = value
+		end 'length' else if slot == SemanticTokensTypeSlot 'tokenType'
+			tokens.push(DecodedSemanticToken.create(currentLine, length: pendingLength, tokenType: value))
+		end 'tokenType'
+	end 'eachValue'
+
+	return tokens
+end 'semanticTokensDecode'
+
+function semanticTokensStartOnFirstLine(tokens DecodedSemanticTokenArray) returns bool
+	for token in tokens 'eachToken'
+		return token.line == 0
+	end 'eachToken'
+
+	return false
+end 'semanticTokensStartOnFirstLine'
+
+function semanticTokensCoverLine(tokens DecodedSemanticTokenArray, line SemanticTokenValue) returns bool
+	for token in tokens 'eachToken'
+		if token.line == line 'hit'
+			return true
+		end 'hit'
+	end 'eachToken'
+
+	return false
+end 'semanticTokensCoverLine'
+
+// Both halves of the colour claim from ONE walk: how many tokens of that width sit on the line, and how
+// many of them carry the wrong type.
+function semanticTokensTypeAgreement(tokens DecodedSemanticTokenArray, line SemanticTokenValue, length SemanticTokenValue, tokenType SemanticTokenValue) returns (TokenTally, TokenTally)
+	var matched = 0 as TokenTally
+	var misTyped = 0 as TokenTally
+
+	for token in tokens 'eachToken'
+		if token.line == line and token.length == length 'candidate'
+			matched = matched + 1
+
+			if token.tokenType != tokenType 'wrongType'
+				misTyped = misTyped + 1
+			end 'wrongType'
+		end 'candidate'
+	end 'eachToken'
+
+	return (matched, misTyped)
+end 'semanticTokensTypeAgreement'
+
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, a raw
+// newline in one IS the byte it spells, no indentation stripped and no trailing newline. Every line
+// number asserted above is counted against exactly these bytes.
+function semanticTokensVariableFixture() returns String
+	return String.from(b"function test() returns int
+    var x = 42
+    return x
+end 'test'")
+end 'semanticTokensVariableFixture'
+
+function semanticTokensEnumFixture() returns String
+	return String.from(b"enum TokenType
+    function
+    returns
+    identifier
+end 'TokenType'")
+end 'semanticTokensEnumFixture'

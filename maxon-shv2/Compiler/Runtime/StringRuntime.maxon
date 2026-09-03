@@ -420,6 +420,25 @@ export let StrOfBufferName = b"__str_of_buffer"
 // `__managed_mem_grow`. shv2 spells the same step `__managed_reserve`.
 export let MmToCStringName = b"__mm_to_cstring"
 
+// ⭐⭐ **`__mm_from_cstring(cstr) -> arrRecord` — `__ManagedMemory.fromCString(cstr)`, AND IT IS
+// `__mm_to_cstring`'s EXACT DUAL.** One walks a record's bytes out to a NUL-terminated pointer; this walks
+// a NUL-terminated pointer back into a fresh byte-element `Array` record. They live beside each other for
+// the reason `ManagedDirectoryRuntime`'s load/store byte pair does: a representation's reader and its
+// writer are ONE fact, and the pair this project keeps finding drifted is the one that was split up.
+//
+// ⭐ **IT ALLOCATES AND COPIES, AND THAT IS THE ONLY ANSWER THAT TYPES.** A `cstring` carries no length, no
+// capacity and no ownership; a `__ManagedMemory` is a real `Array` record whose `length@8` and `buffer@0`
+// every consumer reads. There is no view to take — the source is a bare address whose lifetime this
+// function cannot see — so the bytes are measured with a `strlen` walk and blitted into a record the CALLER
+// owns. That is v1's shape too (`stdlib/Internals.maxon:4341`'s `__managed_mem_from_cstring`).
+//
+// ⚠ **THE WHOLE BODY IS `ManagedDirectoryRuntime.emitCStringToManaged`, WHICH ALREADY EXISTED FOR
+// `filename()` AND `currentPath()`.** This door is a THIRD caller of that builder, not a third copy of the
+// loop; what it adds is a Maxon-reachable name for a conversion the runtime had been doing for the OS
+// families only. See that builder for the strlen/copy shape and for why the record's `ValueId` is minted by
+// the caller.
+export let MmFromCStringName = b"__mm_from_cstring"
+
 // ⭐⭐ **THE ONE BYTE DOOR LEFT — what a FUSED WRAPPER's inline `managed` read mints.**
 //
 //   * `__str_bytes_view(str) -> arrRecord` — a ZERO-COPY `Array with Byte` VIEW over the receiver's live
@@ -709,6 +728,9 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesMmToCString 'mmtocstring'
 		buildMmToCString(module)
 	end 'mmtocstring'
+	if usage.usesMmFromCString 'mmfromcstring'
+		buildMmFromCString(module)
+	end 'mmfromcstring'
 	if usage.usesStrBytesView 'strbytesview'
 		buildStrBytesView(module)
 	end 'strbytesview'
@@ -1515,6 +1537,24 @@ function buildMmToCString(module StdModule)
 
 	module.functions.push(func)
 end 'buildMmToCString'
+
+// ⭐ **`__mm_from_cstring(cstr) -> arrRecord`** — see the constant's header for the contract and for why it
+// must copy. One block of its own: the strlen walk and the copy add their own, and `emitCStringToManaged`
+// hands back the block execution continues in.
+function buildMmFromCString(module StdModule)
+	var func = IrFunction.createFromStd(MmFromCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let cstr = 0 as ValueId
+
+	let record = ids.mint()
+	let built = emitCStringToManaged(module, func: func, cur: entry, cstr: cstr, record: record, ids: ids)
+	module.setTerminator(built, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildMmFromCString'
 
 // ⭐⭐ **`__str_bytes_view(str) -> arrRecord` — `addressableBytes()`, AND SINCE W157 IT IS THE RECEIVER'S
 // OWN RECORD, CO-OWNED.** The corpus's body is `return managed` (`stdlib/String.maxon:181-183`) — hand out

@@ -667,3 +667,175 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: subprocess-collected-output-keeps-an-embedded-nul -->
+**A CHILD'S OUTPUT IS BYTES, AND A ZERO BYTE IS ONE OF THEM.** Every reader in this API answers a
+`String` built over a `__ManagedMemory`, and that record carries an explicit length — so the byte
+`0x00` is ordinary content in the middle of a capture, not a terminator. A compiler that recovered
+the length with `strlen` instead would end the answer at the first one and report a SHORT capture
+with no error, no diagnostic and exit 0: the caller cannot tell a truncated read from a short child.
+
+The child is THIS TEST'S OWN EXECUTABLE, re-run with one argument. Nothing portable in `cmd.exe` or
+`/bin/sh` writes a NUL to a pipe, and a case that cannot produce the byte cannot assert anything
+about it — so the program plays both parts, and the same two `Executable`/`CommandLine` doors that
+make that possible are also on trial: `Process.executablePath()` must answer a path the spawn can
+run, and `CommandLine.args()` must deliver the argument that selects the child branch.
+
+Both captured streams are asserted, with DIFFERENT content and different lengths, so a stdout answer
+standing in for stderr is a visible failure rather than a coincidence. The bytes either side of the
+NUL are printed individually: a length alone would pass for a reader that answered five bytes of
+the wrong thing.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias StringArray = Array with String
+
+function describe(label String, text String) returns String
+	let bytes = text.toByteArray()
+	var line = "{label} len={bytes.count()} ["
+	for i in 0 upto bytes.count() 'byteLoop'
+		let value = try bytes.get(i) otherwise panic("describe: index is in range")
+		if i > 0 'separator'
+			line = "{line} "
+		end 'separator'
+		line = "{line}{value}"
+	end 'byteLoop'
+	return "{line}]"
+end 'describe'
+
+function runChild()
+	// "ab\0cd" on stdout, "w\0x" on stderr — a NUL in the middle of each, and two different lengths.
+	var out = ByteArray.create()
+	out.push(97)
+	out.push(98)
+	out.push(0)
+	out.push(99)
+	out.push(100)
+	__Builtins.writeStdout(out)
+
+	var err = ByteArray.create()
+	err.push(119)
+	err.push(0)
+	err.push(120)
+	__Builtins.writeStderr(err)
+end 'runChild'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		runChild()
+		return 0 as ExitCode
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("emit")
+	let result = try Subprocess.run(exe, arguments: argv) otherwise return 3
+
+	print("{describe("stdout", text: result.stdout)}\n")
+	print("{describe("stderr", text: result.stderr)}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stdout len=5 [97 98 0 99 100]
+stderr len=3 [119 0 120]
+```
+
+<!-- test: subprocess-streaming-readers-keep-an-embedded-nul -->
+`subprocess-collected-output-keeps-an-embedded-nul`'s subject on the STREAMING path, where the three
+readers are separate code and could each lose the byte on their own. All three are exercised against
+one child, because they are three different questions about the same stream:
+
+- `readStdoutBytes(5)` asks for a COUNT, and the count is the whole of its answer: the child writes
+  the line below straight after the payload, so a reader that measured its answer any other way
+  would run into `ef\0g` rather than stop at five.
+- `readStdoutLine()` stops at a newline, so its answer's length is decided by the terminator rather
+  than by the request, and it must still carry the zero byte in the middle.
+- `readStderrLine()` is the second stream, and a separate body in the runtime: its content differs
+  from stdout's so an answer copied from the wrong pipe reads as a wrong answer, not as a pass.
+
+The child writes stdout twice — a bare five-byte payload for the count reader, then a terminated
+line — and the readers are called in that order, which also asserts the two share one buffer: a
+byte reader with a buffer of its own would leave the line reader waiting on bytes already pulled off
+the pipe.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias StringArray = Array with String
+
+function describe(label String, text String) returns String
+	let bytes = text.toByteArray()
+	var line = "{label} len={bytes.count()} ["
+	for i in 0 upto bytes.count() 'byteLoop'
+		let value = try bytes.get(i) otherwise panic("describe: index is in range")
+		if i > 0 'separator'
+			line = "{line} "
+		end 'separator'
+		line = "{line}{value}"
+	end 'byteLoop'
+	return "{line}]"
+end 'describe'
+
+function runChild()
+	// Payload for the count reader: "ab\0cd", no terminator.
+	var payload = ByteArray.create()
+	payload.push(97)
+	payload.push(98)
+	payload.push(0)
+	payload.push(99)
+	payload.push(100)
+	__Builtins.writeStdout(payload)
+
+	// Then a line for the line reader: "ef\0g\n".
+	var line = ByteArray.create()
+	line.push(101)
+	line.push(102)
+	line.push(0)
+	line.push(103)
+	line.push(10)
+	__Builtins.writeStdout(line)
+
+	// And one on the other stream: "w\0xy\n".
+	var errLine = ByteArray.create()
+	errLine.push(119)
+	errLine.push(0)
+	errLine.push(120)
+	errLine.push(121)
+	errLine.push(10)
+	__Builtins.writeStderr(errLine)
+end 'runChild'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		runChild()
+		return 0 as ExitCode
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+
+	let counted = child.readStdoutBytes(5)
+	let lined = try child.readStdoutLine() otherwise return 5
+	let errored = try child.readStderrLine() otherwise return 6
+	child.release()
+
+	print("{describe("bytes", text: counted)}\n")
+	print("{describe("line", text: lined)}\n")
+	print("{describe("errline", text: errored)}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bytes len=5 [97 98 0 99 100]
+line len=4 [101 102 0 103]
+errline len=4 [119 0 120 121]
+```

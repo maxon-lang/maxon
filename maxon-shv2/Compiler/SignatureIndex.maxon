@@ -6174,13 +6174,20 @@ export let ManagedFileIndexParamName = b"index"
 // seven, which reads `length` as an `Array` spelling and so contradicts the case above — while the dispatch
 // it described accepted twelve `Array` names the message denied.
 //
-// ⚠ **`elementSize`, `remove`, `swap`, `shiftLeft`/`shiftRight`, `toCString`, `makeCharFromBytes`,
-// `fromCString` and `createCursor` are DELIBERATELY ABSENT** — the reference's member table is 19 deep, this
-// is the other 8 of it plus the `fromCString` static. None has a caller shv2 can reach: `elementSize` has
-// twelve (`specs/ranged-int-bit-packing.md`, whose subject is ranged-int bit packing shv2 does not have) and
-// `remove`/`swap`/`shiftRight`/`elementSize`/`toCString`/`makeCharFromBytes` have `stdlib/Array.maxon`; the
-// four cstring/cursor members need a `cstring` type shv2 has no producer for. A member with no reachable
-// caller is a mechanism handed a consumer that cannot exercise it.
+// ⚠ **`elementSize`, `remove`, `swap`, `shiftLeft`/`shiftRight`, `toCString` and `makeCharFromBytes` are
+// DELIBERATELY ABSENT** — the reference's member table is 19 deep and this is the other 7 of it. None has a
+// caller shv2 can reach: `elementSize` has twelve (`specs/ranged-int-bit-packing.md`, whose subject is
+// ranged-int bit packing shv2 does not have) and the rest have `stdlib/Array.maxon`. A member with no
+// reachable caller is a mechanism handed a consumer that cannot exercise it.
+//
+// ⭐⭐ **`fromCString` AND `createCursor` USED TO BE ON THAT LIST, WITH THE SAME REASON, AND BOTH REASONS
+// EXPIRED.** The sentence said the pair *"need a `cstring` type shv2 has no producer for"* — and that was
+// already false when it was written: `parseTypeReference` resolves `cstring`, the lexer has carried the
+// keyword since P1.2, and `String.cstr()` PRODUCES one through `__mm_to_cstring`. `createCursor` was built
+// separately; `fromCString` is built now, as `__mm_from_cstring`, whose whole body is the strlen-and-copy
+// builder `__md_filename` had been using since R4.3. ⇒ **The gap was never a missing type — it was a
+// conversion the runtime already performed, with no Maxon-reachable name on it.** Re-measure a blocker
+// before repeating it.
 // ⚠ **THIS SENTENCE ALSO SAID `stdlib/Array.maxon` IS ONE *"no whitelisted module imports and shv2 cannot
 // compile at all"*, AND THAT HALF IS STALE** — the module was listed long before the whitelist was deleted
 // and the loader takes all of `stdlib/` now, so it is loaded by every compile. What survives is the
@@ -6195,6 +6202,13 @@ export let ManagedFileIndexParamName = b"index"
 // is what the sentences are for; correcting the category costs 34 committed goldens, since the `are not built`
 // clause is a literal in the message rather than rendered from a list the way the roster now is.
 export let ManagedMemoryCreateMethod = b"create"
+
+// ⭐ **`fromCString(cstr)` — A NUL-TERMINATED POINTER BACK INTO A BUFFER**, `toCString()`'s dual and the
+// second `__ManagedMemory` static. The parameter's spelling is the reference's own, read back rather than
+// invented (bootstrap `2-Parser.cs:1767-1768`, v1 `LowerMaxonToStd.maxon:1665`), because the arm accepts it
+// as an argument label.
+export let ManagedMemoryFromCStringMethod = b"fromCString"
+export let ManagedMemoryCStringParamName = b"cstr"
 export let ManagedMemorySetLengthMethod = b"setLength"
 export let ManagedMemorySetByteMethod = b"setByte"
 export let ManagedMemoryLengthMethod = b"length"

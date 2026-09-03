@@ -51,18 +51,20 @@ module {
     x64.mov rcx, [rbp-8]
     x64.xor edx, edx
     x64.call Array_Cell_f64_0to100000.get
-    x64.movsd xmm1, [rip+__float_0]
-    x64.movsd [rbp-16], xmm1
-    x64.movsd [rbp-24], xmm0
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je Wide.stash.otherwise_default_continue_0
-  otherwise_default_error_0:
-    x64.movsd xmm0, [rbp-16]
     x64.movsd [rbp-24], xmm0
+    x64.je Wide.stash.otherwise_default_success_0
+  otherwise_default_error_0:
+    x64.movsd xmm0, [rip+__float_0]
+    x64.movsd [rbp-16], xmm0
+    x64.jmp Wide.stash.otherwise_default_continue_0
+  otherwise_default_success_0:
+    x64.movsd xmm0, [rbp-24]
+    x64.movsd [rbp-16], xmm0
     x64.jmp Wide.stash.otherwise_default_continue_0
   otherwise_default_continue_0:
-    x64.movsd xmm0, [rbp-24]
+    x64.movsd xmm0, [rbp-16]
     x64.movsd xmm1, [rip+__float_0]
     x64.ucomisd xmm0, xmm1
     x64.setb rax
@@ -83,13 +85,13 @@ module {
     x64.call mrt_panic
   __range_ok_0:
     x64.mov rax, [rbp-8]
-    x64.movsd [rbp-32], xmm0
+    x64.movsd [rbp-24], xmm0
     x64.test rax, rax
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.movsd xmm0, [rbp-32]
+    x64.movsd xmm0, [rbp-24]
     x64.epilogue
     x64.ret
   }
@@ -107,17 +109,19 @@ module {
     x64.call Array_Cell_i64_0to100000.get
     x64.mov ecx, rax
     x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.mov [rbp-24], rcx
-    x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je Narrow.stash.otherwise_default_continue_0
+    x64.mov [rbp-24], rcx
+    x64.je Narrow.stash.otherwise_default_success_0
   otherwise_default_error_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp Narrow.stash.otherwise_default_continue_0
+  otherwise_default_success_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-16], rax
     x64.jmp Narrow.stash.otherwise_default_continue_0
   otherwise_default_continue_0:
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.xor ecx, ecx
     x64.mov rdx, 100000
     x64.cmp rax, rdx
@@ -136,7 +140,7 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }

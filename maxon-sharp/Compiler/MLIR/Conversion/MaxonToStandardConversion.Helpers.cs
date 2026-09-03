@@ -499,6 +499,49 @@ public static partial class MaxonToStandardConversion {
     return result;
   }
 
+  /// <summary>
+  /// Lower the arguments of a call to a runtime function down to Standard-tier i64 values.
+  /// </summary>
+  /// <remarks>
+  /// Shared by every op that issues one: a runtime function's parameters mean the same thing
+  /// whoever is calling it, so the managed-struct unwrapping below has exactly one home. The
+  /// caller may append further arguments of its own to the returned list.
+  /// </remarks>
+  private static List<StdValue> LowerRuntimeCallArgs(
+    string functionName,
+    List<MaxonValue> args,
+    IrBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    IrModule<MaxonOp> module) {
+    return [.. args.Select(a => {
+      if (!valueMap.TryGetValue(a, out var mapped))
+        throw new InvalidOperationException($"runtime call '{functionName}' arg {a} not found in valueMap");
+
+      if (mapped is StdHeapPtr hp && hp.VarName != null) {
+        var typeName = hp.TypeName;
+        // Load buffer from managed struct via heap pointer indirection. A fused
+        // String/Character/Array IS its own __ManagedMemory (buffer at offset 0), so it
+        // is handled identically to a bare __ManagedMemory here.
+        if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)
+            || IsFusedManagedWrapper(typeName)) {
+          // hp.VarName IS the __ManagedMemory heap pointer, buffer at offset 0
+          return (StdValue)(StdI64)EmitStructFieldLoad(block, hp.VarName, ManagedFieldBuffer, IrType.I64, varTypes);
+        }
+        if (typeName == "__ManagedFile") {
+          // Pass the __ManagedFile heap pointer itself; runtime (maxon_file_close)
+          // reads _handle at offset 0 and zeros it before submitting close.
+          return (StdValue)(StdI64)EmitLoad(block, hp.VarName, varTypes);
+        }
+        throw new InvalidOperationException(
+          $"runtime call '{functionName}' struct arg has unexpected type '{typeName}' -- " +
+          "only __ManagedMemory struct args are supported (extract fields before passing to runtime calls)");
+      }
+
+      return (StdValue)(StdI64)mapped;
+    })];
+  }
+
   /// Raw buffer free via mm_raw_free (companion to EmitRawAlloc).
   /// Under --mm-trace, mm_raw_free reads a scope-cstring from Arg1; callers
   /// that emit only the ptr would leave Arg1 uninitialized and print garbage

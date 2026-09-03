@@ -1,0 +1,173 @@
+// ⭐⭐ **THE METHOD REGISTRY — THE SEAM EVERY HANDLER FILE PLUGS INTO.**
+//
+// Bringing a language method area live in `maxon-shv2 lsp-server` edits **that area's own file and
+// nothing else**. Every method LSP defines for this server is already wired, whether or not anything
+// answers it yet:
+//
+//   * a case in `LspMethod` below,
+//   * its protocol spellings in `lspMethodSpelling` — the wire name, and the capability key this server
+//     answers `initialize` with,
+//   * an arm in `lspMethodArea` naming the file that owns it,
+//   * and a line in that file's `…ServedMethods`, saying whether it answers the method TODAY.
+//
+// ⇒ **An area goes live by returning its methods from `…ServedMethods` and answering them in
+// `…Answer`.** Until it does, the dispatcher refuses the method with `-32601` and `initialize` does not
+// advertise it — a capability is a promise, and promising a method that answers `-32601` is a broken
+// session rather than a missing feature.
+//
+// ⛔ **`…ServedMethods` IS THE ONLY PLACE THAT FACT IS WRITTEN, AND BOTH READERS OF IT GO THROUGH
+// `LspServer.maxon`'s `servedMethods` — nothing else may narrow either one.** Routing and advertising
+// ask that one question, so a server that answers a method it never promised, or promises one it
+// refuses, is unspellable.
+
+// Every LSP request this server routes. A method belongs here once it has a home; whether it has an
+// ANSWER is a separate question, and `LspServer.maxon`'s `servedMethods` is the one that asks it.
+module enum LspMethod
+	hover
+	definition
+	completion
+	formatting
+	documentSymbol
+	foldingRange
+	linkedEditingRange
+	rename
+	codeAction
+	semanticTokensFull
+end 'LspMethod'
+
+module typealias LspMethodArray = Array with LspMethod
+
+// How LSP spells a server capability's VALUE. Most are a bare `true`; two are defined as options
+// objects and do not admit a flag at all, so the shape is a protocol fact and lives beside the method
+// rather than inside the area that serves it.
+module enum LspProviderValue
+	flag
+	// `CompletionOptions` — trigger characters and the rest, all optional.
+	completionOptions
+	// `SemanticTokensOptions` — the legend included, so it can never be a flag.
+	semanticTokensOptions
+end 'LspProviderValue'
+
+// The name one method answers to on the wire, plus the shape of its capability.
+module type LspMethodSpelling
+	module let wireName as String
+	// `capabilities.<providerKey>` in this server's `initialize` result.
+	module let providerKey as String
+	module let providerValue as LspProviderValue
+
+	static function of(wireName String, providerKey String, providerValue LspProviderValue) returns LspMethodSpelling
+		return Self{wireName: wireName, providerKey: providerKey, providerValue: providerValue}
+	end 'of'
+end 'LspMethodSpelling'
+
+module function lspMethodSpelling(method LspMethod) returns LspMethodSpelling
+	return match method 'spelling'
+		hover gives LspMethodSpelling.of("textDocument/hover", providerKey: "hoverProvider", providerValue: LspProviderValue.flag)
+		definition gives LspMethodSpelling.of("textDocument/definition", providerKey: "definitionProvider", providerValue: LspProviderValue.flag)
+		completion gives LspMethodSpelling.of("textDocument/completion", providerKey: "completionProvider", providerValue: LspProviderValue.completionOptions)
+		formatting gives LspMethodSpelling.of("textDocument/formatting", providerKey: "documentFormattingProvider", providerValue: LspProviderValue.flag)
+		documentSymbol gives LspMethodSpelling.of("textDocument/documentSymbol", providerKey: "documentSymbolProvider", providerValue: LspProviderValue.flag)
+		foldingRange gives LspMethodSpelling.of("textDocument/foldingRange", providerKey: "foldingRangeProvider", providerValue: LspProviderValue.flag)
+		linkedEditingRange gives LspMethodSpelling.of("textDocument/linkedEditingRange", providerKey: "linkedEditingRangeProvider", providerValue: LspProviderValue.flag)
+		rename gives LspMethodSpelling.of("textDocument/rename", providerKey: "renameProvider", providerValue: LspProviderValue.flag)
+		codeAction gives LspMethodSpelling.of("textDocument/codeAction", providerKey: "codeActionProvider", providerValue: LspProviderValue.flag)
+		semanticTokensFull gives LspMethodSpelling.of("textDocument/semanticTokens/full", providerKey: "semanticTokensProvider", providerValue: LspProviderValue.semanticTokensOptions)
+	end 'spelling'
+end 'lspMethodSpelling'
+
+// The handler FILE a method belongs to. An area owns one or more methods, says which of them it answers
+// today, and answers them — and both of those are asked through this enum, so a new area is a compile
+// error in `LspServer.maxon` until both halves have their arm.
+module enum LspArea
+	hover
+	definition
+	completion
+	formatting
+	symbols
+	edits
+	semanticTokens
+end 'LspArea'
+
+module function lspMethodArea(method LspMethod) returns LspArea
+	return match method 'area'
+		hover gives LspArea.hover
+		definition gives LspArea.definition
+		completion gives LspArea.completion
+		formatting gives LspArea.formatting
+		documentSymbol or foldingRange gives LspArea.symbols
+		linkedEditingRange or rename or codeAction gives LspArea.edits
+		semanticTokensFull gives LspArea.semanticTokens
+	end 'area'
+end 'lspMethodArea'
+
+// Which `LspMethod` a wire name is, if any. A name nothing here claims is a method this server has no
+// home for at all — `initialize`, `shutdown`, a notification, or something LSP added since.
+module union LspMethodLookup
+	found(method LspMethod)
+	unknown
+end 'LspMethodLookup'
+
+module function lspMethodNamed(wireName String) returns LspMethodLookup
+	for method in LspMethod.allCases 'eachMethod'
+		if lspMethodSpelling(method).wireName == wireName 'thisOne'
+			return LspMethodLookup.found(method)
+		end 'thisOne'
+	end 'eachMethod'
+
+	return LspMethodLookup.unknown
+end 'lspMethodNamed'
+
+// A message whose `params` do not have the shape LSP defines for it. A REQUEST carrying one is refused
+// with `-32602`; a NOTIFICATION is dropped, since JSON-RPC forbids answering one at all. Either way
+// this is how the walk that found the mismatch says so to the handler that abandons the message.
+module enum LspParamsError implements Error
+	malformed
+end 'LspParamsError'
+
+// One language request, with everything every handler needs already resolved.
+//
+// ⭐ **THE URI AND THE DOCUMENT TEXT ARE RESOLVED ONCE, BY THE DISPATCHER.** Every method in
+// `LspMethod` is a `textDocument/*` whose params carry a `TextDocumentIdentifier`, so that walk is one
+// fact rather than ten copies of it — and a handler is never handed a request for a document this
+// server was never told about.
+module type LspRequest
+	module let method as LspMethod
+	// The parsed REQUEST. A handler reads its own params out of this and builds its answer into a
+	// document of its own, because the reply is a separate document on the wire.
+	module let incoming as JsonDoc
+	module let params as JsonNodeId
+	module let uri as String
+	module let text as String
+
+	module static function of(method LspMethod, incoming JsonDoc, params JsonNodeId, uri String, text String) returns LspRequest
+		return Self{method: method, incoming: incoming, params: params, uri: uri, text: text}
+	end 'of'
+end 'LspRequest'
+
+// A handler's answer: the document it built, and the node inside it that is the JSON-RPC `result`.
+module type LspAnswer
+	module var doc as JsonDoc
+	module let result as JsonNodeId
+
+	module static function of(doc JsonDoc, result JsonNodeId) returns LspAnswer
+		return Self{doc: doc, result: result}
+	end 'of'
+
+	/// LSP's "nothing here", which every method in `LspMethod` admits: a `null` result. It is an ANSWER
+	/// and not a refusal — the client asked a well-formed question about a place with nothing to say.
+	module static function nothing() returns LspAnswer
+		var doc = JsonDoc.create()
+		return Self{doc: doc, result: doc.add(JsonNode.nullNode())}
+	end 'nothing'
+end 'LspAnswer'
+
+// `stdlib/Json.maxon`'s access error is private to that file, so a member walk out here cannot
+// propagate it. These two translate it once into an error this server can name, which is what lets a
+// handler abandon a malformed message with a bare `try`.
+module function lspMember(doc JsonDoc, of JsonNodeId, key String) returns JsonNodeId throws LspParamsError
+	return try doc.getChild(of, key: key) otherwise throw LspParamsError.malformed
+end 'lspMember'
+
+module function lspMemberText(doc JsonDoc, of JsonNodeId, key String) returns String throws LspParamsError
+	return try doc.getString(of, key: key) otherwise throw LspParamsError.malformed
+end 'lspMemberText'

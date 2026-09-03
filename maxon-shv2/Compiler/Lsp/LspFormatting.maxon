@@ -1,0 +1,70 @@
+// `textDocument/formatting` — the whole document, re-laid-out by `Formatter.format`.
+//
+// ⭐ **ONE EDIT SPANNING THE WHOLE DOCUMENT**, which is the reference server's shape
+// (`maxon-sharp/Lsp/FormattingHandler.cs`) and the only one a token-stream re-printer can honestly
+// produce: it rewrites layout everywhere at once and has no notion of which lines it touched.
+
+// LSP's `FormattingOptions`, the two members every client sends.
+let OptionsKey = "options"
+let TabSizeKey = "tabSize"
+let InsertSpacesKey = "insertSpaces"
+
+// LSP's line terminator for the purpose of addressing a position. The protocol says a document's lines
+// are split on `\n`, `\r\n` or `\r`; a `\r\n` document therefore leaves its `\r` at the end of the line
+// it terminates, where it counts as one more code unit — which is exactly where a whole-document range
+// needs it.
+let LspLineTerminator = "\n"
+
+module function formattingServedMethods() returns LspMethodArray
+	var served = LspMethodArray.create()
+	served.push(LspMethod.formatting)
+	return served
+end 'formattingServedMethods'
+
+module function formattingAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+	let options = try lspMember(request.incoming, of: request.params, key: OptionsKey)
+	let formatted = format(request.text, options: try indentAskedFor(request.incoming, options: options))
+
+	// Already formatted — LSP's "nothing here", and the reference server's answer for the same case. An
+	// edit replacing a document with itself would still dirty the buffer in some editors.
+	if formatted == request.text 'nothingToChange'
+		return LspAnswer.nothing()
+	end 'nothingToChange'
+
+	var doc = JsonDoc.create()
+	var edits = JsonNodeIdArray.create()
+	edits.push(wholeDocumentEdit(doc, of: request.text, replacedBy: formatted))
+
+	return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(edits)))
+end 'formattingAnswer'
+
+// The indent style the client asked for.
+//
+// ⚠ `tabSize` is READ ONLY ON THE SPACES PATH, and deliberately: Maxon's indent is one tab whatever
+// width an editor renders it at, so a client that sent `insertSpaces: false` with an absurd `tabSize`
+// gets its file formatted rather than a refusal about a number that could not have been spent.
+function indentAskedFor(doc JsonDoc, options JsonNodeId) returns FormatOptions throws LspParamsError
+	let insertSpaces = try doc.getBool(options, key: InsertSpacesKey) otherwise throw LspParamsError.malformed
+
+	if not insertSpaces 'tabs'
+		return FormatOptions.tabs()
+	end 'tabs'
+
+	let tabSize = try doc.getInt(options, key: TabSizeKey) otherwise throw LspParamsError.malformed
+	return try spacesIndent(tabSize) otherwise throw LspParamsError.malformed
+end 'indentAskedFor'
+
+// One `TextEdit` replacing `source` in full. Its range runs from the very start of the document to the
+// end of its last line — counted in UTF-16 code units, LSP's default `positionEncoding` — so an editor
+// applying it discards everything that was there.
+function wholeDocumentEdit(doc JsonDoc, of String, replacedBy String) returns JsonNodeId
+	let lines = of.split(LspLineTerminator)
+	// `split` on a non-empty delimiter always yields at least one line, so the last index exists.
+	let lastLine = try lines.get(lines.count() - 1) otherwise panic("wholeDocumentEdit: a split of {of.byteLength()} bytes yielded no lines")
+
+	var edit = LspJsonObject.create(doc)
+	edit.putNode(LspRangeKey, value: lspRangeNode(doc, startLine: 0, startCharacter: 0, endLine: lines.count() - 1, endCharacter: lastLine.utf16().count()))
+	edit.put(LspNewTextKey, value: JsonNode.stringNode(replacedBy))
+
+	return edit.finish()
+end 'wholeDocumentEdit'

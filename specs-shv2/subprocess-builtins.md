@@ -11,18 +11,18 @@ category: system
 
 `stdlib/Subprocess.maxon` is the child-process surface — `Subprocess.run(...)`,
 `Configuration.run()`, `runDetached()` and `StreamingSubprocess` — and every one of its leaves
-bottoms out in one of twenty compiler intrinsics. `Parser.BuiltinsSubprocessSpawnName` lists all
-twenty; they fall into three families.
+bottoms out in one of twenty-one compiler intrinsics. `Parser.BuiltinsSubprocessSpawnName` lists all
+twenty-one; they fall into three families.
 
 | Family | Intrinsics |
 |---|---|
 | the ATTACHED run | `subprocessSpawn` / `subprocessDetach` (fourteen arguments), `subprocessGetPid`, `subprocessWaitCollect`, `subprocessResultStatusKind` / `StatusCode` / `Stdout` / `Stderr` / `DurationMs` / `Release`, `subprocessReleaseHandle` |
-| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll`, `subprocessReadStdoutLine` / `ReadStderrLine`, `subprocessCloseStdin`, `subprocessWaitExit` |
+| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll`, `subprocessReadStdoutLine` / `ReadStderrLine`, `subprocessReadStdoutBytes`, `subprocessCloseStdin`, `subprocessWaitExit` |
 | the helpers | `subprocessResolveOnPath`, `subprocessLastErrorMessage`, and `managedIsNull` (a `__ManagedMemory` predicate whose only corpus caller is the executable lookup) |
 
-The bootstrap declares exactly these twenty with exactly these shapes
-(`maxon-sharp/Compiler/2-Parser.cs:11936-12022`), so the SURFACE is the reference's and only the
-implementation differs.
+The bootstrap declares exactly these twenty-one with exactly these shapes
+(`maxon-sharp/Compiler/2-Parser.cs`'s `CompilerBuiltins`, `subprocessSpawn` through
+`subprocessResultRelease`), so the SURFACE is the reference's and only the implementation differs.
 
 ### The fourteen-argument spawn contract
 
@@ -93,7 +93,7 @@ door over, and v1 had already solved that one (`X64Backend.maxon:3530-3533` carr
 per accessor).
 
 ⭐ **SO THE RULE IS NOW STRUCTURAL, AND THE CASES BELOW COVER EVERY DOOR RATHER THAN A CHOSEN FOUR.**
-The guard sits at the ENTRY POINT, never at a wrapper, so both families — the twenty
+The guard sits at the ENTRY POINT, never at a wrapper, so both families — the twenty-one
 `__Builtins.subprocess*` intrinsics and the seven bare-name `subp*` streaming builtins — reach it
 without either having anything to remember. `emitSubpSlotOf` is the one door from a caller's handle
 to a slot address, and every function that calls it must open with `emitSubpRequireHandle`; that
@@ -1129,6 +1129,164 @@ end 'main'
 ```stdout
 wrote=0 echoed=true lineLen=6 code=0
 
+```
+
+<!-- test: subprocess-builtins.streaming-read-exact-bytes -->
+<!-- targets: x64-windows -->
+`subprocessReadStdoutBytes(handle, n)` answers EXACTLY `n` bytes, and that is a different question
+from the one `subprocessReadStdoutLine` answers — which is why it exists. A line reader cannot
+express *"the next four bytes"*, so a framed protocol whose body length arrives in a header
+(`Content-Length: N\r\n\r\n<body>`, the LSP framing, whose body carries NO trailing newline) has no
+way to ask for the body: the line reader blocks for a newline that never comes.
+
+⭐ **THIS CASE DISCRIMINATES THE TWO READERS BY STOPPING MID-LINE.** The child echoes
+`abcdefghij` — one line — and the two four-byte reads answer `abcd` then `efgh`. The line reader
+given the same stream can only answer the whole line (`abcdefghij\r\n`), so a case that read
+a whole newline-terminated line would pass against it too and would prove nothing.
+
+⚠ **SHORT ONLY AT EOF.** `cmd /c more` echoes the line CRLF-terminated and then a blank line, so the
+child produces `abcdefghij\r\n\r\n` — 14 bytes, MEASURED. The third read asks for 100 and gets the 6 that
+remain after the two four-byte reads, because the child has exited and its pipe is closed; the fourth
+read gets 0, from the SAME latched EOF the line reader uses. A short answer anywhere but EOF would be a
+wrong answer, not a limitation.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "more")
+	let empty = ""
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	let payload = "abcdefghij\n"
+	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
+	__Builtins.subprocessCloseStdin(h)
+	let first = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let second = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let rest = String.init(__Builtins.subprocessReadStdoutBytes(h, 100))
+	let afterEof = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let code = __Builtins.subprocessWaitExit(h, 0)
+	print("wrote={wrote} first={first} second={second} restLen={rest.byteLength()} eofLen={afterEof.byteLength()} code={code}\n")
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+wrote=0 first=abcd second=efgh restLen=6 eofLen=0 code=0
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-builtins.streaming-read-bytes-after-line -->
+<!-- targets: x64-windows -->
+⭐⭐ **THE TWO READERS SHARE ONE PER-HANDLE BUFFER, AND THIS IS THE CASE THAT SAYS SO.** A framed
+client reads its headers a LINE at a time and its body by exact COUNT, so the two readers alternate
+on one stream. The line reader pulls a whole 4 KiB chunk off the pipe to find its newline; if the
+byte reader kept a buffer of its own, every byte already pulled would be invisible to it — the read
+below would block on a pipe with nothing left to deliver, and the bytes would be silently lost.
+That is a wrong answer, not a limitation, which is why it gets a case rather than a note.
+
+The child echoes two lines. `subprocessReadStdoutLine` takes `first\r\n` (7 bytes — the runtime's
+line result carries its terminator), and the four bytes immediately after it are `abcd`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "more")
+	let empty = ""
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	let payload = "first\nabcdefghij\n"
+	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
+	__Builtins.subprocessCloseStdin(h)
+	let line = String.init(__Builtins.subprocessReadStdoutLine(h, 1024))
+	let after = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let code = __Builtins.subprocessWaitExit(h, 0)
+	print("wrote={wrote} lineLen={line.byteLength()} after={after} code={code}\n")
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+wrote=0 lineLen=7 after=abcd code=0
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-builtins.streaming-read-bytes-refuses-a-negative-count -->
+<!-- targets: x64-windows -->
+⛔⛔ **A NEGATIVE COUNT IS REFUSED, AND THE STREAM IS LEFT EXACTLY AS IT WAS.** The refusal has to happen
+BEFORE the "is enough buffered?" test, because `bufferedBytes >= count` is VACUOUSLY TRUE for a negative
+count — so the request falls straight through into the consume with a negative length. That produced a
+`String` record claiming a negative length AND, because the consume publishes `buffered - taken`, a stream
+buffer whose recorded length had been driven UP past what it holds: the corruption outlives the call and
+the NEXT reader walks it. MEASURED before the guard existed: `panic at String.maxon:283: Range check
+failed: value outside typealias 'ByteCount'`, exit 1.
+
+⚠ **`still=abcd` IS THE HALF THAT MAKES THIS A TEST.** An empty answer alone would also come from a
+reader that had quietly eaten the stream; reading four real bytes afterwards is what says the refusal
+touched nothing.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "more")
+	let empty = ""
+	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0)
+	let payload = "abcdefghij\n"
+	let wrote = __Builtins.subprocessWriteStdinAll(h, payload.cstr())
+	__Builtins.subprocessCloseStdin(h)
+	let refused = String.init(__Builtins.subprocessReadStdoutBytes(h, -1))
+	let still = String.init(__Builtins.subprocessReadStdoutBytes(h, 4))
+	let code = __Builtins.subprocessWaitExit(h, 0)
+	print("wrote={wrote} negLen={refused.byteLength()} still={still} code={code}\n")
+	__Builtins.subprocessReleaseHandle(h)
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+wrote=0 negLen=0 still=abcd code=0
+```
+```exitcode
+0
 ```
 
 <!-- test: subprocess-builtins.resolve-on-path -->

@@ -2249,7 +2249,7 @@ typealias WitnessSlotsByInterfaceMap = Map with (ByteArray, CollectedInterfaceMe
 // parameter and needs the slot NUMBERING to compile `[witnessAddr + 24 + 8*i]`; asking
 // `interfaceWitnessSlots` there rebuilt the whole transitive list at each one, and a `CollectedInterfaceMethod`
 // is a heap record, so the walk allocates one per requirement. That is O(dispatch sites x requirements) —
-// MEASURED on `Testing/ladders/genwitness.sh 1 <M> dispatch` as `1.02*M^2 + 19*M` extra allocations in
+// MEASURED on `tests/ladders/genwitness.sh 1 <M> dispatch` as `1.02*M^2 + 19*M` extra allocations in
 // `phase:parse` (+200 at M=8 rising to +19,072 at M=128, a ratio approaching x4 per doubling), against a
 // scan that allocated NOTHING before R10c widened it. Memoized, the list is built once per interface the
 // file dispatches through and the per-site cost is a map lookup.
@@ -5164,7 +5164,7 @@ let BinaryNumericBuiltinArity = 2 as ParamCount
 // MECHANISM AND NOT A SPELLING.** `sleep` and `print` retired onto declarations — `stdlib/Sleep.maxon`,
 // `stdlib/Print.maxon` — whose bodies bottom out in an intrinsic. `stdlib/Subprocess.maxon` is listed too, but
 // it declares NO free `runProcess` and its `Subprocess.run` is a DIFFERENT mechanism: a poll-and-`__gt_sleep`
-// drain over the twenty `__Builtins.subprocess*` intrinsics below, not a park on the process handle. So there
+// drain over the twenty-one `__Builtins.subprocess*` intrinsics below, not a park on the process handle. So there
 // was no declaration to move this entry to; PLAN's `#93` records reconciling the two as the deferred
 // full-Subprocess-API rung, and until it lands the intrinsic spelling IS the surface — the shape
 // `__Builtins.gtIsComplete` already has.
@@ -5455,6 +5455,122 @@ let AbsBuiltinName = b"abs"
 let MinBuiltinName = b"min"
 let MaxBuiltinName = b"max"
 
+// ⭐⭐⭐ **THE MATH-INTRINSIC ROSTER AS AN ENUM — the one place the family's MEMBERSHIP is written down,
+// and the thing that makes every other question about a member a compile error to leave unanswered.**
+//
+// The family has four facts per member — its NAME, the OP it emits, the SIGNATURE a reader sees and the
+// HELP LINE under it — and until this enum existed the first two were two independent `equals` chains
+// (`calleeTakesPositionalArgsOnly` and `emitPositionalMathBuiltin`) kept in step by a runtime `panic`.
+// Now the chain from bytes to a case is written ONCE (`mathBuiltinNamed`) and everything downstream is an
+// EXHAUSTIVE match over this enum: adding a case fails to compile until the emit, the signature and the
+// help all name it. That is the same closure the panic bought, moved from the first program that calls a
+// half-added builtin to the build that adds it.
+//
+// ⚠ **`trunc` LEADS BECAUSE IT IS THE ODD ONE — it LEAVES the float domain** (it answers an int, so an
+// integer argument is the identity rather than being promoted). The other seven stay inside it. That split
+// is the family's real content and it is `emitPositionalMathBuiltin`'s three emitters.
+module enum MathBuiltin
+	trunc
+	floor
+	ceil
+	round
+	sqrt
+	abs
+	min
+	max
+end 'MathBuiltin'
+
+// Whether a callee names a math intrinsic. A case rather than a bool-plus-out-param, so the ANSWER is the
+// member and no caller has to re-derive it from the name it just matched.
+module union MathBuiltinLookup
+	found(builtin MathBuiltin)
+	absent
+end 'MathBuiltinLookup'
+
+// ⭐ **BYTES → MEMBER: the family's ONE recognizer.** Every asker — the label rule, the emit, and the
+// editor hover — comes through here, so none of them can hold a different idea of who is in the family.
+//
+// The arms are the `*BuiltinName` constants above rather than fresh `b"…"` literals: the SPELLING stays
+// one fact, and this function says only which member wears it.
+module function mathBuiltinNamed(callee ByteArray) returns MathBuiltinLookup
+	if callee.equals(TruncBuiltinName) 'truncName'
+		return MathBuiltinLookup.found(MathBuiltin.trunc)
+	end 'truncName'
+
+	if callee.equals(FloorBuiltinName) 'floorName'
+		return MathBuiltinLookup.found(MathBuiltin.floor)
+	end 'floorName'
+
+	if callee.equals(CeilBuiltinName) 'ceilName'
+		return MathBuiltinLookup.found(MathBuiltin.ceil)
+	end 'ceilName'
+
+	if callee.equals(RoundBuiltinName) 'roundName'
+		return MathBuiltinLookup.found(MathBuiltin.round)
+	end 'roundName'
+
+	if callee.equals(SqrtBuiltinName) 'sqrtName'
+		return MathBuiltinLookup.found(MathBuiltin.sqrt)
+	end 'sqrtName'
+
+	if callee.equals(AbsBuiltinName) 'absName'
+		return MathBuiltinLookup.found(MathBuiltin.abs)
+	end 'absName'
+
+	if callee.equals(MinBuiltinName) 'minName'
+		return MathBuiltinLookup.found(MathBuiltin.min)
+	end 'minName'
+
+	if callee.equals(MaxBuiltinName) 'maxName'
+		return MathBuiltinLookup.found(MathBuiltin.max)
+	end 'maxName'
+
+	return MathBuiltinLookup.absent
+end 'mathBuiltinNamed'
+
+// ⭐⭐ **THE SIGNATURE AN EDITOR SHOWS — and it is DOCUMENTATION OF AN INTRINSIC, not a declaration.**
+//
+// ⚠⚠ **NO SUCH DECLARATION EXISTS, AND THE PARAMETER NAMES HERE CANNOT BE USED AS `name:` LABELS.** Every
+// member of this family is refused a label outright (E2067, via `argLabelRuleForCallee`) precisely because
+// it has no declaration to slot one against — so `sqrt(value: 16.0)` is an error, not the spelling this
+// text invites. The names are here for the ONE thing a reader wants from a signature and a bare `float`
+// cannot give: which operand is which. `min`'s two are `value` and `other` for that reason.
+//
+// ⚠ It renders bare `float` and bare `int` because that is what the language's own documentation writes
+// for these (`docs/LANGUAGE_REFERENCE.md`'s builtin table) and what the operand rule actually is — the
+// typealias requirement is a rule about DECLARATIONS, and there is no declaration here to hold to it.
+module function mathBuiltinSignature(builtin MathBuiltin) returns String
+	return match builtin 'signature'
+		trunc gives "function trunc(value float) returns int"
+		floor gives "function floor(value float) returns float"
+		ceil gives "function ceil(value float) returns float"
+		round gives "function round(value float) returns float"
+		sqrt gives "function sqrt(value float) returns float"
+		abs gives "function abs(value float) returns float"
+		min gives "function min(value float, other float) returns float"
+		max gives "function max(value float, other float) returns float"
+	end 'signature'
+end 'mathBuiltinSignature'
+
+// One line saying what the intrinsic DOES — the half of a hover a signature cannot carry.
+//
+// ⚠ **NEITHER `min` NOR `max` CLAIMS A NaN ANSWER, DELIBERATELY.** `StdBinOpcode`'s header records that
+// the three backends disagree there — x64's `minsd` answers with its second operand, arm64's `fmin` and
+// wasm's `f64.min` propagate the NaN — so a help line stating one would be true on one target and false
+// on two. What IS the same everywhere is the ORDERED definition, and that is what these say.
+module function mathBuiltinHelp(builtin MathBuiltin) returns String
+	return match builtin 'help'
+		trunc gives "Truncates `value` toward zero, dropping the fractional part."
+		floor gives "Rounds `value` toward negative infinity."
+		ceil gives "Rounds `value` toward positive infinity."
+		round gives "Rounds `value` to the nearest whole number, halves to even."
+		sqrt gives "The square root of `value`."
+		abs gives "The absolute value of `value`."
+		min gives "The lesser of the two: `value` when `value < other`, and `other` otherwise."
+		max gives "The greater of the two: `value` when `value > other`, and `other` otherwise."
+	end 'help'
+end 'mathBuiltinHelp'
+
 // ⭐⭐ **THE CALLEES WHOSE ARGUMENTS ARE ALL POSITIONAL — THE ONE PLACE THE `name:` LABEL RULE IS
 // SWITCHED OFF, AND THE REASON IT CAN BE.** A label names a PARAMETER OF A DECLARATION, and it is
 // checked against that declaration's parameter names downstream (`SemanticCheck.validateCall` for a
@@ -5504,9 +5620,9 @@ let MaxBuiltinName = b"max"
 //
 // ⭐ It is also the GATE the math-intrinsic emit hangs off, so the roster and the dispatch cannot come
 // to disagree about who is in the family — `parseCallNamed` enters `emitPositionalMathBuiltin` only
-// through this predicate, and that function panics on a roster entry with no emit arm. The two
-// questions ('does this name take labels' and 'which op does it emit') stay distinct; what is shared is
-// the one thing that must not be written twice, the SET.
+// through this predicate, and both read the SAME recognizer, `mathBuiltinNamed`. The several questions
+// ('does this name take labels', 'which op does it emit', 'what does an editor show for it') stay
+// distinct; what is shared is the one thing that must not be written twice, the SET.
 //
 // A builtin can still be a bare builtin without being here — EIGHT are: `spawnReadLine` and the seven
 // `subp*` streaming-subprocess builtins. Every one of them is a stand-in for a declaration that does not
@@ -5520,7 +5636,10 @@ let MaxBuiltinName = b"max"
 // retired those two, and it still said `print` after W35 retired that one. Corrected in the rung that
 // moved it; if you are here to check whether a name is claimed, go read the chain anyway.
 function calleeTakesPositionalArgsOnly(callee ByteArray) returns bool
-	return callee.equals(TruncBuiltinName) or callee.equals(FloorBuiltinName) or callee.equals(CeilBuiltinName) or callee.equals(RoundBuiltinName) or callee.equals(SqrtBuiltinName) or callee.equals(AbsBuiltinName) or callee.equals(MinBuiltinName) or callee.equals(MaxBuiltinName)
+	match mathBuiltinNamed(callee) 'roster'
+		found then return true
+		absent then return false
+	end 'roster'
 end 'calleeTakesPositionalArgsOnly'
 
 // ⭐ **THE `__Builtins` INTRINSIC TABLE (P1.0b step 2) — THE ONE PLACE THE RECOGNIZED SET IS STATED.**
@@ -5748,7 +5867,7 @@ end 'isDebugStreamCallee'
 // `subprocess*` NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is the
 // whole child-process surface — `Subprocess.run(...)`, `Configuration.run()`, `runDetached()` and
 // `StreamingSubprocess` — and every one of its leaves is a static call on one of these names. The bootstrap
-// declares exactly these twenty with exactly these shapes (`2-Parser.cs:11936-12022`), so the SURFACE here
+// declares exactly these twenty-one with exactly these shapes (`2-Parser.cs:11936-12022`), so the SURFACE here
 // is the reference's; only the implementation differs. See `SubprocessRuntime.maxon` for the entry points
 // each lowers to, and for the one place shv2 diverges from that reference and why.
 //
@@ -5759,13 +5878,15 @@ end 'isDebugStreamCallee'
 // reverted for declaring intrinsics whose runtime entries did not exist); they arrive with the stdlib
 // method that needs them, not before.
 //
-// THE THREE FAMILIES, which is why the emits below are a handful of shared functions rather than twenty:
+// THE THREE FAMILIES, which is why the emits below are a handful of shared functions rather than twenty-one:
 //   • the ATTACHED run — `subprocessSpawn` / `subprocessDetach` (the fourteen-argument contract),
 //     `subprocessGetPid`, `subprocessWaitCollect`, the five `subprocessResult*` readers of the struct it
 //     answers, `subprocessResultRelease` and `subprocessReleaseHandle`;
 //   • the STREAMING child — `subprocessSpawnStreaming`, `subprocessWriteStdinAll`, the two
-//     `subprocessRead*Line` readers, `subprocessCloseStdin` and `subprocessWaitExit`, which sit on the
-//     `__gt_subp_*` handle table P1.5 slice 1b already built rather than on a second CreateProcess path;
+//     `subprocessRead*Line` readers, `subprocessReadStdoutBytes` (the EXACT-COUNT reader a framed body
+//     needs, whose second argument is a length where the line readers’ is a ceiling), `subprocessCloseStdin`
+//     and `subprocessWaitExit`, which sit on the `__gt_subp_*` handle table P1.5 slice 1b already built
+//     rather than on a second CreateProcess path;
 //   • the HELPERS a caller needs around either — `subprocessResolveOnPath` (PATH + PATHEXT) and
 //     `subprocessLastErrorMessage`, plus `managedIsNull`, which is not a subprocess entry at all (it is a
 //     `__ManagedMemory` predicate lowering to `__mm_is_null`) and is here because this is its only caller.
@@ -5786,6 +5907,7 @@ let BuiltinsSubprocessSpawnStreamingName = b"__Builtins.subprocessSpawnStreaming
 let BuiltinsSubprocessWriteStdinAllName = b"__Builtins.subprocessWriteStdinAll"
 let BuiltinsSubprocessReadStdoutLineName = b"__Builtins.subprocessReadStdoutLine"
 let BuiltinsSubprocessReadStderrLineName = b"__Builtins.subprocessReadStderrLine"
+let BuiltinsSubprocessReadStdoutBytesName = b"__Builtins.subprocessReadStdoutBytes"
 let BuiltinsSubprocessCloseStdinName = b"__Builtins.subprocessCloseStdin"
 let BuiltinsSubprocessWaitExitName = b"__Builtins.subprocessWaitExit"
 let BuiltinsManagedIsNullName = b"__Builtins.managedIsNull"
@@ -5858,7 +5980,7 @@ let ExecutablePathArity = 0 as ParamCount
 // are already both `0`, which is the idiom this band follows: one constant per INTRINSIC, because the
 // number is a fact about that intrinsic's contract and not about the band. (The `SubprocessOneArgArity`
 // family's *"a sixth constant equal to an existing one would be a second name for one fact"* is the
-// opposite case and does not reach here: there, five SHAPES are shared across twenty names by contract, so
+// opposite case and does not reach here: there, five SHAPES are shared across twenty-one names by contract, so
 // the shape is the fact.)
 let CurrentProcessIdArity = 0 as ParamCount
 
@@ -5881,9 +6003,9 @@ let PromiseArrayRequirement = "promise array — an `Array` whose element type i
 // ordinary arity check to read, because no file declares it.
 let StreamWriteArity = 1 as ParamCount
 
-// ⭐ **THE FIVE ARGUMENT SHAPES THE TWENTY SUBPROCESS INTRINSICS FALL INTO.** Stated here for
+// ⭐ **THE FIVE ARGUMENT SHAPES THE TWENTY-ONE SUBPROCESS INTRINSICS FALL INTO.** Stated here for
 // `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's ordinary arity check
-// to read, because no file declares it — and stated as FIVE rather than twenty because a shape is what a
+// to read, because no file declares it — and stated as FIVE rather than twenty-one because a shape is what a
 // caller can get wrong: the handle ops take one, the timed ops two, the last-error read none, a spawn
 // fourteen and a streaming spawn four. A sixth constant equal to an existing one would be a second name
 // for one fact.
@@ -6822,10 +6944,19 @@ end 'appendArgParamName'
 // it is provided. The pairing cannot be verified at install time (an arm is a control-flow position, not an
 // entry in a table something can enumerate), so the check sits at the one moment it is observable.
 //
-// ⚠ **`fromCString` IS ABSENT ON PURPOSE, AND IT IS NOW THE ONLY ONE.** It is a real `__ManagedMemory` member
-// in both references (bootstrap `2-Parser.cs:1481-1516`, v1 `LowerMaxonToStd.maxon:1618-1660`) and is not
-// BUILT here, because it takes a `cstring` shv2 has no producer for. It arrives with the rung that builds it,
-// and **that rung adds its line HERE and has nothing else to remember.**
+// ⭐⭐ **NOTHING IS ABSENT FROM THIS ROSTER ANY MORE, AND THE LAST ENTRY LEFT IT BY BEING FILED IN THE WRONG
+// PLACE RATHER THAN BY BEING BUILT INTO IT.** This block used to end *"`fromCString` IS ABSENT ON PURPOSE,
+// AND IT IS NOW THE ONLY ONE … it takes a `cstring` shv2 has no producer for"*, with the instruction that
+// the rung building it add its line HERE. Both halves were wrong. `fromCString` is `isStatic: true` in both
+// references, so it was never a member of this surface at all — it belongs to
+// `parseManagedMemoryStaticCall`, which is where it was built, and a line here would have put a static on
+// the roster the INSTANCE dispatch reads. And the blocker had already expired: `cstring` resolves,
+// `String.cstr()` produces one, and the strlen-and-copy conversion the new static needed was already in the
+// runtime under `emitCStringToManaged`.
+//
+// ⇒ **A ROSTER'S "ABSENT ON PURPOSE" NOTE IS TWO CLAIMS — that the name belongs here, and that it cannot be
+// built — and this one was false on both.** Check the category before adding a name, and re-measure a
+// blocker before repeating it.
 //
 // ⭐ **THAT LIST USED TO NAME FIVE, AND FOUR OF THEM ARRIVED BY EXACTLY THE ROUTE IT PREDICTED.**
 // `remove`/`swap`/`shiftLeft`/`shiftRight` were absent because *"the only caller anywhere is
@@ -31478,7 +31609,7 @@ export type Parser
 		// `maxon test` while `maxon build` refused the identical file with E2051. Keyed on the names the
 		// stager actually minted, the author's spelling is refused in both commands and the generator's is
 		// accepted in the one that produced it. Pinned by
-		// `maxon-shv2/Testing/test-fixtures/reserved-name-refused`.
+		// `tests/test-fixtures/reserved-name-refused`.
 		//
 		// ⛔ **NOT A LINE THRESHOLD.** "Below the author's last line" is true only because the dispatcher is
 		// APPENDED, and it would invert silently the day anything is prepended — a property of the generator,
@@ -41731,7 +41862,7 @@ export type Parser
 	// parses INSIDE a statement whose accessors are still claimable; cutting there is exactly the reset that
 	// segfaulted. Their leftovers are cut by the enclosing statement's own mark instead.
 	//
-	// MEASURED, on `Testing/ladders/genborrow.sh <K> pending` — K statements of `s = try arr.get(0)
+	// MEASURED, on `tests/ladders/genborrow.sh <K> pending` — K statements of `s = try arr.get(0)
 	// otherwise ""`, an ASSIGNMENT, which takes no borrow a binding can complete and so left one entry behind
 	// each time. Before: +0.44M / +0.48M / +2.02M / +7.74M / +24.2M CPU ticks over the parent binary at
 	// K = 64 … 1024 — ×4.2 ×3.8 ×3.1 per doubling, and 19% of `phase:parse` at K=1024.
@@ -42050,7 +42181,7 @@ export type Parser
 	// the pair contributes net zero to the depth on the way through.
 	//
 	// Walking IN is what made this scan cost `O(depth × tokens)`: a construct nested D deep had its tokens
-	// re-walked by all D scans enclosing it. MEASURED on `Testing/ladders/gennest.sh`, which holds
+	// re-walked by all D scans enclosing it. MEASURED on `tests/ladders/gennest.sh`, which holds
 	// `depth × stmtsPerLevel` fixed so the program barely changes size while the nesting doubles: at a
 	// constant 1024 statements `phase:parse` CPU climbed ×1.20 ×1.33 ×1.50 ×1.74 per depth doubling, and
 	// with this skip it climbs ×1.11 ×1.20 ×1.39 ×1.40 — HALF the depth term, to the tick. The other half
@@ -59809,13 +59940,38 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
-		// ⚠ **ONE STATIC, so the name and its two parameter labels are rendered from the very constants this
-		// call is parsed with, and not a one-element roster (A2q)** — `dispatchCharacterSetMethod`'s reason,
-		// with a second name's worth of drift on top: the `(count, elementSize)` in the sentence and the
-		// `parseTwoBuiltinIntegerArgList` below must agree about what the argument labels ARE, and now do so
-		// by construction.
+		// ⭐⭐ **`fromCString(cstr)` — A NUL-TERMINATED POINTER BACK INTO AN OWNED BUFFER**, `toCString()`'s
+		// dual and the surface's second static. The whole emit is one runtime call: `__mm_from_cstring` walks
+		// the pointer with a `strlen` and blits it into a fresh byte-element `Array` record, which is the
+		// builder `__md_filename` and `__cl_arg` have used since R4.3 rather than a second copy of the loop.
+		//
+		// ⚠ **THE RESULT IS OWNED AND IT IS A BYTE BUFFER, so it takes the SAME door `filename()` does**
+		// (`emitOwnedManagedMemoryResult`): the record is freshly allocated, nothing else will ever drop it,
+		// and its element is a byte — the synthesized byte instance, not `create`'s element-size-chosen one,
+		// because a `cstring` IS a byte pointer and no width argument exists to choose from.
+		//
+		// ⚠ **THE ARGUMENT IS CHECKED AS AN INTEGER AND NOT AS A `cstring`, WHICH IS `parseTypeReference`'s
+		// DECISION RATHER THAN A SHORTCUT TAKEN HERE**: `cstring` resolves to `MaxonType.integer` because it
+		// IS a raw address, so `s.cstr()` arrives integral and there is no separate tag to demand. That arm's
+		// header carries the standing question of whether the day has come to give it a tag of its own — this
+		// door is a second `cstring`-typed PARAMETER for it to weigh, not an answer to it.
+		if methodTok.value.equals(ManagedMemoryFromCStringMethod) 'fromCString'
+			let cstr = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryCStringParamName, methodTok: methodTok)
+			return self.emitOwnedManagedMemoryResult(MmFromCStringName, args: singletonArgs(cstr), range: range)
+		end 'fromCString'
+
+		// ⚠ **THE NAMES AND THEIR PARAMETER LABELS ARE RENDERED FROM THE VERY CONSTANTS THE ARMS ABOVE ARE
+		// PARSED WITH, and not from a hand-written roster (A2q)** — `dispatchCharacterSetMethod`'s reason:
+		// the `(count, elementSize)` in this sentence and the `parseTwoBuiltinIntegerArgList` below must
+		// agree about what the argument labels ARE, and do so by construction.
+		//
+		// ⚠ **`createCursor` IS THE ONE `__ManagedMemory` SPELLING THIS DOOR STILL REFUSES, AND IT IS NOT
+		// UNBUILT — IT IS AN INSTANCE METHOD.** Both references register it `["self"], [mm]` under a
+		// `// static methods` heading (`2-Parser.cs:1517-1523`), which is where the miscategorisation came
+		// from; shv2 serves it off a RECEIVER (`dispatchArrayMethod`'s `createCursor` arm). So the cure a
+		// reader needs here is the spelling, not a rung.
 		if not methodTok.value.equals(ManagedMemoryCreateMethod) 'unknownStatic'
-			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — R4.4 provides `{String.from(ManagedMemoryCreateMethod)}({String.from(ManagedMemoryCountParamName)}, {String.from(ManagedMemoryElementSizeParamName)})`; `fromCString` and `createCursor` are not built: each needs a `cstring` / cursor type shv2 has no producer for, so no spec can reach one", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(ManagedMemoryTypeName)}` static '{String.from(methodTok.value)}' — the statics are `{String.from(ManagedMemoryCreateMethod)}({String.from(ManagedMemoryCountParamName)}, {String.from(ManagedMemoryElementSizeParamName)})` and `{String.from(ManagedMemoryFromCStringMethod)}({String.from(ManagedMemoryCStringParamName)})`; `{String.from(ManagedMemoryCreateCursorMethod)}` is an INSTANCE method, so write it on a receiver", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 
 		let elementSizeStart = self.pos
@@ -75375,6 +75531,14 @@ export type Parser
 				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadErrBytesName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessReadStderrLine'
 
+			// The EXACT-COUNT stdout reader. Its second argument is a LENGTH where the two line readers' is a
+			// ceiling, which is the whole of the difference: `readStdoutLineCapped(maxBytes)` answers the buffered
+			// remainder once it is over the cap, so it can never say "the next four bytes". A framed body — the LSP
+			// `Content-Length` payload, which carries no trailing newline — has no other way to be read.
+			if callee.equals(BuiltinsSubprocessReadStdoutBytesName) 'subprocessReadStdoutBytes'
+				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpReadExactOutBytesName, arity: SubprocessTwoArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
+			end 'subprocessReadStdoutBytes'
+
 			if callee.equals(BuiltinsSubprocessResolveOnPathName) 'subprocessResolveOnPath'
 				return try self.emitSubprocessManagedResult(args, callee: callee, runtimeName: SubpResolvePathName, arity: SubprocessOneArgArity, buffersAt: IntrinsicBufferSlots.none, calleeTok: anchor)
 			end 'subprocessResolveOnPath'
@@ -75676,72 +75840,57 @@ export type Parser
 	//
 	// ⚠ The operand ORDER is load-bearing and must not be normalised anywhere downstream: neither op is
 	// commutative on NaN input. See `StdBinOpcode`'s `min`/`max` header.
-	// ⭐⭐⭐ **THE MATH-INTRINSIC FAMILY'S ONE DISPATCH, ENTERED ONLY THROUGH ITS ONE ROSTER.** Every arm
-	// here is reachable exactly when `calleeTakesPositionalArgsOnly` admits the name, because
-	// `parseCallNamed` gates the whole function on that predicate — so the SET is written down once and
-	// the emit hangs off it, rather than the two being parallel lists 33,000 lines apart that happen to
-	// agree today.
+	// ⭐⭐⭐ **THE MATH-INTRINSIC FAMILY'S ONE DISPATCH, ENTERED ONLY THROUGH ITS ONE ROSTER.** The bytes
+	// are turned into a `MathBuiltin` here and nowhere else downstream, because `parseCallNamed` gates
+	// this call on `calleeTakesPositionalArgsOnly`, which is that same recognizer — so the SET is written
+	// down once and the emit hangs off it, rather than the two being parallel lists 33,000 lines apart
+	// that happen to agree today.
 	//
-	// ⚠⚠ **THE PARALLEL LISTS WERE SCHEDULED TO DIVERGE, THE APPOINTMENT WAS IN THE DIARY, AND IT HAS NOW
-	// BEEN KEPT.** `max` arrived at its own whitelist position, arity-2, beside `min`. Under the old shape
-	// an implementer who added its emit arm and forgot the roster would have got a compiler where
-	// `max(3.0, b: 5.0)` answers **E2052** — the exact wrong noun this family was moved off — as a WRONG
-	// ANSWER rather than a compile error, with a green suite, because no `max` label case exists to catch
-	// it. That is this project's signature bug (ONE FACT WRITTEN DOWN TWICE), and it is the same shape
-	// that left the arity-1 builtins on the old noun when `min` first landed. Under THIS shape the
-	// half-edit is not writable: the roster is the gate, so an emit arm alone is dead code and a roster
-	// entry alone panics by name.
+	// ⚠⚠ **THE PARALLEL LISTS WERE SCHEDULED TO DIVERGE, THE APPOINTMENT WAS IN THE DIARY, AND IT WAS
+	// KEPT.** `max` arrived at its own whitelist position, arity-2, beside `min`. Under the ORIGINAL shape
+	// — two hand-written `equals` chains — an implementer who added its emit arm and forgot the roster
+	// would have got a compiler where `max(3.0, b: 5.0)` answers **E2052**, the exact wrong noun this
+	// family was moved off, as a WRONG ANSWER rather than a compile error, with a green suite, because no
+	// `max` label case exists to catch it. That is this project's signature bug (ONE FACT WRITTEN DOWN
+	// TWICE), and it is the same shape that left the arity-1 builtins on the old noun when `min` landed.
 	//
-	// ⭐ IT CLOSES BOTH DIRECTIONS, which is the whole point of the shape:
+	// ⭐⭐ **IT CLOSES BOTH DIRECTIONS, AND THE SECOND ONE IS NOW A COMPILE ERROR RATHER THAN A PANIC:**
 	//   • a name cannot reach an emit arm without being in the roster — STRUCTURALLY, since the gate is
 	//     the roster;
-	//   • a roster entry with no emit arm PANICS, loudly, on the first program that calls it — rather
-	//     than falling through to `emitCall` and being reported as an undeclared function, which is what
-	//     a `return`-less fallthrough would have done.
+	//   • a `MathBuiltin` with no emit arm does not BUILD — `emitMathBuiltin` matches the enum
+	//     exhaustively, so the half-edit is refused by the compiler that compiles this file rather than by
+	//     the first program that calls the new builtin. `mathBuiltinSignature` and `mathBuiltinHelp` hold
+	//     the member to the same standard, which is why a fourth fact about a builtin (its help text)
+	//     could be added without giving anyone a fifth list to keep in step.
 	//
 	// The three emitters differ and that difference is the family's real content: `trunc` LEAVES the float
 	// domain (so an integer argument is the identity), the five arity-1 intrinsics STAY inside it (so an
 	// integer argument is promoted), and `min`/`max` are the arity-2 pair. See each. Note the emitters
-	// number three while the roster numbers eight — the arms below are a NAME→OP map, and how many names
+	// number three while the roster numbers eight — the arms are a MEMBER→OP map, and how many members
 	// share an emitter is the point of having one.
 	function emitPositionalMathBuiltin(args ValueIdArray, callee ByteArray, calleeTok Token) returns ValueId throws ParseError
-		if callee.equals(TruncBuiltinName) 'truncBuiltin'
-			return try self.emitTrunc(args, calleeTok: calleeTok)
-		end 'truncBuiltin'
-
-		if callee.equals(FloorBuiltinName) 'floorBuiltin'
-			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.floor, name: callee, calleeTok: calleeTok)
-		end 'floorBuiltin'
-
-		if callee.equals(CeilBuiltinName) 'ceilBuiltin'
-			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.ceil, name: callee, calleeTok: calleeTok)
-		end 'ceilBuiltin'
-
-		if callee.equals(RoundBuiltinName) 'roundBuiltin'
-			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.round, name: callee, calleeTok: calleeTok)
-		end 'roundBuiltin'
-
-		if callee.equals(SqrtBuiltinName) 'sqrtBuiltin'
-			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.sqrt, name: callee, calleeTok: calleeTok)
-		end 'sqrtBuiltin'
-
-		if callee.equals(AbsBuiltinName) 'absBuiltin'
-			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.abs, name: callee, calleeTok: calleeTok)
-		end 'absBuiltin'
-
-		// The ARITY-2 intrinsics. A `MaxonBinOp` rather than a `MaxonUnaryOp`, so they reach
-		// `emitBinaryMathIntrinsic`; everything else about them is the same shape as their five siblings,
-		// and the two differ from each other in nothing but which opcode they name.
-		if callee.equals(MinBuiltinName) 'minBuiltin'
-			return try self.emitBinaryMathIntrinsic(args, op: MaxonBinOp.min, name: callee, calleeTok: calleeTok)
-		end 'minBuiltin'
-
-		if callee.equals(MaxBuiltinName) 'maxBuiltin'
-			return try self.emitBinaryMathIntrinsic(args, op: MaxonBinOp.max, name: callee, calleeTok: calleeTok)
-		end 'maxBuiltin'
-
-		panic("emitPositionalMathBuiltin: '{String.from(callee)}' is in `calleeTakesPositionalArgsOnly` but has no emit arm here — the roster and the dispatch are one fact, and adding a name to the roster without an emit is the half-edit this function exists to catch")
+		match mathBuiltinNamed(callee) 'roster'
+			found(builtin) then return try self.emitMathBuiltin(args, builtin: builtin, callee: callee, calleeTok: calleeTok)
+			absent then panic("emitPositionalMathBuiltin: '{String.from(callee)}' reached the math-intrinsic emit without being in `mathBuiltinNamed`, which is the very roster `calleeTakesPositionalArgsOnly` gated this call on — the two cannot disagree, so this is a `mathBuiltinNamed` that answered differently for one name in one call than in the other")
+		end 'roster'
 	end 'emitPositionalMathBuiltin'
+
+	// The NAME→OP half of the roster. Exhaustive over `MathBuiltin`, which is what makes a member added
+	// without an emit a COMPILE error here rather than a panic on the first program that calls it.
+	function emitMathBuiltin(args ValueIdArray, builtin MathBuiltin, callee ByteArray, calleeTok Token) returns ValueId throws ParseError
+		match builtin 'member'
+			trunc then return try self.emitTrunc(args, calleeTok: calleeTok)
+			floor then return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.floor, name: callee, calleeTok: calleeTok)
+			ceil then return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.ceil, name: callee, calleeTok: calleeTok)
+			round then return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.round, name: callee, calleeTok: calleeTok)
+			sqrt then return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.sqrt, name: callee, calleeTok: calleeTok)
+			abs then return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.abs, name: callee, calleeTok: calleeTok)
+			// The ARITY-2 pair. A `MaxonBinOp` rather than a `MaxonUnaryOp`, so they reach
+			// `emitBinaryMathIntrinsic`; they differ from each other in nothing but which opcode they name.
+			min then return try self.emitBinaryMathIntrinsic(args, op: MaxonBinOp.min, name: callee, calleeTok: calleeTok)
+			max then return try self.emitBinaryMathIntrinsic(args, op: MaxonBinOp.max, name: callee, calleeTok: calleeTok)
+		end 'member'
+	end 'emitMathBuiltin'
 
 	function emitBinaryMathIntrinsic(args ValueIdArray, op MaxonBinOp, name ByteArray, calleeTok Token) returns ValueId throws ParseError
 		try self.requireNumericBuiltinArity(args, name: name, arity: BinaryNumericBuiltinArity, calleeTok: calleeTok)

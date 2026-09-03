@@ -3,7 +3,7 @@
 # structurally cannot see.
 #
 # ⭐ WHY THIS EXISTS AS A SCRIPT. Until now this measurement lived only as DEAD COMMENT TEXT
-# inside two ladder generators (`Testing/ladders/genstringviews.sh:213`, `gentrim.sh:119`),
+# inside two ladder generators (`tests/ladders/genstringviews.sh:213`, `gentrim.sh:119`),
 # which each told the reader to type a PowerShell one-liner by hand. Every number produced
 # that way is unreproducible by anyone who has not read that comment.
 #

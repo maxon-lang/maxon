@@ -1791,13 +1791,8 @@ public static class RefcountOptimizationPass {
     var opensByTemp = new Dictionary<string, GlobalBracketOpen>();
     foreach (var block in blocks) {
       var ops = block.Operations;
-      // SSA id → index of the op that produced it in this block.
-      var defIdx = new Dictionary<int, int>();
       for (int i = 0; i < ops.Count; i++) {
         var op = ops[i];
-        int anyId = op.AnyResultId;
-        if (anyId >= 0) defIdx[anyId] = i;
-
         // Match: StdGlobalLoadI64Op immediately followed (within the block) by
         // a store of its result into a __global_* temp, then a load + mm_incref.
         if (op is not StdGlobalLoadI64Op gload) continue;
@@ -2027,8 +2022,8 @@ public static class RefcountOptimizationPass {
           bool isSkipped = skipPairs.Contains((block.Name, i));
 
           // Track constant-zero SSA ids so we can distinguish null-init stores.
-          if (op is StdConstI64Op cst && cst.Value == 0 && cst.AnyResultId >= 0) {
-            constZero.Add(cst.AnyResultId);
+          if (op is StdConstI64Op cst && cst.Value == 0) {
+            constZero.Add(cst.Result.Id);
             continue;
           }
 

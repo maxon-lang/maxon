@@ -1,0 +1,175 @@
+// hover-declarations.test.maxon — hover over declarations, and over text that only LOOKS like one.
+//
+// Eight of the twenty-four recovered hover tests: keywords, the two comment-exclusion cases and their
+// positive counterpart, a field declaration, locals inside a method and inside an interface
+// implementation, and an array's element type. The harness, and what their red before hover existed
+// proved, are
+// in `hover-probe.test.maxon`.
+//
+// ⚠ **POSITIONS AND PINNED STRINGS ARE TRANSCRIBED, NEVER RE-DERIVED.** The recovered strings ARE the
+// specification; re-baselining them to whatever shv2 emits would be inventing the spec and then passing
+// it. Two assertions here are recorded as WEAK at their own sites — they are kept exactly as recovered,
+// and the note is there so that their passing is never mistaken for coverage.
+
+test 'hover shows type keyword info'
+	// Request hover on 'type' keyword at line 0, character 2
+	//
+	// ⚠ WEAK, and deliberately left so: `"type"` is a 4-character substring that would also match inside
+	// `typealias`. It is weak in the recovered test and it stays weak — strengthening it would replace a
+	// recovered claim with an invented one.
+	let document = myStructValueDocument()
+	let rendering = try hoverRendering(document, line: 0, character: 2)
+
+	try Expect.contains(rendering, needle: "type", message: "hovering a declaration KEYWORD yields something, as hovering `return` does.")
+end 'hover shows type keyword info'
+
+test 'hover excludes text in line comments'
+	// Request hover on 'for' inside the line comment (line 0, col 24)
+	// Should return error since there's no hover for text inside comments
+	//
+	// ⛔ The recovered test expected a THROWN `NoHoverInfo`. Absence is option-shaped here instead: an
+	// error and an empty string are both sentinels inside their own domain, and the second one fails
+	// silently the day a real rendering is empty.
+	let document = lineCommentDocument()
+
+	try expectNoHover(document, line: 0, character: 24, note: "`for` inside a LINE COMMENT is prose, not a keyword. A server that hovers it is tokenising the comment body, which would make every English word in a file hoverable.")
+end 'hover excludes text in line comments'
+
+test 'hover excludes text in block comments'
+	// Request hover on 'for' in the block comment (line 1, col 17)
+	// Should return error since there's no hover for text inside comments
+	//
+	// ⚠ The fixture's lines 1 and 2 begin with THREE SPACES, and column 17 is counted against them.
+	let document = blockCommentDocument()
+
+	try expectNoHover(document, line: 1, character: 17, note: "`for` inside a BLOCK COMMENT is prose. The line-comment case and this one fail differently in a scanner that handles only one of the two comment forms, so both are asked.")
+end 'hover excludes text in block comments'
+
+test 'hover works after block comment ends'
+	// Request hover on 'function' keyword after the block comment (line 0, col 18)
+	//
+	// The positive counterpart to the two exclusion tests: it proves the exclusion is BOUNDED. A scanner
+	// that swallowed the rest of the line after `*/` would pass both of those and fail this one.
+	let document = inlineBlockCommentDocument()
+	let rendering = try hoverRendering(document, line: 0, character: 18)
+
+	try Expect.contains(rendering, needle: "function", message: "code on the same line AFTER a closed block comment hovers normally.")
+end 'hover works after block comment ends'
+
+test 'hover shows struct field info'
+	// Request hover on 'capacity' field declaration (line 2, col 8)
+	let document = myStructCapacityDocument()
+	let rendering = try hoverRendering(document, line: 2, character: 8)
+
+	try Expect.contains(rendering, needle: "capacity", message: "a field DECLARATION hovers as that field, not as the same-named method on some other type.")
+
+	// ⚠ KNOWN-VACUOUS, and kept verbatim rather than repaired: `function capacity(self array)` is a
+	// Zig-era rendering shv2 has never produced — `self array` is not how shv2 spells a receiver — so the
+	// negative is trivially satisfied and covers nothing. Recorded here so its passing is never read as
+	// evidence.
+	let mentionsArrayCapacity = rendering.contains("function capacity(self array)")
+	try Expect.isFalse(mentionsArrayCapacity, message: "the field's hover is the FIELD, never `Array.capacity()`. A resolver that reached for a method of the same name would show the wrong thing at a declaration site.")
+end 'hover shows struct field info'
+
+test 'hover shows variable type inside struct method'
+	// Request hover on 'count' in the return statement (line 5, col 15)
+	//
+	// ⚠ The type has a FIELD named `value` and the method has a LOCAL named `count`; the fixture's blank
+	// line 2 is load-bearing for the numbering.
+	let document = myTypeMethodDocument()
+	let rendering = try hoverRendering(document, line: 5, character: 15)
+
+	try Expect.contains(rendering, needle: "count", message: "a local inside a METHOD body resolves to the local, not to a field of the enclosing type.")
+
+	try Expect.contains(rendering, needle: "int", message: "the local's inferred type is in the rendering.")
+end 'hover shows variable type inside struct method'
+
+test 'hover shows variable type inside interface implementation method'
+	// Request hover on 'count' in the return statement (line 8, col 15)
+	let document = interfaceImplementationDocument()
+	let rendering = try hoverRendering(document, line: 8, character: 15)
+
+	try Expect.contains(rendering, needle: "count", message: "a local inside an INTERFACE IMPLEMENTATION method resolves like any other local. The qualified `TestInterface.doSomething` declaration is a different parse shape from a plain method, so it is asked separately.")
+
+	try Expect.contains(rendering, needle: "int", message: "the local's inferred type is in the rendering.")
+end 'hover shows variable type inside interface implementation method'
+
+test 'hover shows array type'
+	// Request hover on 'arr' at line 1 (var arr = [1, 2, 3])
+	let document = arrayDocument()
+	let rendering = try hoverRendering(document, line: 1, character: 8)
+
+	try Expect.contains(rendering, needle: "arr", message: "the rendering names the variable it resolved.")
+
+	// ⭐ DIVERGENCE RULED ON 2026-09-02, and the assertion moved rather than the compiler. The recovered
+	// literal was `Array of int` — the DELETED Zig server's own type-rendering prose, a fact about that
+	// implementation's wording and not about the language. shv2 renders `Array with int`, which is Maxon's
+	// own spelling of the type and what a reader would have to TYPE to declare one. The reader's language
+	// wins over the old server's prose. `Array of Point` moved with it, and for the same reason.
+	try Expect.contains(rendering, needle: "Array with int", message: "an array's hover names its ELEMENT type. `Array` alone would leave an editor user no better informed than the literal already did.")
+end 'hover shows array type'
+
+// ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source
+// character: byte-exact, no indentation stripped or added, no trailing newline. The four-space
+// indentation is the recovered source's own, and every position above is a column counted against it —
+// adding or trimming one byte silently shifts them all.
+
+function myStructValueDocument() returns String
+	return String.from(b"type MyStruct
+    var value int
+end 'MyStruct'")
+end 'myStructValueDocument'
+
+function lineCommentDocument() returns String
+	return String.from(b"// This function uses for loops and if statements
+function test() returns int
+    return 42
+end 'test'")
+end 'lineCommentDocument'
+
+function blockCommentDocument() returns String
+	return String.from(b"/* This is a block comment
+   that mentions for loops
+   and if statements */
+function test() returns int
+    return 42
+end 'test'")
+end 'blockCommentDocument'
+
+function inlineBlockCommentDocument() returns String
+	return String.from(b"/* comment */ function test() returns int
+    return 42
+end 'test'")
+end 'inlineBlockCommentDocument'
+
+function myStructCapacityDocument() returns String
+	return String.from(b"type MyStruct
+    var count int
+    var capacity int
+end 'MyStruct'")
+end 'myStructCapacityDocument'
+
+function myTypeMethodDocument() returns String
+	return String.from(b"type MyType
+    var value int
+
+    function doSomething() returns int
+        var count = 42
+        return count
+    end 'doSomething'
+end 'MyType'")
+end 'myTypeMethodDocument'
+
+function interfaceImplementationDocument() returns String
+	return String.from(b"interface TestInterface
+    function doSomething() returns int
+end 'TestInterface'
+
+type MyType is TestInterface
+    var value int
+    function TestInterface.doSomething() returns int
+        var count = 42
+        return count
+    end 'doSomething'
+end 'MyType'")
+end 'interfaceImplementationDocument'

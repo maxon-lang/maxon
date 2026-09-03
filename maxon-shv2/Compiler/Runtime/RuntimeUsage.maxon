@@ -240,6 +240,10 @@ export type RuntimeUsage
 	export var usesStrFromBytes as bool
 	export var usesStrOfBuffer as bool
 	export var usesMmToCString as bool
+	// `__mm_to_cstring`'s dual, with its own bit under this file's one-bit-per-entry-point discipline: the
+	// two directions have different consumers (`String.cstr()` and `String.fromCString()`) and a program
+	// reaching one must not carry the other's graph.
+	export var usesMmFromCString as bool
 	// The byte-view door, with its OWN bit under this file's one-bit-per-entry-point discipline: a program
 	// that never reads a fused wrapper's inline `managed` must not carry the view builder. It declares
 	// `usesManagedMemory`/`usesHeap` in `closeStringMethodNeeds` — it calls `__managed_create` and `__mm_incref` inside
@@ -499,7 +503,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesParallelBoundary: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesDebugStreamLog: false, usesSlabArena: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -1172,6 +1176,9 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(MmToCStringName) 'tocstring'
 		usage.usesMmToCString = true
 	end 'tocstring'
+	if callee.equals(MmFromCStringName) 'fromcstring'
+		usage.usesMmFromCString = true
+	end 'fromcstring'
 	if callee.equals(StrBytesViewName) 'bytesview'
 		usage.usesStrBytesView = true
 	end 'bytesview'
@@ -1213,6 +1220,15 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 		usage.usesManagedMemory = true
 		usage.usesHeap = true
 	end 'terminatesInPlace'
+	// `__mm_from_cstring` BUILDS an `Array` record one tier down — `emitCStringToManaged`'s
+	// `__managed_create` + `__managed_reserve`, which this Maxon-module scan cannot see — so it carries the
+	// directory family's two transitive bits and for exactly that family's reason. It does NOT carry
+	// `usesStrCopy`: `emitForwardCopy` emits the blit INLINE as a word run and a byte tail, and never calls
+	// `__str_copy`.
+	if usage.usesMmFromCString 'buildsARecord'
+		usage.usesManagedMemory = true
+		usage.usesHeap = true
+	end 'buildsARecord'
 	// `__str_bytes_view` increfs the receiver's own record through `__mm_incref` inside its synthesized body,
 	// which this scan cannot see — and the value it hands back is a buffer the CALLER drops through
 	// `__managed_decref`. `usesManagedMemory` is what installs the managed-memory runtime AND (through

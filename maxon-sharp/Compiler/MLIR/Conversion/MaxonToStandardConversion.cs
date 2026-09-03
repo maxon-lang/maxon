@@ -356,6 +356,7 @@ public static partial class MaxonToStandardConversion {
             MaxonCharLiteralOp c => c.Result.Id,
             MaxonStringInterpOp i => i.Result.Id,
             MaxonCStringToManagedOp c => c.Result.Id,
+            MaxonRuntimeBytesToManagedOp b => b.Result.Id,
             MaxonEnumConstructOp e => e.Result.Id,
             MaxonManagedListCreateOp c => c.Result.Id,
             _ => null
@@ -2562,6 +2563,13 @@ public static partial class MaxonToStandardConversion {
                 valueMap[fromCStringOp.Result] = new StdHeapPtr(fromCStringOp.Result.Id, fromCStringHp.TypeName, fromCStringHp.VarName!);
               }
               break;
+            case MaxonRuntimeBytesToManagedOp bytesToManagedOp:
+              LowerRuntimeBytesToManaged(bytesToManagedOp, newBlock, valueMap, varTypes, temps, module,
+                inlineTargets.GetValueOrDefault(bytesToManagedOp.Result.Id));
+              if (valueMap[bytesToManagedOp.Result] is StdHeapPtr bytesToManagedHp) {
+                valueMap[bytesToManagedOp.Result] = new StdHeapPtr(bytesToManagedOp.Result.Id, bytesToManagedHp.TypeName, bytesToManagedHp.VarName!);
+              }
+              break;
             case MaxonManagedToCStringOp toCStringOp:
               LowerManagedToCString(toCStringOp, newFunc, ref newBlock, valueMap, varTypes);
               break;
@@ -2627,31 +2635,7 @@ public static partial class MaxonToStandardConversion {
               LowerDebugStreamText(dsTextOp, newBlock, valueMap, varTypes);
               break;
             case MaxonCallRuntimeOp callRtOp: {
-              var stdArgs = callRtOp.Args.Select(a => {
-                if (valueMap.TryGetValue(a, out var mapped)) {
-                  if (mapped is StdHeapPtr hp && hp.VarName != null) {
-                    var typeName = hp.TypeName;
-                    // Load buffer from managed struct via heap pointer indirection. A fused
-                    // String/Character/Array IS its own __ManagedMemory (buffer at offset 0), so it
-                    // is handled identically to a bare __ManagedMemory here.
-                    if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)
-                        || IsFusedManagedWrapper(typeName)) {
-                      // hp.VarName IS the __ManagedMemory heap pointer, buffer at offset 0
-                      return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, hp.VarName, ManagedFieldBuffer, IrType.I64, varTypes);
-                    } else if (typeName == "__ManagedFile") {
-                      // Pass the __ManagedFile heap pointer itself; runtime (maxon_file_close)
-                      // reads _handle at offset 0 and zeros it before submitting close.
-                      return (StdValue)(StdI64)EmitLoad(newBlock, hp.VarName, varTypes);
-                    } else {
-                      throw new InvalidOperationException(
-                        $"MaxonCallRuntimeOp struct arg has unexpected type '{typeName}' -- " +
-                        "only __ManagedMemory struct args are supported (extract fields before passing to runtime calls)");
-                    }
-                  }
-                  return (StdValue)(StdI64)mapped;
-                }
-                throw new InvalidOperationException($"MaxonCallRuntimeOp arg {a} not found in valueMap");
-              }).ToList();
+              var stdArgs = LowerRuntimeCallArgs(callRtOp.FunctionName, callRtOp.Args, newBlock, valueMap, varTypes, module);
               // When tracing, mm_free/mm_raw_free take 2 params (ptr, scope) — add NULL scope if caller only passes ptr
               if (Compiler.MmTrace && (callRtOp.FunctionName == "mm_free" || callRtOp.FunctionName == "mm_raw_free") && stdArgs.Count == 1) {
                 var nullScope = new StdConstI64Op(0);

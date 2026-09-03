@@ -941,6 +941,32 @@ public type StreamingSubprocess
 		return readLineResultToString(raw)
 	end 'readStdoutLineCapped'
 
+	/// Read EXACTLY `count` bytes from the child's stdout, blocking until it has
+	/// them. Returns FEWER only at end of stream, and then only what remained; a
+	/// call after that returns "". A `count` of 0 returns "" without touching the
+	/// pipe.
+	///
+	/// This is the reader a FRAMED protocol needs. `Content-Length: N\r\n\r\n` followed
+	/// by N body bytes puts NO newline after the body, so `readStdoutLine` blocks
+	/// for ever on a terminator that never arrives; `readStdoutLineCapped`'s cap is
+	/// a truncation ceiling, not a length, and answers the whole buffered remainder
+	/// once it is exceeded. The two readers share one per-handle buffer, so a
+	/// caller may read headers by line and the body by count on the same stream.
+	///
+	/// No newline is stripped, unlike the line readers: a read that ends at a count
+	/// has no terminator to remove, so a CR or an LF inside the span is part of the
+	/// answer.
+	///
+	/// ⚠ A SHORT ANSWER IS THE ONLY FAILURE SIGNAL THERE IS. The runtime's own refusals
+	/// — an invalid handle, a negative count, an allocation it could not make — answer
+	/// exactly what a clean end of stream answers, and `__subp_last_error` cannot tell
+	/// them apart either: nothing clears it, so a message there may belong to an earlier
+	/// call, and shv2's byte reader never writes one at all. A caller that needs the
+	/// difference compares what it got against what it asked for.
+	public function readStdoutBytes(count ByteLimit) returns String
+		return String.init(__Builtins.subprocessReadStdoutBytes(handle, count))
+	end 'readStdoutBytes'
+
 	/// Read one line from the child's stderr. Same contract as
 	/// `readStdoutLine` (LF stripped by the runtime, trailing CR trimmed
 	/// here, empty string on EOF).

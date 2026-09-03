@@ -1,0 +1,522 @@
+// `textDocument/documentSymbol` and `textDocument/foldingRange` — and the DOCUMENT STRUCTURE MODEL
+// every other language feature in this server reads.
+//
+// ⭐⭐ **ONE WALK ANSWERS "WHERE DOES EACH OF THIS DOCUMENT'S BLOCKS BEGIN AND END", AND FIVE READERS
+// ASK IT.** A declaration's range IS a folding range; a block's opening name and its `end 'name'` label
+// ARE a linked-editing pair and a rename's two edits; and "which lines are inside an `enum` body" is what
+// tells a semantic-token classifier an enum MEMBER from the keyword it happens to be spelled with. Five
+// separate derivations of that one fact are five answers free to disagree.
+//
+// ⛔⛔ **IT IS A TOKEN WALK AND NOT A PARSE, WHICH IS A MEASUREMENT RATHER THAN A SHORTCUT.** Two reasons,
+// and the second is the one that decides it:
+//
+//   1. **The compiler's structure does not hold the answer.** Blocks are gone by the time there is IR —
+//      an `if` is a branch between `IrBlock`s — and no declaration record carries an END: `TypeNameDecl`
+//      says where a type's NAME is and nothing about where its body stops.
+//   2. **The documents an editor asks about do not compile.** `function main() returns int` is E3005 in
+//      this language (a bare `int` is not a type), so a model built on `resolveTypes` answers NOTHING for
+//      the most ordinary file there is. A server whose outline vanishes while the author is mid-edit has
+//      no outline.
+//
+// ⚠ **WHICH KEYWORDS OPEN A DECLARATION BLOCK IS `Formatter.maxon`'s `kindOpensADeclarationBlock`**, read
+// here rather than re-listed: the formatter asks a neighbouring question — how deep to indent — but the
+// six keywords are the same six, and two lists of them are two lists free to disagree. What each walk
+// does with an opener stays its own (`blockKindOpenedBy` is the formatter's indent state,
+// `declarationBlockKind` below is an outline's symbol kind).
+
+// LSP's `SymbolKind`. The numbers are the protocol's own, fixed by it, and are what an editor draws an
+// icon and a sort group from.
+typealias LspSymbolKindCode = int(1 to 26)
+
+let NamespaceSymbolKind = 3 as LspSymbolKindCode
+let EnumSymbolKind = 10 as LspSymbolKindCode
+let InterfaceSymbolKind = 11 as LspSymbolKindCode
+let FunctionSymbolKind = 12 as LspSymbolKindCode
+let StructSymbolKind = 23 as LspSymbolKindCode
+
+// The members LSP defines on the two results this file writes.
+let SymbolNameKey = "name"
+let SelectionRangeKey = "selectionRange"
+let FoldStartLineKey = "startLine"
+let FoldEndLineKey = "endLine"
+
+// The contextual visibility modifier: a bare identifier, because `module` is recognised only immediately
+// before a declaration keyword and is an ordinary name everywhere else.
+let ModuleModifierWord = b"module"
+
+// What kind of thing a block declares. `labelled` declares nothing — it is an `if`, a `while`, a `for`,
+// a `match`, a block-form `try`, an `else`/`otherwise` arm, or a `test`: anything whose header line ends
+// with the very label its `end` names.
+module enum LspBlockKind
+	functionBody
+	structBody
+	enumBody
+	unionBody
+	interfaceBody
+	extensionBody
+	labelled
+end 'LspBlockKind'
+
+// How many blocks enclose a block. 0 is top level.
+module typealias LspBlockDepth = int(0 to u64.max)
+
+// One closed block of a document.
+module type LspDocumentBlock
+	module let kind as LspBlockKind
+	// The name the block is opened AND closed with — a declared name, or a statement label.
+	module let name as ByteArray
+	// Where the OPENING occurrence of `name` sits. For a declaration that is the name's identifier; for
+	// a labelled block it is the bytes INSIDE the opening label's quotes, which is what a rename must
+	// replace so that the quotes are left standing.
+	module let nameSpan as LspSpan
+	// Where `end '<name>'` spells it, likewise inside the quotes.
+	module let endNameSpan as LspSpan
+	module let startLine as LspLineNumber
+	module let endLine as LspLineNumber
+	module let depth as LspBlockDepth
+
+	module static function create(kind LspBlockKind, name ByteArray, nameSpan LspSpan, endNameSpan LspSpan, startLine LspLineNumber, endLine LspLineNumber, depth LspBlockDepth) returns LspDocumentBlock
+		return Self{kind: kind, name: name, nameSpan: nameSpan, endNameSpan: endNameSpan, startLine: startLine, endLine: endLine, depth: depth}
+	end 'create'
+end 'LspDocumentBlock'
+
+module typealias LspDocumentBlockArray = Array with LspDocumentBlock
+
+module function symbolsServedMethods() returns LspMethodArray
+	var served = LspMethodArray.create()
+	served.push(LspMethod.documentSymbol)
+	served.push(LspMethod.foldingRange)
+	return served
+end 'symbolsServedMethods'
+
+module function symbolsAnswer(request LspRequest) returns LspAnswer throws LspParamsError
+	let blocks = lspDocumentBlocks(lspDocumentTokens(request.text))
+
+	if request.method == LspMethod.documentSymbol 'outline'
+		return documentSymbolAnswer(request.text, blocks: blocks)
+	end 'outline'
+
+	if request.method == LspMethod.foldingRange 'regions'
+		return foldingRangeAnswer(blocks)
+	end 'regions'
+
+	panic("symbolsAnswer: {lspMethodSpelling(request.method).wireName} is not this area's — `symbolsServedMethods` names the two it answers, and the dispatcher routes only those here")
+end 'symbolsAnswer'
+
+// ⭐ **FLAT AND TOP-LEVEL ONLY.** LSP's `DocumentSymbol` nests through a `children` member, and a nested
+// outline is a different answer rather than a fuller one: it changes what an editor's breadcrumb shows
+// and what its outline filter matches. Members and statement labels are deliberately not symbols here.
+function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) returns LspAnswer
+	var doc = JsonDoc.create()
+	let index = LspLineIndex.build(source)
+	var symbols = JsonNodeIdArray.create()
+
+	for block in blocks 'eachBlock'
+		// A nested block is not a top-level symbol, and a statement label declares nothing an outline can
+		// name — the two exclusions this answer's shape rests on, stated where they are applied.
+		if block.depth != 0 or block.kind == LspBlockKind.labelled 'notATopLevelDeclaration'
+			continue
+		end 'notATopLevelDeclaration'
+
+		let kind = symbolKindOf(block.kind)
+
+		var symbol = LspJsonObject.create(doc)
+		symbol.put(SymbolNameKey, value: JsonNode.stringNode(String.from(block.name)))
+		symbol.put(LspKindKey, value: JsonNode.numberNode(kind))
+		symbol.putNode(LspRangeKey, value: blockRangeNode(doc, source: source, index: index, block: block))
+		symbol.putNode(SelectionRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: block.nameSpan))
+		symbols.push(symbol.finish())
+	end 'eachBlock'
+
+	return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(symbols)))
+end 'documentSymbolAnswer'
+
+function symbolKindOf(kind LspBlockKind) returns LspSymbolKindCode
+	match kind 'kind'
+		functionBody then return FunctionSymbolKind
+		structBody then return StructSymbolKind
+		// A `union` is Maxon's tagged variant and LSP has no kind for one. `Enum` is the closest true
+		// statement — both are a closed set of named cases — and it groups the two together in an
+		// outline, which is where a reader expects to find them.
+		enumBody or unionBody then return EnumSymbolKind
+		interfaceBody then return InterfaceSymbolKind
+		// An `extension` is a named grouping of members bolted onto a type it does not declare, which is
+		// what LSP's `Namespace` names.
+		extensionBody then return NamespaceSymbolKind
+		labelled then panic("symbolKindOf: a statement label declares nothing an outline can name, and `documentSymbolAnswer` excludes it before asking")
+	end 'kind'
+end 'symbolKindOf'
+
+// ⭐ **EVERY BLOCK FOLDS, NESTED ONES INCLUDED, AND A SINGLE-LINE BLOCK DOES NOT.** LSP folds a REGION,
+// and a region that begins and ends on one line has nothing to collapse — an editor draws a useless
+// chevron for it.
+function foldingRangeAnswer(blocks LspDocumentBlockArray) returns LspAnswer
+	var doc = JsonDoc.create()
+	var ranges = JsonNodeIdArray.create()
+
+	for block in blocks 'eachBlock'
+		if block.endLine <= block.startLine 'nothingToCollapse'
+			continue
+		end 'nothingToCollapse'
+
+		var range = LspJsonObject.create(doc)
+		range.put(FoldStartLineKey, value: JsonNode.numberNode(block.startLine))
+		range.put(FoldEndLineKey, value: JsonNode.numberNode(block.endLine))
+		ranges.push(range.finish())
+	end 'eachBlock'
+
+	return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(ranges)))
+end 'foldingRangeAnswer'
+
+// The whole block: from the start of its opening line to just past the quote that closes its `end`
+// label. The end is taken from the label rather than from the line's last token because a PUNCTUATOR
+// carries no byte offsets at all (`Token.startByte` is 0 for every one), so a line-final `)` cannot say
+// where it is.
+function blockRangeNode(doc JsonDoc, source String, index LspLineIndex, block LspDocumentBlock) returns JsonNodeId
+	let finish = index.positionOf(source, offset: block.endNameSpan.endByte + 1)
+	return lspRangeNode(doc, startLine: block.startLine, startCharacter: 0, endLine: finish.line, endCharacter: finish.character)
+end 'blockRangeNode'
+
+// --- The structure walk -----------------------------------------------------------------------
+
+/// The tokens of a document, or NONE when it does not lex. A file with an unterminated string has no
+/// token stream to read, and every feature built on one then answers LSP's "nothing here" rather than a
+/// guess. Every language feature here re-lexes: a document changes on every keystroke, and one `tokenize`
+/// of one open file is cheap next to the request that follows it.
+module function lspDocumentTokens(source String) returns TokenArray
+	return try tokenize(source) otherwise TokenArray.create()
+end 'lspDocumentTokens'
+
+// One source line's extent in the token stream, layout tokens excluded. `module`, because a line is the
+// unit every rule in this directory is written against — a block header, a label, an `end`, a field
+// declaration and an enum case are each exactly one line's worth of tokens.
+module type LspTokenLine
+	module let firstIndex as TokenIndex
+	module let lastIndex as TokenIndex
+	module let line as LineNumber
+
+	module static function create(firstIndex TokenIndex, lastIndex TokenIndex, line LineNumber) returns LspTokenLine
+		return Self{firstIndex: firstIndex, lastIndex: lastIndex, line: line}
+	end 'create'
+end 'LspTokenLine'
+
+module typealias LspTokenLineArray = Array with LspTokenLine
+
+// A block whose `end` has not been seen yet.
+type OpenBlock
+	export let kind as LspBlockKind
+	export let name as ByteArray
+	export let nameSpan as LspSpan
+	export let startLine as LspLineNumber
+
+	export static function create(kind LspBlockKind, name ByteArray, nameSpan LspSpan, startLine LspLineNumber) returns OpenBlock
+		return Self{kind: kind, name: name, nameSpan: nameSpan, startLine: startLine}
+	end 'create'
+end 'OpenBlock'
+
+typealias OpenBlockArray = Array with OpenBlock
+
+// ⭐⭐ **THE STACK IS RECONCILED BY LABEL NAME, AND THAT IS WHAT MAKES IT SELF-CORRECTING.** Maxon closes
+// every block with `end '<the very name it was opened with>'`, so a candidate opener that was never a
+// block at all — `let c = 'a'`, a line that merely ends in a character literal — is discarded the moment
+// an enclosing `end` names something else. A walk that trusted its own pushes would mis-nest the whole
+// rest of the file from one such line.
+module function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArray
+	let lines = lspTokenLines(tokens)
+	var open = OpenBlockArray.create()
+	var closed = LspDocumentBlockArray.create()
+
+	for tokenLine in lines 'eachLine'
+		let first = lspTokenAt(tokens, index: tokenLine.firstIndex)
+
+		if first.kind == TokenKind.end 'closesABlock'
+			// The label is the token after `end`. A bare `end` closes nothing this walk can name.
+			if tokenLine.lastIndex > tokenLine.firstIndex 'hasLabel'
+				let label = lspTokenAt(tokens, index: tokenLine.firstIndex + 1)
+				if label.kind == TokenKind.charLiteral 'labelled'
+					closeMatching(open, closed: closed, label: label)
+				end 'labelled'
+			end 'hasLabel'
+
+			// `end 'check' else 'other'` closes one block and opens the next on one line, and the
+			// close must be recorded first or the new arm would nest inside the arm it replaces.
+			openContinuationArm(open, tokens: tokens, tokenLine: tokenLine)
+			continue
+		end 'closesABlock'
+
+		// Nothing inside an `enum` or `union` body opens a block: every line there is a case name, and a
+		// case may be spelled with a word this language uses as a keyword everywhere else.
+		if innermostKindIs(open, kind: LspBlockKind.enumBody) or innermostKindIs(open, kind: LspBlockKind.unionBody) 'caseList'
+			continue
+		end 'caseList'
+
+		openDeclarationOrLabelledBlock(open, tokens: tokens, tokenLine: tokenLine)
+	end 'eachLine'
+
+	return closed
+end 'lspDocumentBlocks'
+
+// A line that opens a declaration block's KEYWORD without opening a BODY, so nothing is pushed for it.
+//
+// `function(n) gives n * 2` is a closure literal, not a declaration: it names nothing and closes nothing.
+// And inside an `interface` body a `function` line is a bodyless signature — the same shape and the same
+// absence of an `end`.
+function lineOpensNoBody(open OpenBlockArray, tokens TokenArray, keyword Token, keywordIndex TokenIndex, tokenLine LspTokenLine) returns bool
+	return keyword.kind == TokenKind.function and (opensAClosure(tokens, keywordIndex: keywordIndex, tokenLine: tokenLine) or innermostKindIs(open, kind: LspBlockKind.interfaceBody))
+end 'lineOpensNoBody'
+
+// The opener on a line that is not an `end` line: a declaration keyword, or a trailing label.
+function openDeclarationOrLabelledBlock(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine)
+	let keywordIndex = pastVisibilityModifiers(tokens, tokenLine: tokenLine)
+	let keyword = lspTokenAt(tokens, index: keywordIndex)
+
+	if kindOpensADeclarationBlock(keyword.kind) 'declaration'
+		if lineOpensNoBody(open, tokens: tokens, keyword: keyword, keywordIndex: keywordIndex, tokenLine: tokenLine) 'noBodyToClose'
+			return
+		end 'noBodyToClose'
+
+		let nameToken = declaredNameToken(tokens, keywordIndex: keywordIndex, tokenLine: tokenLine, keyword: keyword.kind)
+		if nameToken.kind == TokenKind.eof 'unnamed'
+			return
+		end 'unnamed'
+
+		open.push(OpenBlock.create(declarationBlockKind(keyword.kind), name: nameToken.value, nameSpan: LspSpan.create(nameToken.startByte, endByte: nameToken.endByte), startLine: lspLineOf(tokenLine.line)))
+		return
+	end 'declaration'
+
+	openTrailingLabel(open, tokens: tokens, tokenLine: tokenLine)
+end 'openDeclarationOrLabelledBlock'
+
+// The `else`/`otherwise` half of an `end '…' else '…'` line. It is the same trailing-label rule, asked of
+// a line whose first token already closed a block.
+function openContinuationArm(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine)
+	// The close consumed the first two tokens; a line with nothing after them opens no arm.
+	if tokenLine.lastIndex <= tokenLine.firstIndex + 1 'closeOnly'
+		return
+	end 'closeOnly'
+
+	openTrailingLabel(open, tokens: tokens, tokenLine: tokenLine)
+end 'openContinuationArm'
+
+// ⭐ **A LINE WHOSE LAST TOKEN IS A CHARACTER LITERAL IS A BLOCK HEADER** — that is the language's own
+// layout rule (`Parser.requireNewlineAfterBlockLabel`: a block label is followed by a newline and
+// nothing else), so it holds for `if`, `while`, `for`, `match`, block-form `try`, `else`, `otherwise` and
+// `test` alike without any of them being enumerated. A line that merely ENDS in a character literal is
+// admitted here too and discarded by the label reconciliation in `closeMatching`.
+function openTrailingLabel(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine)
+	let last = lspTokenAt(tokens, index: tokenLine.lastIndex)
+	if last.kind != TokenKind.charLiteral 'noLabel'
+		return
+	end 'noLabel'
+
+	open.push(OpenBlock.create(LspBlockKind.labelled, name: last.value, nameSpan: LspSpan.create(last.startByte, endByte: last.endByte), startLine: lspLineOf(tokenLine.line)))
+end 'openTrailingLabel'
+
+// Close the innermost open block this `end` label names, discarding every candidate opener above it.
+function closeMatching(open OpenBlockArray, closed LspDocumentBlockArray, label Token)
+	var depth = open.count()
+
+	while depth > 0 'findTheMatch'
+		depth = depth - 1
+		let candidate = try open.get(depth) otherwise panic("closeMatching: depth is below the count it was seeded from and OpenBlockArray is dense")
+
+		if candidate.name.equals(label.value) 'matched'
+			closed.push(LspDocumentBlock.create(candidate.kind, name: candidate.name, nameSpan: candidate.nameSpan, endNameSpan: LspSpan.create(label.startByte, endByte: label.endByte), startLine: candidate.startLine, endLine: lspLineOf(label.line), depth: depth))
+			discardAbove(open, depth: depth)
+			return
+		end 'matched'
+	end 'findTheMatch'
+end 'closeMatching'
+
+// Drop the matched block and every unmatched candidate that had been pushed on top of it.
+function discardAbove(open OpenBlockArray, depth LspBlockDepth)
+	while open.count() > depth 'unwind'
+		_ = try open.pop() otherwise panic("discardAbove: the count is above `depth` and so at least one entry remains")
+	end 'unwind'
+end 'discardAbove'
+
+function innermostKindIs(open OpenBlockArray, kind LspBlockKind) returns bool
+	if open.isEmpty() 'nothingOpen'
+		return false
+	end 'nothingOpen'
+
+	let innermost = try open.get(open.count() - 1) otherwise panic("innermostKindIs: the stack is not empty, so its last index exists")
+	return innermost.kind == kind
+end 'innermostKindIs'
+
+// Group the stream into source lines, layout tokens excluded.
+module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
+	var lines = LspTokenLineArray.create()
+	var firstIndex = 0 as TokenIndex
+	var lastIndex = 0 as TokenIndex
+	var currentLine = 0 as LineNumber
+	var open = false
+
+	for (position, token) in tokens.withIterator() 'eachToken'
+		if tokenKindIsSkippedLayout(token.kind) or token.kind == TokenKind.eof 'notCode'
+			continue
+		end 'notCode'
+
+		let index = position.index() as TokenIndex
+
+		if open and token.line == currentLine 'sameLine'
+			lastIndex = index
+			continue
+		end 'sameLine'
+
+		if open 'lineEnded'
+			lines.push(LspTokenLine.create(firstIndex, lastIndex: lastIndex, line: currentLine))
+		end 'lineEnded'
+
+		firstIndex = index
+		lastIndex = index
+		currentLine = token.line
+		open = true
+	end 'eachToken'
+
+	if open 'lastLine'
+		lines.push(LspTokenLine.create(firstIndex, lastIndex: lastIndex, line: currentLine))
+	end 'lastLine'
+
+	return lines
+end 'lspTokenLines'
+
+// The token index a line's declaration keyword would sit at, past `export` / `public` / `module` /
+// `static`. Every one of those may precede a declaration and none of them opens a block itself.
+function pastVisibilityModifiers(tokens TokenArray, tokenLine LspTokenLine) returns TokenIndex
+	var index = tokenLine.firstIndex
+
+	while index < tokenLine.lastIndex 'skipModifiers'
+		if not lspIsDeclarationModifier(lspTokenAt(tokens, index: index)) 'notAModifier'
+			return index
+		end 'notAModifier'
+
+		index = index + 1
+	end 'skipModifiers'
+
+	return index
+end 'pastVisibilityModifiers'
+
+/// `export`, `public`, `static` and the contextual `module` — every word that may stand in front of a
+/// declaration keyword.
+///
+/// ⚠ **IT IS A TOKEN TEST AND NOT A `TokenKind` TEST, BECAUSE `module` IS CONTEXTUAL**: it is recognised
+/// only immediately before a declaration and is an ordinary identifier everywhere else, so it has no kind
+/// of its own to match on.
+module function lspIsDeclarationModifier(token Token) returns bool
+	if token.kind == TokenKind.export or token.kind == TokenKind.public or token.kind == TokenKind.static 'spelledAsAKeyword'
+		return true
+	end 'spelledAsAKeyword'
+
+	return token.kind == TokenKind.identifier and token.value.equals(ModuleModifierWord)
+end 'lspIsDeclarationModifier'
+
+/// Does `line` fall strictly INSIDE `block` — past its header and before its `end`? The two boundary
+/// lines carry the block's own syntax and belong to whatever encloses it, which is exactly what makes the
+/// lines this admits a declaration's MEMBERS and an `enum` body's CASES.
+module function lspBlockHoldsLine(block LspDocumentBlock, line LspLineNumber) returns bool
+	return line > block.startLine and line < block.endLine
+end 'lspBlockHoldsLine'
+
+/// Does the cursor sit on this span? A cursor one past the last byte is still on it — an editor puts the
+/// caret at the end of a name the author has just finished typing.
+module function lspSpanHolds(span LspSpan, offset LspByteOffset) returns bool
+	return offset >= span.startByte and offset <= span.endByte
+end 'lspSpanHolds'
+
+/// What kind of block a line sits in, or `absent` at module level. The INNERMOST one, which is what makes
+/// it an answer about the line rather than about the file: a nested block's kind is the one that decides
+/// how its lines read.
+module union LspEnclosingBlockKind
+	found(kind LspBlockKind)
+	absent
+end 'LspEnclosingBlockKind'
+
+module function lspInnermostBlockKindAt(blocks LspDocumentBlockArray, line LspLineNumber) returns LspEnclosingBlockKind
+	var innermost = LspEnclosingBlockKind.absent
+	var innermostDepth = 0 as LspBlockDepth
+
+	for block in blocks 'eachBlock'
+		if not lspBlockHoldsLine(block, line: line) 'elsewhere'
+			continue
+		end 'elsewhere'
+
+		// Two blocks at one depth cannot both hold a line, so `>=` takes the first holder this walk meets
+		// and thereafter only a genuinely deeper one.
+		if block.depth >= innermostDepth 'deeper'
+			innermost = LspEnclosingBlockKind.found(block.kind)
+			innermostDepth = block.depth
+		end 'deeper'
+	end 'eachBlock'
+
+	return innermost
+end 'lspInnermostBlockKindAt'
+
+function declarationBlockKind(kind TokenKind) returns LspBlockKind
+	return match kind 'keyword'
+		function gives LspBlockKind.functionBody
+		type gives LspBlockKind.structBody
+		enum gives LspBlockKind.enumBody
+		union gives LspBlockKind.unionBody
+		interface gives LspBlockKind.interfaceBody
+		extension gives LspBlockKind.extensionBody
+		default panic("declarationBlockKind: '{kind.rawValue}' is not a declaration keyword — `kindOpensADeclarationBlock` is the one gate, and every kind it admits has an arm here")
+	end 'keyword'
+end 'declarationBlockKind'
+
+// `function` immediately followed by `(` is a closure literal.
+function opensAClosure(tokens TokenArray, keywordIndex TokenIndex, tokenLine LspTokenLine) returns bool
+	if keywordIndex >= tokenLine.lastIndex 'nothingFollows'
+		return false
+	end 'nothingFollows'
+
+	return lspTokenAt(tokens, index: keywordIndex + 1).kind == TokenKind.leftParen
+end 'opensAClosure'
+
+// ⭐ **A FUNCTION'S NAME IS THE LAST WORD BEFORE ITS `(`, AND EVERY OTHER DECLARATION'S IS THE FIRST WORD
+// AFTER ITS KEYWORD.** `function Countable.count()` declares `count` — the interface qualifier is not the
+// name a rename or a linked edit moves, and its `end 'count'` says so. `type MyStruct is Countable` and
+// `extension Array where Element is Equatable` both name their first word and nothing later on the line.
+//
+// A line with no word at all yields an EOF token, which is this walk's "there is no name here" — a real
+// token kind that cannot be mistaken for one, rather than a span at offset 0 that a document legitimately
+// has.
+function declaredNameToken(tokens TokenArray, keywordIndex TokenIndex, tokenLine LspTokenLine, keyword TokenKind) returns Token
+	var index = keywordIndex + 1
+	var found = Token.eof()
+
+	while index <= tokenLine.lastIndex 'scanTheHeader'
+		let token = lspTokenAt(tokens, index: index)
+
+		if token.kind == TokenKind.leftParen 'paramsBegin'
+			break
+		end 'paramsBegin'
+
+		if token.kind == TokenKind.identifier 'aWord'
+			found = token
+			if keyword != TokenKind.function 'firstWordWins'
+				return found
+			end 'firstWordWins'
+		end 'aWord'
+
+		index = index + 1
+	end 'scanTheHeader'
+
+	return found
+end 'declaredNameToken'
+
+// The compiler counts source lines from 1 and LSP from 0. A synthesized token carries line 0, which is
+// not a source line at all; it clamps to the first, which is where a reader looking for it would start.
+module function lspLineOf(line LineNumber) returns LspLineNumber
+	if line == 0 'synthesized'
+		return 0
+	end 'synthesized'
+
+	return line - 1
+end 'lspLineOf'
+
+// Every index this file forms is derived from an `LspTokenLine`, whose bounds came from the same array — so an
+// out-of-range read is a defect in this walk and not an input a document can present.
+module function lspTokenAt(tokens TokenArray, index TokenIndex) returns Token
+	return try tokens.get(index) otherwise panic("lspTokenAt: index {index} is outside a {tokens.count()}-token stream — every index here is derived from an LspTokenLine built off this same array")
+end 'lspTokenAt'
