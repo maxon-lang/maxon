@@ -6598,9 +6598,11 @@ end 'overloadRegistrationName'
 // A name carrying no separator comes back UNCHANGED, which is the answer and not a fallback: an unmangled
 // registration name IS its own bare name. `bareMethodName` takes the same shape one join over.
 //
-// ⚠ One caller, and it is a diagnostic (`ParseStaging.duplicateFunctionMessage`): the name it must explain
-// is one no declaration wrote, so it has to say what the author DID write. Kept beside the join for the
-// reason every inverse in this file is — the separator has one speller.
+// ⚠ Two callers, wanting it for opposite reasons. `ParseStaging.duplicateFunctionMessage` is a DIAGNOSTIC
+// that must say what the author wrote, the name it explains being one no declaration spells;
+// `SemanticCheck.WitnessDispatchTargets.create` needs the base because an overload's registration name
+// answers no interface requirement. Kept beside the join for the reason every inverse in this file is: the
+// separator has one speller.
 export function overloadRegistrationBaseName(registered ByteArray) returns ByteArray
 	let segments = String.from(registered).split(OverloadNameSeparator)
 	return (try segments.get(0) otherwise String.from(registered)).toByteArray()
@@ -7186,14 +7188,12 @@ export typealias PendingTransformArityArray = Array with PendingTransformArity
 // the whole call graph — its body, its callees, and their callees — and shv2's parser is a pure function of
 // ONE FILE, so the callee's body may not even have been read yet when the site is found.
 //
-// ⚠ **TWO DOORS RECORD ONE**, and they differ in WHO can answer the purity question rather than in what is
-// recorded. The all-discard tuple assignment — `(_, _) = makePair(…)`, which names every target `_` — files a
-// callee the effect summary must judge. A discarded MATH INTRINSIC (`round(10)` as a statement) files one
-// whose answer is already in hand: the roster is machine instructions, so there is no body to walk and no
-// entry in the module's function index to walk it from. The canonical language raises E3064 at a third door
-// too — a bare `foo()` statement over a DECLARED callee — which stands shelved with its reason in
-// `specs-shv2/discarded-results.md`; wiring it is a change of blast radius rather than of mechanism, because
-// this record and the summary that judges it already serve it.
+// ⚠ **FOUR DOORS RECORD ONE**, and they differ in WHO can answer the purity question rather than in what is
+// recorded. A bare `foo()` statement, `_ = foo()`, and the all-discard tuple assignment — `(_, _) =
+// makePair(…)`, which names every target `_` — each file a callee the whole-program effect summary must
+// judge. A discarded MATH INTRINSIC (`round(10)` as a statement) files one whose answer is already in hand:
+// the roster is machine instructions, so there is no body to walk and no entry in the module's function
+// index to walk it from.
 export type PendingDiscardedResult
 	// The callee whose result nobody took, as the CALL OP spells it — the key the effect summary is indexed
 	// by, so it is the resolved name and not the source token.
@@ -7203,16 +7203,22 @@ export type PendingDiscardedResult
 	// about it, and does not need to be: a machine instruction over its arguments has no observable effect.
 	// Recording the provenance rather than a bare "already known pure" keeps the field to one meaning.
 	export var calleeIsACompilerIntrinsic as bool
+	// ⭐ **THE NAME THE DIAGNOSTIC PRINTS, WHEN IT IS NOT THE KEY.** shv2's parser lowers a container read
+	// straight to a runtime symbol, so `items.first()` files `__managed_first` — a name no author wrote and
+	// no `IrFunction` declares. The lowering arm records the source member here (`Parser.lastRuntimeRead*`)
+	// and `SemanticCheck.checkDiscardedResults` reports under it. EMPTY for a declared callee and for an
+	// intrinsic, both of which ARE their own subject.
+	export var subject as ByteArray
 	export var line as LineNumber
 	export var column as ColumnNumber
 	export var filePath as FilePath
 
-	export static function create(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{callee: callee, calleeIsACompilerIntrinsic: false, line: line, column: column, filePath: filePath}
+	export static function create(callee ByteArray, subject ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
+		return Self{callee: callee, calleeIsACompilerIntrinsic: false, subject: subject, line: line, column: column, filePath: filePath}
 	end 'create'
 
 	export static function createForIntrinsic(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{callee: callee, calleeIsACompilerIntrinsic: true, line: line, column: column, filePath: filePath}
+		return Self{callee: callee, calleeIsACompilerIntrinsic: true, subject: EmptySourceText, line: line, column: column, filePath: filePath}
 	end 'createForIntrinsic'
 end 'PendingDiscardedResult'
 

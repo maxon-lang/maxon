@@ -253,7 +253,7 @@ v2none
 <!-- test: owned-struct-in-block -->
 ```maxon
 type Box
-	var v as Integer
+	export var v as Integer
 
 	static function create(v Integer) returns Box
 		return Self{v: v}
@@ -262,13 +262,15 @@ end 'Box'
 
 function main() returns ExitCode
 	var i = 0
+	var seen = 0
 	while i < 3 'loop'
 		if i < 2 'b'
-			_ = Box.create(i)
+			let b = Box.create(i)
+			seen = seen + b.v
 		end 'b'
 		i = i + 1
 	end 'loop'
-	return 0
+	return 0 if seen == 1 else 1
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

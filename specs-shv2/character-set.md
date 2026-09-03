@@ -529,10 +529,17 @@ The third arm, and the one that shows the three were one defect rather than thre
 synthesized by the same machinery and its needs were declared from `genericInstanceHasStringField`, the
 `String`-only question again.
 ```maxon
+typealias Tally = int(0 to 100)
+
+var inits = 0 as Tally
+
 type Box uses T
 	var v as T
 
+	// The instance is DISCARDED below, which is what runs the cascade — so the factory must have an effect
+	// or the discard is E3064 (`discarded-results.md`).
 	export static function init(x T) returns Self
+		inits = inits + 1
 		return Self{v: x}
 	end 'init'
 end 'Box'
@@ -541,7 +548,7 @@ typealias CharacterSetBox = Box with CharacterSet
 
 function main() returns ExitCode
 	_ = CharacterSetBox.init(CharacterSet.whitespaces())
-	return 0
+	return inits - 1
 end 'main'
 ```
 ```exitcode

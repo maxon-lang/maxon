@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "594bd6cc7e1bd821",
+  "sourceHash": "4b7ee207518a9711",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -900,7 +900,7 @@
       "tag": "E3064",
       "name": "SemanticDiscardedPureResult",
       "stage": "semantic",
-      "doc": "a pure-function call's result was discarded. Pure callees must\nhave their result used -- neither bare `foo()` nor `_ = foo()` is\npermitted. Fires from `checkDiscardedResults`.\nshv2 raises it at TWO doors. A tuple assignment whose every target is `_`\n(`(_, _) = makePair(10, b: 32)`, `specs/tuple-assign.md`) uses none of the result,\nand the whole-program effect summary judges the callee. A discarded MATH INTRINSIC\n(`round(10)` as a statement) needs no summary: the roster is machine instructions, so\nthe statement is provably dead. Its bare-call and `_ =` doors over DECLARED callees\nstay shelved in `specs-shv2/discarded-results.md`.",
+      "doc": "a pure-function call's result was discarded. Pure callees must\nhave their result used -- neither bare `foo()` nor `_ = foo()` is\npermitted. Fires from `checkDiscardedResults`.\nshv2 raises it from FOUR statement doors -- a bare `foo()` line, `_ = foo()`,\na tuple assignment whose every target is `_` (`(_, _) = makePair(10, b: 32)`,\n`specs/tuple-assign.md`), and a discarded MATH INTRINSIC (`round(10)` as a\nstatement) -- which differ only in who answers the purity question. An intrinsic\nneeds no summary: the roster is machine instructions, so the statement is provably\ndead. A DECLARED callee is judged by the whole-program effect summary, unless it is\nCHAINABLE (first parameter the receiver, return type the receiver's own), which the\nlanguage lets a caller drop freely. A container read the parser lowered straight to\na runtime entry is judged by that entry's read-only roster and reported under the\nmember the author wrote (`Array.first`, never `__managed_first`).\nThe bare-call door covers every CALL-STATEMENT spelling, not only `foo()`: a method\n(`arr.count()`), a field chain (`b.ops.count()`), a static member and a\nnamespace-qualified free call all take none of what they produced. Each is anchored\non the CALLED NAME -- the last name of the chain the `(` follows.\nThe summary CLOSES OVER a witness dispatch rather than reading it as an effect: a\nconstrained requirement (`key.hash()` inside `Map.get`) has candidates, and they are\nevery declared member wearing the requirement's name whose body this program reached.",
       "emittedBy": {"csharp": "SemanticDiscardedPureResult", "selfhosted": "semanticDiscardedPureResult", "shv2": "semanticDiscardedPureResult"},
       "notEmittedBy": []
     },

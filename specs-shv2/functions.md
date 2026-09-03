@@ -282,16 +282,19 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: bare-call-statement -->
-A call may stand alone as a statement, its result discarded. `noop(5)` runs for effect
-(none here); the program returns 0.
+A call may stand alone as a statement, its result discarded. `noop(5)` runs for its effect — which it
+must have, or discarding the result is E3064 (`discarded-results.md`) — and the program returns 0.
 ```maxon
+var runs = 0 as Integer
+
 function noop(x Integer) returns Integer
+	runs = runs + 1
 	return x
 end 'noop'
 
 function main() returns ExitCode
 	noop(5)
-	return 0
+	return runs - 1
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

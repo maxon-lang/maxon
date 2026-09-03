@@ -331,11 +331,13 @@ end 'Box'
 typealias StrBox = Box with String
 function main() returns ExitCode
 	var i = 0
+	var total = 0
 	while i < 100 'loop'
-		_ = StrBox.create("{i}")
+		let b = StrBox.create("{i}")
+		total = total + b.value.byteLength()
 		i = i + 1
 	end 'loop'
-	return 0
+	return 0 if total == 190 else 1
 end 'main'
 ```
 ```exitcode
@@ -402,12 +404,14 @@ typealias StrBox = Box with String
 typealias BoxBox = Box with (Box with String)
 function main() returns ExitCode
 	var i = 0
+	var total = 0
 	while i < 50 'loop'
 		let inner = StrBox.create("{i}")
-		_ = BoxBox.create(inner)
+		let outer = BoxBox.create(inner)
+		total = total + outer.value.value.byteLength()
 		i = i + 1
 	end 'loop'
-	return 0
+	return 0 if total == 90 else 1
 end 'main'
 ```
 ```exitcode

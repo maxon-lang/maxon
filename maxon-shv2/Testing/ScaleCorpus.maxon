@@ -1438,6 +1438,7 @@ let NsHelperPrefix = "nsHelper"
 let NsHiddenPrefix = "nsHidden"
 let NsSharedPrefix = "nsShared"
 let NsDeepFuncPrefix = "nsDeep"
+let NsTouchPrefix = "nsTouch"
 let NsPrivateAliasPrefix = "NsLocal"
 
 let NamespacesDriver = "scaleNamespaces"
@@ -1773,8 +1774,15 @@ let OpaqueCoreCalleeName = "scaleOpaqueCore"
 // ladder measures that pass's SEED WALK and its whole REFERENCE COLLECTION — which is the bulk — but not
 // its indexing or its emission. A regression confined to those two would read flat here.
 function exportedFunctionHeader(name String, parameters String) returns String
-	return "public function {name}({parameters}) returns {ScaleIntAlias}\n"
+	return "{exportedFunctionSignature(name, parameters: parameters)} returns {ScaleIntAlias}\n"
 end 'exportedFunctionHeader'
+
+// The half of a `public` declaration a VOID door shares with a value-returning one: the namespace
+// knob's statement door needs a signature with no `returns` clause, and a second spelling of the
+// `public` prefix would drift from the note above it.
+function exportedFunctionSignature(name String, parameters String) returns String
+	return "public function {name}({parameters})"
+end 'exportedFunctionSignature'
 
 // The shape every knob's DRIVER has: it takes the threaded accumulator and hands one back.
 function driverHeader(name String) returns String
@@ -4792,15 +4800,14 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 			body.append("\t\tacc = acc + xv{i}.get(){neutralizeText(corpusSeedValue() and GenericInstanceArgMask)}\n")
 			body.append(accProbe("\t\t"))
 		end 'trivialUse' else if shape == 1 'managedUse'
-			// ⚠ THE MANAGED ARM HAS NO VALUE TO WITNESS, AND SAYS SO RATHER THAN INVENTING ONE. Its `T` is a
-			// struct MOVED into the box, so reading it back through `get()` would consume a value the
-			// instance now owns — a different ownership shape from the one this knob exists to price. It
-			// therefore contributes nothing to `acc`, and what it still gets for free is `ownedSiteBlock`'s
-			// entered-mark: a create this rung skipped is short by one and the driver says so.
-			// ⚠ `_ =` rather than a binding: this arm has no value to witness, and a body `let` that
-			// nothing reads is E3012 since the unused-`let` rule landed. The create this knob prices
-			// is unchanged.
-			body.append("\t\t_ = {GenericInstancePrefix}{i}.create({GenericInstanceHoldPrefix}{i}.create(\"generic managed instance {i} payload for the heap\", value: a))\n")
+			// The managed arm's `T` is a struct MOVED into the box, so `get()` would hand the whole value
+			// back and consume what the instance now owns — a different ownership shape from the one this
+			// knob prices. The witness is instead the INT inside the moved struct, read through the box's
+			// field without naming the struct itself, so the move stays exactly as it was and the create
+			// still has a result that is USED (a dropped one is E3064).
+			body.append("\t\tlet xb{i} = {GenericInstancePrefix}{i}.create({GenericInstanceHoldPrefix}{i}.create(\"generic managed instance {i} payload for the heap\", value: a))\n")
+			body.append("\t\tacc = acc + xb{i}.value.value{neutralizeText(corpusSeedValue())}\n")
+			body.append(accProbe("\t\t"))
 		end 'managedUse' else 'noArgUse'
 			panic("genericInstancesSource: GenericInstanceArgShapeCount is {GenericInstanceArgShapeCount} but argument shape {shape} has no USE branch — the declaration loop above and this one realize the same shape set, so both need the branch")
 		end 'noArgUse'
@@ -5043,6 +5050,10 @@ end 'tryCoOwnPick'
 //     • `export function nsHelper{m}` and a FILE-PRIVATE `nsHidden{m}` — and BOTH get an entry in
 //       `ProgramSignatures.namespaceQualifiedFunctions`, because the function side deliberately does not
 //       gate on the tier. That is the per-declaration cost this knob is really pricing.
+//     • `export function nsTouch{m}` — VOID, and the only callee a qualified call written as a
+//       STATEMENT can have: a statement discards the result, and a discarded result is E3064/E3065
+//       whatever the callee's purity. It writes through its by-ref parameter, so the consumer's probe
+//       can prove the call ran.
 //
 //   `ns{m}/inner/deep.maxon` (namespace `ns{m}.inner` — MULTI-SEGMENT)
 //     • a second M-way contested `export typealias {NsDeepAliasName}`, reachable only as
@@ -5119,6 +5130,15 @@ function namespacedModuleSource(m KnobIndex) returns String
 	out.append("function {NsHiddenPrefix}{m}(a {ScaleIntAlias}) returns {ScaleIntAlias}\n")
 	out.append("\treturn a + {nsHiddenIncrement(m)}\n")
 	out.append("end '{NsHiddenPrefix}{m}'\n")
+	out.append("\n")
+	// The VOID export the statement door names. It has to be void because a qualified call written as a
+	// STATEMENT discards whatever it answers, and a discarded result is E3064/E3065 whether the callee is
+	// pure or not — so the door's subject is the one shape with nothing to discard. Its by-ref write to
+	// `a` is what makes the call observable, and the consumer's probe reads that write back.
+	out.append(exportedFunctionSignature("{NsTouchPrefix}{m}", parameters: "a {ScaleIntAlias}"))
+	out.append("\n")
+	out.append("\ta = a + {nsTouchIncrement(m)}\n")
+	out.append("end '{NsTouchPrefix}{m}'\n")
 	return out.build()
 end 'namespacedModuleSource'
 
@@ -5133,6 +5153,13 @@ end 'nsSharedIncrement'
 function nsHiddenIncrement(m KnobIndex) returns TrackedValue
 	return m mod 5 + 2
 end 'nsHiddenIncrement'
+
+// What `ns{m}.nsTouch{m}(acc)` ADDS to the caller's accumulator through its by-ref parameter. Never
+// zero: the consumer neutralizes it with `acc = acc - <this>`, and a zero would emit `acc = acc`, which
+// is E3067.
+function nsTouchIncrement(m KnobIndex) returns TrackedValue
+	return m mod 3 + 1
+end 'nsTouchIncrement'
 
 // What `ns{m}.nsHelper{m}(argument)` answers: its file-private helper's increment, plus the masked value
 // it casts through its own file-private alias. The one-dot qualified CALL door, tracked.
@@ -5199,9 +5226,13 @@ function qualifiedReferenceGroup(m KnobIndex) returns String
 	out.append("\tacc = acc + {innerNs}{NsQualifierSeparator}{NsDeepFuncPrefix}{m}(a) + ns{m}b{neutralizeText(nsDeepValue(m, argument: corpusSeedValue()) + (corpusSeedValue() and NsAliasMask))}\n")
 	out.append(accProbe("\t"))
 	// A qualified call as a STATEMENT — the third door, and the one whose absence made a namespaced
-	// module's void function uncallable (`E2015: Unsupported: identifier statement`). Its result is
-	// discarded here exactly as a bare call statement's is.
-	out.append("\t{moduleNs}{NsQualifierSeparator}{NsHelperPrefix}{m}(a)\n")
+	// module's void function uncallable (`E2015: Unsupported: identifier statement`). The callee is the
+	// module's VOID export, which is what a statement position can call at all: a statement discards the
+	// result, and a discarded result is E3064/E3065 for pure and impure callees alike. Its effect is the
+	// by-ref write to `acc`, so the neutralize-and-probe below witnesses that the call happened.
+	out.append("\t{moduleNs}{NsQualifierSeparator}{NsTouchPrefix}{m}(acc)\n")
+	out.append("\tacc = acc{neutralizeText(nsTouchIncrement(m))}\n")
+	out.append(accProbe("\t"))
 	return out.build()
 end 'qualifiedReferenceGroup'
 
@@ -5849,7 +5880,8 @@ export function printCorpusManifest()
 	print("      segment counts: a one-segment and a two-segment qualified TYPE name (`ns3.{NsSharedAliasName}`,\n")
 	print("      `ns3.{NsInnerDirName}.{NsDeepAliasName}` — the ranged-alias MIRROR), a ONE-DOT qualified call\n")
 	print("      (`parseQualifiedCall`'s door), a TWO-DOT one (`parseDottedPrimary`'s chain WALK), and a\n")
-	print("      qualified call as a STATEMENT. Plus the three VISIBILITY tiers on one declaration set: an\n")
+	print("      qualified call as a STATEMENT — onto the module's VOID export, the one callee a statement\n")
+	print("      position can have. Plus the three VISIBILITY tiers on one declaration set: an\n")
 	print("      `export`ed alias CONTESTED by every module (so the bare key is ambiguous and the qualified\n")
 	print("      key is not), a file-private alias and a file-private free function (which still earns a\n")
 	print("      qualified entry — that side does not gate on the tier), and `module function` — the SUBTREE\n")

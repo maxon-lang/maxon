@@ -3227,7 +3227,7 @@ end 'tupleAssignTargetDeclares'
 // the same shape of question with a sentinel index instead, and its header says why the two differ.)
 union DiscardedCallee
 	notACall
-	named(callee ByteArray)
+	named(callee ByteArray, result ValueId)
 end 'DiscardedCallee'
 
 // Did a call produce the value at all? The `try` rewrite's half of `directCallDefining` — it needs the fact,
@@ -4157,9 +4157,13 @@ typealias OverloadMemberMap = Map with (ByteArray, OverloadMemberArray)
 // function's name has no qualifier and comes back unchanged. Read by the E3007 diagnostic, which names the
 // callee the way the AUTHOR wrote it at the call (`c.convert(21)` mentions `convert`, not `Converter.convert`)
 // — the same choice both reference compilers make for that message.
-// It answers a `String` because its one reader is a diagnostic, which needs one — and because splitting on
-// the separator this file already spells as a `String` keeps the join and its inverse reading the same
-// constant. A cold path: nothing but a rejected program asks.
+// It answers a `String` because splitting on the separator this file already spells as a `String` keeps the
+// join and its inverse reading the same constant, and its first reader is a diagnostic, which needs one.
+//
+// ⚠ **IT IS NOT A COLD PATH.** `SemanticCheck.WitnessDispatchTargets.splitBareNames` runs it once per
+// declared function of the whole program — which is why that column is built on demand rather than at
+// construction — so a `String.from` and a `split` here are paid per function by any program that dispatches
+// through a witness slot.
 export function bareMethodName(name ByteArray) returns String
 	let segments = String.from(name).split(MethodNameSeparator)
 	return try segments.get(segments.count() - 1) otherwise String.from(name)
@@ -13629,6 +13633,29 @@ export type Parser
 	// statement end. Reset per function, like every other per-function column. It holds only owned RESULTS —
 	// the interpolation's internal scratch buffers are freed inside `emitStringInterp`, never tracked here.
 	var pendingTempDrops as ValueIdArray
+	// ⭐⭐ **WHICH SOURCE MEMBER A LOWERED RUNTIME READ SERVES — E3064's SUBJECT, AND NOTHING ELSE'S.** shv2's
+	// parser lowers a container read STRAIGHT to a runtime symbol, so a discarded `items.first()` files
+	// `__managed_first` as the callee and the diagnostic would name a symbol the author never wrote; the
+	// reference reports `Array.first`. The ARM that lowers the call is the only party holding both halves —
+	// the receiver's declared name and the member token — so it says so here.
+	//
+	// ⚠ **ONE SLOT, NOT A TABLE, AND THE `result` FIELD IS WHAT MAKES THAT SOUND.** The discard door only ever
+	// asks about the call its own statement ENDED on, so a nested read (`f(a.count())`) simply fails the
+	// ValueId test and the door falls back to the callee — which is the right answer there, the discarded
+	// result being `f`'s. A per-call map would cost an insert on the parser's hottest path to answer the same
+	// question. The qualified name is built only when a site is actually filed, for the same reason.
+	//
+	// ⚠ **AND IT IS INVALIDATED PER FUNCTION, for `lastFieldReadValid`'s reason beside it: a ValueId names a
+	// slot in ONE function's SSA space**, so a slot carried across the boundary could match an unrelated
+	// value's id in the next body and report a runtime read under a member from the previous one.
+	//
+	// ⚠ **PARALLEL FIELDS BESIDE A VALID FLAG, `lastFieldRead*`'s own shape, because a union PAYLOAD IS A HEAP
+	// RECORD and this is written once per lowered container read** — every `get`, `count` and `first` in the
+	// program, on the parser's hottest path, for a fact almost none of them is ever asked for.
+	var lastRuntimeReadValid as bool
+	var lastRuntimeReadResult as ValueId
+	var lastRuntimeReadTypeName as ByteArray
+	var lastRuntimeReadMethodName as ByteArray
 	// ⭐ **THE PERMANENTLY EMPTY TEMPORARY LIST every NON-catching `if` is answered with, allocated ONCE per
 	// file instead of once per `if`.** `takeCatchingForkTemps` has to hand its caller a list on both of its
 	// paths, and only the catching path has anything to put in one — a fresh `ValueIdArray` on the other
@@ -14062,6 +14089,10 @@ export type Parser
 			referencedNames: ByteArrayArray.create(),
 			mutabilityExercisedNames: ByteArrayArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
+			lastRuntimeReadValid: false,
+			lastRuntimeReadResult: 0,
+			lastRuntimeReadTypeName: EmptySourceText,
+			lastRuntimeReadMethodName: EmptySourceText,
 			noForkTemps: ValueIdArray.create(),
 			lastDispatchedMemberIndex: 0,
 			lastDispatchedReceiver: 0,
@@ -26111,6 +26142,7 @@ export type Parser
 		// Invalidated per function for the same reason: a stale `box` id names a value in the PREVIOUS
 		// function's SSA space, so a move-out would null the wrong slot.
 		self.lastFieldReadValid = false
+		self.lastRuntimeReadValid = false
 		self.loops = LoopContextArray.create()
 		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
 		self.tryBlocks = TryBlockContextArray.create()
@@ -26357,6 +26389,7 @@ export type Parser
 		// diagnostic that is a property of the ops.** See `Parser.bodyDemand` for the measurement and for why
 		// the DECLARATION above this line is never skipped.
 		if not self.buildsBodies 'bodyNotReached'
+			func.bodyWasSkippedAsUnreached = true
 			self.skipUnreachedFunctionBody(entry, nameTok: nameTok)
 		end 'bodyNotReached' else 'bodyReached'
 			// parseStatements threads a "current block" that control-flow statements can
@@ -26848,23 +26881,14 @@ export type Parser
 	// `var`, which is why the list is walked with a `continue` and its kind is asked at the waiver below
 	// rather than once before the loop.
 	//
-	// ⭐⭐ **BODY `var`s ARE IN, AND THE NOTE SAYING NO LOCAL COULD BE WAS WRONG ABOUT ITS REASON.** It read:
-	// the local rule "is not separable from two refusals shv2 lacks — `let _ = expr` is E2001 and
-	// `_ = <pure call>` is E3064 — until all three land together, a borrowed element that may be neither
-	// bound, nor discarded, nor used has no legal spelling at all." That premise is the ORACLE's and does
-	// not transfer: **shv2's `_ =` DOOR CONSULTS NO PURITY VERDICT**, so `_ = <any call>` is already the
-	// discard spelling here (`parseAssignment`'s `DiscardBindingName` arm) and such a value HAS a legal
-	// spelling before this rule is written. MEASURED, not reasoned: `_ = f()` on a non-mutating call compiles
-	// and runs. E2001 and E3064 are not blockers, and neither is anything else the note names.
+	// ⭐⭐ **BODY `var`s ARE IN, AND NO DISCARD RULE BLOCKS THAT.** A value that must be neither bound nor read
+	// always has a spelling — `_ = <call>` (`parseAssignment`'s `DiscardBindingName` arm) — so enrolling a body
+	// `var` here cannot leave an author with nowhere to put one. E3064 refuses that spelling only for a
+	// callee the effect summary proves pure, which is a rule about the CALLEE and not about this candidate.
 	//
-	// ⚠ **THE REASON WAS "shv2 has no purity analysis" AND THAT IS NO LONGER TRUE** —
-	// `SemanticCheck.buildEffectFreeSummary` landed with the tuple-assign port. The CONCLUSION is unchanged
-	// because it never rested on the analysis being absent, only on this door not asking it, and this door
-	// still does not.
-	//
-	// ⚠ **WHAT IS REAL IS A COST THE NOTE NEVER MENTIONED — the unused-`let` half costs 82 cases of this
-	// suite, in EXPRESSIVENESS rather than tidiness.** See `UnusedBindingKind.mutableLocal`, which carries
-	// the measurement and says which spec owns the rung. A body `var` rides now because E3077 owes it.
+	// ⚠ **THE UNUSED-`let` HALF COSTS 82 CASES OF THIS SUITE, in EXPRESSIVENESS rather than tidiness.**
+	// See `UnusedBindingKind.mutableLocal`, which carries the measurement and says which spec owns the rung.
+	// A body `var` rides because E3077 owes it.
 	//
 	// ⇒ **it returns a VERDICT, because E3077 rides behind it** (`reportVarShouldBeLet`): "an unused `var`
 	// reports as UNUSED, not as should-be-let" is the two scans' ORDER over one list, which is how both
@@ -27735,6 +27759,7 @@ export type Parser
 		self.promiseConsumes = PromiseConsumeRecordArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
+		self.lastRuntimeReadValid = false
 		self.loops = LoopContextArray.create()
 		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
 		self.tryBlocks = TryBlockContextArray.create()
@@ -29702,20 +29727,32 @@ export type Parser
 			// (the #68/#78 lowering), so the trailing `(` is not left to be misread as a `( statement` on the next
 			// iteration. A real method call consumes its own `(args)`, so `parsePostfix` then sees no trailing `(`
 			// and is a no-op — the emitted IR of every existing method-call statement is unchanged.
-			_ = try self.parsePostfix(func, value: try self.parseMethodCall(func, resultUsed: false), resultUsed: false)
+			//
+			// E3064's METHOD-CALL door, in the shape every dotted call statement shares: the anchor is read
+			// before the cursor leaves the chain, the floor before the call emits anything.
+			let methodAnchor = self.dottedCallNameToken(self.pos)
+			let methodOpFloor = self.artifact.module.ops.count()
+			let methodResult = try self.parsePostfix(func, value: try self.parseMethodCall(func, resultUsed: false), resultUsed: false)
+			try self.recordDiscardedCallResult(methodResult, opFloor: methodOpFloor, anchor: methodAnchor)
 		end 'methodCallStmt' else if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
 			// `b.ops.push(1)` / `o.inner.op()` — a call reached through a ≥2-hop field chain, on an ARRAY FIELD's
 			// method or a FUNCTION-typed FIELD (#97). `methodCallsAt` covers only the one-hop `b.push(…)` / `h.op()`;
 			// this is the chain case, dispatched for effect (`resultUsed: false`). A function field's trailing
 			// `(args)` goes through `parsePostfix` exactly as the one-hop `methodCallStmt` above.
-			_ = try self.parseFieldChainCall(func, resultUsed: false)
+			let chainAnchor = self.dottedCallNameToken(self.pos)
+			let chainOpFloor = self.artifact.module.ops.count()
+			let chainResult = try self.parseFieldChainCall(func, resultUsed: false)
+			try self.recordDiscardedCallResult(chainResult, opFloor: chainOpFloor, anchor: chainAnchor)
 		end 'fieldChainMethodStmt' else if self.staticMemberCallsAt(self.pos) 'staticMemberCallStmt'
 			// `Names.items.push(9)` — a method called for its EFFECT on a static member's record (W65). The
 			// expression door reaches the same reader through `parseDottedPrimary`'s static arm; a statement
 			// has no arm that claims a dotted form, so it needs one of its own — exactly as
 			// `methodCallStmt` and `fieldChainMethodStmt` each do. Without it the canonical spelling of the
 			// only mutation a managed static supports died as `E2015: Unsupported: identifier statement`.
-			_ = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
+			let staticAnchor = self.dottedCallNameToken(self.pos)
+			let staticOpFloor = self.artifact.module.ops.count()
+			let staticResult = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
+			try self.recordDiscardedCallResult(staticResult, opFloor: staticOpFloor, anchor: staticAnchor)
 		end 'staticMemberCallStmt' else if self.voidStaticCallsAt(self.pos) 'voidStaticStmt'
 			// ⭐ `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A VOID COMPILER-OWNED STATIC
 			// CALLED FOR ITS EFFECT, and `statFree` is the case that makes the position load-bearing rather
@@ -29763,7 +29800,10 @@ export type Parser
 			// Through `parsePostfix` for `directCallStmt`'s reason: a call whose RESULT is a function value can
 			// carry a trailing `(args)`, which the postfix loop applies as an indirect call. A plain direct
 			// call leaves none, so this is a no-op for every ordinary namespace-qualified statement.
-			_ = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
+			let qualifiedAnchor = self.dottedCallNameToken(self.pos)
+			let qualifiedOpFloor = self.artifact.module.ops.count()
+			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
+			try self.recordDiscardedCallResult(qualifiedResult, opFloor: qualifiedOpFloor, anchor: qualifiedAnchor)
 		end 'namespaceQualifiedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
 			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
@@ -29794,7 +29834,13 @@ export type Parser
 				// no-op and every existing direct-call statement lowers to the same IR.
 				let calleeTok = self.current()
 				let callTempFloor = self.pendingTempDrops.count()
-				_ = try self.parsePostfix(func, value: try self.parseCall(func, resultUsed: false), resultUsed: false)
+				// A module-wide floor, for `parseTupleAssignment`'s reason: the call may have left the cursor on a
+				// block it forked, and two blocks' op COUNTS compare to nothing.
+				let callOpFloor = self.artifact.module.ops.count()
+				let callResult = try self.parsePostfix(func, value: try self.parseCall(func, resultUsed: false), resultUsed: false)
+				// ⭐ E3064's BARE-CALL door: the statement took none of what the call produced. Probed before the
+				// terminator below and before `drainPendingTemps`, so the call is still the last op emitted.
+				try self.recordDiscardedCallResult(callResult, opFloor: callOpFloor, anchor: calleeTok)
 				self.terminateAfterDivergingCall(func, calleeTok: calleeTok, tempFloor: callTempFloor)
 			end 'directCallStmt'
 		end 'callStmt' else if self.peekKind() == TokenKind.dot 'memberExprStmt'
@@ -30446,10 +30492,7 @@ export type Parser
 			throw ParseError.tupleAssignArityMismatch(layout.fieldCount(), targets: targetIndices.count(), line: openTok.line, column: openTok.column)
 		end 'arityMismatch'
 
-		match discardedCallee 'usedNothing'
-			named(callee) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(callee, line: openTok.line, column: openTok.column, filePath: self.filePath))
-			notACall then break 'usedNothing'
-		end 'usedNothing'
+		self.recordDiscardOf(discardedCallee, anchor: openTok)
 
 		// WHICH local the right-hand side reached into, read once for the whole statement — the temp's move
 		// source, and the root every DECLARING target reaches a field of (see `declareDestructuredElement`).
@@ -30489,28 +30532,155 @@ export type Parser
 	// rewrite identifies its target — the last op this statement emitted, required to DEFINE the value the
 	// expression handed back — so a `+`, a group, or a bare name all decline it.
 	//
-	// ⚠ **A `tryCall` IS NOT MATCHED** (`directCallDefining` lists it with the non-call ops), so
-	// `(_, _) = try f() otherwise (1, 2)` records nothing. Deliberate and in the safe direction: a throwing
-	// callee is never effect-free by this analysis anyway (`opShowsAnEffect` treats a throw as an effect), so
-	// the site it would file could never fire. Stated because "the last op is the call" reads like it covers
-	// both spellings.
-	//
 	// ⚠ It reads `self.currentBlock` FRESH rather than the block it was handed: an expression may have forked
 	// (a `try`, a ternary), and the op that produced the value is on the block the expression ENDED on. What
 	// makes that safe is the floor being a module-wide `OpIndex` — see the caller.
 	function directCallProducing(value ValueId, opFloor OpIndex) returns DiscardedCallee throws ParseError
 		let refCount = self.currentBlock.opRefs.count()
-		if refCount == 0 'theBlockHoldsNoOp'
-			return DiscardedCallee.notACall
-		end 'theBlockHoldsNoOp'
+		if refCount > 0 'theBlockEndsInAnOp'
+			let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("directCallProducing: opRefs.get OOB on a block whose count was just read as non-zero")
+			if opIdx >= opFloor 'emittedByThisStatement'
+				let producer = try self.directCallDefining(opIdx, value: value)
+				if discardedCalleeIsACall(producer) 'theLastOpIsTheCall'
+					return producer
+				end 'theLastOpIsTheCall'
+			end 'emittedByThisStatement'
+		end 'theBlockEndsInAnOp'
 
-		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("directCallProducing: opRefs.get OOB on a block whose count was just read as non-zero")
-		if opIdx < opFloor 'olderThanThisStatement'
+		// ⛔ **THE BACKWARD WALK IS FOR A VALUE THE FORK LAUNDERED, AND NOTHING ELSE.** Without this gate it
+		// runs for EVERY value the last-op test declines, and a statement whose ARGUMENT forks has one:
+		// `digits.push(try src.get(i) otherwise panic(…))` hands back `push`'s own result, the walk found the
+		// argument's `tryCall` behind it, and the void `push` statement was reported as a discarded
+		// `Array.get`. MEASURED: 34 such sites across `maxon-shv2/` and `stdlib/`, every one of them a legal
+		// program. A value the statement's own ops DEFINE has already had its answer from the test above.
+		if not self.valueIsArgOfCurrentBlock(value) 'theStatementDefinedThisValueItself'
 			return DiscardedCallee.notACall
-		end 'olderThanThisStatement'
+		end 'theStatementDefinedThisValueItself'
 
-		return try self.directCallDefining(opIdx, value: value)
+		return try self.throwingCallThisStatementMade(opFloor)
 	end 'directCallProducing'
+
+	// Did the statement's expression FORK and merge into the block it ended on, handing back that merge's
+	// block ARGUMENT? That is the one shape whose producer no op in the block defines.
+	function valueIsArgOfCurrentBlock(value ValueId) returns bool
+		for arg in self.currentBlock.blockArgs 'eachArg'
+			if arg.valueId == value 'theMergeHandedThisBack'
+				return true
+			end 'theMergeHandedThisBack'
+		end 'eachArg'
+
+		return false
+	end 'valueIsArgOfCurrentBlock'
+
+	// ⭐⭐ **`try f() otherwise 0` HANDS BACK A MERGE ARGUMENT, NOT THE CALL'S RESULT — which is why the
+	// last-op probe above cannot name its callee and this walk has to.** The expression FORKS: the `tryCall`
+	// and its `condBr` are left behind on the block the statement opened on, the fallback runs in a block of
+	// its own, and the value handed back is a block ARGUMENT the two arms merged into. So the callee is found
+	// by walking THIS STATEMENT's ops back from the end, bounded by `opFloor`, which is a module-wide index
+	// and therefore cannot reach a previous statement's call.
+	//
+	// ⚠ **REACHED ONLY WHEN THE VALUE IS THAT MERGE ARGUMENT** — the caller's gate, and the walk is unsound
+	// without it: a merge block goes on accepting ops, so a statement that forks INSIDE an argument ends on a
+	// block holding its own producer, and this walk would reach past it to the argument's `tryCall`.
+	//
+	// ⛔ **A `throws` CLAUSE IS NOT AN EFFECT**, so this shape cannot be declined on the reasoning that a
+	// throwing callee is never effect-free: `SemanticCheck.opShowsAnEffect` counts neither a throw nor a
+	// panic, as the reference counts neither, and a throwing PURE callee's discarded result is reportable —
+	// `specs-shv2/discarded-results.md`'s `try-pure-let-discard`, `_ = try parseNum("abc") otherwise 0`.
+	//
+	// ⚠ **IT ASKS A DIFFERENT QUESTION FROM `directCallDefining`, WHICH IS WHY IT ENUMERATES THE UNION AGAIN.**
+	// That one asks *which call DEFINED this value* and can therefore compare results; here the result was
+	// laundered into a block argument by the fork, so the only answerable question is *did this op call
+	// anything at all*. Both are exhaustive over `MaxonOp`, so an appended op is still classified in both.
+	function throwingCallThisStatementMade(opFloor OpIndex) returns DiscardedCallee throws ParseError
+		var idx = self.artifact.module.ops.count()
+		while idx > opFloor 'scanThisStatementBackwards'
+			idx = idx - 1
+			let producer = try self.tryCallAt(idx)
+			if discardedCalleeIsACall(producer) 'theStatementMadeAThrowingCall'
+				return producer
+			end 'theStatementMadeAThrowingCall'
+		end 'scanThisStatementBackwards'
+		return DiscardedCallee.notACall
+	end 'throwingCallThisStatementMade'
+
+	// Which callee the op at `idx` calls THROUGH THE `try` CHANNEL, if it is one at all. A plain `call` is
+	// declined here: the probe above reaches this walk only when the last-op test has already failed, and a
+	// plain call's result is never laundered through a fork.
+	function tryCallAt(idx OpIndex) returns DiscardedCallee throws ParseError
+		return match try self.artifact.module.ops.get(idx) otherwise panic("tryCallAt: opRef {idx} not in module.ops") 'producer'
+			call to stringLiteral gives DiscardedCallee.notACall
+			tryCall(result, _, callee, _, _, _, _, _, _) gives DiscardedCallee.named(callee, result: result)
+			throwError to serviceReplyCell gives DiscardedCallee.notACall
+		end 'producer'
+	end 'tryCallAt'
+
+	// ⭐⭐ **THE DISCARD DOOR THE TWO STATEMENT POSITIONS SHARE — a bare `f()` line and `_ = f()`.** Both
+	// evaluate a call and take none of what it produced, so both file the site `SemanticCheck` judges; what
+	// differs is only the anchor token, which is each door's own statement start.
+	//
+	// ⚠ **A VOID RESULT IS NOT A DISCARD.** A `void` callee is seeded effectful anyway
+	// (`functionShowsAnEffect`), so filing one could never fire — but every bare void statement in every
+	// program would still pay for a record and for the whole-program summary those records switch on.
+	function recordDiscardedCallResult(value ValueId, opFloor OpIndex, anchor Token) throws ParseError
+		if self.tagOf(value) == ValueTypeTag.void 'theCallPromisedNothing'
+			return
+		end 'theCallPromisedNothing'
+
+		self.recordDiscardOf(try self.directCallProducing(value, opFloor: opFloor), anchor: anchor)
+	end 'recordDiscardedCallResult'
+
+	// File a probed producer, if it was a call at all. The ANCHOR is the statement's own token — where the
+	// author decided to take nothing — rather than the callee's, which is what makes `_ = double(5)` report at
+	// the `_` and a bare `double(5)` at the name.
+	//
+	// The SUBJECT is the source member behind a lowered runtime read (`lastRuntimeRead*`) and EMPTY for
+	// every other producer, which is the `EmptySourceText`-means-none convention: a declared callee is its
+	// own subject and `SemanticCheck.checkDiscardedResults` reports it under the name it is keyed by.
+	function recordDiscardOf(producer DiscardedCallee, anchor Token)
+		match producer 'usedNothing'
+			named(callee, result) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(callee, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
+			notACall then break 'usedNothing'
+		end 'usedNothing'
+	end 'recordDiscardOf'
+
+	// ⭐⭐ **WHERE E3064 POINTS AT A CALL STATEMENT — THE CALLED NAME, WHICH IS THE LAST NAME OF THE CHAIN THE
+	// `(` FOLLOWS.** One rule for every call-statement door, dotted or not: `arr.count()` blames `count`,
+	// `b.ops.count()` blames `count`, `utils.twice(4)` blames `twice`, and a bare `double(5)` blames
+	// `double` — the zero-hop chain, which is the same walk with nothing to walk. MEASURED against the
+	// bootstrap at each of those spellings; it anchors on the METHOD, never on the receiver.
+	//
+	// ⚠ `directCallStmt` files its `calleeTok` rather than calling this: on a bare name the two are the SAME
+	// token, and that door already holds it for `terminateAfterDivergingCall`.
+	//
+	// It must be asked BEFORE the door parses, while the cursor is still on the chain's base.
+	function dottedCallNameToken(index TokenIndex) returns Token
+		let chainEnd = self.fieldChainEndAfter(index, minHops: AnyFieldHops)
+		if chainEnd == index 'notAName'
+			panic("dottedCallNameToken: token {index} opens no name chain — every call-statement door that asks this has already matched a name there")
+		end 'notAName'
+
+		return self.tokenAt((chainEnd - 1) as TokenIndex)
+	end 'dottedCallNameToken'
+
+	// Say which SOURCE member the runtime read just emitted serves (see `lastRuntimeRead*`). Called by the
+	// arm that lowered it, with the value it is about to hand back.
+	function noteRuntimeReadMember(result ValueId, typeName ByteArray, methodName ByteArray)
+		self.lastRuntimeReadValid = true
+		self.lastRuntimeReadResult = result
+		self.lastRuntimeReadTypeName = typeName
+		self.lastRuntimeReadMethodName = methodName
+	end 'noteRuntimeReadMember'
+
+	// The `Type.member` spelling behind `result`, or EMPTY when the last runtime read this parse lowered was
+	// about a different value — see the `lastRuntimeRead*` fields for why one slot answers this honestly.
+	function runtimeReadSubjectOf(result ValueId) returns ByteArray
+		if not self.lastRuntimeReadValid or self.lastRuntimeReadResult != result 'aboutAnotherValue'
+			return EmptySourceText
+		end 'aboutAnotherValue'
+
+		return qualifiedMethodName(self.lastRuntimeReadTypeName, methodName: self.lastRuntimeReadMethodName)
+	end 'runtimeReadSubjectOf'
 
 	// The identifier token of each target of a confirmed list, in source order. Every identifier in the span
 	// IS a target's name and nothing else is one — a qualifier is a KEYWORD and a separator is a comma — so
@@ -30899,7 +31069,12 @@ export type Parser
 		// the value-position twin of the bare-call statement, reached by `_ = try arr.pop() otherwise 0` and
 		// any `_ = f(…)`.
 		if nameTok.value.equals(DiscardBindingName) 'discardResult'
-			_ = try self.parseExpression(func, block: block)
+			let discardOpFloor = self.artifact.module.ops.count()
+			let discarded = try self.parseExpression(func, block: block)
+			// ⭐ E3064's `_ =` door. `_` does not license a discard of a result nobody reads — it only says the
+			// author meant it — so a pure callee is refused here exactly as it is one statement over, anchored on
+			// the `_` the author wrote.
+			try self.recordDiscardedCallResult(discarded, opFloor: discardOpFloor, anchor: nameTok)
 			return
 		end 'discardResult'
 
@@ -31650,6 +31825,11 @@ export type Parser
 		// managed slot can free an element). `staticMemberNameToken` has already fused `Counter.count` into one
 		// token, so this spelling is the author's for both shapes.
 		self.artifact.recordModuleVarAccessSite(ModuleVarAccessSite.create(nameTok.value, access: ModuleVarAccess.write, line: nameTok.line, column: nameTok.column, declFilePath: self.filePath))
+
+		// ⭐ **THE EFFECT SUMMARY'S "modifies global state" SEED (E3064).** Recorded here for the reason the
+		// write half above is: past this door the write is a `globalAddr` + `storeIndirect` pair a READ emits
+		// too. See `IrFunction.writesModuleStorage`.
+		func.writesModuleStorage = true
 
 		let range = SourceRange.ofToken(nameTok)
 		// `from:` names the interner `valueType`'s ids would live in — this file's own. A global's type comes
@@ -33329,48 +33509,37 @@ export type Parser
 		var returned = retVal
 
 		// The ONE promotion door (see the header): a borrowed String is RETAINED at this HAND-OFF door
-		// (`__str_retain`), a borrowed TRIVIAL TUPLE gets its own record, a borrowed struct/union/instance
-		// INCREFS. An already-owned value and a scalar pass
-		// straight through. The tuple half used to be asked HERE, one branch ahead of the shared door, which
-		// made it the `returned` door's private rule — and the `merged` door, opening onto the same shared door
-		// in S5, increfed a borrowed tuple instead and then handed the return an alias wearing the owned bit.
-		if self.valueIsManagedHeap(returned) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
+		// (`__str_retain`), a borrowed TRIVIAL TUPLE gets its own record, a borrowed opaque `T` takes a
+		// reference through its instance descriptor, a borrowed struct/union/instance INCREFS. An
+		// already-owned value and a scalar pass straight through.
+		//
+		// ⭐⭐ **THE CALLEE DISCHARGES THE HAND-OFF FOR EVERY SHAPE — AN OPAQUE `T` INCLUDED — AND THE CALLER
+		// SIMPLY ADOPTS** (`enrolOwnedCallTemp`). There is no convention under which the CALLER can take the
+		// reference instead: a body that returns a value it CREATED has nowhere to put the one it holds, and
+		// releasing it before the `ret` frees the record the caller is about to retain. A caller-takes-it
+		// convention is read off the DECLARED type while the obligation belongs to the RETURNED VALUE, so it
+		// leaks whenever the body already owned what it hands back — MEASURED, `return fresh()` through a
+		// `returns Element` prints the right answer and exits 101 with no `pop`, no array and no function
+		// alias in it. v1 puts the retain in the same place: `planReturnedBorrowRetains` /
+		// `planReturnIncrefs`, through `mm_retain_type_param(value, layout)`.
+		//
+		// ⚠ **THE OPAQUE ARM IS ADMITTED BY THE SHARED GATE BELOW RATHER THAN BY A PRIVATE `if` HERE, AND
+		// THAT IS WHAT KEEPS THE MERGE EDGE ANSWERABLE.** A private arm on this road leaves
+		// `promoteBorrowedGive` with no answer for a borrowed `T` — a parser panic on
+		// `return front if c else back` over a body whose `if`/`return` spelling compiles. An ALREADY-OWNED
+		// opaque value (an element `pop` moved out of an `Array with T` field) passes straight through and is
+		// moved out of the drop sets below, exactly as an owned String does.
+		//
+		// ⚠ **THE OPAQUE ARM IS RESERVATION-UNGATED, AND `moveOpaqueValueInto`'s SIBLING STORE IS NOT — the
+		// two doors are reserved by different signals and each is written to match its own.** A store's
+		// reservation (`buildsRecordFromOpaqueSource`) is a body-shape guess and declines for a type no `with`
+		// ever names, so the store asks `typeParamOwnerIsInstantiated` and declines with it. A RETURN's
+		// reservation is read off the DECLARATION (`calleeReturnsBareTypeParameter`) and declines for nothing,
+		// because an instantiation the pre-scan cannot see is one the body's own parse can — see
+		// `scanDescriptorNeedsInto` for the 38 `map/*` cases that measured exactly that disagreement.
+		if self.borrowedValueOwesAHandoffReference(returned) 'promoteBorrowed'
 			returned = try self.promoteBorrowedToOwned(returned, door: BorrowLaunderDoor.returned, range: SourceRange.ofToken(anchor))
 		end 'promoteBorrowed'
-
-		// ⭐⭐ **THE SAME PROMOTION FOR THE ONE TYPE THE BODY CANNOT NAME (P1.7 slice 3b-vi-a).** A shared
-		// generic body's `returns T` obeys the convention above unchanged — hand the caller a `+1` — and the
-		// door directly above declines for it, because `valueIsManagedHeap` reads the TAG and `typeParameter` is
-		// neither a byte record nor an aggregate. So a BORROWED opaque `T` takes its reference the only way a
-		// body compiled once for every instantiation can: through the enclosing instance's descriptor, whose
-		// `retainFunc@64` is `__str_clone` for a byte record, `__mm_retain` for a managed aggregate and 0 — a
-		// no-op — for an instantiation that owns nothing. An ALREADY-OWNED opaque value (an element `pop` moved
-		// out of an `Array with T` field) passes straight through and is moved out of the drop sets below,
-		// exactly as an owned String does.
-		//
-		// ⛔⛔ **THIS WAS A CLEAN `E2015` UNTIL THIS SLICE, AND THE REFUSAL'S OWN REASONING NAMED THE WRONG
-		// PARTY.** It said the caller "neither adopts nor drops" an opaque return, which was true — the caller
-		// took its own reference instead, on the premise that a shared body hands one back UNREFERENCED. That
-		// premise is read off the DECLARED type and the obligation belongs to the RETURNED VALUE, so a body
-		// returning a value it already owned handed over a real `+1` that the caller's own `+1` then leaked:
-		// `return fresh()` through a `returns Element` printed the right answer and exited 101, with no `pop`,
-		// no array and no function alias anywhere in it. There is no convention under which the CALLER can take
-		// the reference — a body that returns a value it CREATED has nowhere to put the one it holds, and
-		// releasing it before the `ret` frees the record the caller is about to retain — so the callee
-		// discharges the hand-off for every shape and the caller simply adopts (`enrolOwnedCallTemp`). It is
-		// also what v1 does: `planReturnedBorrowRetains` / `planReturnIncrefs` retain a returned borrow in the
-		// CALLEE, through `mm_retain_type_param(value, layout)`.
-		//
-		// ⚠ **IT IS UNGATED, AND `moveOpaqueValueInto`'s SIBLING STORE IS NOT — the two doors are reserved by
-		// different signals and each is written to match its own.** A store's reservation
-		// (`buildsRecordFromOpaqueSource`) is a body-shape guess and declines for a type no `with` ever names,
-		// so the store asks `typeParamOwnerIsInstantiated` and declines with it. A RETURN's reservation is read
-		// off the DECLARATION (`calleeReturnsBareTypeParameter`) and declines for nothing, because an
-		// instantiation the pre-scan cannot see is one the body's own parse can — see `scanDescriptorNeedsInto`
-		// for the 38 `map/*` cases that measured exactly that disagreement.
-		if self.tagOf(returned) == ValueTypeTag.typeParameter and not self.valueIsOwnedHeap(returned) 'borrowedOpaqueReturn'
-			returned = self.coOwnBorrowedOpaque(returned, range: SourceRange.ofToken(anchor))
-		end 'borrowedOpaqueReturn'
 
 		self.emitHandoffExitDrops(returned, anchor: anchor)
 
@@ -34235,7 +34404,7 @@ export type Parser
 	// appended op is classified here once and cannot be classified two ways.
 	function directCallDefining(idx OpIndex, value ValueId) returns DiscardedCallee throws ParseError
 		return match try self.artifact.module.ops.get(idx) otherwise panic("directCallDefining: opRef {idx} not in module.ops") 'producer'
-			call(result, callee, _, _, _, _, _, _) gives DiscardedCallee.named(callee) if result == value else DiscardedCallee.notACall
+			call(result, callee, _, _, _, _, _, _) gives DiscardedCallee.named(callee, result: result) if result == value else DiscardedCallee.notACall
 			literal to panicAbortValue gives DiscardedCallee.notACall
 			// The error-flag encode defines a value, but never a CALL's result — this test is about a direct call's.
 			errorFlagEncode gives DiscardedCallee.notACall
@@ -38895,11 +39064,47 @@ export type Parser
 		return promoted
 	end 'promoteBorrowedToOwned'
 
+	// ⭐ **WHICH VALUES THE DOOR ABOVE HAS AN ANSWER FOR** — the entry condition of a hand-off that must leave
+	// its new owner with a reference of its own. Written once because a door whose condition is NARROWER than
+	// the door's answer set silently declines a shape its sibling promotes: spelled `valueIsManagedHeap`, the
+	// merge-edge door dropped a generic body's borrowed opaque `T` into `promoteBorrowedGive`'s
+	// unreachable-case panic while the `if`/`return` spelling of the same function compiled.
+	//
+	// ⚠ **THE TWO CALLERS ARE `emitOwnedValueReturn` AND `promoteBorrowedGive`** — a `return`, and a
+	// `match`/ternary arm's give. A `try … otherwise` fallback reaches the SAME `promoteBorrowedMergeEdge`
+	// but is gated on the PHI's ownership instead (`valueIsOwnedHeap(result) and not
+	// valueIsOwnedHeap(otherwiseValue)`), which is a different question — the type merge has already forced
+	// the two edges to agree in kind there, so a scalar cannot reach it. Narrowing this predicate does NOT
+	// narrow that door; check it too.
+	//
+	// A SCALAR owns no heap and owes nothing. An ALREADY-OWNED value has already discharged the hand-off.
+	function borrowedValueOwesAHandoffReference(value ValueId) returns bool
+		return (self.valueIsManagedHeap(value) or self.tagOf(value) == ValueTypeTag.typeParameter) and not self.valueIsOwnedHeap(value)
+	end 'borrowedValueOwesAHandoffReference'
+
 	// The protocol choice `promoteBorrowedToOwned` is written around — RETAIN a String at a hand-off and COPY
-	// it at a `binding`, copy a trivial tuple at a hand-off, incref anything else — split out so the surface
-	// carry above can wrap all three without being written into each. Every word of that door's header describes this body; it is
+	// it at a `binding`, copy a trivial tuple at a hand-off, take an opaque `T`'s reference through its
+	// instance descriptor, incref anything else — split out so the surface carry above can wrap all of them
+	// without being written into each. Every word of that door's header describes this body; it is
 	// called from nowhere else.
 	function ownedFormOfBorrowedValue(value ValueId, door BorrowLaunderDoor, range SourceRange) returns ValueId throws ParseError
+		// ⭐⭐ **THE ONE TYPE THE BODY CANNOT NAME (P1.7 slice 3b-vi-a).** A shared generic body's opaque `T`
+		// is neither a byte record nor an aggregate, so every arm below declines it — it takes its reference
+		// through the enclosing instance's descriptor instead, whose `retainFunc@64` is `__str_clone` for a
+		// byte record, `__mm_retain` for a managed aggregate and 0 — a no-op — for an instantiation that owns
+		// nothing.
+		//
+		// ⭐ **IT IS ASKED AT THE SHARED DOOR BECAUSE THREE DOORS OWE THIS REFERENCE, NOT TWO.** A RETURN out
+		// of the body, a STORE into a durable slot (`moveOpaqueValueInto`, which reaches `coOwnBorrowedOpaque`
+		// on its own consume path) and a MERGE EDGE — a `match`/ternary arm's borrowed give, and a
+		// `try … otherwise` fallback — each hand a borrowed `T` to an owner that will release it. The merge
+		// edge was the door nothing wired: `return front if c else back` over an `Array with Element`'s
+		// borrowed `first()` and owned `last()` PANICKED the parser in `promoteBorrowedGive`, while the same
+		// program written as an `if`/`return` pair compiled and ran, because only the return road asked.
+		if self.tagOf(value) == ValueTypeTag.typeParameter 'opaqueElement'
+			return self.coOwnBorrowedOpaque(value, range: range)
+		end 'opaqueElement'
+
 		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
 			// ⭐⭐ **A MERGE EDGE CO-OWNS WHERE THE OTHER TWO DOORS COPY, AND THE DIFFERENCE IS A WRITE THAT MUST
 			// REACH THE CALLER (W56).** `grow(make() if c else s)` hands the phi to a callee that WRITES it, so a
@@ -45365,6 +45570,14 @@ export type Parser
 	// through a `match … gives` arm AND a ternary arm alike); the incref is what makes it owned, so the phi's
 	// single drop balances against a real second reference instead of the borrow's owner's one.
 	//
+	// ⭐⭐ **WHICH GIVES THE SHARED DOOR ANSWERS FOR IS ASKED THROUGH THE PREDICATE THE `return` USES, NOT
+	// THROUGH A TEST OF THIS DOOR'S OWN.** Spelled `valueIsManagedHeap` here, this door was NARROWER than the
+	// door it opens onto: a shared generic body's borrowed opaque `T` — a `typeParameter` tag, so neither a
+	// byte record nor an aggregate — fell past it into the panic below. MEASURED: over an `Array with
+	// Element` whose `first()` yields a BORROW and whose `last()` hands back an owned `+1`,
+	// `return front if c else back` aborted the compiler while the `if`/`return` spelling of the same
+	// function compiled and ran, because only the return road asked about the opaque case.
+	//
 	// An UNRESOLVED give reaches here too, and is DEFERRED, not refused: a give whose type could not be
 	// pinned at parse is a call NO file declares (`mintCallResult` defers rather than throwing), and
 	// `checkGiveTypes` let it through because `typesAgree` lets `unresolved` agree with anything and its
@@ -45375,9 +45588,9 @@ export type Parser
 	// so it is a parser invariant break.
 	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId throws ParseError
 		let giveTag = self.tagOf(give)
-		if self.valueIsManagedHeap(give) 'managed'
+		if self.borrowedValueOwesAHandoffReference(give) 'owesAReference'
 			return try self.promoteBorrowedMergeEdge(give, edgeBlock: arm.exitBlock, anchor: matchTok)
-		end 'managed'
+		end 'owesAReference'
 
 		if tagIsUnresolved(giveTag) 'deferredCallError'
 			return give
@@ -59993,7 +60206,9 @@ export type Parser
 		// answer a non-ASCII cluster with a sentinel.
 		if methodTok.value.equals(CharacterAsciiValueMethod) 'asciiValue'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(CharAsciiValueName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			let asciiValue = self.emitRuntimeCall(CharAsciiValueName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			self.noteRuntimeReadMember(asciiValue, typeName: CharacterConformerName, methodName: methodTok.value)
+			return asciiValue
 		end 'asciiValue'
 		let drift = rosterDriftMessage("dispatchCharacterMethod", member: methodTok.value, roster: roster, rosterFuncs: "`characterSurfaceMemberNames`")
 		panic("{drift}")
@@ -65234,6 +65449,24 @@ export type Parser
 		return self.signatures.arrayRecordDeclaredName() if base.equals(self.signatures.arrayRecordBaseName()) else base
 	end 'arrayReceiverDeclaredName'
 
+	// ⭐ **NAME THE ARRAY READ THIS ARM JUST LOWERED, FOR E3064's SUBJECT** (`lastRuntimeRead*`). Threaded
+	// around the emit so an arm stays one `return`.
+	//
+	// ⚠ **THE BUFFER SURFACE IS EXCLUDED, exactly as `recordArmServedIndexRangeCheck` excludes it, and for a
+	// reason of its own: THERE IS NO MEMBER TO NAME.** `count`/`length` and `get` share one arm and one
+	// runtime entry with the buffer's spellings, and the receiver's GIID is the array's either way — so a
+	// buffer read would be reported as `Array.length`, a member no reference declares and no author wrote.
+	// The reference cannot judge these at all (it answers E3067, `_ =` wanting a call where a buffer member
+	// is an op), so declining leaves a missed diagnostic rather than a wrong one.
+	function noteArrayReadMember(result ValueId, giid GenericInstanceId, methodTok Token, bufferSurface bool) returns ValueId
+		if bufferSurface 'theCompilersOwnNameForARecord'
+			return result
+		end 'theCompilersOwnNameForARecord'
+
+		self.noteRuntimeReadMember(result, typeName: self.arrayReceiverDeclaredName(giid), methodName: methodTok.value)
+		return result
+	end 'noteArrayReadMember'
+
 	// ⭐⭐ **THE `Array` ROSTER REFUSAL IS A WRONG ANSWER IN EXACTLY ONE PROGRAM, AND THIS IS IT (ARR2).** When a
 	// user program declares its own `type Array` the compile holds TWO `Array` declarations — the user's under
 	// the bare name, `stdlib/Array.maxon`'s under this compile's mint — and a member call resolves against the
@@ -65908,7 +66141,7 @@ export type Parser
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
 			self.recordArmServedIndexRangeCheck(giid, member: methodTok.value, value: index, anchor: methodTok, bufferSurface: isManagedMemory)
-			return try self.emitContainerElementAccessor(func, callee: ManagedGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
+			return self.noteArrayReadMember(try self.emitContainerElementAccessor(func, callee: ManagedGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
 		end 'get'
 		// ⭐⭐ **ONE SPELLING, TWO ENTRIES — THE BUFFER'S `set` IS BOUNDED BY CAPACITY AND THE `Array`'s BY LENGTH
 		// (R4.6).** ⚖ The capacity bound is a USER RULING of 2026-07-30, taken after a measured three-way
@@ -65973,7 +66206,7 @@ export type Parser
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
-			return try self.emitContainerElementAccessor(func, callee: ManagedFirstName, container: arr, args: singletonArgs(arr), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
+			return self.noteArrayReadMember(try self.emitContainerElementAccessor(func, callee: ManagedFirstName, container: arr, args: singletonArgs(arr), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
 		end 'first'
 		// ⭐ **`remove` IS BUFFER-SURFACE ONLY SINCE X-array-retire, AND THE GATE IS WHAT SAYS SO.** The
 		// `Array` spelling is `stdlib/Array.maxon:327`'s, which is this same operation through
@@ -66018,7 +66251,7 @@ export type Parser
 		// references never gave it, or the roster's own first entry becomes decorative.
 		if methodTok.value.equals(CountMethod) or (isManagedMemory and methodTok.value.equals(ManagedMemoryLengthMethod)) 'count'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.noteArrayReadMember(self.emitRuntimeCall(ManagedCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range), giid: giid, methodTok: methodTok, bufferSurface: isManagedMemory)
 		end 'count'
 		// ⭐ **`toCString()` — BUFFER-SURFACE ONLY**, like `length`/`byteAt`/`elementSize`: neither reference
 		// gives `Array` the spelling, and the corpus reaches it through `arr.managed.toCString()`. The result is
@@ -72472,6 +72705,7 @@ export type Parser
 		self.mutabilityExercisedNames = ByteArrayArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
+		self.lastRuntimeReadValid = false
 		self.loops = LoopContextArray.create()
 		// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
 		self.tryBlocks = TryBlockContextArray.create()
@@ -75538,8 +75772,8 @@ export type Parser
 				// statement that takes none of the answer has no other reason to run, and no call graph has to be
 				// walked to say so. The site still travels as a `PendingDiscardedResult` because the DIAGNOSTIC is
 				// `SemanticCheck.checkDiscardedResults`'s and must stay one sentence in one place; what the site
-				// carries is that its purity is already settled. (The bare-call door for DECLARED callees is a
-				// different question and stands shelved in `specs-shv2/discarded-results.md`.)
+				// carries is that its purity is already settled. (A DECLARED callee discarded the same way is the
+				// statement doors' site, and the summary answers for it.)
 				if not resultUsed 'nobodyTookTheAnswer'
 					self.artifact.recordDiscardedResult(PendingDiscardedResult.createForIntrinsic(callee, line: anchor.line, column: anchor.column, filePath: self.filePath))
 				end 'nobodyTookTheAnswer'

@@ -93,7 +93,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// judged against the whole-program effect summary built here. Beside the two drains above and after
 	// `resolveOverloadedCalls`, whose rewrite is what makes a call op's `callee` the name the summary is
 	// keyed by.
-	checkDiscardedResults(project, module: module, funcNames: funcNames)
+	checkDiscardedResults(project, module: module, signatures: signatures, funcNames: funcNames)
 	// E3073 — a spawn whose callee can never suspend. Whole-program like the summary above it, and for the same
 	// reason: whether `f` yields depends on what `f` calls, which is only knowable once every file has merged.
 	checkAsyncYielding(project, module: module, funcNames: funcNames)
@@ -3478,12 +3478,12 @@ end 'checkTransformParamType'
 
 // ⭐⭐ **E3064 — A CALL WHOSE RESULT NOBODY TOOK, WHEN THE CALLEE HAD NO OTHER REASON TO RUN.** Drains the
 // sites the parser recorded (`PendingDiscardedResult`) against the effect summary built below. The message
-// and the code are `specs/tuple-assign.md`'s, and the anchor is the site's own — the statement's `(`, which
-// is where the author wrote the discards.
+// and the code are `specs/tuple-assign.md`'s, and the anchor is the site's own — each door's statement start,
+// which is where the author decided to take nothing: the bare call's name, the `_`, or the tuple pattern's `(`.
 //
-// ⚠ **THE SUMMARY IS ASKED ONLY WHEN A SITE EXISTS**, and that is not an optimization: it is a whole-program
-// walk over every function's every op, and almost no program writes an all-discard tuple assignment. A
-// compile that records no site pays nothing at all.
+// ⚠ **THE SUMMARY IS ASKED ONLY WHEN A SITE EXISTS.** It is a whole-program walk over every function's every
+// op, so a compile that takes every result it computes pays nothing at all — but a discarded call result is
+// ordinary, so most compiles do pay it, and it is the price of the diagnostic rather than a rare path.
 // ⭐ **E3073 — a spawn of a function that can never suspend.** `async` exists to overlap waiting with other
 // work; a callee that only computes runs straight through on the spawning thread, so the spawn buys nothing
 // and the author has almost certainly meant something else. Reported at every `asyncCall` whose callee the
@@ -3570,33 +3570,106 @@ function requireTargetHostsSpawn(project Project, func IrFunction, opIndex OpInd
 	requireTargetSupportsServiceEntry(project, func: func, opIndex: opIndex, subject: "an `async` spawn", entry: GtSpawnName, blameTargetErrorsHere: blameTargetErrorsIn(project, func: func))
 end 'requireTargetHostsSpawn'
 
-function checkDiscardedResults(project Project, module MaxonModule, funcNames FunctionNameIndex)
+// A position in `Project.pendingDiscardedResults`. Sites are filed one per discarding statement, so the
+// bound is the program's statement count.
+typealias DiscardSiteIndex = int(0 to u64.max)
+
+// "This site earns no diagnostic" — the empty answer `discardedResultSubject` and its helpers agree on.
+let NoDiscardSubject = ""
+
+function checkDiscardedResults(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
 	if project.pendingDiscardedResults.count() == 0 'nothingDiscardedAWholeResult'
 		return
 	end 'nothingDiscardedAWholeResult'
 
-	let effectFree = buildEffectFreeSummary(module, funcNames: funcNames)
+	// ⛔ **A STATEMENT ALREADY REFUSED EARNS NO SECOND LINE.** The parser files a site from the SHAPE of the
+	// statement, before `checkCalls` has judged the call at all — so `takeInt("hello")` on a line of its own
+	// is one mistake wearing two diagnostics, the argument mismatch and then "its result must be used" about
+	// a call that will not survive the fix. `requireTargetHostsSpawn` guards on the same fact for the same
+	// reason. The author sees this on the next compile, which is when it is the only thing left to say.
+	if projectHasErrors(project) 'alreadyRefused'
+		return
+	end 'alreadyRefused'
+
+	let effectFree = buildEffectFreeSummary(module, signatures: signatures, funcNames: funcNames)
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
-		let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
-		// An INTRINSIC is not in `funcNames` and never will be — it emits no call — so the summary is not asked
-		// about it. Its site already carries the answer (see `PendingDiscardedResult`), and asking anyway would
-		// miss the lookup and silently drop the diagnostic.
-		if not site.calleeIsACompilerIntrinsic 'aDeclaredCalleeTheSummaryJudges'
-			let calleeIndex = try funcNames.byName.get(site.callee) otherwise continue
-			if not (try effectFree.get(calleeIndex) otherwise panic("checkDiscardedResults: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")) 'theCallDidSomething'
-				continue
-			end 'theCallDidSomething'
-		end 'aDeclaredCalleeTheSummaryJudges'
+		let subject = discardedResultSubject(project, siteIndex: siteIndex, funcNames: funcNames, effectFree: effectFree)
+		if subject.isEmpty() 'theCallHadAnotherReasonToRun'
+			continue
+		end 'theCallHadAnotherReasonToRun'
 
 		// Scalars off the borrow, a fresh inline read for the managed halves — see the loop header's note.
+		let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 		let line = site.line
 		let column = site.column
-		reportPositioned(project, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{String.from((try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).callee)}' must be used", line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
+		reportPositioned(project, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{subject}' must be used", line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("checkDiscardedResults: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
 	end 'eachSite'
 end 'checkDiscardedResults'
+
+// ⭐⭐ **WHICH NAME ONE FILED SITE EARNS ITS DIAGNOSTIC UNDER, OR EMPTY WHEN IT EARNS NONE.** Three
+// provenances reach this, and they differ in WHO can answer whether the callee had another reason to run:
+//
+//   * a COMPILER INTRINSIC is not in `funcNames` and never will be — it emits no call — so the summary is
+//     not asked about it. Its site already carries the answer (see `PendingDiscardedResult`), and asking
+//     anyway would miss the lookup and silently drop the diagnostic.
+//   * a DECLARED callee is the whole-program effect summary's, and is reported under the name it is keyed
+//     by.
+//   * a RUNTIME ENTRY the parser lowered a source member to is neither. It has no body to walk, so the
+//     ROSTER answers for it (`effectFreeRuntimeCallee`) — and it is reported under the member the author
+//     wrote (`PendingDiscardedResult.subject`), which is the reference's spelling: `Array.first`, never
+//     `__managed_first`. A runtime entry no lowering arm named is left alone, which is the safe direction —
+//     a missed diagnostic, never a legal program refused under a symbol nobody wrote.
+function discardedResultSubject(project Project, siteIndex DiscardSiteIndex, funcNames FunctionNameIndex, effectFree BoolArray) returns String
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("discardedResultSubject: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+	if site.calleeIsACompilerIntrinsic 'anIntrinsicWhosePurityIsSettled'
+		return String.from(site.callee)
+	end 'anIntrinsicWhosePurityIsSettled'
+
+	let calleeIndex = try funcNames.byName.get(site.callee) otherwise return runtimeReadSubject(project, siteIndex: siteIndex)
+	if not (try effectFree.get(calleeIndex) otherwise panic("discardedResultSubject: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")) 'theCallDidSomething'
+		return NoDiscardSubject
+	end 'theCallDidSomething'
+
+	if calleeIsChainable(project, callee: site.callee) 'aBuilderStep'
+		return NoDiscardSubject
+	end 'aBuilderStep'
+
+	return String.from(site.callee)
+end 'discardedResultSubject'
+
+// The member spelling a LOWERED RUNTIME READ earns, or none. Split out so the lookup miss above reads as a
+// question with its own answer rather than as a fallthrough.
+function runtimeReadSubject(project Project, siteIndex DiscardSiteIndex) returns String
+	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("runtimeReadSubject: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
+	if site.subject.isEmpty() or not effectFreeRuntimeCallee(site.callee) 'notALoweredPureRead'
+		return NoDiscardSubject
+	end 'notALoweredPureRead'
+
+	return String.from(site.subject)
+end 'runtimeReadSubject'
+
+// ⭐⭐ **A CHAINABLE METHOD'S RESULT MAY BE DROPPED FREELY** — `specs/discarded-results.md`'s third rule
+// ("Methods that return their own type … are chainable"), and the reference's
+// `SemanticCheckPass.IsChainable` word for word: a first parameter that is the RECEIVER, and a return type
+// that is the receiver's own. A builder step (`c.increment()`) is written to be dropped.
+//
+// ⛔ **WITHOUT IT THE E3064 DOOR REFUSES LEGAL PROGRAMS**, which is the one direction the effect summary's
+// safety argument says must not happen. MEASURED against the runnable oracle, which accepts all three:
+// `_ = arr.clone()`, `_ = try arr.slice(…) otherwise …` and `_ = s.trim()` — each a corpus body whose every
+// callee is on the effect-free roster, so the summary calls it pure and is right to.
+function calleeIsChainable(project Project, callee ByteArray) returns bool
+	let sig = try project.funcSignatures.get(callee) otherwise return false
+	if not sig.takesReceiver() 'aStaticHasNoOwnTypeToReturn'
+		return false
+	end 'aStaticHasNoOwnTypeToReturn'
+
+	let receiver = try sig.paramTypes.get(0) otherwise panic("calleeIsChainable: paramTypes.get(0) OOB on a signature `takesReceiver()` just read a slot-0 name from — the name and type columns are parallel by construction")
+	let declaredReturn = try project.funcReturnTypes.get(callee) otherwise return false
+	return maxonReturnTypesDenoteSame(declaredReturn, b: MaxonReturnType.value(receiver))
+end 'calleeIsChainable'
 
 // ⭐⭐ **WHICH FUNCTIONS ARE PROVABLY FREE OF OBSERVABLE EFFECT** — a dense `bool` per function over
 // `funcNames.functions`, in the index space `funcNames.byName` resolves into, exactly as
@@ -3647,12 +3720,13 @@ end 'checkDiscardedResults'
 // own bodies show one. The same relation, the same CSR and the same complexity argument as the parameter
 // mutation and closure escape summaries; see that routine's header for why a re-scan loop is a different
 // complexity and not a different spelling.
-function buildEffectFreeSummary(module MaxonModule, funcNames FunctionNameIndex) returns BoolArray
+function buildEffectFreeSummary(module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
 	var seeds = BoolArray.create()
 	var edges = CallGraphEdges.create()
+	var dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
 	for i in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(i) otherwise panic("buildEffectFreeSummary: functions.get OOB at {i}")
-		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges))
+		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges, dispatch: dispatch))
 	end 'eachFunc'
 
 	var effectFree = BoolArray.create()
@@ -3662,6 +3736,162 @@ function buildEffectFreeSummary(module MaxonModule, funcNames FunctionNameIndex)
 	end 'invert'
 	return effectFree
 end 'buildEffectFreeSummary'
+
+// ⭐⭐ **WHAT A CONSTRAINED REQUIREMENT'S CALL CAN REACH — the requirement's own name, and every member of the
+// program that wears it.** A `witnessDispatch` names a SLOT, not a callee: `key.hash()` inside `Map.get`
+// binds to `Hashable.hash` and lands on whichever conformer the instantiation supplied. So the summary
+// closes over the CANDIDATES — every declared member whose bare method name is the requirement's — and lets
+// the ordinary call graph carry each one's answer back. An EXISTENTIAL receiver never reaches here; see
+// `witnessDispatchShowsAnEffect`, which is where the two dispatch shapes part.
+//
+// ⛔⛔ **ANSWERING `true` FOR EVERY DISPATCH MAKES THE DIAGNOSTIC VACUOUS FOR EVERY GENERIC CONTAINER, WHICH
+// IS WHY THE CANDIDATES ARE ENUMERATED AT ALL.** `Map.get`, `Map.contains` and `Set.contains` each call
+// `key.hash()` and `existing == key` on a constrained type parameter — two witness dispatches — so a blanket
+// `true` reads all three as effectful and lets `_ = m.get(k)` compile clean where the bootstrap answers
+// E3064 (MEASURED on each). It MONOMORPHIZES, so the same requirement call is a DIRECT call there and its own
+// closure already crosses it; shv2 shares one body across instantiations and has to name the candidates
+// instead. That is the departure, and this is where it is paid.
+//
+// ⚠ **`ServiceProgramSurvey.possibleIndirectCallTargets` ASKS THE SAME QUESTION FOR E3143 AND ANSWERS IT
+// FROM A DIFFERENT STORE — deliberately, and neither may be swapped for the other.** That one enumerates
+// `project.witnessSlotImpls`, the members CONFORMANCE accepted, over every requirement at once; this one
+// enumerates by requirement NAME over the declared functions. Its store is the narrower of the two and its
+// own header records the gap (a builtin conformer files no slot impl), which is affordable there — it is
+// UNIONED with the address-taken set and only widens a refusal — and is not affordable here, where a missing
+// candidate would call a dispatch pure and REFUSE a legal program. A change to how conformance is recorded
+// reaches that one and cannot reach this one, which is the point: this scan is complete by construction.
+//
+// ⚠ **THE KEY IS THE METHOD NAME, WHICH OVER-APPROXIMATES ON PURPOSE.** An unrelated `equals` that prints
+// joins `Equatable.equals`'s candidate set and makes every dispatch through it effectful. That costs a MISSED
+// diagnostic and nothing else, which is the direction `buildEffectFreeSummary`'s safety argument requires —
+// where enumerating conformers exactly would risk MISSING one (a builtin conformer records no conformance
+// decision, and a granted enum records none either) and so REFUSING a legal program.
+typealias WitnessTargetsByRequirement = Map with (ByteArray, ByteArrayArray)
+
+// The two MEMOS and the two stores they are derived from, carried together because both must outlive the
+// per-op walk: one transitive slot walk per interface and one candidate scan per requirement, never one per
+// dispatch (`checkCalls` keeps the slot memo for that exact reason, stated there).
+type WitnessDispatchTargets
+	let signatures as ProgramSignatures
+	let functions as IrFunctionArray
+	// Each function's bare method name, parallel to `functions` once `splitBareNames` has filled it. Split
+	// ONCE per function rather than once per function per requirement, which is what the scan below would
+	// otherwise cost.
+	var bareNames as ByteArrayArray
+	var slots as WitnessSlotsByDeclIndex
+	var byRequirement as WitnessTargetsByRequirement
+
+	static function create(signatures ProgramSignatures, functions IrFunctionArray) returns WitnessDispatchTargets
+		return Self{signatures: signatures, functions: functions, bareNames: ByteArrayArray.create(), slots: WitnessSlotsByDeclIndex.create(), byRequirement: WitnessTargetsByRequirement.create()}
+	end 'create'
+
+	// ⭐ **ON THE FIRST DISPATCH ASKED, NOT AT CONSTRUCTION.** This undoes two joins per function of the
+	// WHOLE program and nothing but `candidatesFor` reads it, so a program that reaches this summary with no
+	// witness dispatch in it — which is most of them — must not pay a name split per declared function. The
+	// column being as long as `functions` IS the done flag: one pass fills it and nothing else writes it, so
+	// a short column is an unsplit one and a program with no functions is split by having nothing to split.
+	//
+	// ⛔⛔ **BOTH JOINS HAVE TO COME OFF, AND `bareMethodName` UNDOES ONLY ONE.** A registration name
+	// is `Type.method` joined AGAIN with `#suffix` when the member contests an overload set
+	// (`Project.overloadRegistrationName`), so `bareMethodName` alone answers `digest#` for
+	// `Loud.digest#` and that member matches NO requirement: an interface member that is not the FIRST
+	// declaration of its base drops out of the candidate set, and a dispatch that can land on it then
+	// reads PURE. MEASURED, and it is the over-refusing direction this summary must never take: a
+	// conformer whose `digest()` sits behind a `digest(salt)` overload had its module-global write erased
+	// from the summary and `_ = box.itemDigest()` was refused E3064, while deleting the unrelated
+	// overload compiled the same program.
+	//
+	// ⚠ **`#` COMES OFF FIRST.** A suffix part is a rendered TYPE name and may hold a `.` of its own
+	// (`hash#ns.Type`), so taking the last `.`-segment first would answer the suffix's tail.
+	function splitBareNames()
+		if self.bareNames.count() == self.functions.count() 'alreadySplit'
+			return
+		end 'alreadySplit'
+
+		for func in self.functions 'eachFunc'
+			self.bareNames.push(bareMethodName(overloadRegistrationBaseName(func.name)).toByteArray())
+		end 'eachFunc'
+	end 'splitBareNames'
+
+	// The requirement's declared name, off the SAME slot list `checkWitnessArgTypes` reads — so the candidate
+	// set and the argument check cannot come to name different requirements for one op.
+	function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns ByteArray
+		let dispatched = dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex)
+		let dispatchedSlots = witnessSlotsAt(self.signatures, witnessSlots: self.slots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
+		return (try dispatchedSlots.get(methodIndex) otherwise panic("requirementNameAt: slot {methodIndex} is outside the {dispatchedSlots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")).method.name
+	end 'requirementNameAt'
+
+	// Every declared member wearing that name — the requirement's own spelling, which is what `create`
+	// reduces every registration name to.
+	//
+	// ⛔⛔ **A STDLIB BODY NO PATH FROM `main` DEMANDED IS NOT A CANDIDATE, AND WITHOUT THAT THIS ANSWERS
+	// NOTHING.** Such a body is one empty block (`Parser.bodyWasSkippedAsUnreached`), which every summary
+	// here reads as an effect — so leaving it in the set makes `Hashable.hash` effectful in every program,
+	// because `float.hash` and `Character.hash` are declared in every program and reached by almost none.
+	// MEASURED: a user interface's `tag()` reported E3064 while the identical program over `Hashable.hash`
+	// compiled clean.
+	//
+	// ⚠ **IT CONCLUDES REACHABILITY, NEVER PURITY — which is the distinction `IrFunction`'s own field note
+	// draws.** Nothing is read off the skipped body's ops; the claim is that a body the demand walk did not
+	// pull is one no dispatch here can land on, since the witness table that would name it would then hold a
+	// relocation to a symbol with no code. A demand walk that missed such a body would already be
+	// miscompiling that dispatch, so this cannot be the first thing to notice.
+	function candidatesFor(requirement ByteArray) returns ByteArrayArray
+		if let memoized = try self.byRequirement.get(requirement) 'alreadyScanned'
+			return memoized
+		end 'alreadyScanned'
+
+		self.splitBareNames()
+		var candidates = ByteArrayArray.create()
+		for i in 0 upto self.bareNames.count() 'eachFunc'
+			if not (try self.bareNames.get(i) otherwise panic("candidatesFor: bareNames.get OOB at {i} inside its own count()")).equals(requirement) 'wearsAnotherName'
+				continue
+			end 'wearsAnotherName'
+
+			let candidate = try self.functions.get(i) otherwise panic("candidatesFor: functions.get OOB at {i} — `bareNames` is built over `functions` and is parallel to it by construction")
+			if not candidate.bodyWasSkippedAsUnreached 'inThisProgram'
+				candidates.push(candidate.name)
+			end 'inThisProgram'
+		end 'eachFunc'
+		self.byRequirement.upsert(requirement, value: candidates)
+		return candidates
+	end 'candidatesFor'
+end 'WitnessDispatchTargets'
+
+// One dispatch. Records an edge to every candidate — so the closure carries a conformer's own effects back to
+// this caller — and answers `true` only for a candidate no `IrFunction` declares, which is
+// `calleeShowsAnEffect`'s own unknown-callee verdict and the safe direction.
+//
+// ⛔⛔ **ONLY A CONSTRAINED TYPE PARAMETER IS CLOSED OVER. AN EXISTENTIAL RECEIVER IS AN EFFECT, and that
+// line is the reference's own.** The bootstrap monomorphizes a generic body, so `key.hash()` on a `Key`
+// parameter is a DIRECT call there and its closure crosses it; a `c Cloneable` parameter is a vtable
+// dispatch, which its call graph calls an INDIRECT CALL and reads as impure. shv2's `indirectCall` arm one
+// band up says the same thing about a closure value, so the two dispatch shapes now agree with it and with
+// each other. MEASURED: without the split,
+// `array-conditional-conformance-withheld.the-cloneable-witness-route-is-opened-by-the-instance-dictionary`
+// — `_ = copyIt(src)` over `function copyIt(c Cloneable) returns Cloneable` — was REFUSED E3064 where the
+// bootstrap compiles it, which is the over-refusing direction this summary must never take.
+function witnessDispatchShowsAnEffect(dispatch WitnessDispatchTargets, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+	if (try func.valueTags.get(witnessDispatchReceiver(args)) otherwise return true) != ValueTypeTag.typeParameter 'chosenAtRunTime'
+		return true
+	end 'chosenAtRunTime'
+
+	let candidates = dispatch.candidatesFor(dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+	// ⚠ **NO CANDIDATE AT ALL IS AN EFFECT, NOT A VACUOUS PASS.** A dispatch exists, so something fills its
+	// slot; an empty set means this pass failed to find it, and every unknown resolves toward "effectful".
+	if candidates.isEmpty() 'nothingWearsTheRequirementsName'
+		return true
+	end 'nothingWearsTheRequirementsName'
+
+	var effectful = false
+	for candidate in candidates 'eachCandidate'
+		if calleeShowsAnEffect(candidate, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges) 'thisOneDoes'
+			effectful = true
+		end 'thisOneDoes'
+	end 'eachCandidate'
+
+	return effectful
+end 'witnessDispatchShowsAnEffect'
 
 // ⭐⭐ **THE WHOLE-PROGRAM YIELD CLOSURE — E3073.** Which functions can give up the green thread, closed over
 // the call graph exactly as `buildEffectFreeSummary` closes "shows an effect": seed each function from its own
@@ -3726,10 +3956,10 @@ end 'markSeededCallees'
 // records the caller-callee edges, so the graph and the seeds come out of ONE pass — `functionShowsAnEffect`'s
 // shape, and its early-return is sound for the same reason: a function already marked needs no incoming edge.
 //
-// A function with NO body is a declaration this module cannot read (a restored intrinsic, an extern). Nothing
-// about it is provable, so by the erring-toward-accepting rule above it counts as yielding.
+// A body this pass cannot read proves nothing, so by the erring-toward-accepting rule above it counts as
+// yielding — the same direction `functionShowsAnEffect` resolves it in, off the same predicate.
 function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
-	if func.blockRefs.count() == 0 'noBodyToProveAnythingAbout'
+	if bodyIsUnreadable(func) 'noBodyToProveAnythingAbout'
 		return true
 	end 'noBodyToProveAnythingAbout'
 
@@ -3895,10 +4125,9 @@ end 'CallGraphEdges'
 // (callee, this) exists only to carry a CALLEE's mark up into this function, and this function is already
 // marked. Its own mark reaches its callers through the edges THEY record. The op loop returns early for the
 // same reason.
-function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
-	// A function with NO body is a declaration this module cannot read — a restored intrinsic, an extern.
-	// Nothing about it is provable.
-	if func.blockRefs.count() == 0 'noBodyToProveAnythingAbout'
+function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets) returns bool
+	// Nothing this pass can read, so nothing about it is provable.
+	if bodyIsUnreadable(func) 'noBodyToProveAnythingAbout'
 		return true
 	end 'noBodyToProveAnythingAbout'
 
@@ -3915,6 +4144,13 @@ function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByN
 		return true
 	end 'writesAnAggregateItWasHanded'
 
+	// ⭐ **IT ASSIGNS A MODULE-LEVEL `let`/`var` — the spec's "modifies global state", and the WRITE half of
+	// what the `globalAddr` op cannot tell apart.** Recorded at `Parser.emitCheckedGlobalStore`, the one door
+	// every module-storage assignment passes through.
+	if func.writesModuleStorage 'writesModuleStorage'
+		return true
+	end 'writesModuleStorage'
+
 	// It writes what it was handed — the parser's own two masks, the seeds `ParamMutationSummary` closes over.
 	// Read UNCLOSED here on purpose: the transitive half arrives through the very same call edges this walk
 	// records, so closing it twice would be one fact propagated by two fixpoints. They are kept BESIDE the
@@ -3927,13 +4163,22 @@ function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByN
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("functionShowsAnEffect: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			if opShowsAnEffect(try module.ops.get(opIdx) otherwise panic("functionShowsAnEffect: opIdx {opIdx} not in module.ops"), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges) 'effectful'
+			if opShowsAnEffect(try module.ops.get(opIdx) otherwise panic("functionShowsAnEffect: opIdx {opIdx} not in module.ops"), func: func, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, dispatch: dispatch) 'effectful'
 				return true
 			end 'effectful'
 		end 'eachOp'
 	end 'eachBlock'
 	return false
 end 'functionShowsAnEffect'
+
+// ⛔ **THIS BODY'S OPS ARE NOT WHAT THE SOURCE SAYS**, so every whole-program summary over them must
+// decline rather than conclude. Two shapes, one question: NO blocks at all is a declaration this module
+// cannot read (a restored intrinsic, an extern), and `bodyWasSkippedAsUnreached` is one empty block the
+// parser left behind after walking past a stdlib body no path from `main` demanded. The second reads as an
+// ordinary function that happens to do nothing, which is why it has to be asked for by name.
+function bodyIsUnreadable(func IrFunction) returns bool
+	return func.blockRefs.count() == 0 or func.bodyWasSkippedAsUnreached
+end 'bodyIsUnreadable'
 
 // Does this function promise a value at all? A `void` return is the language's way of saying the call is
 // worth making for something other than what it hands back.
@@ -3948,15 +4193,17 @@ end 'functionReturnsNothing'
 // the closure will carry the callee's answer back along. The non-call bands range to `break`, so a newly
 // appended op fails to compile here rather than silently reading as effect-free — the band-append invariant,
 // and here it is load-bearing in the refusing direction (see `buildEffectFreeSummary`'s safety argument).
-function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets) returns bool
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
 		literal to branch gives false
-		// ⭐ **MODULE STORAGE, READ *OR* WRITTEN.** `globalAddr` is the one door to a global (`emitGlobalAddr`),
-		// so this covers both directions — and both are effects for this rule's purpose: a write is the
-		// spec's "modifies global state", and a READ of a `var` global makes the result depend on when the
-		// call happened, which is exactly what "the result is all this call is for" denies.
-		globalAddr gives true
+		// ⭐⭐ **MODULE STORAGE READ IS NOT AN EFFECT; THE WRITE IS, AND IT IS COUNTED ON THE FUNCTION.**
+		// `globalAddr` is the one door to a global (`emitGlobalAddr`) and opens a read and a write alike, so
+		// the OP cannot tell them apart — `storeIndirect`'s arm below lacks the same provenance for the same
+		// reason. The write is recorded where it is known, at `Parser.emitCheckedGlobalStore`, and read off
+		// `IrFunction.writesModuleStorage` by the seed above. The reference draws the line in exactly this
+		// place: `PurityAnalysisPass` names `MaxonGlobalStoreOp` and nothing that loads.
+		globalAddr gives false
 		// ⛔ **A STORE THROUGH A POINTER IS NOT DECIDED HERE, AND THIS ARM ONCE CLAIMED IT WAS.** It read "a
 		// store into a heap box the function itself built is not observable outside it", deferring the rest to
 		// the `globalAddr` arm — and neither half held: `self.n = 5` and `p.n = 5` both lower to a
@@ -3970,10 +4217,14 @@ function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerInde
 		// the filling of a fresh box. A `storeIndirect` reaching here has already been counted if it was one.
 		loadIndirect to stringLiteral gives false
 		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
-		// Failing is an effect the RETURN type cannot express, so a function that can throw has a reason to be
-		// called besides its value (`Parser`'s `_ = try …` note makes the same point from the other side).
-		throwError to propagateError gives true
-		panicAbort gives true
+		// ⛔ **FAILING IS NOT AN EFFECT, AND ABORTING IS NOT ONE EITHER — the reference names neither, and the
+		// language's own rule is that a THROWING pure function's discarded result is still E3064**
+		// (`specs-shv2/discarded-results.md`'s `try-pure-let-discard`; MEASURED against the bootstrap on that
+		// exact program, which answers E3064). A throw hands the caller a value through the other channel and
+		// a panic ends the process; neither leaves state behind for a later call to observe, which is the only
+		// thing "the result is all this call is for" denies.
+		throwError to propagateError gives false
+		panicAbort gives false
 		// Taking a function's ADDRESS calls nothing.
 		functionRef gives false
 		// The target is chosen at run time or out of a witness table, so there is no callee to close over.
@@ -3982,8 +4233,10 @@ function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerInde
 		// call merely computed.
 		asyncCall to tryAwait gives true
 		sizeofType to switch gives false
-		witnessDispatch to witnessTryDispatch gives true
-		panicAbortValue gives true
+		// ⭐⭐ **A CONSTRAINED REQUIREMENT'S CALL IS CLOSED OVER, NOT REFUSED — see `WitnessDispatchTargets`.**
+		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) gives witnessDispatchShowsAnEffect(dispatch, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) gives witnessDispatchShowsAnEffect(dispatch, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		panicAbortValue gives false
 		errorFlagEncode gives false
 		// Starting a service and delivering a message are both effects no return type expresses — a send has
 		// no result at all, so its whole reason for existing is the effect.
@@ -3991,18 +4244,84 @@ function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerInde
 	end 'op'
 end 'opShowsAnEffect'
 
-// One call, judged by its callee. A `__mm_*` heap entry point says nothing (see `buildEffectFreeSummary`);
-// any other callee this module does not declare is an effect; a declared one contributes an EDGE and lets
-// the closure decide.
+// One call, judged by its callee. A runtime entry point on the effect-free roster says nothing; any other
+// callee this module does not declare is an effect; a declared one contributes an EDGE and lets the closure
+// decide.
 function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
-	if isRuntimeCallee(callee) 'heapBookkeeping'
+	if effectFreeRuntimeCallee(callee) 'aRuntimeEntryThatObservesNothing'
 		return false
-	end 'heapBookkeeping'
+	end 'aRuntimeEntryThatObservesNothing'
 
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return true
 	edges.record(calleeIndex, callerIndex: callerIndex)
 	return false
 end 'calleeShowsAnEffect'
+
+// ⭐⭐ **WHICH RUNTIME ENTRY POINTS OBSERVE NOTHING — the READ/WRITE split
+// `maxon-sharp/.../PurityAnalysisPass.ImpureManagedMemBuiltins` draws (*"read-only builtins (get, byte_at,
+// slice, create) are excluded"*), stated here as its INVERSE.** The reference can afford to roster the
+// IMPURE entries and let the rest through, because its own `IMaxonRuntimeCallOp ⇒ impure` rule catches
+// everything else that reaches a runtime symbol. shv2 has no "everything else": its parser lowers each
+// stdlib member to a runtime symbol, so by the time this walk runs `s.count()` IS `__managed_count`, and
+// "any runtime call is an effect" makes every stdlib member effectful and the diagnostic vacuous. MEASURED
+// both ways on `String.byteLength`, whose whole body is one `__managed_count`: the bootstrap answers E3064,
+// shv2 compiled clean.
+//
+// ⛔⛔ **THE ROSTER IS THE WHOLE POSITIVE SIDE — A RUNTIME ENTRY NOT NAMED HERE IS AN EFFECT.** Every write,
+// grow, resize, push, remove, clear, detach, vacate, fill, cursor STEP, mailbox, service, file, directory,
+// socket, console, subprocess, scheduler, clock, terminal and debug-stream entry falls through to
+// `calleeShowsAnEffect`'s unknown-callee arm. That is the direction `buildEffectFreeSummary`'s safety
+// argument requires: an over-generous classification REFUSES A LEGAL PROGRAM, an over-cautious one only
+// misses a diagnostic.
+//
+// ⚠ **THE PREFIX TEST IS A GATE, NOT A ROSTER ENTRY.** Every name below — the three families' constants and
+// the four prefix predicates alike — wears the reserved prefix, so a callee without it cannot be on the
+// roster and the sixty comparisons cannot answer anything. This runs at every call op of the program, ahead
+// of the lookup that resolves the DECLARED callee almost all of them are, and a declared name is the one
+// shape that reaches here wearing no prefix.
+function effectFreeRuntimeCallee(callee ByteArray) returns bool
+	if reservedCalleeReasonOf(callee) != ReservedCalleeReason.compilerInternalPrefix 'noRosterEntryWearsThisShape'
+		return false
+	end 'noRosterEntryWearsThisShape'
+
+	return ownershipBookkeepingCallee(callee) or containerReadCallee(callee) or pureComputationCallee(callee)
+end 'effectFreeRuntimeCallee'
+
+// ⭐ **THE OWNERSHIP BOOKKEEPING THE SOURCE NEVER WROTE.** Allocation, retain, release, the copy-on-write
+// clone and the move's soleness walk are the compiler's own emissions — unobservable to the program, and
+// counting them would leave no function that builds or holds a value effect-free, `makePair` included.
+// `isRuntimeCallee` (the `__mm_` heap band) already draws exactly this line for exactly this reason; the
+// managed, String, List and type-parameter families are the same fact one prefix over.
+function ownershipBookkeepingCallee(callee ByteArray) returns bool
+	return isRuntimeCallee(callee) or callee.equals(StrRetainName) or callee.equals(StrDecrefName) or callee.equals(StrCloneName) or callee.equals(StrCopyName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ListCloneName) or callee.equals(ListCloneManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName) or callee.equals(RetainTypeParamName) or callee.equals(DropTypeParamName) or callee.equals(RetainExistentialName) or callee.equals(DropExistentialName)
+end 'ownershipBookkeepingCallee'
+
+// ⭐ **A READ OF A CONTAINER THE CALLER ALREADY OWNS**, plus the two CREATE entries the reference names in
+// the same breath as its read-only set. Nothing here changes a byte anything else can see: a `slice` and a
+// `clone` answer with a fresh record over bytes the source already had.
+//
+// ⚠ **THE CURSOR FAMILY SPLITS, AND ONLY THE READING HALF IS HERE.** `create`/`current`/`index`/`peek`
+// answer from the cursor; `advance`/`retreat`/`seek` MOVE it, which is a write to a record a caller may hold
+// across the call — the same cut the reference draws across `__managed_mem_*`.
+function containerReadCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedCreateName) or callee.equals(ManagedMemCreateName) or callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedFirstName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedEqName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName) or callee.equals(ManagedCursorCreateName) or callee.equals(ManagedCursorCurrentName) or callee.equals(ManagedCursorIndexName) or callee.equals(ManagedCursorPeekName) or callee.equals(ListCreateName) or callee.equals(ListCountName) or callee.equals(ListIsEmptyName) or callee.equals(ListNodeValueName) or callee.equals(ListHeadCheckedName) or callee.equals(ListTailCheckedName) or callee.equals(ListNodeNextCheckedName) or callee.equals(ListNodePrevCheckedName) or callee.equals(StrEqName) or callee.equals(StrBytesViewName) or callee.equals(StrToBytesName) or callee.equals(StrFromBytesName) or callee.equals(StrOfBufferName)
+end 'containerReadCallee'
+
+// ⭐ **A VALUE IN, A VALUE OUT.** A Unicode table lookup, an enum's name/raw-value lookup, a `Character`
+// primitive, a number's decimal rendering: each answers from its arguments and a `.rdata` table.
+function pureComputationCallee(callee ByteArray) returns bool
+	return isUcdRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee) or checkedDivisionExpansion(callee) or callee.equals(CharAtName) or callee.equals(CharAsciiValueName) or callee.equals(CharCmpName) or callee.equals(CharFromCodepointName) or callee.equals(IntToStringName) or callee.equals(UIntToStringName) or callee.equals(BoolToStringName)
+end 'pureComputationCallee'
+
+// A checked divide or modulo is arithmetic behind a guard: two of the three kinds raise on a zero divisor and
+// the third answers `0`, and none of them changes anything the program can observe. Asked through
+// `divisionKindOf` rather than by name so this cannot name a fourth kind's symbol the family never minted.
+function checkedDivisionExpansion(callee ByteArray) returns bool
+	return match divisionKindOf(callee) 'kind'
+		quotient to guardedRemainder gives true
+		notCheckedDivision gives false
+	end 'kind'
+end 'checkedDivisionExpansion'
 
 // Where the door was, as the diagnostic says it — ONE arm per `FunctionTypeDoor`, and a new door cannot be
 // declared without being given its sentence here. The shapes the arms fall into, rather than a list of them:

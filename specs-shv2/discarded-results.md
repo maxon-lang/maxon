@@ -81,8 +81,7 @@ The variable name `_` is a special discard identifier. It does not create a bind
 
 ## Tests
 
-<!-- disabled-test: pure-function-discarded -->
-<!-- MEASURED 2026-08-13: compiles clean. NOT a missing mechanism — the effect classification exists (`SemanticCheck.buildEffectFreeSummary`, landed with the tuple-assign port) and reads a body of exactly this shape as effect-free, which is what `tuple-assign/tuple-assign-discard-all` pins. What is missing is the BARE-CALL DOOR: `parseStatement`'s `callStmt` arm files no `PendingDiscardedResult`, so nothing asks. Wiring it makes every bare call statement in the suite a candidate — a blast-radius decision, not a gap. -->
+<!-- test: pure-function-discarded -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -100,8 +99,7 @@ end 'main'
 error E3064: specs/fragments/discarded-results/pure-function-discarded.test:10:2: result of pure function 'double' must be used
 ```
 
-<!-- disabled-test: pure-function-let-discard -->
-<!-- MEASURED 2026-08-13: compiles clean. Same standing as `pure-function-discarded` one door over — the classification is there; the `_ =` DOOR (`parseAssignment`'s `DiscardBindingName` arm) files no site. -->
+<!-- test: pure-function-let-discard -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -117,6 +115,20 @@ end 'main'
 ```
 ```maxoncstderr
 error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10:2: result of pure function 'double' must be used
+```
+
+<!-- test: pure-method-underscore-discard -->
+A pure STDLIB method is under the same rule as a pure declaration: `_ =` does not license a discard of a
+result nobody reads.
+```maxon
+function main() returns ExitCode
+	let s = "hello"
+	_ = s.count()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/pure-method-underscore-discard.test:4:2: result of pure function 'String.count' must be used
 ```
 
 <!-- test: pure-function-used -->
@@ -138,7 +150,7 @@ end 'main'
 ```
 
 <!-- disabled-test: impure-function-discarded -->
-<!-- MEASURED 2026-08-13: compiles clean. Needs E3065, which shv2 emits NOWHERE and which `docs/error-codes.txt` gives no `shv2` line. It is also a different question from the one this tree can answer: the summary classifies `provably effect-free` vs `not proven`, and E3065 needs the third verdict `has an effect, so the discard must be explicit`. Both that split and the bare-call door above. -->
+<!-- MEASURED 2026-08-13: compiles clean. Needs E3065, which shv2 emits NOWHERE and which `docs/error-codes.txt` gives no `shv2` line. It is also a different question from the one this tree can answer: the summary classifies `provably effect-free` vs `not proven`, and E3065 needs the third verdict `has an effect, so the discard must be explicit`. That split is the whole of what is missing -- the bare-call door itself is wired and the pure cases above run through it. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -369,8 +381,7 @@ end 'main'
 error E3065: specs/fragments/discarded-results/transitive-impure.test:15:2: result of 'computeAndPrint' is not used (use '_ = expr' to discard)
 ```
 
-<!-- disabled-test: try-pure-let-discard -->
-<!-- MEASURED 2026-08-13: compiles clean, and it would NOT fire even with the `_ =` door wired — shv2's summary counts a `throws` clause as an effect (`opShowsAnEffect`: failing is an effect the return type cannot express), so `parseNum` is not effect-free here where the canonical spec calls it pure. That disagreement is the blocker, ahead of the door. -->
+<!-- test: try-pure-let-discard -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -480,4 +491,268 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+### Container reads the parser lowers straight to a runtime entry
+
+`Array.first`/`get`/`count` are not corpus bodies in shv2 — the parser lowers each straight to a runtime
+symbol — so the discarded-result site names `__managed_first` where the author wrote `items.first()`. The
+rule is the same one door over and the SUBJECT is the member, never the symbol.
+
+<!-- test: pure-array-read-underscore-discard -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var arr = TallyArray.create()
+	arr.push(1)
+	_ = try arr.first() otherwise 0
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/pure-array-read-underscore-discard.test:8:2: result of pure function 'Array.first' must be used
+```
+
+A read that MOVES the element out is not one of them: `pop` vacates the slot, so the call changed the
+container and `_ =` is the explicit discard the language asks for.
+
+<!-- test: move-out-read-underscore-discard -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var arr = TallyArray.create()
+	arr.push(1)
+	_ = try arr.pop() otherwise 0
+	return arr.count()
+end 'main'
+```
+```exitcode
+0
+```
+
+### A generic container's read is pure through its constraint
+
+`Map.get`, `Map.contains` and `Set.contains` each call `key.hash()` and `existing == key` on a constrained
+type parameter. Those bind to a REQUIREMENT rather than to a callee, and the effect summary judges them by
+the members that can fill the slot — so a probe that only reads the table is pure, and `_ =` does not
+license dropping its answer.
+
+<!-- test: map-get-underscore-discard -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyMap = Map with (String, Tally)
+
+function main() returns ExitCode
+	var m = TallyMap.create()
+	m.upsert("a", value: 1)
+	_ = try m.get("a") otherwise 0
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/map-get-underscore-discard.test:8:2: result of pure function 'Map.get' must be used
+```
+
+<!-- test: set-contains-underscore-discard -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallySet = Set with Tally
+
+function main() returns ExitCode
+	var s = TallySet.create()
+	s.insert(1)
+	_ = s.contains(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/set-contains-underscore-discard.test:8:2: result of pure function 'Set.contains' must be used
+```
+
+⚠ The reference names this member `Set.contains$element` — its own overload key, in a message. shv2 reports
+the member's registration name, which for an un-overloaded member is the bare `Set.contains`. Same member,
+same code, same position; only the subject is spelled without the key.
+
+The control is the read that CHANGES the table: `remove` tombstones a slot, so the call has a reason to run
+and its `bool` answer may be discarded.
+
+<!-- test: map-remove-underscore-discard -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyMap = Map with (String, Tally)
+
+function main() returns ExitCode
+	var m = TallyMap.create()
+	m.upsert("a", value: 1)
+	_ = m.remove("a")
+	return m.count()
+end 'main'
+```
+```exitcode
+0
+```
+
+### A bare method-call statement is the same door
+
+A method written on a line of its own takes none of what the call produced, exactly as a bare `f()` does —
+so a pure callee reached that way is refused there too. The diagnostic anchors on the METHOD NAME rather
+than on the receiver, which is where the reference puts it (measured at `arr.count()`, `b.ops.count()` and
+`utils.twice(4)` alike).
+
+<!-- test: method-call-statement-discarded -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var arr = TallyArray.create()
+	arr.push(1)
+	arr.count()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/method-call-statement-discarded.test:8:6: result of pure function 'Array.count' must be used
+```
+
+The chainable rule holds at this door too: a builder step written for its receiver is legal on a line of
+its own, however pure its body is.
+
+<!-- test: chainable-method-statement-ok -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var arr = TallyArray.create()
+	arr.push(7)
+	arr.clone()
+	return arr.count() - 1
+end 'main'
+```
+```exitcode
+0
+```
+
+⭐ **AND AN ARGUMENT THAT FORKS IS NOT THE STATEMENT'S OWN PRODUCER.** `push` is void, so the statement
+discards nothing — but the `try` inside its argument leaves the call on a merge block, and the probe that
+names a discarded producer must not reach past `push` to it. Every `x.push(try y.get(i) otherwise …)` in
+`stdlib/` and `maxon-shv2/` is this shape.
+
+<!-- test: void-method-statement-with-forking-argument -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var src = TallyArray.create()
+	src.push(3)
+	var dst = TallyArray.create()
+	dst.push(try src.get(0) otherwise panic("src holds one element"))
+	return dst.count() - 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A chainable method's result may be dropped
+
+`Array.clone` takes the receiver and returns the receiver's own type, so it is a builder step: its result is
+droppable however pure the body is. Every callee `clone` reaches is on the effect-free roster, so the
+summary calls it pure — and the chainable rule is what keeps this legal program legal.
+
+<!-- test: chainable-clone-underscore-discard -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var arr = TallyArray.create()
+	arr.push(7)
+	_ = arr.clone()
+	return arr.count() - 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A conformer reached through an overload set is still a candidate
+
+An interface requirement is implemented by whichever member matches it, and that member need not be the
+FIRST declaration of its name: a second `digest` registers as `Loud.digest#`, a name no requirement is
+spelled with. The candidate scan has to undo BOTH joins, or the conformer drops out of the set and a
+dispatch that can land on its module-global write reads pure.
+
+The control is the identical program with the extra overload deleted -- it compiles either way, so the
+refusal this case forbids would turn on nothing but an unrelated declaration.
+
+<!-- test: overloaded-conformer-is-a-candidate -->
+```maxon
+typealias Code = int(0 to u32.max)
+
+var noise = 0 as Code
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Quiet implements Digest
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Quiet'
+
+type Loud implements Digest
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function digest(salt Code) returns Code
+		return self.x + salt
+	end 'digest'
+
+	export function digest() returns Code
+		noise = noise + 1
+		return self.x
+	end 'digest'
+end 'Loud'
+
+type Box uses T where T is Digest
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function itemDigest() returns Code
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias LoudBox = Box with Loud
+typealias QuietBox = Box with Quiet
+
+function main() returns ExitCode
+	let loud = LoudBox.create(Loud.create(3))
+	_ = loud.itemDigest()
+	let quiet = QuietBox.create(Quiet.create(3))
+	return quiet.itemDigest() + noise - 4
+end 'main'
+```
+```exitcode
+0
 ```

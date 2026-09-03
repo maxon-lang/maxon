@@ -270,8 +270,8 @@ end 'stash'
 
 function main() returns ExitCode
 	stash()
-	_ = churn(1000)
-	return kept.x
+	let noise = churn(1000)
+	return kept.x if noise > 0 else 1
 end 'main'
 ```
 ```exitcode
@@ -323,9 +323,9 @@ end 'fill'
 function main() returns ExitCode
 	var arr = ItemArray.create()
 	fill(arr)
-	_ = churn(1000)
+	let noise = churn(1000)
 	let got = try arr.get(0) otherwise Item.create(0)
-	return got.value
+	return got.value if noise > 0 else 1
 end 'main'
 ```
 ```exitcode

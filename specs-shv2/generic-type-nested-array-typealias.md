@@ -496,6 +496,11 @@ element 0 and then reports the count, which is still 1 (the borrow did not remov
 exits leak-free. A borrow that were mistakenly tracked owned would free the element AND leave the array's walk
 to free it again — a double-free the exit-0 run rules out.
 
+The read is a bare `try` STATEMENT rather than `_ = try …`. A container read is a PURE call, so `_ =` does not
+license dropping its result (`discarded-results.md`, E3064) — a statement `try` is the spelling that reads an
+element for its side effects on nothing and keeps none of it, and it is what the reference accepts. The
+property under test is unchanged: element 0 is still read and its borrow still dropped by nobody.
+
 <!-- test: get-borrows-opaque-element -->
 ```maxon
 typealias ExitCode = int(0 to 125)
@@ -515,7 +520,7 @@ type Container uses Element
 	end 'push'
 
 	export function peekCount() returns Count
-		_ = try self.items.get(0) otherwise return 0
+		try self.items.get(0) otherwise return 0
 		return self.items.count()
 	end 'peekCount'
 end 'Container'
@@ -559,9 +564,15 @@ type Container uses Element
 		self.items.push(item)
 	end 'push'
 
-	export function peekEnds()
-		_ = try self.items.first() otherwise return
-		_ = try self.items.last() otherwise return
+	// Both ends are BOUND and read: an end borrow is a pure read, so discarding one is E3064
+	// (`discarded-results.md`), and binding it exercises the same take-and-release this case exists for.
+	export function peekEnds() returns Element throws ArrayError
+		let front = try self.items.first()
+		let back = try self.items.last()
+		if self.items.count() == 1 'oneElement'
+			return front
+		end 'oneElement'
+		return back
 	end 'peekEnds'
 end 'Container'
 
@@ -570,7 +581,74 @@ typealias StringContainer = Container with String
 function main() returns ExitCode
 	var sc = StringContainer.create()
 	sc.push("only element long enough to force a heap allocation")
-	sc.peekEnds()
+	let seen = try sc.peekEnds() otherwise return 1
+	return 0 if seen.byteLength() > 0 else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+### Merge a borrowed and an owned opaque element through a ternary
+
+The two ends disagree about OWNERSHIP: `first()` is an arm-lowered container read that yields a BORROW,
+while `last()` is a corpus body whose return discharges the hand-off and gives the caller a `+1`. A ternary
+joins them into ONE result phi, which has ONE drop discipline — so the borrowed edge must take a reference
+of its own, through the enclosing instance's descriptor (`__retain_type_param`, whose `retainFunc@64` is
+`__str_clone` here and 0 for a trivial instantiation). It is the same door a `return` of a borrowed `T`
+uses, asked through the same predicate: written as an `if`/`return` pair the case above compiles, and only
+the merge edge lacked an answer.
+
+Both arms are taken and each is checked against the element it must hand back — the two-element container
+returns its FRONT (the promoted borrow) and the three-element one its BACK (the already-owned edge) — and
+the program exits leak-free, so neither String is freed twice and none is stranded.
+
+<!-- test: first-last-borrow-opaque-element-ternary -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function peekEnds() returns Element throws ArrayError
+		let front = try self.items.first()
+		let back = try self.items.last()
+		return front if self.items.count() == 2 else back
+	end 'peekEnds'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var pair = StringContainer.create()
+	pair.push("front element, long enough to force a heap allocation")
+	pair.push("back element, also long enough to force a heap allocation")
+	let fromBorrowedArm = try pair.peekEnds() otherwise return 1
+
+	var trio = StringContainer.create()
+	trio.push("front element, long enough to force a heap allocation")
+	trio.push("middle element, long enough to force a heap allocation")
+	trio.push("back element, also long enough to force a heap allocation")
+	let fromOwnedArm = try trio.peekEnds() otherwise return 2
+
+	if not fromBorrowedArm.equals("front element, long enough to force a heap allocation") 'wrongFront'
+		return 3
+	end 'wrongFront'
+
+	if not fromOwnedArm.equals("back element, also long enough to force a heap allocation") 'wrongBack'
+		return 4
+	end 'wrongBack'
+
 	return 0
 end 'main'
 ```
@@ -747,7 +825,7 @@ type Container uses Element
 	end 'drainOne'
 
 	export function peek()
-		_ = try self.items.get(0) otherwise return
+		try self.items.get(0) otherwise return
 	end 'peek'
 end 'Container'
 
@@ -1916,7 +1994,10 @@ type Sink uses S
 		return Self{ n: 0 }
 	end 'create'
 
+	// `Container.add` DISCARDS this result — the shape under test — so the method must have an effect, or
+	// the discard is E3064 (`discarded-results.md`).
 	export function push(x S) returns S
+		self.n = self.n + 1
 		return x
 	end 'push'
 end 'Sink'

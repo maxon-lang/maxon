@@ -938,12 +938,23 @@ E3064 SemanticDiscardedPureResult
 	doc a pure-function call's result was discarded. Pure callees must
 	doc have their result used -- neither bare `foo()` nor `_ = foo()` is
 	doc permitted. Fires from `checkDiscardedResults`.
-	doc shv2 raises it at TWO doors. A tuple assignment whose every target is `_`
-	doc (`(_, _) = makePair(10, b: 32)`, `specs/tuple-assign.md`) uses none of the result,
-	doc and the whole-program effect summary judges the callee. A discarded MATH INTRINSIC
-	doc (`round(10)` as a statement) needs no summary: the roster is machine instructions, so
-	doc the statement is provably dead. Its bare-call and `_ =` doors over DECLARED callees
-	doc stay shelved in `specs-shv2/discarded-results.md`.
+	doc shv2 raises it from FOUR statement doors -- a bare `foo()` line, `_ = foo()`,
+	doc a tuple assignment whose every target is `_` (`(_, _) = makePair(10, b: 32)`,
+	doc `specs/tuple-assign.md`), and a discarded MATH INTRINSIC (`round(10)` as a
+	doc statement) -- which differ only in who answers the purity question. An intrinsic
+	doc needs no summary: the roster is machine instructions, so the statement is provably
+	doc dead. A DECLARED callee is judged by the whole-program effect summary, unless it is
+	doc CHAINABLE (first parameter the receiver, return type the receiver's own), which the
+	doc language lets a caller drop freely. A container read the parser lowered straight to
+	doc a runtime entry is judged by that entry's read-only roster and reported under the
+	doc member the author wrote (`Array.first`, never `__managed_first`).
+	doc The bare-call door covers every CALL-STATEMENT spelling, not only `foo()`: a method
+	doc (`arr.count()`), a field chain (`b.ops.count()`), a static member and a
+	doc namespace-qualified free call all take none of what they produced. Each is anchored
+	doc on the CALLED NAME -- the last name of the chain the `(` follows.
+	doc The summary CLOSES OVER a witness dispatch rather than reading it as an effect: a
+	doc constrained requirement (`key.hash()` inside `Map.get`) has candidates, and they are
+	doc every declared member wearing the requirement's name whose body this program reached.
 
 E3065 SemanticDiscardedImpureResult
 	csharp SemanticDiscardedImpureResult

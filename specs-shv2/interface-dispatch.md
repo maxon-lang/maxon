@@ -1845,7 +1845,14 @@ read-modify-write of READ-ONLY memory. **MEASURED before the retain word existed
 `retainFunc@16` is what splits it — `__str_clone` for a byte-record conformer (an independently-droppable
 fresh heap record, which is what launders the literal), `__mm_retain` for an aggregate, 0 for a scalar.
 ```maxon
+typealias Tally = int(0 to 100)
+
+var widenings = 0 as Tally
+
+// The discard below is the whole shape, so `widen` must have an effect — discarding a PURE result is
+// E3064 (`discarded-results.md`) and the program would never reach the retain this case is about.
 function widen(h Hashable) returns Hashable
+	widenings = widenings + 1
 	return h
 end 'widen'
 
@@ -1853,7 +1860,7 @@ function main() returns ExitCode
 	print("A")
 	_ = widen("abc")
 	print("B")
-	return 0
+	return widenings - 1
 end 'main'
 ```
 ```exitcode
@@ -3162,13 +3169,17 @@ type Thing implements Printer
 	end 'show'
 end 'Thing'
 
+var boxes = 0 as Tag
+
+// The discard is the shape under test, so `box` must have an effect — see `discarded-results.md`.
 function box() returns Printer
+	boxes = boxes + 1
 	return Thing.create(7)
 end 'box'
 
 function main() returns ExitCode
 	_ = box()
-	return 3
+	return 2 + boxes
 end 'main'
 ```
 ```exitcode

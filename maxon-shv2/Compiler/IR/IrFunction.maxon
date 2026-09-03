@@ -371,11 +371,6 @@ export type IrFunction
 	// overflow the register file.
 	export var outgoingArgSize as StackSize
 
-	// Function purity (no side effects / global or param mutation, transitively
-	// pure call graph). Computed by SemanticCheck; read by the discarded-result
-	// lint. Defaults true; the analysis lowers it on impure constructs.
-	export var isPure as bool
-
 	// ⭐ **THE PER-FUNCTION CLOSURE COUNTER (P1.5-A2a).** The k-th non-capturing closure literal in this
 	// function's body lifts to a top-level function named `<name>$closure_<k>`; `parseClosureExpression`
 	// reads this value for `k` and post-increments it. Source-deterministic — the same source mints the
@@ -559,6 +554,30 @@ export type IrFunction
 	// Point.create(1)` then `p.x = 5`) sets it too, costing a missed diagnostic and never a refusal.
 	export var assignsIntoAnExistingAggregate as bool
 
+	// ⭐ **IT ASSIGNS MODULE-LEVEL STORAGE — the effect summary's "modifies global state" seed (E3064).**
+	// Set at `Parser.emitCheckedGlobalStore`, the one door every `g = …` on a module `let`/`var` passes
+	// through, and read by `SemanticCheck.functionShowsAnEffect`.
+	//
+	// ⚠ **IT IS A FIELD BECAUSE THE OP CANNOT ANSWER IT.** A global's read and its write both open with the
+	// same `globalAddr` (`Parser.emitGlobalAddr` is the one door to either), so an op walk that counts
+	// `globalAddr` counts every READ as a write — which made a function that merely consults a module
+	// constant effectful, and no stdlib member effect-free. The distinction exists only at the emitter, so
+	// that is where it is recorded; `assignsIntoAnExistingAggregate` above carries the identical argument one
+	// storage kind over.
+	export var writesModuleStorage as bool
+
+	// ⛔⛔ **THE PARSER WALKED PAST THIS BODY WITHOUT BUILDING IT — so NOTHING may be concluded from its ops,
+	// and an analysis that reads them is reading an empty function that is not what the source says.**
+	// `Parser.skipUnreachedFunctionBody` leaves ONE block holding a bare `retVoid` and no ops at all, which is
+	// indistinguishable from a body that genuinely does nothing.
+	//
+	// ⛔ MEASURED: read as ops, `Map.remove` — which sets a slot state and decrements a count — classifies
+	// EFFECT-FREE whenever the walk has not demanded its body, which refuses `stdlib/Subprocess.maxon`'s own
+	// `_ = pending.remove(name)` with E3064. The verdict would then turn on nothing but whether some other
+	// call site happened to make the body reachable, which is exactly the kind of answer an analysis must not
+	// give.
+	export var bodyWasSkippedAsUnreached as bool
+
 	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE (PBR-2) — an ABI fact, and the ONE of the three
 	// masks on this record that is not a diagnostic's seed.**
 	//
@@ -662,7 +681,6 @@ export type IrFunction
 			varSlotCount: 0,
 			stackSize: 0,
 			outgoingArgSize: 0,
-			isPure: true,
 			closureSubCounter: 0,
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
@@ -670,6 +688,8 @@ export type IrFunction
 			writesThroughParamMask: 0,
 			immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
 			assignsIntoAnExistingAggregate: false,
+			writesModuleStorage: false,
+			bodyWasSkippedAsUnreached: false,
 			borrowFacts: sharedEmptyBorrowFacts,
 			paramGuards: sharedEmptyParamGuards
 		}
@@ -725,7 +745,6 @@ export type IrFunction
 			varSlotCount: 0,
 			stackSize: 0,
 			outgoingArgSize: 0,
-			isPure: true,
 			closureSubCounter: 0,
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
@@ -733,6 +752,8 @@ export type IrFunction
 			writesThroughParamMask: 0,
 			immutableGlobalAliasValues: GlobalAliasValueSet.create(),
 			assignsIntoAnExistingAggregate: false,
+			writesModuleStorage: false,
+			bodyWasSkippedAsUnreached: false,
 			borrowFacts: BorrowFacts.create(),
 			paramGuards: RangeCheckParamGuardArray.create()
 		}
@@ -775,7 +796,6 @@ export type IrFunction
 			varSlotCount: src.varSlotCount,
 			stackSize: src.stackSize,
 			outgoingArgSize: src.outgoingArgSize,
-			isPure: src.isPure,
 			closureSubCounter: src.closureSubCounter,
 			writtenParamMask: src.writtenParamMask,
 			reassignedParamMask: src.reassignedParamMask,
@@ -783,6 +803,8 @@ export type IrFunction
 			writesThroughParamMask: src.writesThroughParamMask,
 			immutableGlobalAliasValues: src.immutableGlobalAliasValues,
 			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
+			writesModuleStorage: src.writesModuleStorage,
+			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
 			borrowFacts: src.borrowFacts,
 			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
 			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by

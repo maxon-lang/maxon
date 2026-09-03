@@ -8,7 +8,10 @@ type Sink uses S
 		return Self{ n: 0 }
 	end 'create'
 
+	// `Container.add` DISCARDS this result — the shape under test — so the method must have an effect, or
+	// the discard is E3064 (`discarded-results.md`).
 	export function push(x S) returns S
+		self.n = self.n + 1
 		return x
 	end 'push'
 end 'Sink'
@@ -71,6 +74,22 @@ func @Sink.push {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rsi, 125
+    x64.jcc lessEqual, __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at feed-into-a-borrowing-user-push-releases-what-it-took.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.storeBaseDispReg.word64 [rcx + 0], rsi
     x64.movRegReg rcx, rax
     x64.callDirect __retain_type_param
     x64.epilogue 32

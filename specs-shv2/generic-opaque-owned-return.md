@@ -99,7 +99,9 @@ function main() returns ExitCode
 	let t = TextHolder.create("a held string long enough to force a heap allocation")
 	var i = 0
 	while i < 100 'spin'
-		t.remade()
+		if t.remade().byteLength() == 0 'empty'
+			return 1
+		end 'empty'
 		i = i + 1
 	end 'spin'
 	print("done\n")

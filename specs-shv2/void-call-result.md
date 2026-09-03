@@ -167,16 +167,23 @@ end 'main'
 <!-- test: value-call-result-may-still-be-discarded -->
 A value-returning call in statement position keeps its existing behaviour: the result is discarded,
 and that is not this error.
+
+⚠ `answer` writes a module counter, so it HAS an effect. That is deliberate and it is a different
+rule: a call whose result nobody uses is E3064 when the callee is pure (`discarded-results.md`), and
+this case is about the void check, so the callee must be one E3064 has nothing to say about.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
+var calls = 0 as Integer
+
 function answer() returns Integer
+	calls = calls + 1
 	return 42
 end 'answer'
 
 function main() returns ExitCode
 	answer()
-	return 42
+	return 41 + calls
 end 'main'
 ```
 ```exitcode

@@ -72,14 +72,14 @@ Both halves were SABOTAGE-MEASURED on this tree, and they do not catch the same 
 ⭐⭐ **THE FIVE LINES THAT EXITED 101.** A first `append` onto `""` leaves `capacity == length`, which is
 exactly the shape whose terminator slot the record cannot vouch for — so this receiver takes the second
 path on every run, deterministically, and is not relying on any allocator coincidence to do so. The
-receiver is still readable afterwards, which is what says the in-place grow moved the bytes rather than
-losing them.
+receiver is still readable afterwards, and the printed text comes back THROUGH the pointer — which is what
+says the in-place grow moved the bytes rather than losing them, and that the terminator landed where the
+receiver's bytes end.
 ```maxon
 function main() returns ExitCode
 	var s = ""
 	s.append("hello world")
-	_ = s.cstr()
-	print("{s} len={s.count()}\n")
+	print("{String.fromCString(s.cstr())} len={s.count()}\n")
 	return 0
 end 'main'
 ```
@@ -102,8 +102,7 @@ allocator's rounding, so it refuses the whole shape rather than the half that is
 function main() returns ExitCode
 	var s = ""
 	s.append("xxxxxxxx")
-	_ = s.cstr()
-	print("{s} len={s.count()}\n")
+	print("{String.fromCString(s.cstr())} len={s.count()}\n")
 	return 0
 end 'main'
 ```
@@ -124,20 +123,26 @@ which is what distinguishes a grow from a copy: the copy path paid on every call
 function main() returns ExitCode
 	let lit = "hello world"
 	let beforeLit = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
-	_ = lit.cstr()
+	var p = lit.cstr()
 	let afterLit = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
 
 	var s = ""
 	s.append("xxxxxxxx")
 	let beforeFirst = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
-	_ = s.cstr()
+	p = s.cstr()
 	let afterFirst = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
 
 	let beforeSecond = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
-	_ = s.cstr()
+	p = s.cstr()
 	let afterSecond = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
 
 	print("literal={afterLit - beforeLit} first={afterFirst - beforeFirst} second={afterSecond - beforeSecond}\n")
+	// The round trip is the only user-reachable consumer of a `cstring`, and it is kept OUT of every
+	// measured window because it allocates. It is what says the pointer is terminated where the
+	// receiver's bytes end rather than merely handed back.
+	if String.fromCString(p).byteLength() != 8 'roundTripIsNotTheReceiversBytes'
+		return 1
+	end 'roundTripIsNotTheReceiversBytes'
 	return 0
 end 'main'
 ```

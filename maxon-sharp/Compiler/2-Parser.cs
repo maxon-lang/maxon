@@ -10497,14 +10497,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (expr is ExprResult.VarRef rv)
       return [rv.VarName];
     if (expr is ExprResult.Direct) {
-      // For `foo()`: last op is a MaxonAssignOp for __call_tmp_X. For `try foo() otherwise bar`: a
-      // MaxonStructVarRefOp/MaxonEnumVarRefOp for __try_result_X (or a plain MaxonVarRefOp when the type
-      // is a generic TypeParameter monomorphization resolves later).
+      // For `foo()`: last op is a MaxonAssignOp for __call_tmp_X. For a `try`/`otherwise`, a `match`
+      // expression and a ternary: a MaxonStructVarRefOp/MaxonEnumVarRefOp for that construct's result
+      // temp, or a plain MaxonVarRefOp when the type is a generic TypeParameter monomorphization
+      // resolves later.
+      //
+      // ⛔⛔ THE VAR-REF ARM MUST NOT BE GATED ON A TEMP-NAME ROSTER. Every merging construct mints its
+      // own result temp under its own prefix, so a roster is one entry per construct and a construct
+      // that gains one inherits nothing — a name missing from it hands the caller a slot scope cleanup
+      // has already freed and NULLED, and the caller's incref hits it: `mm_incref called with NULL
+      // pointer`, exit 1, at run time with no diagnostic. MEASURED at `return front if c else back`
+      // inside `type Container uses Element`, which is generic-only exactly because the struct and enum
+      // arms are ungated and a concrete `String` element takes one of those. A var ref that IS the
+      // returned expression names the variable that transfers, whatever it is called.
       var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock.Operations[^1] : null;
       string? backedByVar = lastOp switch {
         MaxonStructVarRefOp sv => sv.VarName,
         MaxonEnumVarRefOp ev => ev.VarName,
-        MaxonVarRefOp vr when vr.VarName.StartsWith("__try_result_") => vr.VarName,
+        MaxonVarRefOp vr => vr.VarName,
         MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
         MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__lit_tmp_") => av.VarName,
         _ => null
