@@ -1566,7 +1566,17 @@ export union ParseError implements Error
 	//
 	// The TIER rides because it picks the code and the sentence, and the parser has it in hand from the
 	// sweep's own column — re-deriving it in the renderer would need the index the renderer has no handle to.
-	calleeNotVisible(callee String, tier Visibility, line LineNumber, column ColumnNumber)
+	//
+	// ⭐ **THE `kind` IS THE SENTENCE'S NOUN, AND IT IS WHY THIS IS ONE ARM RATHER THAN TWO.** A hidden
+	// STATIC MEMBER (`Parser.parseDottedPrimary`, `parseStatement`) is the same refusal at the same two tiers
+	// as a hidden CALLEE and differs only in the word it opens with — so it rides the same variant to the
+	// same producer, which is what keeps a static and a function from drifting on what `module` means.
+	symbolNotVisible(kind HiddenSymbolKind, symbol String, tier Visibility, line LineNumber, column ColumnNumber)
+	// ⭐ **A QUALIFIED READ NAMING A MEMBER THE TYPE DOES NOT DECLARE** — `Config.MIN_SIZE`, `Box.min`,
+	// `Self.nope`. Renders as **E2073**, at the MEMBER token. Raised by `Parser.throwStaticRosterRefusal`;
+	// `typeName` is the type whose roster was searched, which for a `Self.` spelling is the enclosing type
+	// rather than the keyword the author wrote.
+	unknownStaticMember(typeName String, member String, line LineNumber, column ColumnNumber)
 	// ⭐ **A PLACE ASSIGNED TO ITSELF, TEXTUALLY** — `x = x`, `p.x = p.x`, `self.n = self.n`. Renders as
 	// **E3067**, positioned at the statement's FIRST token. `place` is the chain as written, which the
 	// message prints on BOTH sides of the `=` (the reference's exact wording). Raised by
@@ -12082,6 +12092,26 @@ let BinaryHalfRadix = 1 as FormatHalfRadix
 // Exported because the diagnostic quotes it (`Queries.reportParseError`): a limit named at an author
 // must be the limit that fired.
 export let MaxFormatFieldWidth = u32.max as FormatFieldWidth
+
+// ⭐⭐ **WHAT A DECLARED TYPE'S STATIC ROSTER SAYS ABOUT `<Type>.<member>` ONCE EVERY ARM THAT COULD HAVE
+// CLAIMED THE FORM HAS DECLINED IT** — `Parser.staticRosterVerdictFor`, asked by the READ door
+// (`parseDottedPrimary`) and the STORE door (`parseStatement`) so the two cannot answer one program
+// differently.
+//
+// Three arms because the caller has to tell "not mine" from the two refusals, and the refusals differ in
+// code, in sentence and — for `hidden` — in the tier that picks between E3008 and E3088.
+//
+// Ordered least-known to most-known, and the two doors consolidate their arms along that order: the READ
+// door refuses both refusals, the STORE door only the last.
+union StaticRosterVerdict
+	// The base does not name a declared struct, or the member half is not a name. Some other arm's business,
+	// and the answer for every sized-type bound (`u64.max`) on this path.
+	notADeclaredTypeMember
+	// The type declares no static member of that name.
+	undeclaredMember
+	// The type declares the member and this file may not read it.
+	hidden(tier Visibility)
+end 'StaticRosterVerdict'
 
 export type Parser
 	var tokens as TokenArray
@@ -29099,7 +29129,13 @@ export type Parser
 			// reason: it assigns no BINDING, so a loop writing a static must mint no header phi for it — every
 			// read of the slot is a fresh `loadIndirect` (`emitGlobalLoad`), exactly as for a file-scope `var`.
 			try self.parseStaticMemberAssignment(func, block: block)
-		end 'staticMemberAssign' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
+		end 'staticMemberAssign' else if self.staticStoreRefusedAt(self.pos) 'refusedStaticStore'
+			// `Counter.hits = 9` where the roster refuses the member. Directly beneath the arm that takes the
+			// LEGAL store and above the field arm, which is the same separation that pair already draws: a
+			// base naming a TYPE is never a chain through a binding, so the field arm's refusal would name
+			// the wrong mistake. See `staticStoreRefusedAt`.
+			try self.refuseStaticMemberHiddenStore()
+		end 'refusedStaticStore' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
 			// `p.x = 5` — a store THROUGH a binding rather than a rebinding of one. Its own
 			// predicate, and `assignedBindingsIn` reads only `assignsAt`: see `assignsAt` for why
 			// widening that one instead would have minted the loop's phi for the FIELD's name.
@@ -54072,6 +54108,21 @@ export type Parser
 			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'hiddenTypeBase'
 
+		// ⭐⭐ **A DECLARED TYPE ANSWERS FROM ITS OWN STATIC ROSTER RATHER THAN FROM THE BOUND GRAMMAR.** Asked
+		// LAST among the type-named arms and immediately before the sized-bound last resort, and every step of
+		// that placement is load-bearing: after `staticMemberRead`, so a LEGAL read is already gone and a
+		// `visible` verdict here can only mean "no such member"; after `hiddenTypeBase`, so the sentence's
+		// premise — that the base is a type this file may name — is true when it is spoken.
+		//
+		// What the arm claims, and the residual it leaves, are both stated at `staticRosterVerdictFor`: a
+		// sized-type base keeps the bound grammar, and an alias base and an undeclared base still read as a
+		// malformed bound.
+		let rosterVerdict = self.staticRosterVerdictFor(baseTok, memberIndex: self.pos + TokensPerQualifierSegment)
+		match rosterVerdict 'roster'
+			notADeclaredTypeMember then break 'roster'
+			undeclaredMember to hidden then try self.throwStaticRosterRefusal(rosterVerdict, baseTok: baseTok, memberTok: self.tokenAt(self.pos + TokensPerQualifierSegment))
+		end 'roster'
+
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
 
@@ -54253,26 +54304,112 @@ export type Parser
 	// the other would be refused as a malformed sized-numeric bound or as a field chain through a binding
 	// that does not exist.
 	//
-	// ⚠⚠ **THE `containsStruct` GATE IN FRONT IS THE COST, and it is `containsEnum`'s gate for exactly its
-	// reason.** This runs on every dotted expression that reaches it — `v == u64.max` among them — and the
-	// probe below ALLOCATES the joined name plus the union box each lookup door returns. `containsStruct` is
-	// a set membership on bytes already in hand, allocating nothing, and a `false` from it is FINAL: a static
-	// member is declared in a `type` body, so its base is a declared struct by construction and `u16` never
-	// pays the join.
 	function namesStaticMemberAt(baseTok Token, memberIndex TokenIndex) returns bool
+		if not self.couldNameAStaticMember(baseTok, memberIndex: memberIndex) 'notACandidate'
+			return false
+		end 'notACandidate'
+
+		return self.namesTopLevelBinding(qualifiedMethodName(baseTok.value, methodName: self.tokenAt(memberIndex).value))
+	end 'namesStaticMemberAt'
+
+	// ⚠⚠ **CAN `<baseTok>.<member at memberIndex>` NAME A STATIC MEMBER AT ALL?** — the gate in front of
+	// every door that joins the qualified name, asked once by the recognizer above and once by the refusal
+	// below so the two cannot come to disagree about which spellings are candidates.
+	//
+	// **`containsStruct` IS THE COST, and it is `containsEnum`'s gate for exactly its reason.** This runs on
+	// every dotted form that reaches those doors — `v == u64.max` among them — and everything past it
+	// ALLOCATES the joined name plus the union box each lookup door returns. `containsStruct` is a set
+	// membership on bytes already in hand, allocating nothing.
+	//
+	// **A `false` IS FINAL, and deliberately so in both directions.** A static member is declared in a `type`
+	// body, so its base is a declared struct by construction and `u16` never pays the join — while a ranged
+	// ALIAS base keeps its bound reading (`specs-shv2/type-name-collision.md` pins `Status.big` against an
+	// alias) and an UNDECLARED base has no roster for the noun "type" to be true of. Both of those report as
+	// a malformed bound, which is a true statement about each; a base-kind-aware noun is what would sharpen
+	// them.
+	//
+	// D8 lets a declaration take a keyword as its name, so the member half is `tokenCanBeAName` rather than
+	// `identifier` — the same asymmetry `dottedChainLengthAt` draws between a chain's head and its trailing
+	// segments, and for the same reason.
+	function couldNameAStaticMember(baseTok Token, memberIndex TokenIndex) returns bool
 		if not self.signatures.containsStructFor(baseTok.value, readerFilePath: self.filePath) 'notADeclaredTypeBase'
 			return false
 		end 'notADeclaredTypeBase'
 
-		// D8 lets a declaration take a keyword as its name, so the member half is `tokenCanBeAName` rather
-		// than `identifier` — the same asymmetry `dottedChainLengthAt` draws between a chain's head and its
-		// trailing segments, and for the same reason.
-		if not tokenCanBeAName(self.tokenAt(memberIndex)) 'notAMemberName'
-			return false
-		end 'notAMemberName'
+		return tokenCanBeAName(self.tokenAt(memberIndex))
+	end 'couldNameAStaticMember'
 
-		return self.namesTopLevelBinding(qualifiedMethodName(baseTok.value, methodName: self.tokenAt(memberIndex).value))
-	end 'namesStaticMemberAt'
+	// ⭐⭐ **WHAT `<baseTok>.<member>` IS, ONCE `namesStaticMemberAt` HAS SAID IT IS NOT A READABLE STATIC.**
+	// The refusing half of that recognizer, and the ONE reader both refusal doors share.
+	//
+	// ⭐ **A HIDDEN MEMBER IS INVISIBLE TO `namesStaticMemberAt` BY CONSTRUCTION, WHICH IS THE WHOLE REASON
+	// THIS EXISTS.** Visibility is carried by the storage KEY (`SignatureIndex.topLevelStorageKey`), so a
+	// reader's probe MISSES a file-private declaration rather than meeting it, leaving the statement to the
+	// last-resort sized-bound arm and the author told `Expected 'min or max'` about a member that exists.
+	// `declVisibilityFrom` asks the declaring file's key instead, which is the only key that can answer.
+	//
+	// ⭐ **AND A `visible` VERDICT HERE MEANS NO DECLARATION AT ALL.** `declVisibilityFrom` answers `visible`
+	// both for a readable binding and for a name nothing declares; the first is unreachable at this point,
+	// the caller having already routed every readable static to `parseStaticMemberAccess`. So the remaining
+	// case is the roster's honest `undeclaredMember`.
+	function staticRosterVerdictFor(baseTok Token, memberIndex TokenIndex) returns StaticRosterVerdict
+		// ⛔ **THE TEN SIZED-TYPE SPELLINGS BELONG TO THE BOUND GRAMMAR, AND A DECLARATION WEARING ONE DOES
+		// NOT TAKE THEM AWAY.** `type u64` is legal, and without this a program declaring it loses `u64.max`
+		// — MEASURED, E2073 on source the runnable oracle compiles, which reads the bound through the very
+		// same fixed roster (`evalConstNamed` gates the constant walk on `isSizedTypeName` one door over).
+		//
+		// Deliberately NOT part of `couldNameAStaticMember`: a sized-named type that DOES declare the member
+		// is a readable static, and the recognizer must still claim it.
+		if isSizedTypeName(baseTok.value) 'aSizedBoundBase'
+			return StaticRosterVerdict.notADeclaredTypeMember
+		end 'aSizedBoundBase'
+
+		if not self.couldNameAStaticMember(baseTok, memberIndex: memberIndex) 'notACandidate'
+			return StaticRosterVerdict.notADeclaredTypeMember
+		end 'notACandidate'
+
+		// Joined ONCE for both rosters below, so the "does a function wear this name" probe and the "may this
+		// file read this binding" probe cannot come to ask about two different names.
+		let member = qualifiedMethodName(baseTok.value, methodName: self.tokenAt(memberIndex).value)
+
+		// ⛔ **A DECLARED METHOD IS A MEMBER THIS ROSTER MAY NOT CALL MISSING.** `declVisibilityFrom` reads the
+		// top-level BINDING index, which no function is filed in, so `Box.make` written WITHOUT its call parens
+		// — a form the language does not have — reaches the visibility probe, misses, and would be refused
+		// "type 'Box' has no static member named 'make'" about a method declared four lines up. Existence is
+		// `declaresCallee`; `SignatureIndex.conformerDeclaresOwnMethod` records what asking a near-miss
+		// predicate instead cost the last door to try it. Declining leaves the form to the last-resort bound
+		// arm, whose sentence is at least true of it.
+		if self.signatures.declaresCallee(member) 'aDeclaredMethod'
+			return StaticRosterVerdict.notADeclaredTypeMember
+		end 'aDeclaredMethod'
+
+		// A static's declaring file IS its type's — see `ProgramSignatures.declVisibilityFrom` for the case
+		// that makes that a rule rather than an observation.
+		let declFilePath = match self.signatures.structFor(baseTok.value, readerFilePath: self.filePath) 'layout'
+			declared(layout) gives layout.declFilePath
+			undeclared panic("staticRosterVerdictFor: containsStruct answered yes for '{String.from(baseTok.value)}' but structFor answered undeclared — the two read one registry under one key")
+		end 'layout'
+
+		return match self.signatures.declVisibilityFrom(member, declFilePath: declFilePath, readerFilePath: self.filePath) 'visibility'
+			visible gives StaticRosterVerdict.undeclaredMember
+			hidden(tier) gives StaticRosterVerdict.hidden(tier)
+		end 'visibility'
+	end 'staticRosterVerdictFor'
+
+	// The refusal `staticRosterVerdictFor` names, raised at the MEMBER token — the name that is missing or
+	// unreadable, and the token both reference compilers blame. Its own routine because the READ door and
+	// the STORE door owe the author identical sentences.
+	//
+	// The `notADeclaredTypeMember` arm panics rather than inventing a third: both callers ask the verdict
+	// first and route this only what it refused.
+	function throwStaticRosterRefusal(verdict StaticRosterVerdict, baseTok Token, memberTok Token) throws ParseError
+		let member = String.from(qualifiedMethodName(baseTok.value, methodName: memberTok.value))
+		match verdict 'verdict'
+			hidden(tier) then throw ParseError.symbolNotVisible(HiddenSymbolKind.staticMember, symbol: member, tier: tier, line: memberTok.line, column: memberTok.column)
+			undeclaredMember then throw ParseError.unknownStaticMember(String.from(baseTok.value), member: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
+			notADeclaredTypeMember then panic("throwStaticRosterRefusal: '{member}' is not a refusal — both callers ask `staticRosterVerdictFor` and route only what it refused")
+		end 'verdict'
+	end 'throwStaticRosterRefusal'
 
 	// Does `name` denote a top-level binding this file may read — a `let` it would INLINE, or a slot it
 	// would LOAD? Asked as ONE question because the two doors are disjoint by construction (one storage key
@@ -61427,7 +61564,7 @@ export type Parser
 	function requireGlobalInitCalleeIsVisible(callee ByteArray, anchor Token) throws ParseError
 		match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.filePath) 'calleeVisibility'
 			visible then return
-			hidden(tier) then throw ParseError.calleeNotVisible(String.from(callee), tier: tier, line: anchor.line, column: anchor.column)
+			hidden(tier) then throw ParseError.symbolNotVisible(HiddenSymbolKind.functionDeclaration, symbol: String.from(callee), tier: tier, line: anchor.line, column: anchor.column)
 		end 'calleeVisibility'
 	end 'requireGlobalInitCalleeIsVisible'
 
@@ -80047,29 +80184,91 @@ export type Parser
 
 	// ⭐ **DOES A ONE-HOP DOTTED FORM AT `index` ROOT AT A STATIC MEMBER — the half the two STATEMENT
 	// dispatchers share (W65)?** They differ only in the token that must FOLLOW the pair, and everything
-	// before that is one question: the `.`, the shadowing rule, the type-naming base and the qualified
+	// before that is one question: `typeBaseAdmittedAt`'s base rules, the type-naming base and the qualified
 	// resolution. Written once so the store door and the call door cannot come to disagree about which
 	// spellings are static members — a disagreement that would be silent, each falling through to a
 	// different arm's refusal of the same program.
-	//
-	// ⭐ **A VALUE IN SCOPE OUTRANKS THE TYPE READING, and that test is why this is not merely a name probe.**
-	// A local called `Counter` shadows `Counter.` exactly as a local `OFFSET` shadows a top-level constant of
-	// that name — the rule `baseNamesAValueInScope` carries — so `Counter.count = 1` with such a local in
-	// scope is a FIELD store on that local and must fall through to `fieldAssignsAt`. `Self` is excluded from
-	// the shadowing test by that same function, which is what makes `Self.count = 1` inside a static method
-	// reach here.
 	function staticMemberBaseAt(index TokenIndex) returns bool
-		if self.kindAt(index + 1) != TokenKind.dot 'notADottedForm'
+		if not self.typeBaseAdmittedAt(index) 'notATypeBase'
 			return false
-		end 'notADottedForm'
-
-		if self.baseNamesAValueInScope(self.tokenAt(index)) 'aValueBase'
-			return false
-		end 'aValueBase'
+		end 'notATypeBase'
 
 		let baseTok = try self.typeBaseTokenAt(index) otherwise return false
 		return self.namesStaticMemberAt(baseTok, memberIndex: index + TokensPerQualifierSegment)
 	end 'staticMemberBaseAt'
+
+	// ⭐⭐ **THE BASE RULES EVERY STATEMENT-POSITION `<Type>.<member>` READER SHARES** — a `.` must follow the
+	// base, and a base bound to a VALUE declines. Written once because `staticMemberBaseAt` and
+	// `staticRosterVerdictAt` route the SAME statement on it: a rule added to one copy alone would split the
+	// arm that takes a LEGAL static store from the arm that REFUSES a hidden one, and each would then refuse
+	// the same program at the other's door with no compile error anywhere.
+	//
+	// ⭐ **A VALUE IN SCOPE OUTRANKS THE TYPE READING, and that test is why this is not merely a shape test.**
+	// A local called `Counter` shadows `Counter.` exactly as a local `OFFSET` shadows a top-level constant of
+	// that name — the rule `baseNamesAValueInScope` carries — so `Counter.count = 1` with such a local in
+	// scope is a FIELD store on that local and must fall through to `fieldAssignsAt`. `Self` is excluded from
+	// the shadowing test by that same function, which is what makes `Self.count = 1` inside a static method
+	// reach the static-member doors at all.
+	function typeBaseAdmittedAt(index TokenIndex) returns bool
+		if self.kindAt(index + 1) != TokenKind.dot 'notADottedForm'
+			return false
+		end 'notADottedForm'
+
+		return not self.baseNamesAValueInScope(self.tokenAt(index))
+	end 'typeBaseAdmittedAt'
+
+	// `<Type>.<member>` at `index` as the static roster answers it — the STATEMENT door's face of
+	// `staticRosterVerdictFor`, over the base `staticMemberBaseAt` reads and with `Self` already resolved to
+	// the type it denotes.
+	function staticRosterVerdictAt(index TokenIndex) returns StaticRosterVerdict
+		if not self.typeBaseAdmittedAt(index) 'notATypeBase'
+			return StaticRosterVerdict.notADeclaredTypeMember
+		end 'notATypeBase'
+
+		let baseTok = try self.typeBaseTokenAt(index) otherwise return StaticRosterVerdict.notADeclaredTypeMember
+		return self.staticRosterVerdictFor(baseTok, memberIndex: index + TokensPerQualifierSegment)
+	end 'staticRosterVerdictAt'
+
+	// ⭐ **THE TOKEN SHAPE OF A STORE TO A STATIC MEMBER THIS FILE MAY NOT SEE** — `Counter.hits = 9` where
+	// `hits` is declared and hidden. The refusing twin of `staticMemberAssignsAt`, and its own predicate
+	// rather than a widening of that one, whose base half the CALL door shares (`staticMemberCallsAt`): what
+	// is refused here is the STORE.
+	//
+	// ⚠ **WITHOUT IT THE WRITE HALF OF THE VISIBILITY RULE IS UNENFORCED.** The store falls past
+	// `staticMemberAssignsAt` for exactly the reason the read falls past `namesStaticMemberAt` — a hidden
+	// declaration is invisible to a reader's probe — and then past `fieldAssignsAt`, whose chain walk refuses
+	// a base that binds no value, leaving the author told `Undefined variable 'Counter'` about a type that is
+	// perfectly visible.
+	//
+	// ⛔ **IT DELIBERATELY DOES NOT CLAIM `undeclaredMember`, WHICH THE READ DOOR DOES.** The two positions
+	// fall through to different places: a read's last resort is the SIZED-BOUND grammar, whose refusal
+	// describes a program the author is not writing, while a store's is the field arm — and `Gate.n = 5`
+	// against an INSTANCE FIELD is exactly that, an assignment through a base binding no value.
+	// `self-type-member-expression`'s two `error.store-through-…` cases pin that sentence, and it is the
+	// right one: the member is not missing, it needs a receiver.
+	//
+	// The `=` is asked FIRST for `staticMemberAssignsAt`'s cost reason: it is a token-kind compare, and
+	// everything inside the verdict joins a name.
+	function staticStoreRefusedAt(index TokenIndex) returns bool
+		if self.kindAt(index + TokensPerQualifierSegment + 1) != TokenKind.equals 'notAStoreShape'
+			return false
+		end 'notAStoreShape'
+
+		return match self.staticRosterVerdictAt(index) 'roster'
+			notADeclaredTypeMember to undeclaredMember gives false
+			hidden gives true
+		end 'roster'
+	end 'staticStoreRefusedAt'
+
+	// The store arm's refusal, worded by the one producer the read arm uses. It reads the base ONCE and asks
+	// `staticRosterVerdictFor` rather than `staticRosterVerdictAt`: `staticStoreRefusedAt` admitted the base
+	// rules one predicate ago off this same cursor, so re-asking them would be a second answer to a question
+	// already settled.
+	function refuseStaticMemberHiddenStore() throws ParseError
+		let baseTok = try self.typeBaseTokenAt(self.pos) otherwise panic("refuseStaticMemberHiddenStore: no type base at this statement — `staticStoreRefusedAt` read one here one predicate ago, off the same cursor")
+		let memberIndex = self.pos + TokensPerQualifierSegment
+		try self.throwStaticRosterRefusal(self.staticRosterVerdictFor(baseTok, memberIndex: memberIndex), baseTok: baseTok, memberTok: self.tokenAt(memberIndex))
+	end 'refuseStaticMemberHiddenStore'
 
 	// **The token shape of an EXPLICIT self-field store** — `self . <field> =`.
 	//

@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "4138c400e5b2aced",
+  "sourceHash": "4849a7a81b0f4b19",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -560,6 +560,15 @@
       "doc": "'countof(Self)' was written inside a closure. A closure body is lifted to its own\ntop-level function, and that function is emitted ONCE rather than compiled per generic\ninstance -- so the enclosing method's instance, which is the whole source of the answer,\nis not in scope there however the method itself was instantiated.\nNOT E2071, which is about a type that HAS no count: here the type has one and the\nposition cannot reach it. The cure differs accordingly -- read 'countof(Self)' into a\nbinding outside the closure and capture the integer.\nIt is refused at the parse because the alternative is measured: the twin expression\n'sizeof' has no such gate, and 'sizeof(Element)' inside a closure in a generic body\nreaches lowering with its operand unsubstituted and aborts as E9001 with a C# stack\ntrace and no source position at all.",
       "emittedBy": {"csharp": "CountofSelfInLiftedClosure"},
       "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 2073,
+      "tag": "E2073",
+      "name": "ParserUnknownStaticMember",
+      "stage": "parser",
+      "doc": "A qualified read names a member the type does not declare -- `Config.MIN_SIZE` where\n`Config` declares only `MAX_SIZE`. The base is a type the AUTHOR declared, so the type\nhas a static roster to answer from and the honest sentence is about that roster. Blamed at\nthe MEMBER token, which is the name that is missing.\nWithout it the form falls to its last-resort reading as a SIZED NUMERIC BOUND (`u64.max`)\nand is refused E2010 -- \"Expected 'min or max' but got 'MIN_SIZE'\", a demand the author\nnever made, in words for a base this program does not have; and for `Box.min`, whose member\nspells a bound, on the BASE token, blaming a name that resolves perfectly well.\nTHE GATE IS \"the base names a declared STRUCT\", deliberately not \"the base is not a sized\ntype name\". A ranged ALIAS base keeps the bound reading -- specs-shv2/type-name-collision.md\npins `Status.big` against an alias as E2010 -- and an UNDECLARED base has no roster, so the\nnoun \"type\" would be false of it. Both still report as a malformed bound, which is a true\nstatement about each; narrowing them further needs a base-kind-aware noun.\nThe runnable oracle answers the same programs E3018 \"Type 'Config' has no static member\n'MIN_SIZE'\" -- one subject, each compiler in its own house spelling.",
+      "emittedBy": {"shv2": "unknownStaticMember"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 3001,

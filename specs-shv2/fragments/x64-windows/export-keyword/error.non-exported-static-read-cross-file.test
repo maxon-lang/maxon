@@ -1,0 +1,21 @@
+// Test: error.non-exported-static-read-cross-file
+// --- file: holder.maxon
+typealias Count = int(0 to u64.max)
+
+export type Holder
+	static var cached = Holder.build()
+	export var value as Count
+
+	static function build() returns Holder
+		return Holder{value: 7}
+	end 'build'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = Holder.cached
+	return a.value
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:16:17: static 'Holder.cached' is not exported

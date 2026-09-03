@@ -1,0 +1,43 @@
+// Test: static-let-cross-file
+// --- file: api/limits.maxon
+export type Config
+	export static let MAX_SIZE = 40
+	export static var used = 2
+end 'Config'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	Config.used = Config.used + Config.MAX_SIZE
+	return Config.used
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+Config.used]
+    x64.mov rcx, 40
+    x64.add rax, rcx
+    x64.mov qword [rip+Config.used], rax
+    x64.mov rdx, qword [rip+Config.used]
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

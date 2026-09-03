@@ -3264,24 +3264,39 @@ end 'reportAmbiguousCrossFileCall'
 // reached only when it answered `false` — so it panics rather than inventing a third sentence.
 function reportCalleeNotVisible(project Project, funcNames FunctionNameIndex, callee ByteArray, noun ByteArray, callRange SourceRange, filePath FilePath)
 	let declared = try funcNames.funcNamed(callee) otherwise panic("reportCalleeNotVisible: '{String.from(callee)}' has no declaration — `calleeVisibleFrom` answered `false`, which it can only do for a callee it found")
-	reportHiddenCallee(project, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath)
+	reportHiddenSymbol(project, kind: HiddenSymbolKind.functionDeclaration, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath)
 end 'reportCalleeNotVisible'
 
-// ⭐ **THE CODE AND THE SENTENCE A HIDDEN CALLEE IS REFUSED WITH — one producer for the two positions a
-// call can be written in.** A call in a function BODY reaches it from `validateCall` above, off
-// `FunctionNameIndex`; a call in a TOP-LEVEL INITIALIZER reaches it from `Queries.reportParseError`'s
-// `calleeNotVisible` arm, off the sweep's own visibility column, because that call is decided before this
-// pass exists. Two askers, one wording — the discipline the `unknownTypeName` arm states.
+// ⭐ **WHICH KIND OF DECLARATION A HIDDEN-SYMBOL REFUSAL IS ABOUT — the ONE axis on which its two sentences
+// vary.** An enum rather than the noun itself, so the word lives at the single producer below and a caller
+// cannot invent a second spelling for a kind that already has one.
+export enum HiddenSymbolKind
+	functionDeclaration
+	staticMember
+end 'HiddenSymbolKind'
+
+// ⭐ **THE CODE AND THE SENTENCE A HIDDEN SYMBOL IS REFUSED WITH — one producer for every position a hidden
+// name can be written in.** A call in a function BODY reaches it from `validateCall` above, off
+// `FunctionNameIndex`; a call in a TOP-LEVEL INITIALIZER and a read or store of a hidden STATIC MEMBER reach
+// it from `Queries.reportParseError`'s `symbolNotVisible` arm, off the sweep's own visibility column,
+// because both are decided before this pass exists. Several askers, one wording — the discipline the
+// `unknownTypeName` arm states, and the reason a static and a function cannot come to disagree about what
+// `module` means.
 //
-// A program-wide callee (`global` or `public`) cannot be refused by any door, so reaching here with one is
+// A program-wide symbol (`global` or `public`) cannot be refused by any door, so reaching here with one is
 // an invariant break.
-export function reportHiddenCallee(project Project, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath)
+export function reportHiddenSymbol(project Project, kind HiddenSymbolKind, noun String, tier Visibility, line LineNumber, column ColumnNumber, filePath FilePath)
+	let word = match kind 'kind'
+		functionDeclaration gives "function"
+		staticMember gives "static"
+	end 'kind'
+
 	match tier 'tier'
-		file then reportPositioned(project, code: ErrorCode.symbolNotExported, message: "function '{noun}' is not exported", line: line, column: column, filePath: filePath)
-		module then reportPositioned(project, code: ErrorCode.symbolNotInModuleScope, message: "function '{noun}' is module-scoped and not visible from this directory", line: line, column: column, filePath: filePath)
-		global or public then panic("reportHiddenCallee: '{noun}' is program-wide and visible from every file — no visibility door can have refused it")
+		file then reportPositioned(project, code: ErrorCode.symbolNotExported, message: "{word} '{noun}' is not exported", line: line, column: column, filePath: filePath)
+		module then reportPositioned(project, code: ErrorCode.symbolNotInModuleScope, message: "{word} '{noun}' is module-scoped and not visible from this directory", line: line, column: column, filePath: filePath)
+		global or public then panic("reportHiddenSymbol: '{noun}' is program-wide and visible from every file — no visibility door can have refused it")
 	end 'tier'
-end 'reportHiddenCallee'
+end 'reportHiddenSymbol'
 
 // ⭐ **VALIDATE AN INDIRECT CALL AGAINST THE FUNCTION TYPE ITS CALLEE VALUE WAS DECLARED WITH.** The
 // declared type is the authority: the call site derives its argument count, its per-argument register file

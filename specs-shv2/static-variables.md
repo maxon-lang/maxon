@@ -234,7 +234,7 @@ end 'main'
 ### A static member IS a top-level binding whose name carries a dot
 
 shv2 makes `static let MAX = 100` inside `type Config` a top-level binding named `Config.MAX` — the same
-storage key both reference compilers use (`maxon-sharp/Compiler/2-Parser.cs:7812` builds
+storage key both reference compilers use (`maxon-sharp/Compiler/2-Parser.cs:8112` builds
 `$"{typeName}.{fieldName}"`; v1 keys a `static let` "by its enclosing type",
 `maxon-selfhosted/Compiler/Project.maxon:187`). Everything below follows from that one sentence rather
 than from machinery of its own: per-type identity is the qualifier, the initializer obeys the top-level
@@ -243,11 +243,9 @@ does, and a static member takes no slot in the instance layout because it never 
 
 <!-- test: error.static-let-reassign -->
 Assigning to a `static let` is E2013, in the same words a top-level `let` gets
-(`top-level-let-scalar-reassign-error`) and naming the qualified binding the author actually wrote. Both
-reference compilers refuse this program; only the sentence differs, and the bootstrap's is
-`E3003: 'Config' is a type and cannot be used directly as a value` — a noun about the base rather than
-about the `let`, which is the "sends the reader hunting for a typo" shape that spec case exists to argue
-against.
+(`top-level-let-scalar-reassign-error`) and naming the qualified binding the author actually wrote. The
+bootstrap refuses the same program in the same sentence, byte for byte, so one `maxoncstderr` block
+carries both compilers rather than a per-compiler pair.
 ```maxon
 type Config
 	static let MAX_SIZE = 42
@@ -265,15 +263,16 @@ error E2013: <fragment>:7:2: cannot assign to immutable variable: 'Config.MAX_SI
 <!-- test: error.static-member-undeclared -->
 ⭐ **THE NEGATIVE CONTROL FOR THE STATIC-MEMBER ARM**: a member the type never declared must NOT be
 claimed by it. The declaring type is right there, so a probe keyed on the BASE alone would have taken this
-and then had no binding to read; keying on the QUALIFIED name is what makes the arm decline and the
-statement fall through to the reading it had before static members existed — the sized numeric bound,
-which is the last resort for any dotted form nothing else claims.
+and then had no binding to read; keying on the QUALIFIED name is what makes the arm decline.
 
-⚠ The sentence is therefore that arm's, and it is unchanged and pre-existing: it says `min or max` about
-a base that is a declared `type` rather than a sized numeric one. The runnable oracle answers the same
-program `E3003: 'Config' is a type and cannot be used directly as a value`, which is a better noun; the
-two are recorded as they are rather than reconciled here, because changing the last-resort arm's wording
-moves every dotted refusal in the corpus and belongs to whichever rung owns that arm.
+Declining is not the same as falling through to the numeric-bound reading. The base is a `type` the
+author declared, so the honest sentence is about that type's static roster rather than about `min` and
+`max` — words for a base this program does not have. The refusal names the MEMBER token, which is the
+name that is missing.
+
+⚠ The runnable oracle answers the same program `E3018 Type 'Config' has no static member 'MIN_SIZE'` —
+one subject, each compiler in its own house spelling, the arrangement the E3018/E3086 table below
+already describes.
 ```maxon
 type Config
 	static let MAX_SIZE = 42
@@ -284,7 +283,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:7:16: Expected 'min or max' but got 'MIN_SIZE'
+error E2073: <fragment>:7:16: type 'Config' has no static member named 'MIN_SIZE'
 ```
 
 <!-- test: static-let-cross-file -->
@@ -2944,4 +2943,59 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: specs/fragments/static-variables/error.an-array-literal-may-not-mix-two-enums.test:12:23: Unsupported: an array literal with mixed element types — every element must have the same type as the first
+```
+
+### A STATIC MEMBER'S VISIBILITY IS THE MEMBER'S, NOT ITS TYPE'S
+
+<!-- test: error.module-scoped-static-read-different-directory -->
+`module` on a static member scopes that member to the declaring directory's subtree while the type
+around it stays exported and nameable everywhere. A reader outside the subtree may therefore write
+`Config` and must still be refused `used`, at the member token — the base is not the problem here and a
+sentence about it sends the author to a name that is perfectly visible.
+
+⚠ The runnable oracle answers this same program `E3003: 'Holder' is a type and cannot be used directly
+as a value` (measured 2026-09-02): its constant-initialized statics never reach the reader's file at
+all, so the directory rule is never consulted and the read is blamed on the base. It gains its own
+E3088 case in `specs/module-keyword.md` in this same change, so the two compilers reach one sentence
+from both ends.
+```maxon
+// --- file: dir_a/config.maxon
+export type Config
+	module static var used = 42
+end 'Config'
+
+// --- file: dir_b/main.maxon
+function main() returns ExitCode
+	return Config.used
+end 'main'
+```
+```maxoncstderr
+error E3088: dir_b/specs/fragments/static-variables/error.module-scoped-static-read-different-directory.test:9:16: static 'Config.used' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.static-bound-name-on-a-struct-base -->
+⭐ **THE ONE SHAPE WHERE THE DOOR MUST CHOOSE.** The member is spelled like a numeric bound, but the
+base is a type the author declared and a declared type has a static roster to answer from. The roster
+wins: the honest sentence is about what `Box` does not have, and it is anchored on the member.
+
+⚠ Answered as a bound, the refusal lands on the BASE token and reads `Expected 'a sized numeric type
+(u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)' but got 'Box'` (measured 2026-09-02) — a demand the author
+never made of a name that resolved perfectly well. Nothing in either suite pins the alternative, which
+is why this case exists.
+
+⚠ A ranged ALIAS base is a different question and keeps the bound reading;
+`specs-shv2/type-name-collision.md` holds that case and this arm deliberately does not claim it.
+```maxon
+typealias Num = int(0 to 100)
+
+type Box
+	export var n as Num
+end 'Box'
+
+function main() returns ExitCode
+	return Box.min
+end 'main'
+```
+```maxoncstderr
+error E2073: <fragment>:9:13: type 'Box' has no static member named 'min'
 ```

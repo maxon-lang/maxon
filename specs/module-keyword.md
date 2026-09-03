@@ -344,3 +344,43 @@ end 'main'
 ```maxoncstderr
 error E2004: other/specs/fragments/module-keyword/error.module-let-different-directory.test:6:14: Undefined constant 'LIMIT'
 ```
+
+<!-- test: module-static-var-same-directory -->
+`module` on a static member scopes the MEMBER, not its type: `Config` is exported and nameable
+anywhere, while `used` is readable only from the declaring directory's subtree. A reader in that
+subtree must therefore get the value, which requires the member to be published at all — a
+constant-initialized static that never leaves its declaring file fails this before visibility is ever
+consulted, and reports the base as an unusable type rather than answering 42.
+```maxon
+// --- file: feature/config.maxon
+export type Config
+	module static var used = 42
+end 'Config'
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	return Config.used
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.module-static-var-different-directory -->
+Outside that subtree the same read is refused, and the refusal is the one `module function` already
+gets with `static 'T.x'` in place of `function 'x'` — one directory rule, two nouns. The member token
+carries the blame because `Config` itself is exported and perfectly visible here; only `used` is not.
+```maxon
+// --- file: dir_a/config.maxon
+export type Config
+	module static var used = 42
+end 'Config'
+
+// --- file: dir_b/main.maxon
+function main() returns ExitCode
+	return Config.used
+end 'main'
+```
+```maxoncstderr
+error E3088: dir_b/specs/fragments/module-keyword/error.module-static-var-different-directory.test:9:16: static 'Config.used' is module-scoped and not visible from this directory
+```

@@ -410,8 +410,10 @@ error E3004: <fragment>:12:15: call to undefined function 'Gate.nope'
 
 <!-- test: error.unknown-member-through-Self -->
 ### A `Self.<member>` that is neither a case nor a call
-It falls to the type-qualified-bound arm, the same last resort `Gate.nope` falls to, and reports the
-same thing on the same token rather than an `E2010` about the keyword.
+It falls to the same static-member door `Gate.nope` falls to, and reports the same thing on the same
+token rather than an `E2010` about the keyword. The noun is `Gate`, not `Self`: the keyword is
+rewritten to the enclosing type before the door sees it, so the sentence names the type whose roster
+was actually searched.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -432,7 +434,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:12:15: Expected 'min or max' but got 'nope'
+error E2073: <fragment>:12:15: type 'Gate' has no static member named 'nope'
 ```
 
 <!-- test: error.Self-member-at-file-scope -->

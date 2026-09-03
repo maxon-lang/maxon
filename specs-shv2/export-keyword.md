@@ -188,10 +188,10 @@ end 'main'
 ```
 
 <!-- test: export-typealias-basic -->
-⚠ This gates the `Array with T` TYPEALIAS reaching another file, not the `export`
-keyword: shv2 enforces export visibility for `var`s only, so deleting `export` here
-still compiles. `error.non-exported-typealias-cross-file` below is the case that will
-gate the keyword, and it stays disabled until that enforcement exists.
+⚠ This gates the `Array with T` TYPEALIAS reaching another file, and the `export` keyword is
+load-bearing in it: strip `export` and the alias is unreachable from `app/main.maxon`, so the
+declaring file is told `E3062: unused typealias: 'IntArray'` and the use site loses its type name.
+`error.non-exported-typealias-cross-file` below pins both halves of that refusal.
 ```maxon
 // --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -689,4 +689,65 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+### A STATIC FIELD obeys the export rule its type does
+
+`export` on the type publishes the type, not every slot inside it. A `static var` without its own
+`export` is file-private exactly as a top-level function is, and reading or writing it from another
+file is the same refusal with a different noun — `function 'x' is not exported` and
+`static 'T.x' is not exported` are one rule. Both cases below are the bootstrap's, carried across
+byte for byte: the programs and the sentences are identical, because a visibility rule that answered
+differently in the two compilers would not be one rule.
+
+<!-- test: error.non-exported-static-read-cross-file -->
+```maxon
+// --- file: holder.maxon
+typealias Count = int(0 to u64.max)
+
+export type Holder
+	static var cached = Holder.build()
+	export var value as Count
+
+	static function build() returns Holder
+		return Holder{value: 7}
+	end 'build'
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = Holder.cached
+	return a.value
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.non-exported-static-read-cross-file.test:16:17: static 'Holder.cached' is not exported
+```
+
+<!-- test: error.non-exported-static-constant-assign-cross-file -->
+The write is refused at the same token for the same reason. Assignment reaches the member through the
+same qualified-name lookup a read does, so a refusal that fired only on the read would be a rule
+written once and applied in one of the two places it belongs.
+
+The initializer is a constant because a call-built one cannot express this yet: a global holding a
+SCALAR has its value written into the `.data` image before any code runs, so a factory-built global
+must return a record (E2015). `error.non-exported-static-read-cross-file` above carries the call-built
+form, whose `Holder.build()` returns one. The bootstrap accepts a scalar there and pins the same write
+under `error.non-exported-static-assign-cross-file`; closing the gap is the `lazy-static` family
+`specs-shv2/lazy-static.md` does not yet carry, and it needs a guard word per scalar static rather than
+the in-band pointer sentinel a record slot allows.
+```maxon
+// --- file: counter.maxon
+export type Counter
+	static var hits = 7
+end 'Counter'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	Counter.hits = 9
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.non-exported-static-constant-assign-cross-file.test:9:10: static 'Counter.hits' is not exported
 ```

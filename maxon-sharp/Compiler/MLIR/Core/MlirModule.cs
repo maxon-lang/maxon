@@ -1063,6 +1063,10 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in other.TypeDefSourceFiles) TypeDefSourceFiles.TryAdd(k, v);
     foreach (var (n, declarers) in other.AmbiguousTypeDeclarers) AddAmbiguousTypeDeclarers(n, [.. declarers]);
     foreach (var n in other.ContestedGenericAliasNames) ContestedGenericAliasNames.Add(n);
+    // A top-level constant is folded into the SHARED module at pre-scan, but a `static let` folds
+    // at full parse into a PER-FILE module, so both tiers must survive the merge or an
+    // `export static let` is published and then discarded.
+    foreach (var (k, v) in other.ExportedConstants) ExportedConstants.TryAdd(k, v);
     foreach (var (k, v) in other.ModuleVisibleConstants) ModuleVisibleConstants.TryAdd(k, v);
     foreach (var (k, v) in other.ModuleConstantSourceFiles) ModuleConstantSourceFiles.TryAdd(k, v);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);

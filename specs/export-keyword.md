@@ -389,6 +389,45 @@ end 'main'
 error E3008: specs/fragments/export-keyword/error.non-exported-static-assign-cross-file.test:15:10: static 'Counter.hits' is not exported
 ```
 
+<!-- test: error.non-exported-static-var-constant-read-cross-file -->
+Both refusals above are seeded by a call. The constant-initialized arm is the one with the hole: a
+member never published cannot be found, so it cannot be refused for the reason it deserves either, and
+the reader is told its base is a type instead of being told the member is private. The refusal is owed
+at the MEMBER token — that is the name `export` was missing from.
+```maxon
+// --- file: holder.maxon
+export type Holder
+	static var count = 3
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Holder.count
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.non-exported-static-var-constant-read-cross-file.test:9:16: static 'Holder.count' is not exported
+```
+
+<!-- test: error.non-exported-static-let-read-cross-file -->
+An immutable static is judged by the same rule: `static let` without its own `export` is file-private,
+and the constant it holds does not make it public. Kind is not visibility, so the two spellings must
+reach one refusal naming one member.
+```maxon
+// --- file: holder.maxon
+export type Holder
+	static let LIMIT = 3
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Holder.LIMIT
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.non-exported-static-let-read-cross-file.test:9:16: static 'Holder.LIMIT' is not exported
+```
+
 ### An EXPORTED static is readable across files
 
 The refusal above must not cost the exported case anything.
@@ -415,6 +454,27 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: exported-static-var-constant-cross-file -->
+The static above is initialized by a CALL, which is the arm a lazily-seeded static takes. A CONSTANT
+initializer is the other arm and it must publish the member just as far: `export` on the member is the
+whole of what the reader's file needs, and the value's shape is not part of the visibility rule.
+Unpublished, the qualified read has nothing to resolve and the diagnostic blames `Holder` for being a
+type — a sentence about the base that says nothing about the member the author asked for.
+```maxon
+// --- file: holder.maxon
+export type Holder
+	export static var count = 3
+end 'Holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return Holder.count
+end 'main'
+```
+```exitcode
+3
 ```
 
 <!-- test: error.typealias-with-unknown-element-type -->

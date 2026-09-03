@@ -2557,18 +2557,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     _topLevelConstants = state.Values;
 
-    // Store exported / module-visible constants on the module for cross-file
-    // seeding. Module-visible constants additionally need their declarer path
-    // recorded so the directory-subtree check can run when other files seed.
     foreach (var decl in ownDecls) {
       if (!state.Values.TryGetValue(decl.Name, out var constVal)) continue;
-      if (decl.IsExported) {
-        module.ExportedConstants[decl.Name] = constVal;
-      } else if (decl.IsModuleVisible) {
-        module.ModuleVisibleConstants[decl.Name] = constVal;
-        if (_sourceFilePath != null)
-          module.ModuleConstantSourceFiles[decl.Name] = _sourceFilePath;
-      }
+      PublishFoldedConstant(module, decl.Name, constVal, decl.IsExported, decl.IsModuleVisible);
     }
 
     // Evaluate deferred global vars using the same constant expression evaluator
@@ -2666,6 +2657,29 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     module.NonExportedGlobalVarNames.Add(deferred.Name);
   }
 
+  /// <summary>
+  /// Carries a folded constant's VALUE as far as its own visibility reaches, so a reader in scope
+  /// inlines it rather than loading a slot. A `module` declaration additionally records its
+  /// declarer, because the reader's directory-subtree check has nothing else to measure against.
+  ///
+  /// One publisher for both nouns that fold: a top-level `let` and a `static let` differ only in
+  /// how their name is spelled, and two copies of this would let them disagree on what `module`
+  /// reaches.
+  /// </summary>
+  private void PublishFoldedConstant(IrModule<MaxonOp> module, string name, object value,
+      bool isExported, bool isModuleVisible) {
+    if (isExported) {
+      module.ExportedConstants[name] = value;
+      return;
+    }
+
+    if (!isModuleVisible) return;
+
+    module.ModuleVisibleConstants[name] = value;
+    if (_sourceFilePath != null)
+      module.ModuleConstantSourceFiles[name] = _sourceFilePath;
+  }
+
   private (IrType type, IrAttribute attr) ConstValueToAttribute(object value, int line, int column) {
     if (value is EnumConstantValue ec && _typeRegistry.TryGetValue(ec.EnumTypeName, out var enumType)) {
       return (enumType, new IntegerAttr(ec.Ordinal, IrType.I64));
@@ -2675,7 +2689,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       double d => (IrType.F64, new FloatAttr(d, IrType.F64)),
       bool b => (IrType.I1, new IntegerAttr(b ? 1 : 0, IrType.I1)),
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
-        $"Unsupported constant expression type for var initializer: {value.GetType().Name}", line, column)
+        $"Initializer does not fold to a constant this declaration can hold: {value.GetType().Name}", line, column)
     };
   }
 
@@ -8128,23 +8142,24 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var value = EvalConstExpr(ConstantDeclSet.Empty, new ConstFoldState(_topLevelConstants, [], []));
       var (fieldType, defaultValue) = ConstValueToAttribute(value, fieldToken.Line, fieldToken.Column);
 
+      // The PERMISSION is published for both kinds, whatever the initializer's shape: a member no
+      // file but its own can name is one another file must be REFUSED by name, not left unresolved
+      // for the reader to be told its base is a type.
+      var gvarInfo = new GlobalVarMetadata(fieldType.ToValueKind(), isMutable,
+        EnumTypeName: value is EnumConstantValue enumConst ? enumConst.EnumTypeName : null,
+        IsExported: isExported, IsModuleVisible: isModuleVisible, SourceFilePath: _sourceFilePath);
+      _globalVars[qualifiedName] = gvarInfo;
+      module.GlobalVarInfos[qualifiedName] = gvarInfo;
+
       if (isMutable) {
         module.Globals.Add(new IrGlobal(qualifiedName, fieldType, defaultValue));
-        _globalVars[qualifiedName] = new GlobalVarMetadata(fieldType.ToValueKind(), true,
-          IsExported: isExported, IsModuleVisible: isModuleVisible, SourceFilePath: _sourceFilePath);
       } else {
-        RegisterStaticLetConstant(qualifiedName, fieldType, defaultValue);
+        // A `static let` reaches its reader as the VALUE — `_topLevelConstants` is consulted ahead
+        // of `_globalVars`, so a visible one folds to a literal and needs no slot, while a hidden
+        // one misses here and falls through to the visibility door.
+        _topLevelConstants[qualifiedName] = value;
+        PublishFoldedConstant(module, qualifiedName, value, isExported, isModuleVisible);
       }
-    }
-  }
-
-  private void RegisterStaticLetConstant(string name, IrType type, IrAttribute? value) {
-    if (value is IntegerAttr intAttr && type == IrType.I1) {
-      _topLevelConstants[name] = intAttr.Value != 0;
-    } else if (value is IntegerAttr intAttr2) {
-      _topLevelConstants[name] = intAttr2.Value;
-    } else if (value is FloatAttr floatAttr) {
-      _topLevelConstants[name] = floatAttr.Value;
     }
   }
 
@@ -9663,9 +9678,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Check if it's a qualified name (Type.member)
       var qualifiedName = $"{nameToken.Value}.{_tokens[_pos + 2].Value}";
 
+      // Every type-named reading below declines for a base that names a value in scope; the
+      // instance-field and instance-method paths are where such a base belongs.
+      var baseIsValue = BaseNamesValueInScope(nameToken.Value);
+
       if (afterIdent.Type == TokenType.Equals) {
         // Could be either Type.field = value or instance.field = value
-        if (_globalVars.ContainsKey(qualifiedName)) {
+        if (!baseIsValue && _globalVars.ContainsKey(qualifiedName)) {
           // Global/static variable assignment: Type.field = value
           ParseQualifiedAssignment();
           return;
@@ -9690,7 +9709,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       if (afterIdent.Type == TokenType.LeftParen) {
         // Check for __Builtins static method call
-        if (nameToken.Value == "__Builtins") {
+        if (!baseIsValue && nameToken.Value == "__Builtins") {
           Advance(); // consume '__Builtins'
           Advance(); // consume '.'
           var methodToken = Advance(); // consume method name
@@ -9708,7 +9727,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             DebugStreamTypeName when IsDebugStreamVoidMethod(nextMethod) => true,
             _ => false,
           };
-          if (isBuiltinStaticStmt) {
+          if (!baseIsValue && isBuiltinStaticStmt) {
             _usedTypeAliases.Add(nameToken.Value);
             Advance(); // consume type name
             Advance(); // consume '.'
@@ -9729,7 +9748,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
 
         // Check for static/qualified function call: Type.method(...)
-        var resolvedStatic = ResolveStaticMethodName(qualifiedName);
+        var resolvedStatic = baseIsValue ? null : ResolveStaticMethodName(qualifiedName);
         if (resolvedStatic != null) {
           ParseQualifiedCallStatement(resolvedStatic != qualifiedName ? resolvedStatic : null);
           return;
@@ -9958,6 +9977,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return false;
   }
 
+  /// A binding in scope outranks a type of the same spelling, so under a local `Config` every
+  /// `Config.x` form — store, read, call — belongs to that local and never to the type. The one
+  /// home for that rule: a door deciding shadowing for itself re-points a written name at another
+  /// declaration and earns no compile error anywhere.
+  private bool BaseNamesValueInScope(string baseName) => _variables.ContainsKey(baseName);
+
   /// Resolves a variable name by checking local scope then global scope.
   private ResolvedVar? ResolveVariable(string name) {
     if (_variables.TryGetValue(name, out var varInfo)) {
@@ -10027,12 +10052,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     && !(info.IsCaptured && _closureCaptures != null)
     && !_staleSelfFields.Contains(name);
 
+  /// True where a type cannot be named at all until a typealias binds its associated types — the
+  /// reader's problem is the missing alias, and no more specific sentence about what follows the
+  /// name would be true yet.
+  private static bool IsGenericNeedingAlias(IrType type) =>
+    type is IrStructType st && st.AssociatedTypeNames.Count > 0
+    || type is IrEnumType et && et.AssociatedTypeNames.Count > 0;
+
   private CompileError CreateUndefinedVariableError(string name, Token token,
       ErrorCode fallbackCode = ErrorCode.SemanticUndefinedVariable) {
     if (_typeRegistry.TryGetValue(name, out var type)) {
-      var isGeneric = type is IrStructType st && st.AssociatedTypeNames.Count > 0
-        || type is IrEnumType ut && ut.AssociatedTypeNames.Count > 0;
-      if (isGeneric)
+      if (IsGenericNeedingAlias(type))
         return new CompileError(ErrorCode.SemanticUndefinedVariable,
           $"'{name}' requires a typealias before use, e.g.: typealias My{name} = {name} with <type>",
           token.Line, token.Column);
@@ -10065,18 +10095,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private (MaxonValue value, string structTypeName) ResolveStructVariable(string name, Token nameToken, bool requireMutable = false) {
     switch (ResolveVariable(name)) {
       case ResolvedVar.Local(var info) when info.StructTypeName != null:
-        if (requireMutable && !info.Mutable) {
-          throw new CompileError(ErrorCode.ParserImmutableVariable,
-            $"cannot assign to immutable variable: '{name}'",
-            nameToken.Line, nameToken.Column);
-        }
+        if (requireMutable && !info.Mutable) throw ImmutableAssignmentError(name, nameToken);
+
         return (ResolveExprValue(new ExprResult.VarRef(name, info)), info.StructTypeName);
       case ResolvedVar.Global(var info) when info.Kind == MaxonValueKind.Struct && info.TypeName != null:
-        if (requireMutable && !info.Mutable) {
-          throw new CompileError(ErrorCode.ParserImmutableVariable,
-            $"cannot assign to immutable variable: '{name}'",
-            nameToken.Line, nameToken.Column);
-        }
+        if (requireMutable && !info.Mutable) throw ImmutableAssignmentError(name, nameToken);
+
         return (EmitGlobalLoad(name, info).Value, info.TypeName);
     }
     throw CreateUndefinedVariableError(name, nameToken);
@@ -11947,10 +11971,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             $"cannot assign to global variable '{name}' via tuple assignment",
             nameToken.Line, nameToken.Column);
 
-        if (!varInfo.Mutable)
-          throw new CompileError(ErrorCode.ParserImmutableVariable,
-            $"cannot assign to immutable variable: '{name}'",
-            nameToken.Line, nameToken.Column);
+        if (!varInfo.Mutable) throw ImmutableAssignmentError(name, nameToken);
 
         _currentBlock!.AddOp(new MaxonAssignOp(name, accessOp.Result, isDeclaration: false, isMutable: true, fieldKind));
         _reassignedVars.Add(name);
@@ -12037,11 +12058,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var resolved = ResolveVariable(name)
       ?? throw CreateUndefinedVariableError(name, nameToken, ErrorCode.ParserExpectedExpression);
 
-    if (!resolved.IsMutable) {
-      throw new CompileError(ErrorCode.ParserImmutableVariable,
-        $"cannot assign to immutable variable: '{name}'",
-        nameToken.Line, nameToken.Column);
-    }
+    if (!resolved.IsMutable) throw ImmutableAssignmentError(name, nameToken);
 
     var newVal = ResolveExprValue(ParseExpression());
     if (_lastExprVarName == name) {
@@ -12116,6 +12133,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
       RequireStaticFieldVisible(qualifiedName, globalInfo, fieldToken);
+
+      // The whole qualified name is what cannot be written, so the base token carries the blame.
+      if (!globalInfo.Mutable) throw ImmutableAssignmentError(qualifiedName, typeToken);
+
       var newValue = ResolveExprValue(ParseExpression());
       newValue = CoerceAssignedValue(newValue, globalInfo.Kind, globalInfo.TypeName,
         $"static '{qualifiedName}'", typeToken.Line, typeToken.Column);
@@ -12147,6 +12168,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess,
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
         fieldToken.Line, fieldToken.Column);
+
+  /// The one refusal an immutable BINDING's write gets, wherever the write is spelled — a bare name,
+  /// a tuple target, a struct receiver, a qualified static member. `specs/static-variables.md` and
+  /// `specs-shv2/static-variables.md` pin this sentence byte for byte against each other, so a second
+  /// spelling of it here would be a wording the two compilers could drift on with nothing to notice.
+  private static CompileError ImmutableAssignmentError(string name, Token anchor) =>
+    new(ErrorCode.ParserImmutableVariable,
+      $"cannot assign to immutable variable: '{name}'",
+      anchor.Line, anchor.Column);
 
   /// Throws E_ImmutableVariable if `field` is declared with `let`.
   private static void RequireMutableField(IrStructType structType, IrStructField field, Token errorToken) {
@@ -19641,8 +19671,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
       }
 
-      // Check for qualified name: TypeName.member
-      if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())) {
+      // Check for qualified name: TypeName.member. Every reading below names a TYPE, so a base that
+      // names a value in scope skips the whole block and reaches the field/method chain instead.
+      if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext()) && !BaseNamesValueInScope(token.Value)) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
 
         // Check for sized type bound: u64.max, i32.min, etc.
@@ -20010,6 +20041,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var fnRefOp = new MaxonFunctionRefOp(referencedFunc.Name, fnType);
         _currentBlock!.AddOp(fnRefOp);
         return new ExprResult.Direct(fnRefOp.Result);
+      }
+
+      // `Type.member` naming a member the type does not have: the author wrote the MEMBER, so
+      // blaming the base describes a program nobody wrote and sends them to the wrong token.
+      //
+      // ⚠ THE STATIC-METHOD PROBE IS WHAT MAKES THE SENTENCE TRUE. Reaching here does NOT mean the
+      // roster declined the name — a static method reference with no call parens (`Box.make` as a
+      // value) is unsupported and falls past every arm above with its member fully declared, so
+      // without this probe the refusal asserts the type has no `make` when it plainly does. The
+      // remaining routes — enum case, static field, constant — all throw or claim above, so the
+      // method roster is the only one still owed an answer.
+      if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())
+          && _typeRegistry.TryGetValue(token.Value, out var staticBase)
+          && !IsGenericNeedingAlias(staticBase)
+          && ResolveStaticMethodName($"{token.Value}.{PeekNext().Value}") == null) {
+        var memberToken = PeekNext();
+        throw new CompileError(ErrorCode.SemanticUnknownField,
+          $"Type '{token.Value}' has no static member '{memberToken.Value}'",
+          memberToken.Line, memberToken.Column);
       }
 
       throw CreateUndefinedVariableError(token.Value, token, ErrorCode.ParserExpectedExpression);

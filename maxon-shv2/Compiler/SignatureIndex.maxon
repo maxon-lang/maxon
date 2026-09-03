@@ -9067,13 +9067,17 @@ typealias OverloadedDeclMap = Map with (ByteArray, OverloadedDeclArray)
 // ⭐ THE ONE empty candidate list a name with no swept declaration answers with. NEVER mutated.
 let sharedNoOverloadedDecls = OverloadedDeclArray.create()
 
-// The verdict `ProgramSignatures.calleeVisibilityFrom` hands back. A union rather than a bool because the
-// refusing arm owes the caller the TIER — it is what picks the diagnostic's code and sentence — and a bool
-// would send every caller back for a second lookup to find out.
-export union CalleeVisibility
+// The verdict `ProgramSignatures.calleeVisibilityFrom` and `declVisibilityFrom` hand back. A union rather
+// than a bool because the refusing arm owes the caller the TIER — it is what picks the diagnostic's code
+// and sentence — and a bool would send every caller back for a second lookup to find out.
+//
+// ONE union for a callee and for a top-level binding, because the two askers feed one rule (`isVisibleFrom`)
+// and one producer (`SemanticCheck.reportHiddenSymbol`): a second verdict type would be a second place for
+// a tier to acquire a meaning.
+export union SymbolVisibility
 	visible
 	hidden(tier Visibility)
-end 'CalleeVisibility'
+end 'SymbolVisibility'
 
 // Does this recorded return type still carry a NAME a later reader will have to resolve? Exactly the bare
 // `named` arm: `void` and every concrete tag are already decided, and `Parser.resolveNamedAlias` — the one
@@ -10342,6 +10346,18 @@ export type ProgramSignatures
 			module then return moduleDirectoryContains(self.moduleDirectoryOf(declFilePath), inner: self.moduleDirectoryOf(readerFilePath))
 		end 'tier'
 	end 'isVisibleFrom'
+
+	// ⭐ **`isVisibleFrom`'S ANSWER AS THE VERDICT A REFUSING CALLER NEEDS** — the bool plus the TIER that
+	// picks the code and the sentence. Written once so the function door (`calleeVisibilityFrom`) and the
+	// binding door (`declVisibilityFrom`) cannot come to spell one rule two ways; each supplies the tier and
+	// the declaring file off its own record, which is all they differ in.
+	function symbolVisibility(visibility Visibility, declFilePath FilePath, readerFilePath FilePath) returns SymbolVisibility
+		if self.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerFilePath) 'nameableHere'
+			return SymbolVisibility.visible
+		end 'nameableHere'
+
+		return SymbolVisibility.hidden(visibility)
+	end 'symbolVisibility'
 
 	// ⭐ **MAY `readerFilePath` NAME THIS RANGED ALIAS (P1.9)?** The alias-shaped face of `isVisibleFrom`, kept
 	// as its own name because the two answers it separates are the point: a hidden alias is still FOUND, which
@@ -15992,6 +16008,42 @@ export type ProgramSignatures
 		return TopLevelDeclLookup.found(index) if isWanted else TopLevelDeclLookup.notFound
 	end 'lookupIfKind'
 
+	// ⭐⭐ **MAY `readerFilePath` READ THE TOP-LEVEL BINDING `name` THAT `declFilePath` DECLARES?** —
+	// `calleeVisibilityFrom`'s binding-shaped twin, feeding the same rule and handing back the same verdict.
+	//
+	// ⚠ **IT ASKS A DIFFERENT QUESTION FROM `declFor` ABOVE, AND THE KEY IS WHERE THE DIFFERENCE LIVES.**
+	// `declFor` resolves a name FOR a reader and so probes the reader's own file-scoped key; a declaration
+	// hidden elsewhere is simply not found, which is what leaves a use with no binding. This asks about the
+	// declaration over THERE, so the file-scoped probe carries the DECLARING path — which is the only way to
+	// see a refusal at all, a file-private declaration being filed under a key the reader can never spell.
+	//
+	// ⭐ **THE DECLARING PATH IS THE CALLER'S TO SUPPLY, AND FOR A STATIC MEMBER IT IS ITS TYPE'S.** A
+	// `static var` may be written only in a `type` body — an `extension` is refused outright
+	// (`static-variables/error.static-binding-in-an-extension`, E2015) — so a static's declaring file IS the
+	// file its type is declared in, which is what lets `Parser.staticRosterVerdictFor` hand this the struct
+	// layout's `declFilePath`.
+	//
+	// A name no declaration wears is VISIBLE: "there is no such binding" is a different mistake with a
+	// different reporter, exactly as `calleeVisibilityFrom` decides it.
+	export function declVisibilityFrom(name ByteArray, declFilePath FilePath, readerFilePath FilePath) returns SymbolVisibility
+		if let filePrivate = try self.declIndex.get(fileScopedDeclKey(name, declFilePath: declFilePath)) 'declaredFilePrivate'
+			return self.declVisibility(filePrivate, readerFilePath: readerFilePath)
+		end 'declaredFilePrivate'
+
+		if let wider = try self.declIndex.get(name) 'declaredAtAWiderTier'
+			return self.declVisibility(wider, readerFilePath: readerFilePath)
+		end 'declaredAtAWiderTier'
+
+		return SymbolVisibility.visible
+	end 'declVisibilityFrom'
+
+	// The verdict for the declaration at `index`. Its own name so the two probes above read one arena entry
+	// each and hand `symbolVisibility` the tier and the file off the same record.
+	function declVisibility(index TopLevelDeclIndex, readerFilePath FilePath) returns SymbolVisibility
+		let decl = self.declAt(index)
+		return self.symbolVisibility(decl.visibility, declFilePath: decl.declFilePath, readerFilePath: readerFilePath)
+	end 'declVisibility'
+
 	// `declFor` restricted to the INLINED kind — the probe both constant doors share, named once so the two
 	// cannot drift on which kind they meant.
 	function constantDeclFor(name ByteArray, readerFilePath FilePath) returns TopLevelDeclLookup
@@ -21445,13 +21497,9 @@ export type ProgramSignatures
 		self.overloadedDecls.upsert(key, value: wearingThisKey)
 	end 'recordOverloadedDecl'
 
-	export function calleeVisibilityFrom(callee ByteArray, readerFilePath FilePath) returns CalleeVisibility
-		let site = try self.funcDeclSites.get(callee) otherwise return CalleeVisibility.visible
-		if self.isVisibleFrom(site.visibility, declFilePath: site.declFilePath, readerFilePath: readerFilePath) 'nameableHere'
-			return CalleeVisibility.visible
-		end 'nameableHere'
-
-		return CalleeVisibility.hidden(site.visibility)
+	export function calleeVisibilityFrom(callee ByteArray, readerFilePath FilePath) returns SymbolVisibility
+		let site = try self.funcDeclSites.get(callee) otherwise return SymbolVisibility.visible
+		return self.symbolVisibility(site.visibility, declFilePath: site.declFilePath, readerFilePath: readerFilePath)
 	end 'calleeVisibilityFrom'
 
 	// ⭐⭐ **HOW A DIAGNOSTIC SPELLS A CALLEE IT HAS RESOLVED: BY ITS MODULE NAMESPACE (W81).**

@@ -800,3 +800,218 @@ end 'main'
 ```maxoncstderr
 error E3006: specs/fragments/static-variables/top-level-var-let-duplicate-declaration-error.test:3:5: duplicate definition of 'counter'
 ```
+
+<!-- test: static-let-cross-file -->
+A static member is reached by its qualified name from wherever the type is visible, so an
+`export static let` constant and an `export static var` beside it must both be readable — and one of
+them writable — from another file. Nothing in the read depends on which file declared the member,
+only on the type owning it. A compiler that publishes only the statics whose initializer is a CALL
+leaves this pair invisible to the reader, and the failure does not look like a visibility problem: the
+qualified read stops resolving and the diagnostic blames `Config` for being a type. shv2 answers 42
+here already, so this is a case another compiler in the tree has satisfied.
+```maxon
+// --- file: api/limits.maxon
+export type Config
+	export static let MAX_SIZE = 40
+	export static var used = 2
+end 'Config'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	Config.used = Config.used + Config.MAX_SIZE
+	return Config.used
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: static-let-enum-constant -->
+A `static let` carries the TYPE of the constant that initialized it, not merely its bits. Initialized
+from a backed enum case, the member is still a `Color` where it is read, and `.rawValue` is the only
+route back to 40 and 2 — a route that exists only while the enum type survives the member. A member
+that arrives as a bare integer is the shape of a static published by value with its type discarded,
+and it says so: `Primitive type 'int' has no method named 'rawValue'`.
+```maxon
+enum Color
+	red = 40
+	green = 2
+end 'Color'
+
+type Palette
+	static let accent = Color.red
+	static let fallback = Color.green
+end 'Palette'
+
+function main() returns ExitCode
+	let a = Palette.accent
+	let b = Palette.fallback
+	return (a.rawValue + b.rawValue) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: static-let-reassign-error -->
+A `static let` is immutable wherever it is reached, and the assignment is refused in the words a
+file-scope `let` reassignment is refused in — one immutability rule, two spellings of the target. The
+blame is the whole qualified name, so the anchor is the base token: the member alone would name a
+fragment of the thing that cannot be written. `specs-shv2/static-variables.md`'s
+`error.static-let-reassign` pins this sentence byte for byte, which is why both compilers say it.
+```maxon
+type Config
+	static let MAX_SIZE = 40
+end 'Config'
+
+function main() returns ExitCode
+	Config.MAX_SIZE = 7
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: specs/fragments/static-variables/static-let-reassign-error.test:7:2: cannot assign to immutable variable: 'Config.MAX_SIZE'
+```
+
+<!-- test: static-member-undeclared-error -->
+A qualified read of a member the type never declared names the MEMBER. The base resolved, the type is
+right there and its static roster is readable, so a sentence about `Config` not being usable as a value
+describes a program nobody wrote and sends the author to the wrong token. shv2 pins the same subject
+under `error.static-member-undeclared` in its own file; the two compilers keep their own house
+spellings for E3018 — `Type 'Pair' has no field 'c'` against `type 'Pair' has no field named 'c'` —
+exactly the arrangement `specs-shv2/static-variables.md` records around lines 374-386.
+```maxon
+type Config
+	static let MAX_SIZE = 42
+end 'Config'
+
+function main() returns ExitCode
+	return Config.MIN_SIZE
+end 'main'
+```
+```maxoncstderr
+error E3018: specs/fragments/static-variables/static-member-undeclared-error.test:7:16: Type 'Config' has no static member 'MIN_SIZE'
+```
+
+<!-- test: local-shadowing-a-type-name-keeps-a-qualified-store-local -->
+A local binding in scope outranks a type of the same spelling, so `Config.MAX_SIZE` here is a field of
+the local `Config` and never a static. The store and the read must agree on that: routing either one to
+`Config`'s static slot writes a program nobody wrote, and because the static is a `let` the misrouted
+store refuses a valid program as an immutable assignment.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Holder
+	export var MAX_SIZE as Num
+
+	export static function make() returns Holder
+		return Holder{MAX_SIZE: 1}
+	end 'make'
+end 'Holder'
+
+type Config
+	static let MAX_SIZE = 5
+end 'Config'
+
+function main() returns ExitCode
+	var Config = Holder.make()
+	Config.MAX_SIZE = 7
+	return Config.MAX_SIZE
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: local-shadowing-a-type-name-keeps-a-qualified-store-local-over-a-static-var -->
+The same shadowing over a WRITABLE static, which is the half where a misroute is silent: the store
+lands in `Config.MAX_SIZE`'s global slot and the read follows it there, so the program exits 5 with the
+local never touched — and the only outward sign is the local reported as unused.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Holder
+	export var MAX_SIZE as Num
+
+	export static function make() returns Holder
+		return Holder{MAX_SIZE: 1}
+	end 'make'
+end 'Holder'
+
+type Config
+	static var MAX_SIZE = 5
+end 'Config'
+
+function main() returns ExitCode
+	var Config = Holder.make()
+	Config.MAX_SIZE = 7
+	return Config.MAX_SIZE
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: local-shadowing-a-type-name-keeps-a-qualified-call-local -->
+Shadowing is ONE rule reached through four doors — a store, a read, a CALL and an enum case — and each
+door decided the base for itself. This is the call: `Config.bump()` invokes the local's method, not the
+static of the same name on `type Config`. A door that consults only the static roster calls the wrong
+`bump` and returns 5, leaving the local unread.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Holder
+	export var n as Num
+
+	export static function make() returns Holder
+		return Holder{n: 1}
+	end 'make'
+
+	export function bump() returns Num
+		return 7
+	end 'bump'
+end 'Holder'
+
+type Config
+	export static function bump() returns Num
+		return 5
+	end 'bump'
+end 'Config'
+
+function main() returns ExitCode
+	let Config = Holder.make()
+	return Config.bump()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: local-shadowing-a-type-name-keeps-an-enum-case-read-local -->
+The fourth door. `Color.red` reads the local's FIELD; the enum case of the same spelling belongs to a
+type the local shadows. The enum registry is consulted from its own arm, so a base that names a value in
+scope has to be refused there too — otherwise this door alone keeps answering 5 while the other three
+answer 7, and one rule spelled four times disagrees with itself.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Holder
+	export var red as Num
+
+	export static function make() returns Holder
+		return Holder{red: 7}
+	end 'make'
+end 'Holder'
+
+enum Color
+	red = 5
+end 'Color'
+
+function main() returns ExitCode
+	let Color = Holder.make()
+	return Color.red
+end 'main'
+```
+```exitcode
+7
+```
