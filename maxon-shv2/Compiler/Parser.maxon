@@ -9732,10 +9732,10 @@ end 'insertCarriedPosition'
 // per-opener heap object would be one live allocation per construct, on the token array's own scale.
 typealias TokenIndexColumn = Array with TokenIndex
 
-// The INITIAL `Parser.declaredNameKeywords`, AND the anchor whose `is`-identity says that list has not been
-// built yet — `sharedEmptyBlockExtentEnds`'s pattern, for its reason and with its invariant: the builder
-// REPLACES the field with a fresh list rather than mutating this one, so it stays empty and is safe to share
-// across the per-file parse fan-out.
+// The INITIAL `Parser.declaredNameKeywords`. It has no `is`-identity gate of its own because it is filled by
+// `buildBlockExtentIndex` in the SAME pass as `blockExtentEnds`, whose anchor is the gate for all three of
+// that walk's outputs. The builder REPLACES the field with a fresh list before pushing anything, so this one
+// stays empty and is safe to share across the per-file parse fan-out.
 let sharedEmptyDeclaredNameKeywords = TokenIndexColumn.create()
 
 // Does the ASCENDING token-index list `column` hold `index`? The bisect BOTH sparse keyword indexes are
@@ -9766,18 +9766,17 @@ function ascendingTokenIndexHolds(column TokenIndexColumn, index TokenIndex) ret
 end 'ascendingTokenIndexHolds'
 
 // The INITIAL `Parser.blockExtentEnds`, AND the anchor whose `is`-identity says the index has not been built
-// yet — `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. A parser that never
-// asks where a block closes (the signature sweep, a file with no `if`/`while`/`match`) allocates nothing
-// here, and `buildBlockExtentIndex` REPLACES the field with a fresh column rather than mutating this one, so
-// it stays empty and is safe to share across the per-file parse fan-out. Reading it before the build is
-// harmless: `matchingEndOf` is the only reader and an empty column makes it panic rather than answer.
+// yet — `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant.
+// `buildBlockExtentIndex` REPLACES the field with a fresh column rather than mutating this one, so it stays
+// empty and is safe to share across the per-file parse fan-out. Reading it before the build is harmless:
+// `matchingEndOf` is the only reader and an empty column makes it panic rather than answer.
 let sharedEmptyBlockExtentEnds = TokenIndexColumn.create()
 
 // The INITIAL `Parser.blockKeywordNames`. It has no `is`-identity gate of its own because it is filled by
-// `buildBlockExtentIndex` in the SAME pass as `blockExtentEnds`, whose anchor above is the gate for both:
-// one walk decides block structure once, so one "have I run?" answer covers both of its outputs. The
-// builder REPLACES the field with a fresh list before pushing anything, so this one stays empty and is
-// safe to share across the per-file parse fan-out.
+// `buildBlockExtentIndex` in the SAME pass as `blockExtentEnds`, whose anchor above is the gate: one walk
+// decides block structure once, so one "have I run?" answer covers every output of it. The builder REPLACES
+// the field with a fresh list before pushing anything, so this one stays empty and is safe to share across
+// the per-file parse fan-out.
 let sharedEmptyBlockKeywordNames = TokenIndexColumn.create()
 
 // The bare member names of a generic type's inner ranged typealiases, in scope while its body is parsed
@@ -10616,8 +10615,7 @@ function tokenKindIsEnumLiteralBacking(kind TokenKind) returns bool
 end 'tokenKindIsEnumLiteralBacking'
 
 // ⭐ **THE TOKEN KINDS MAXON'S BLOCK STRUCTURE IS SPELLED WITH** — exactly the kinds
-// `opensBlockAt`/`closesBlockAt` can ever answer `true` for, and therefore exactly the kinds whose meaning
-// the keyword-as-a-NAME exclusion can suppress (`keywordIsAName` is consulted about no other).
+// `opensBlockAt`/`closesBlockAt` can ever answer `true` for.
 //
 // ⚠ **IT IS LOAD-BEARING, NOT DOCUMENTATION, AND IT IS GUARDED IN BOTH DIRECTIONS**: `opensBlockAt`
 // early-returns on it, so a construct added to that chain WITHOUT being added here never opens a block at
@@ -10628,6 +10626,31 @@ end 'tokenKindIsEnumLiteralBacking'
 function kindSpellsBlockStructure(kind TokenKind) returns bool
 	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end or kind == TokenKind.try
 end 'kindSpellsBlockStructure'
+
+// ⭐ **THE KINDS THE BLOCK-EXTENT WALK OFFERS TO `keywordIsANameAt`** — block structure, PLUS `function`,
+// whose name-ness `functionDeclarationAt` reads to tell a declaration from a keyword-named enum case used as
+// a match-arm pattern (`function gives (1 + 1)` spells `function` · <name> · `(` character for character).
+// It is wider than `kindSpellsBlockStructure` because a `function` keyword opens no block `opensBlockAt`
+// counts — it is not block structure, it merely needs the same left context to be read correctly.
+//
+// ⚠ **GUARDED IN BOTH DIRECTIONS, like the set it wraps**: `recordBlockKeywordName` offers exactly this set
+// to the walk's verdict, and `keywordIsAName` PANICS when asked about a kind outside it, so a reader added
+// without a producer gets a loud answer rather than a silent `false` off a memo that can hold no entry.
+function kindAsksKeywordIsAName(kind TokenKind) returns bool
+	return kindSpellsBlockStructure(kind) or kind == TokenKind.function
+end 'kindAsksKeywordIsAName'
+
+// ⭐⭐ **WHAT THE INNERMOST OPEN BLOCK MAKES OF A KEYWORD STANDING AT ITS LEVEL** — the left context
+// `keywordIsANameAt`'s position-sensitive shapes are rules about, and which no bounded lookaround can see.
+// Only the block-extent walk knows it, from its own opener stack.
+enum NameContext
+	// A `match` BODY's own level, the only place an arm spells its case name.
+	matchBody
+	// An `enum`/`union` BODY's own level, where every member but a method declaration is case material.
+	caseList
+	// Anywhere else, where only the position-independent shapes hold.
+	statementLevel
+end 'NameContext'
 
 // ⭐ **CAN `tok` SERVE AS A NAME — in any position where a name is the ONLY thing that may stand?** An
 // identifier, or a KEYWORD spelled there. A keyword carries its source spelling in `.value` (the lexer
@@ -12492,15 +12515,15 @@ export type Parser
 	var blockExtentEnds as TokenIndexColumn
 	// ⭐ **THE FILE'S KEYWORD TOKENS THAT ARE DECLARED NAMES, ASCENDING** — a function's own name and each of
 	// its parameters' names, kept only where the source spelled a KEYWORD there (D8). It exists for exactly
-	// one reader, `keywordIsAName`: a keyword written in one of those positions is a NAME, so the block-extent
-	// scans must not read `function while(…)` as a block that never closes nor `function f(end Integer)` as a
-	// close that never opened.
+	// one reader, `namesADeclaration`: a keyword written in one of those positions is a NAME, so the
+	// block-extent scans must not read `function while(…)` as a block that never closes nor
+	// `function f(end Integer)` as a close that never opened.
 	//
 	// It is an INDEX and not an O(1) lookbehind because no bounded lookaround can answer the parameter case:
 	// `(` `match` `x` is a parenthesized match EXPRESSION inside a call, and `(` `match` `X` is a parameter
 	// named `match`, and the two are the same token shape — only the enclosing list's OWNER tells them apart.
-	// It is filled by ONE linear pass whose inputs are paren matching and `functionDeclarationAt`, neither of
-	// which knows anything about block structure, so it cannot be circular with the extent index that reads it.
+	// It is filled by the block-extent walk itself (`recordDeclaredNamesAt`), which is what lets a declared
+	// name be decided from the same left context every other verdict in that pass is decided from.
 	//
 	// ⚡ **SPARSE, NOT A PER-TOKEN COLUMN, and that is a MEASURED choice.** A keyword-named declaration is
 	// rare — `stdlib/FilePath.maxon` is the ONLY `stdlib/` file with one — so this list is EMPTY for very
@@ -12510,24 +12533,25 @@ export type Parser
 	// array. `blockExtentEnds` next door is dense because its answer is DENSE — a block opens at a great many
 	// tokens — and this one's is not.
 	//
-	// FILE-scoped and keyed by an ABSOLUTE token index, `blockExtentEnds`'s discipline for its reason, and it
-	// points at the shared empty until the first query with that `is`-identity as the "have I run?" gate.
+	// FILE-scoped and keyed by an ABSOLUTE token index, `blockExtentEnds`'s discipline for its reason, and
+	// that column's `is`-identity is the "have I run?" gate for this one too.
 	var declaredNameKeywords as TokenIndexColumn
 	// ⭐⭐ **THE FILE'S BLOCK-STRUCTURE KEYWORD TOKENS THAT ARE NAMES, ASCENDING** — the memo
 	// `keywordIsAName` answers from, decided ONCE by `buildBlockExtentIndex`'s walk and read by every scan
 	// after it.
 	//
 	// ⚠ **IT IS A MEMO BECAUSE THE ANSWER NEEDS THE WALK'S OWN LEFT CONTEXT, WHICH NO CALLER HAS.** The
-	// match-arm shapes (`end gives 0`, `while(a, b) then …`) are rules about a token standing at the top
-	// level of a `match` BODY, and that is what the walk's opener stack knows and a bounded lookaround does
-	// not — see `keywordIsANameAt`. Recording the verdict per token is what lets the eight scans that count
-	// block depth (`blockStatementEndIndex`, `methodBodyEndFrom`, `skipUnreachedFunctionBody`, …) share ONE
-	// answer instead of each re-deriving it from a context it cannot see.
+	// match-arm shapes (`end gives 0`, `while(a, b) then …`) are rules about a token at the top level of a
+	// `match` BODY, and the case-list shape is a rule about one at the top level of an `enum`/`union` body;
+	// that is what the walk's opener stack knows and a bounded lookaround does not — see `keywordIsANameAt`.
+	// Recording the verdict per token is what lets the eight scans that count block depth
+	// (`blockStatementEndIndex`, `methodBodyEndFrom`, `skipUnreachedFunctionBody`, …) share ONE answer
+	// instead of each re-deriving it from a context it cannot see.
 	//
 	// ⚡ **SPARSE, NOT A PER-TOKEN COLUMN**, for the reason `declaredNameKeywords` above records with a
-	// measurement: a keyword standing where block structure could stand is rare, so this list is EMPTY for
-	// very nearly every file and `keywordIsAName` answers off its `count()`. Only the eight kinds
-	// `kindSpellsBlockStructure` admits are ever offered to it, because those are the only ones any caller
+	// measurement: a keyword standing where its own construct could stand is rare, so this list is EMPTY for
+	// very nearly every file and `keywordIsAName` answers off its `count()`. Only the kinds
+	// `kindAsksKeywordIsAName` admits are ever offered to it, because those are the only ones any caller
 	// asks about — an entry for anything else would be one nothing can match.
 	//
 	// FILE-scoped and keyed by an ABSOLUTE token index, `blockExtentEnds`'s discipline for its reason.
@@ -14448,8 +14472,10 @@ export type Parser
 			// reserved keywords that are nonetheless legal as PARAMETER NAMES, so a bare `enum`/`union`
 			// token can sit inside a parameter list (which `recordScannedSignature` skips wholesale). At
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
-			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
-			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
+			// declaration — cursor past its `end` — so the loop's depth invariant is untouched. The shape
+			// itself is `enumDeclarationAt`'s, shared with the block-extent walk so the sweep and that walk
+			// cannot disagree about where a case list begins.
+			if depth == 0 and self.enumDeclarationAt(self.pos) 'isEnumDecl'
 				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
@@ -14513,16 +14539,25 @@ export type Parser
 	//   • an enum/union CASE NAME — `function` is a legal one (`keyword-as-case-name.md`), and READING one
 	//     as a member puts the keyword in the middle of an expression.
 	//
-	// ⭐⭐ **THE THREE-TOKEN SHAPE IS NOT ENOUGH ON ITS OWN, AND THE POSITION CLAUSE IS WHAT MAKES IT A
-	// DECLARATION** (`declarationBeginsStatement`). A keyword-named case READ, followed by a word-shaped
-	// operator, followed by a parenthesized group spells `function` · <name> · `(` character for character:
-	// `if m == Marker.function and (flag or not flag) 'both'` puts `and` in the NAME slot and the group's
-	// `(` after it. MEASURED without the clause: every declaration after that line went unrecorded — a
-	// `union` declared below it earned **E2015 `a match pattern naming 'found' … enum-case patterns arrive
-	// in a later wave`**, blaming an unbuilt feature for a type the index never received, and a top-level
-	// `var` below it took `ProgramSignatures.recordedDeclFor`'s drift guard down as a compiler PANIC. It is
-	// the SEQUENCE and not the word `and`: any word-shaped operator (`or`, `xor`, `mod`, `is`) reaches it,
-	// which is why the cure is where a declaration may STAND rather than what may follow the keyword.
+	// ⭐⭐ **THE THREE-TOKEN SHAPE IS NOT ENOUGH ON ITS OWN, AND TWO CLAUSES MAKE IT A DECLARATION:**
+	//
+	//   • **WHERE IT STANDS** (`declarationBeginsStatement`). A keyword-named case READ, followed by a
+	//     word-shaped operator, followed by a parenthesized group spells `function` · <name> · `(`
+	//     character for character: `if m == Marker.function and (flag or not flag) 'both'` puts `and` in
+	//     the NAME slot and the group's `(` after it. MEASURED without the clause: every declaration after
+	//     that line went unrecorded — a `union` declared below it earned **E2015 `a match pattern naming
+	//     'found' … enum-case patterns arrive in a later wave`**, blaming an unbuilt feature for a type the
+	//     index never received, and a top-level `var` below it took `ProgramSignatures.recordedDeclFor`'s
+	//     drift guard down as a compiler PANIC. It is the SEQUENCE and not the word `and`: any word-shaped
+	//     operator (`or`, `xor`, `mod`, `is`) reaches it, which is why the cure is where a declaration may
+	//     STAND rather than what may follow the keyword.
+	//   • **WHAT ENCLOSES IT** (`keywordIsAName`). A match ARM spells its keyword-named case pattern at a
+	//     position where a declaration may begin — `function gives (1 + 1)` is `function` · `gives` · `(`
+	//     with a newline behind it — and `parseStatement` has no `function` arm, so a named function can
+	//     never stand inside a match body. Only the enclosing construct separates the two, and only the
+	//     block-extent walk's opener stack knows it, which is why the answer is read off that walk's memo
+	//     instead of derived here. Unclaimed, the arm's `(1 + 1)` was counted as a parameter list and the
+	//     two faults the first bullet measures both returned.
 	//
 	// ONE predicate, read by the whole-file declaration sweep, by `recordScannedType`'s body walk and by
 	// `atEnumMethodStart`, for `atTopLevelBindingKeyword`'s reason: the sweep's `function` arm counts a
@@ -14534,14 +14569,34 @@ export type Parser
 	// body the same overshoot swallows the NEXT type's members into this one's layout, which is a wrong
 	// ANSWER: the swallowed type's factory is registered under this type's name, so a call to it is typed
 	// from the wrong signature.
-	// ⭐ The NAME half asks `tokenCanBeAName`, not `kindAt(index + 1) == identifier`: a keyword is a legal
-	// declared name (D8), and a `function while(…)` this predicate did not recognize would leave the sweep's
-	// `depth` one too deep for the rest of the file — the exact failure the header above describes, reached
-	// by a keyword rather than by a closure. A closure literal is still excluded by construction: its `(`
-	// sits where the name would, and a punctuator carries no spelling.
 	function functionDeclarationAt(index TokenIndex) returns bool
-		return self.kindAt(index) == TokenKind.function and self.declarationBeginsStatement(index) and tokenCanBeAName(self.tokenAt(index + 1)) and self.kindAt(index + 2) == TokenKind.leftParen
+		return self.functionDeclarationShapeAt(index) and not self.keywordIsAName(index)
 	end 'functionDeclarationAt'
+
+	// The SHAPE half on its own — a pure bounded lookaround. It is a routine of its own because the
+	// block-extent walk asks it while deciding THIS token's name verdict, and so cannot read the memo that
+	// verdict goes into.
+	//
+	// ⭐ The NAME slot asks `tokenCanBeAName` rather than `kindAt(index + 1) == identifier`: a keyword is a
+	// legal declared name (D8), and a `function while(…)` this did not recognize would leave the sweep's
+	// `depth` one too deep for the rest of the file. A closure literal is excluded by construction — its
+	// `(` sits where the name would, and a punctuator carries no spelling.
+	function functionDeclarationShapeAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.function and self.declarationBeginsStatement(index) and tokenCanBeAName(self.tokenAt(index + 1)) and self.kindAt(index + 2) == TokenKind.leftParen
+	end 'functionDeclarationShapeAt'
+
+	// Does an `enum`/`union` DECLARATION open at `index`? Both keywords are legal PARAMETER names, so the
+	// keyword alone says nothing — `declarationBeginsStatement` is what makes it a declaration, exactly as
+	// it is for `function`. ONE spelling, read by the declaration sweep and by the block-extent walk, whose
+	// case-list rule rests on knowing where a member list begins.
+	function enumDeclarationAt(index TokenIndex) returns bool
+		let kind = self.kindAt(index)
+		if kind != TokenKind.enum and kind != TokenKind.union 'notAnEnumKeyword'
+			return false
+		end 'notAnEnumKeyword'
+
+		return self.declarationBeginsStatement(index) and self.kindAt(index + 1) == TokenKind.identifier
+	end 'enumDeclarationAt'
 
 	// ⭐⭐ **DOES A DECLARATION BEGIN AT `index` — is that token the FIRST of its statement, past the
 	// modifiers a declaration may carry?** Maxon separates statements with newlines, so a declaration's
@@ -14553,9 +14608,9 @@ export type Parser
 	// be answered by looking forward. They differ only in what may precede — an `if` admits an `else` (the
 	// `else if` chain), a declaration admits its modifiers.
 	//
-	// ⚠ It is a bounded LOOKBEHIND and must stay one. `buildDeclaredNameIndex` reads
-	// `functionDeclarationAt`, and `keywordIsAName` reads that index, so a position test that asked the
-	// block-extent walk would close a cycle between the two.
+	// ⚠ It is a bounded LOOKBEHIND and must stay one. The block-extent walk asks it AT THE CURSOR while
+	// deciding that token's name verdict, so a term reading anything ahead of the cursor would read an
+	// index that walk has not built yet.
 	function declarationBeginsStatement(index TokenIndex) returns bool
 		var start = index
 		while start > 0 and self.declarationModifierAt((start - 1) as TokenIndex) 'pastModifiers'
@@ -42765,17 +42820,24 @@ export type Parser
 	// where the question is actually decided and why it cannot be decided here.
 	//
 	// ⚡ A BISECT of the ascending memo, and the `count()` read is the whole cost for very nearly every
-	// file: only a file that spells a keyword where block structure could stand has any entry at all.
+	// file: only a file that spells a keyword where its own construct could stand has any entry at all.
 	function keywordIsAName(index TokenIndex) returns bool
+		// A TRIPWIRE, not a path: every caller pre-checks the kind. Without it a reader asking about a kind
+		// the walk never offers would get a silent `false` off a memo that can hold no entry for it.
+		let kind = self.kindAt(index)
+		if not kindAsksKeywordIsAName(kind) 'neverOffered'
+			panic("keywordIsAName: '{kind.rawValue}' is never offered to the block-extent walk's name verdict, so this memo can hold no entry for it — a reader that needs an answer here belongs in `kindAsksKeywordIsAName`")
+		end 'neverOffered'
+
 		self.buildBlockExtentIndex()
 		return ascendingTokenIndexHolds(self.blockKeywordNames, index: index)
 	end 'keywordIsAName'
 
 	// ⭐⭐ **THE DERIVATION BEHIND `keywordIsAName`, ASKED ONCE PER TOKEN BY THE BLOCK-EXTENT WALK.** It is
-	// separate from the reader above for one reason: **two of the four shapes below are rules about a token
-	// standing at the top level of a `match` BODY, and no bounded lookaround can see that.** The walk can —
-	// its opener stack holds exactly the blocks still open BEHIND the cursor — so it supplies `inMatchBody`
-	// and records the verdict, and every later scan reads that one answer instead of guessing again.
+	// separate from the reader above for one reason: **three of the shapes below are rules about the
+	// CONSTRUCT the token stands directly inside, and no bounded lookaround can see that.** The walk can —
+	// its opener stack holds exactly the blocks still open BEHIND the cursor — so it supplies the
+	// `NameContext` and records the verdict, and every later scan reads that one answer instead of guessing.
 	//
 	// ⚠⚠ **THE SCOPING IS NOT TIDINESS — AN UNSCOPED ARM LOOKAHEAD MISREAD A CONDITION AS A MATCH ARM AND
 	// TOOK THE COMPILER DOWN.** The rule used to say a control keyword is *never* followed by an arm
@@ -42796,10 +42858,20 @@ export type Parser
 	// and `assertScanAligned` fires (or the arm loop stops early, or the declaration sweep records a
 	// local as a top-level binding).
 	//
-	// **FOUR SHAPES, ONE FACT, so ONE predicate** — a divergence would leave the opener rule taught and
-	// the closer rule not, or one shape taught and the next not. The first two are ARM shapes and run only
-	// under `inMatchBody`; the last two hold wherever the keyword stands:
+	// **ONE FACT, so ONE predicate** — a divergence would leave the opener rule taught and the closer rule
+	// not, or one shape taught and the next not. The CASE-LIST shape claims a whole level; the two ARM
+	// shapes run only under `NameContext.matchBody`; the last two hold wherever the keyword stands:
 	//
+	//   • **AN ENUM/UNION BODY'S OWN LEVEL IS A CASE LIST, NOT BLOCK STRUCTURE.** `enum Kw { while match
+	//     for omega }` declares four cases, and a case may be spelled with ANY keyword. Everything at that
+	//     level is case material — a name, its `= raw`, its payload parens — with exactly two exceptions:
+	//     the body's terminating `end` (told from a case NAMED `end` by `enumBodyEndsAt`, the one shared
+	//     rule the real parse and the sweep read too) and a METHOD declaration, whose own block the walk
+	//     pushes so its body is not read at member level. ⚠ MEASURED without it: `while`/`match`/`for`
+	//     cases leaked openers past the enum's `end`, so for the rest of the file the walk believed it
+	//     stood inside a match body — and `if to >= from 'forward'`, the keyword-named-binding condition
+	//     D8 makes legal, was read as an arm. The `if` opened nothing and `assertScanAligned` fired.
+	//     `ensureSiblingReceivers` applies the identical rule in its own walk.
 	//   • **A MATCH-ARM CASE NAME — the LOOKAHEAD.** `if gives …`, `end then …`, `else to critical then
 	//     …`. Inside a match body a keyword immediately followed by `gives`/`then`/`to`/`upto`/`or` is a
 	//     case name: an arm is the only thing that stands at that level, and a `match` header's own
@@ -42853,14 +42925,31 @@ export type Parser
 	//     (`functionDeclarationAt(index - 1)`), but the PARAMETER cannot: `( match x` is a parenthesized
 	//     match EXPRESSION and `( match X` is a parameter named `match`, and those are the same token shape
 	//     — only the enclosing list's OWNER separates them, which no bounded lookaround can reach. See
-	//     `buildDeclaredNameIndex`, whose one linear pass reads paren matching and `functionDeclarationAt`
-	//     and NOTHING about block structure, so it cannot be circular with the extent index that reads it.
-	function keywordIsANameAt(index TokenIndex, inMatchBody bool) returns bool
+	//     `recordDeclaredNamesAt`, which the same walk runs at the same cursor: every entry it makes is for
+	//     a token strictly AHEAD of the one it stood on, so it is present before the cursor arrives there.
+	function keywordIsANameAt(index TokenIndex, context NameContext) returns bool
+		let kind = self.kindAt(index)
 		let next = self.kindAt(index + 1)
+
+		// The CASE-LIST level FIRST, because it claims every token at it and the shapes below are about
+		// positions a case list has none of.
+		if context == NameContext.caseList 'caseListLevel'
+			if kind == TokenKind.end 'terminatorOrCaseNamedEnd'
+				return not self.enumBodyEndsAt(index)
+			end 'terminatorOrCaseNamedEnd'
+
+			// The SHAPE, not `functionDeclarationAt`: this IS the memo entry that predicate reads. The
+			// modifiers a method may carry are `declarationBeginsStatement`'s to step over.
+			if kind == TokenKind.function 'methodOrCaseNamedFunction'
+				return not self.functionDeclarationShapeAt(index)
+			end 'methodOrCaseNamedFunction'
+
+			return true
+		end 'caseListLevel'
 
 		// The two MATCH-ARM shapes, and they are asked only where an arm can stand. Everything below is
 		// position-independent and stays unscoped.
-		if inMatchBody 'armShapes'
+		if context == NameContext.matchBody 'armShapes'
 			if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
 				return true
 			end 'matchCaseName'
@@ -42902,8 +42991,8 @@ export type Parser
 			return true
 		end 'memberName'
 
-		// LAST, because it is the only shape that can trigger a build: the three above are O(1) lookarounds,
-		// and a real closing `end` — the overwhelmingly common token this is asked about — reaches here.
+		// LAST, because it is the only shape that reads a MEMO rather than the token stream, and a real
+		// closing `end` — the overwhelmingly common token this is asked about — reaches here.
 		return self.namesADeclaration(index)
 	end 'keywordIsANameAt'
 
@@ -42913,13 +43002,19 @@ export type Parser
 	// nearly every file: only a file that actually declares a keyword-named function or parameter has any
 	// entry at all (see the field).
 	function namesADeclaration(index TokenIndex) returns bool
-		self.buildDeclaredNameIndex()
+		self.buildBlockExtentIndex()
 		return ascendingTokenIndexHolds(self.declaredNameKeywords, index: index)
 	end 'namesADeclaration'
 
-	// ⭐ **BUILD `declaredNameKeywords`: the KEYWORD tokens at which a declaration spells a name.** One linear
-	// pass — at every `function` keyword, record the declared NAME (if the spelling has one) and every name
-	// position in the parameter list that follows, keeping only the tokens that are not plain identifiers.
+	// ⭐ **RECORD THE DECLARED NAMES THE `function` KEYWORD AT `index` INTRODUCES** — its own name where the
+	// spelling has one, and every name position in the parameter list that follows. Returns the watermark
+	// the block-extent walk carries forward: the token past the list this consumed, or `recordedThrough`
+	// unchanged.
+	//
+	// ⚠ **THE WATERMARK IS WHAT KEEPS `declaredNameKeywords` ASCENDING**, which `namesADeclaration`'s bisect
+	// rests on. A `function(` inside a parameter TYPE (`cb function(Integer) returns Integer`) is recorded
+	// by its ENCLOSING list, so reaching it again from behind would push a lower index after a higher one
+	// and duplicate it.
 	//
 	// **BOTH SPELLINGS OF `function` ARE COVERED, and deliberately.** A DECLARATION (`function <name> (`)
 	// records its name and its parameters; a CLOSURE LITERAL (`function (`) has no name but records its
@@ -42927,52 +43022,35 @@ export type Parser
 	// so they may be keyword-named too, and a closure body sits INSIDE a statement whose extent scan reads
 	// those tokens.
 	//
-	// ⚠ **THE CURSOR RESUMES PAST THE PARAMETER LIST, AND THAT IS WHAT KEEPS THE LIST ASCENDING** — which the
-	// bisect in `namesADeclaration` rests on. A `function(` inside a parameter TYPE (`cb function(Integer)
-	// returns Integer`) would otherwise be reached by the outer walk AFTER its enclosing list had already
-	// contributed, pushing lower indices behind higher ones and duplicating them. Skipping the list also costs
-	// nothing to correctness: a function TYPE's parenthesized part names types, never parameters.
-	//
-	// Idempotent, and the shared-empty `is`-identity of the list is the "have I run?" gate (see the field): the
-	// fresh list installed below is what says it has run, whether or not the file declares anything.
-	//
-	// ⚡ LINEAR, and provably: every token is visited at most twice — once by the outer walk, once by
-	// `recordParamNameKeywords` — because the walk resumes past each list it descends into. Nothing is
-	// allocated per function.
-	function buildDeclaredNameIndex()
-		if self.declaredNameKeywords is sharedEmptyDeclaredNameKeywords 'notBuiltYet'
-			let tokenCount = self.tokens.count()
-			var found = TokenIndexColumn.create()
+	// ⚠ **THE KEYWORD'S OWN NAME-NESS IS NOT CONSULTED, AND MUST NOT BE.** A closure literal inside a match
+	// arm spells `function (…) gives`, which IS a payload-carrying arm's shape, so the walk calls that
+	// keyword a name — and `while` in `function(while Idx) gives 40` is still a PARAMETER, which unrecorded
+	// opens a block nothing closes. The arm `function gives (…)` needs no exclusion of its own: its `gives`
+	// stands where the `(` would, so there is no list to descend into.
+	function recordDeclaredNamesAt(index TokenIndex, recordedThrough TokenIndex) returns TokenIndex
+		if self.kindAt(index) != TokenKind.function or index < recordedThrough 'nothingToRecord'
+			return recordedThrough
+		end 'nothingToRecord'
 
-			var i = 0 as TokenIndex
-			while i < tokenCount 'scan'
-				if self.kindAt(i) == TokenKind.function 'functionKeyword'
-					// A named declaration's list starts one token later than a closure literal's, because the name
-					// sits between the keyword and the `(`.
-					var listAt = i + 1
-					if self.functionDeclarationAt(i) 'named'
-						self.recordNameKeyword(found, index: i + 1)
-						listAt = i + 2
-					end 'named'
-					i = self.recordParamNameKeywords(found, parenPos: listAt)
-					continue
-				end 'functionKeyword'
+		// A named declaration's list starts one token later than a closure literal's, because the name sits
+		// between the keyword and the `(`.
+		var listAt = index + 1
+		if self.functionDeclarationAt(index) 'named'
+			self.recordNameKeyword(index + 1)
+			listAt = index + 2
+		end 'named'
 
-				i = i + 1
-			end 'scan'
+		return self.recordParamNameKeywords(listAt)
+	end 'recordDeclaredNamesAt'
 
-			self.declaredNameKeywords = found
-		end 'notBuiltYet'
-	end 'buildDeclaredNameIndex'
-
-	// Append `index` to the ascending index if the token there is a KEYWORD rather than a plain identifier.
-	// Identifiers are dropped because no scan ever asks about one: `keywordIsAName` is consulted only for the
-	// seven block-structure keywords, so an identifier entry would be a list entry nothing can ever match.
-	function recordNameKeyword(found TokenIndexColumn, index TokenIndex)
+	// Append `index` to `declaredNameKeywords` if the token there is a KEYWORD rather than a plain
+	// identifier. Identifiers are dropped because no scan ever asks about one: `keywordIsAName` is consulted
+	// only about `kindAsksKeywordIsAName`'s set, so an identifier entry would be one nothing can ever match.
+	function recordNameKeyword(index TokenIndex)
 		if self.kindAt(index) == TokenKind.identifier 'plainIdentifier'
 			return
 		end 'plainIdentifier'
-		found.push(index)
+		self.declaredNameKeywords.push(index)
 	end 'recordNameKeyword'
 
 	// ⭐ Record the parameter NAMES of the list at `parenPos` — by offering EVERY word-shaped token inside its
@@ -42999,7 +43077,7 @@ export type Parser
 	//
 	// ⚠ **AND THE "NO BLOCK STRUCTURE IN HERE" PREMISE IS CHECKED, NOT ASSUMED** — see
 	// `parenGroupCanBeAParameterList`. It has to be, because the caller reaches this off a pure TOKEN SHAPE.
-	function recordParamNameKeywords(found TokenIndexColumn, parenPos TokenIndex) returns TokenIndex
+	function recordParamNameKeywords(parenPos TokenIndex) returns TokenIndex
 		if self.kindAt(parenPos) != TokenKind.leftParen 'noParamList'
 			return parenPos
 		end 'noParamList'
@@ -43016,7 +43094,7 @@ export type Parser
 		var q = parenPos + 1
 		while q < listEnd 'eachToken'
 			if tokenCanBeAName(self.tokenAt(q)) 'wordShaped'
-				self.recordNameKeyword(found, index: q)
+				self.recordNameKeyword(q)
 			end 'wordShaped'
 			q = q + 1
 		end 'eachToken'
@@ -43030,13 +43108,13 @@ export type Parser
 	// in there is REAL block structure — true of a parameter list, which holds names and TYPES and not one
 	// statement, and NOT true of an arbitrary expression.
 	//
-	// ⚠ **AND AN ARBITRARY EXPRESSION DOES REACH IT, because `functionDeclarationAt` is a pure TOKEN SHAPE.**
-	// `function` is itself a legal enum CASE name (`keyword-as-case-name.md`), so a `gives` arm spelled
-	// `function gives (…)` matches `function <name> (` exactly as a declaration does — and its parentheses
-	// hold whatever the arm's value is. MEASURED before this check existed: a `function gives (match y 'n' one
-	// gives 1 two gives 2 end 'n')` arm recorded the inner match's `match` AND its `end` as declared names,
-	// so `closesBlockAt` stopped seeing that `end`, the inner match's arm loop read it as one more case name,
-	// and the program was refused `E3034 unknown enum case: 'end'` — while the reference bootstrap compiles it.
+	// ⚠ **AND AN ARBITRARY EXPRESSION DOES REACH IT.** `recordDeclaredNamesAt` offers the group that follows
+	// a `function` keyword the walk called a NAME, which is how a closure's parameters get recorded — and a
+	// keyword-named case READ carrying arguments (`Kw.function(match x 'n' one gives 1 end 'n')`) is the same
+	// two tokens with an expression in the parentheses. MEASURED before this check existed: such a group's
+	// inner `match` AND its `end` were recorded as declared names, so `closesBlockAt` stopped seeing that
+	// `end`, the inner match's arm loop read it as one more case name, and the program was refused
+	// `E3034 unknown enum case: 'end'` — while the reference bootstrap compiles it.
 	//
 	// **THE TEST IS WHERE A BLOCK KEYWORD STANDS, because that is the entire difference.** In a parameter list
 	// one may stand only as a NAME — immediately after the `(`, or after a top-level `,` — and a parameter's
@@ -43075,16 +43153,24 @@ export type Parser
 	// by every `if`/`while`/`match` after it. It is what lets `blockStatementEndIndex` step OVER a nested
 	// construct in one array read instead of walking through its tokens.
 	//
-	// ⭐⭐ **IT DECIDES `blockKeywordNames` IN THE SAME PASS, AND THAT IS NOT A CONVENIENCE.** Whether a
-	// keyword is block structure or a match-arm case NAME depends on whether a `match` BODY is open around
-	// it (`keywordIsANameAt`), and the only thing that knows is this walk's own opener stack. So the walk
-	// asks the question at each token, from the left context it already holds, and RECORDS the verdict —
-	// which is what lets `keywordIsAName`'s other readers share one answer instead of re-deriving it from a
-	// context none of them has. The two outputs are one derivation and share this routine's gate.
+	// ⭐⭐ **IT DECIDES THE TWO KEYWORD MEMOS IN THE SAME PASS, AND THAT IS NOT A CONVENIENCE.** Whether a
+	// keyword is block structure, a match-arm case NAME or an enum case depends on the construct open
+	// around it (`keywordIsANameAt`), and the only thing that knows is this walk's own opener stack. So the
+	// walk asks the question at each token, from the left context it already holds, and RECORDS the verdict
+	// into `blockKeywordNames` — which is what lets `keywordIsAName`'s other readers share one answer
+	// instead of re-deriving it from a context none of them has. `declaredNameKeywords` rides the same walk
+	// (`recordDeclaredNamesAt`) because that memo is one of the inputs to the verdict.
 	//
-	// Idempotent, and the shared-empty `is`-identity of the extent column is the "have I run?" gate (see the
-	// field): the fresh column installed below is what says it has run, whether or not the file opens a
-	// single block.
+	// ⚠ **THE WALK IS RE-ENTRANT AND THAT IS SOUND, for one reason: every name-ness read it makes is of a
+	// token AT or BEHIND the cursor.** `keywordIsAName` is asked only at the cursor, after
+	// `recordBlockKeywordName` has already decided that token; and every declared-name entry is for a token
+	// strictly AFTER the `function` keyword that declares it, pushed while the walk stands on that keyword,
+	// so it is present before the cursor reaches it. Nothing the walk reaches reads an EXTENT
+	// (`matchingEndOf` has no caller here), which is why the gate may be shut before the first of those calls.
+	//
+	// Idempotent, and the shared-empty `is`-identity of the extent column is the "have I run?" gate for all
+	// three outputs (see the field): the fresh column installed below is what says it has run, whether or
+	// not the file opens a single block.
 	function buildBlockExtentIndex()
 		if self.blockExtentEnds is sharedEmptyBlockExtentEnds 'notBuiltYet'
 			let tokenCount = self.tokens.count()
@@ -43094,25 +43180,47 @@ export type Parser
 			var extentEnds = TokenIndexColumn.create()
 			extentEnds.resize(tokenCount)
 
-			// ⚠ **BOTH COLUMNS ARE INSTALLED BEFORE THE WALK, AND THE WALK WRITES THROUGH `self`.** The walk
-			// asks `opensBlockAt`, which asks `keywordIsAName`, which asks for this index — so the gate above
-			// has to be SHUT before the first of those calls or the builder re-enters itself forever. Shutting
-			// it early is sound because nothing the walk reaches READS an extent (`matchingEndOf` has no
-			// caller here), and every name-ness read it makes is of a token BEHIND the cursor, already
-			// recorded.
+			// ALL THREE OUTPUTS ARE INSTALLED BEFORE THE WALK, AND THE WALK WRITES THROUGH `self` — see the
+			// re-entrancy paragraph above.
 			self.blockExtentEnds = extentEnds
 			self.blockKeywordNames = TokenIndexColumn.create()
+			self.declaredNameKeywords = TokenIndexColumn.create()
 
 			// The openers not yet closed, innermost last — the bracket-matching stack.
 			var openers = TokenIndexColumn.create()
+			// The token past the last parameter list already recorded, which is what keeps
+			// `declaredNameKeywords` ascending (see `recordDeclaredNamesAt`).
+			var declaredThrough = 0 as TokenIndex
+			// ⚠ **A MEMBER LIST CANNOT OPEN INSIDE A `( … )`.** No accepted program puts a newline in a
+			// parameter list (E2010 on both compilers), so only MALFORMED source can spell `function f(`
+			// newline `enum Idx, …)` — and an opener pushed for that parameter is never closed, which would
+			// turn a clean diagnostic into an extent-scan panic. `opensBlockAt`'s own kinds need no such
+			// guard: none of them is a legal parameter name.
+			var parenDepth = 0
 
 			var i = 0 as TokenIndex
 			while i < tokenCount 'scan'
-				// BEFORE the two predicates below, because both of them read it back through
-				// `keywordIsAName` for this very token.
-				self.recordBlockKeywordName(i, openers: openers)
+				let kind = self.kindAt(i)
+				if kind == TokenKind.leftParen 'groupOpens'
+					parenDepth = parenDepth + 1
+				end 'groupOpens'
 
-				if self.opensBlockAt(i) 'opensBlock'
+				let context = self.innermostOpenerContext(openers)
+				// BEFORE the predicates below, because every one of them reads it back through
+				// `keywordIsAName` for this very token.
+				self.recordBlockKeywordName(i, context: context)
+				declaredThrough = self.recordDeclaredNamesAt(i, recordedThrough: declaredThrough)
+
+				// ⭐ **A MEMBER LIST'S OPENER — an `enum`/`union` declaration, and inside one, a METHOD.**
+				// Neither is block structure `opensBlockAt` counts, and both have to be on the stack anyway:
+				// the enum so its body reads as a case list, the method so ITS body does not, and so that its
+				// own `end 'name'` pops the method rather than the enum. Each is pushed ONLY where it can stand:
+				// an interface requirement is a bodiless `function name(` line with no `end` at all, and two
+				// cases may share a line, so a case NAMED `enum` followed by the next case spells
+				// `enumDeclarationAt`'s lookaround exactly. Pushed anywhere else, either leaks an opener for
+				// the rest of the file.
+				let opensMemberList = parenDepth == 0 and ((context == NameContext.statementLevel and self.enumDeclarationAt(i)) or (context == NameContext.caseList and self.functionDeclarationAt(i)))
+				if opensMemberList or self.opensBlockAt(i) 'opensBlock'
 					openers.push(i)
 					// UNTERMINATED until a closer says otherwise — the end of the token stream, which is the
 					// tolerant answer `blockStatementEndIndex`'s header states for a construct with no `end`.
@@ -43127,41 +43235,55 @@ export type Parser
 					end 'hasOpener'
 				end 'closesBlock'
 
+				// Floored, because a stray `)` closes no group and a negative depth would disable the member-
+				// list arm for the whole rest of the file. Malformed source is the real parse's to report.
+				if kind == TokenKind.rightParen and parenDepth > 0 'groupCloses'
+					parenDepth = parenDepth - 1
+				end 'groupCloses'
+
 				i = i + 1
 			end 'scan'
 		end 'notBuiltYet'
 	end 'buildBlockExtentIndex'
 
-	// Is the innermost block still open a `match` — i.e. does the cursor stand at the top level of a match
-	// BODY, which is where an arm spells its case name and the only place one can? Read off the walk's
+	// What the innermost block still open makes of a keyword standing at the cursor. Read off the walk's
 	// opener stack, which holds only openers BEHIND the cursor, so the answer is a fact about the left
 	// context and cannot be circular with the extent this same walk is computing.
 	//
-	// A construct nested inside an arm's body pushes its own opener and becomes the innermost, so "the
-	// innermost is a match" is exactly "at the match's own level": an arm body is a statement on the arm's
-	// line, and it cannot re-enter this level without opening a block of its own first.
-	function innermostOpenBlockIsAMatch(openers TokenIndexColumn) returns bool
+	// A construct nested inside an arm or a member pushes its own opener and becomes the innermost, so "the
+	// innermost is a `match`" is exactly "at the match's own level", and likewise for a case list: a body
+	// cannot re-enter its own level without opening a block of its own first.
+	function innermostOpenerContext(openers TokenIndexColumn) returns NameContext
 		if openers.isEmpty() 'noneOpen'
-			return false
+			return NameContext.statementLevel
 		end 'noneOpen'
 
-		let innermost = try openers.last() otherwise panic("innermostOpenBlockIsAMatch: the opener stack is non-empty by the guard above and has no last")
-		return self.kindAt(innermost) == TokenKind.match
-	end 'innermostOpenBlockIsAMatch'
+		let innermost = try openers.last() otherwise panic("innermostOpenerContext: the opener stack is non-empty by the guard above and has no last")
+		let kind = self.kindAt(innermost)
+		if kind == TokenKind.match 'matchBody'
+			return NameContext.matchBody
+		end 'matchBody'
 
-	// Decide whether the token at `index` is a keyword standing where block structure could stand but
-	// spelling a NAME, and append it to the ascending memo if it is — the one caller of `keywordIsANameAt`.
+		if kind == TokenKind.enum or kind == TokenKind.union 'caseList'
+			return NameContext.caseList
+		end 'caseList'
+
+		return NameContext.statementLevel
+	end 'innermostOpenerContext'
+
+	// Decide whether the token at `index` is a keyword spelling a NAME rather than the construct its kind
+	// names, and append it to the ascending memo if it is — the one caller of `keywordIsANameAt`.
 	//
-	// Only the kinds `kindSpellsBlockStructure` admits are offered, because those are the only ones any
-	// reader asks about (`opensBlockAt` early-returns on that set and `closesBlockAt` tests `end` first):
-	// an entry for anything else would be one the bisect can never be asked to match. That gate stands
-	// FIRST, so the stack read below runs at the few tokens that can answer anything and not at every one.
-	function recordBlockKeywordName(index TokenIndex, openers TokenIndexColumn)
-		if not kindSpellsBlockStructure(self.kindAt(index)) 'notBlockStructure'
+	// Only the kinds `kindAsksKeywordIsAName` admits are offered, because those are the only ones any reader
+	// asks about: an entry for anything else would be one the bisect can never be asked to match, and
+	// `keywordIsAName` panics on such a question rather than answering `false` off an empty memo. That gate
+	// stands FIRST, so the work below runs at the few tokens that can answer anything and not at every one.
+	function recordBlockKeywordName(index TokenIndex, context NameContext)
+		if not kindAsksKeywordIsAName(self.kindAt(index)) 'neverAsked'
 			return
-		end 'notBlockStructure'
+		end 'neverAsked'
 
-		if not self.keywordIsANameAt(index, inMatchBody: self.innermostOpenBlockIsAMatch(openers)) 'isBlockStructure'
+		if not self.keywordIsANameAt(index, context: context) 'isBlockStructure'
 			return
 		end 'isBlockStructure'
 
@@ -43171,13 +43293,14 @@ export type Parser
 	// The index of the `end` that closes the block opened at `index`, or the end of the token stream when
 	// nothing does — O(1) off `buildBlockExtentIndex`'s column.
 	//
-	// ⚠ ONLY MEANINGFUL AT AN OPENER, which is why a zero entry PANICS rather than answering: no block
-	// opens at that token, and any extent returned for it would be invented. Every caller asks under
+	// ⚠ ONLY MEANINGFUL AT AN OPENER THE WALK PUSHED — block structure, an `enum`/`union` declaration, or
+	// a method inside a case list — which is why a zero entry PANICS rather than answering: nothing opens
+	// at that token, and any extent returned for it would be invented. Every caller asks under
 	// `opensBlockAt`, so the panic is a tripwire and not a path.
 	function matchingEndOf(index TokenIndex) returns TokenIndex
 		let closer = try self.blockExtentEnds.get(index) otherwise panic("matchingEndOf: token {index} is outside this file's token space")
 		if closer == 0 'notAnOpener'
-			panic("matchingEndOf: no block opens at token {index} — the extent column holds a matching `end` only for a token `opensBlockAt` accepts")
+			panic("matchingEndOf: nothing opens at token {index} — the extent column holds an extent only for an opener `buildBlockExtentIndex` pushed")
 		end 'notAnOpener'
 
 		return closer
@@ -75100,20 +75223,16 @@ export type Parser
 	// that same reason.
 	//
 	// ⚠⚠ **AN `enum`/`union` BODY'S MEMBER LIST IS NOT BLOCK STRUCTURE, AND A CASE MAY BE SPELLED WITH A
-	// KEYWORD (D1).** `enum … end  while  if …` declares three cases, and `opensBlockAt`/`closesBlockAt`
-	// read those three tokens as an `end`, a `while` and an `if`. MEASURED, before the depth-0 arm below
-	// existed: a case named `end` closed the walk early, so a bare sibling call to a method declared after
-	// it reported `E3004 call to undefined function 'inner'`; a case named `while` did the opposite,
-	// over-counting so the walk ran PAST the enum's own `end` and adopted a LATER type's `helper` as a
-	// sibling — turning a bare call to a free `helper()` into `E3004 ... 'Sib.helper'`. Both are legal
-	// programs, refused.
+	// KEYWORD (D1)** — the rule the depth-0 arm below applies, and the one `keywordIsANameAt`'s case-list
+	// shape applies to the block-extent walk. MEASURED before this arm existed: a case named `end` closed
+	// the walk early, so a bare sibling call to a method declared after it reported
+	// `E3004 call to undefined function 'inner'`; a case named `while` did the opposite, running PAST the
+	// enum's own `end` and adopting a LATER type's `helper` as a sibling. Both are legal programs, refused.
 	function ensureSiblingReceivers()
 		if self.siblingReceiverScanType.equals(self.enclosingType) and self.siblingReceiverScanBody == self.enclosingTypeBodyStart 'memoHit'
 			return
 		end 'memoHit'
 
-		// Read once: it names the DECLARATION this walk is over, and it cannot change while the walk runs.
-		let inEnumBody = self.enclosingTypeIsEnum
 		var map = SiblingReceiverMap.create()
 		var depth = 0 as BlockDepth
 		var q = self.enclosingTypeBodyStart
@@ -75128,19 +75247,6 @@ export type Parser
 				// the descriptor sweep uses (`functionDeclIsStatic`), so the two scans agree by construction.
 				map.upsert(self.tokenAt(q + 1).value, value: not self.functionDeclIsStatic(q))
 			end 'method'
-
-			// At an ENUM's OWN level every token that is not a method declaration belongs to a CASE — its name
-			// (possibly a keyword), its `= raw`, its payload parens, or the label of the method whose `end` just
-			// brought the depth back here. None of it is block structure, and the body's terminator is told from
-			// a case named `end` by the one shared rule the real parse and the sweep use.
-			if inEnumBody and depth == 0 and not isMethod 'enumMemberLevel'
-				if self.enumBodyEndsAt(q) 'typeEnd'
-					break
-				end 'typeEnd'
-
-				q = q + 1
-				continue
-			end 'enumMemberLevel'
 
 			if isMethod or self.opensBlockAt(q) 'opens'
 				depth = depth + 1

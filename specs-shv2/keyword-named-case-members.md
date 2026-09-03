@@ -819,3 +819,131 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 113
 ```
+
+<!-- test: a-keyword-named-condition-after-a-case-list-spelling-block-keywords -->
+⚠ **A CASE LIST IS NOT BLOCK STRUCTURE, AND THE EXTENT WALK HAS TO KNOW WHERE ONE IS.** `while`, `match`
+and `for` on their own lines in an enum body are case names; read as openers they leak past the enum's
+`end`, so for the rest of the file the walk believes it stands inside a `match` body — and a keyword-named
+binding at the head of a condition (`if to >= from`, the shape `keyword-as-a-declared-name.md` pins at
+declaration level) is then read as an arm: the `if` opens nothing and the extent scan panics. The walk
+treats an `enum`/`union` body's own level as a case list, where every token that is not a method
+declaration is case material and the terminator is `enumBodyEndsAt`'s.
+```maxon
+typealias Idx = int(0 to 100)
+
+enum Kw
+	while
+	match
+	for
+	omega
+end 'Kw'
+
+function span(to Idx, from Idx) returns Idx
+	if to >= from 'forward'
+		return to - from
+	end 'forward'
+	return from - to
+end 'span'
+
+function tagOf(k Kw) returns Idx
+	match k 'm'
+		while then return 1
+		match then return 2
+		for then return 3
+		omega then return 0
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	return (span(50, from: 8) + tagOf(Kw.omega)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-named-function-after-a-case-list-spelling-match -->
+The other thing a leaked `match` opener would cost: a function NAMED with an arm separator, declared
+after such an enum, is a declaration — not a case-name arm — because the case list closed at its `end`.
+```maxon
+typealias Idx = int(0 to 100)
+
+enum Kw
+	while
+	match
+	for
+	omega
+end 'Kw'
+
+function gives(x Idx) returns Idx
+	return x * 10
+end 'gives'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function tagOf(k Kw) returns Idx
+	match k 'm'
+		while then return 1
+		match then return 2
+		for then return 3
+		omega then return 4
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	return (gives(tagOf(Kw.omega)) + pick(Victim.found(2))) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-case-named-enum-sharing-a-line-with-the-next-case -->
+Two cases may share a line, so a case named `enum` (or `union`) followed by the next case spells a
+DECLARATION's lookaround — the keyword, then an identifier — and only the case-list context says it is a
+name. Read as a declaration it leaks an opener past the enum's `end`; the rest of the file then reads as a
+case list, where a bare `end` is a case name rather than a closer, so the sibling walk runs past `Box`'s
+`end` and adopts the free `helper` declared after it as a method: `E3004 call to undefined function 'Box.helper'`.
+```maxon
+typealias Idx = int(0 to 100)
+
+enum Kw
+	enum omega
+end 'Kw'
+
+type Box
+	export var base as Idx
+
+	export static function create() returns Box
+		return Self{base: 0}
+	end 'create'
+
+	export function total() returns Idx
+		return self.base + helper()
+	end 'total'
+end
+
+function helper() returns Idx
+	return 12
+end 'helper'
+
+function main() returns ExitCode
+	match Kw.omega 'm'
+		enum then return 1
+		omega then return Box.create().total()
+	end 'm'
+end 'main'
+```
+```exitcode
+12
+```

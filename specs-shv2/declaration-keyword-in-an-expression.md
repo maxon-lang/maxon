@@ -62,9 +62,9 @@ agreement. `the-sweep-and-the-parse-agree-about-what-a-declaration-is` puts ever
 and reaches all of them: through a bare sibling call (which needs the type's member walk aligned) and
 through free calls (which need the whole-program signature).
 
-⚠ **ONE SHAPE OF THIS DEFECT IS NOT CURED HERE AND HAS NO CASE BELOW.** A keyword-named case standing as
-a MATCH-ARM PATTERN whose body is parenthesized spells the same three tokens at a position where a
-declaration genuinely may begin:
+⚠ **THE SAME THREE TOKENS ALSO STAND WHERE A DECLARATION GENUINELY MAY BEGIN, and there the position
+test cannot help.** A keyword-named case as a MATCH-ARM PATTERN whose value is parenthesized is first on
+its line:
 
 ```
 	return match m 'm'
@@ -73,12 +73,24 @@ declaration genuinely may begin:
 	end 'm'
 ```
 
-Telling that from a real `function gives(x Idx)` — a function NAMED `gives`, which is legal and
-compiles — needs the enclosing `match` body, which is exactly the context `keywordIsANameAt` takes from
-`buildBlockExtentIndex`'s opener stack for the eight block-structure keywords. `functionDeclarationAt`
-cannot ask it: `buildDeclaredNameIndex` reads `functionDeclarationAt` and `keywordIsAName` reads that
-index, so the question would close a cycle between them. It is a separate rung, and a case added here
-before it lands would be red.
+Telling that from a real `function gives(x Idx)` — a function NAMED `gives`, which is legal — needs the
+ENCLOSING CONTEXT: a named function can never stand inside a match body (`parseStatement` has no
+`function` arm), so `function` followed by an arm separator at a match body's own level is a case name
+and nothing else. The block-extent walk (`buildBlockExtentIndex`) is the one reader that holds that
+context — its opener stack — and it already decides, once per token, whether a block keyword standing
+where block structure could stand is a NAME (`keywordIsANameAt`). `function` is offered to that same
+verdict, and `functionDeclarationAt` reads it back: **one walk, one opener stack, one decider**, shared
+by the sweep and by every member walk that counts a function's block. The declared-name index the walk
+also feeds (`declaredNameKeywords`) is recorded in the same pass, so no pre-walk of its own reads the
+predicate — which is what lets the predicate consult the walk without a cycle.
+
+⚠ **THE OPENER STACK HAS TO BE EXACT FOR THAT TO HOLD, AND AN `enum` BODY IS WHERE IT WAS NOT.** A case
+spelled `while`/`match`/`for` on its own line is not block structure, but nothing told the walk so:
+those openers leaked past the enum's `end`, and a `function gives(…)` declared after such an enum would
+read as an arm. `keyword-named-case-members.md` pins that half — the walk treats an `enum`/`union` body's
+own level as a case list, where every token that is not a method declaration is case material and the
+body's terminator is told from a case named `end` by the one rule the parser and the sweep share
+(`enumBodyEndsAt`).
 
 ## Tests
 
@@ -311,6 +323,213 @@ function main() returns ExitCode
 		return (exported() + scoped()) as ExitCode
 	end 'ok'
 	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-case-arm-with-a-parenthesized-value-keeps-the-next-union -->
+```maxon
+typealias Idx = int(0 to 100)
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function classify(m Marker) returns Idx
+	return match m 'm'
+		function gives (1 + 1)
+		other gives 3
+	end 'm'
+end 'classify'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	return (classify(Marker.function) * 20 + pick(Victim.found(2))) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-keyword-case-arm-with-a-parenthesized-value-keeps-the-next-top-level-binding -->
+```maxon
+enum Marker
+	function
+	other
+end 'Marker'
+
+function classify(m Marker) returns Idx
+	return match m 'm'
+		function gives (1 + 1)
+		other gives 3
+	end 'm'
+end 'classify'
+
+let counter = 42
+
+function main() returns ExitCode
+	if classify(Marker.function) == 2 'ok'
+		return counter as ExitCode
+	end 'ok'
+	return 1
+end 'main'
+typealias Idx = int(0 to 100)
+```
+```exitcode
+42
+```
+
+<!-- test: a-function-named-gives-beside-the-arm-that-spells-it -->
+Both directions of the discriminator in one file: the arm is a case name, and the function NAMED `gives`
+declared after it is a declaration — a lost one would leave `main`'s call with no callee.
+```maxon
+typealias Idx = int(0 to 100)
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function classify(m Marker) returns Idx
+	return match m 'm'
+		function gives (1 + 1)
+		other gives 3
+	end 'm'
+end 'classify'
+
+function gives(x Idx) returns Idx
+	return x * 10
+end 'gives'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	return (gives(classify(Marker.function) * 2) + pick(Victim.found(2))) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: the-keyword-case-arm-inside-a-type-method-body -->
+Inside a type body the same miscount swallows the NEXT declaration into this type's member list.
+```maxon
+typealias Idx = int(0 to 100)
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+type Holder
+	export var base as Idx
+
+	export static function create() returns Holder
+		return Self{base: 20}
+	end 'create'
+
+	export function classify(m Marker) returns Idx
+		let extra = match m 'm'
+			function gives (1 + 1)
+			other gives 3
+		end 'm'
+		return self.base + extra
+	end 'classify'
+end 'Holder'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return (h.classify(Marker.function) + pick(Victim.found(20))) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-closure-with-a-block-keyword-parameter-inside-an-arm-body -->
+A closure literal inside a match arm spells `function (…) gives`, which is the shape of a payload-carrying
+case arm — so the walk's name verdict for that `function` token is "a name", and it must STILL record the
+closure's parameters as declared names: `while` here is a parameter, not the opener of a block that never
+closes. Miscounted, the sweep's depth never returns to zero and the union declared after `classify` is
+lost. (An unread closure parameter is not refused; a bare read of a block keyword is —
+`keyword-as-a-declared-name.md` — so the parameter stays unread.)
+```maxon
+typealias Idx = int(0 to 100)
+typealias Step = function(Idx) returns Idx
+
+enum Marker
+	function
+	other
+end 'Marker'
+
+function apply(f Step, x Idx) returns Idx
+	return f(x)
+end 'apply'
+
+function classify(m Marker, seed Idx) returns Idx
+	var total = match m 'm'
+		function gives apply(function(while Idx) gives 38, x: seed)
+		other gives 0
+	end 'm'
+
+	var i = 0
+	while i < 2 'bump'
+		total = total + 1
+		i = i + 1
+	end 'bump'
+	return total
+end 'classify'
+
+union Victim
+	found(index Idx)
+	absent
+end 'Victim'
+
+function pick(v Victim) returns Idx
+	match v 'v'
+		found(index) then return index
+		absent then return 0
+	end 'v'
+end 'pick'
+
+function main() returns ExitCode
+	return (classify(Marker.function, seed: 5) + pick(Victim.found(2))) as ExitCode
 end 'main'
 ```
 ```exitcode
