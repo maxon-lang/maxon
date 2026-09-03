@@ -161,11 +161,12 @@ function newestSourceUnder(dir FilePath) returns NewestSource throws NotFound
 end 'newestSourceUnder'
 
 /// The refusal a caller sees when the binary predates one of its own sources. It names the
-/// file that moved, the binary that predates it, and BOTH steps of the fix — rebuilding is
-/// not enough on its own, because the MCP host keeps the old process alive until the
-/// connection is restarted.
+/// file that moved, the binary that predates it, and all THREE steps of the fix in the only
+/// order that works: the running process holds an open handle on its own binary, so a rebuild
+/// attempted first fails on the locked artifact, and a rebuild that does succeed still leaves
+/// the host running the old process until the connection is restarted.
 export function staleSourceRefusal(newestSource String, binaryPath String) returns String
-	return "THIS MCP SERVER IS RUNNING STALE CODE AND WILL NOT ANSWER. Its binary ({binaryPath}) is older than its own source `{newestSource}`, so it cannot do what that source says it does — and a tool that answers confidently from code nobody is running is worse than one that refuses. FIX: (1) rebuild it — `{RebuildCommand}` in the tree holding that binary; (2) RESTART the MCP server, because the host is still running the old process and a rebuild alone does not replace it."
+	return "THIS MCP SERVER IS RUNNING STALE CODE AND WILL NOT ANSWER. Its binary ({binaryPath}) is older than its own source `{newestSource}`, so it cannot do what that source says it does — and a tool that answers confidently from code nobody is running is worse than one that refuses. FIX, in this order: (1) KILL the running server process — it is safe to kill, and it holds an open handle on its own binary, so a rebuild attempted first fails with `E6002: could not remove the previous build artifact ... it is locked or read-only`; (2) rebuild it — `{RebuildCommand}` in the tree holding that binary; (3) RESTART the MCP server, because the host keeps the old process until the connection is restarted."
 end 'staleSourceRefusal'
 
 /// The refusal a caller sees when freshness cannot be established at all. Refused rather

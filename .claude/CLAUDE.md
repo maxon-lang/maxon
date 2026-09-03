@@ -424,8 +424,11 @@ emits it**, and commit the regenerated files with your change.
 
 ### ⚠ THE MCP SERVER'S BINARY IS GITIGNORED AND NOTHING REBUILDS IT
 
-**If you edit anything under `maxon-dev-mcp/mcp/`, rebuild it — `maxon build maxon-dev-mcp/mcp`
-— AND RESTART THE MCP SERVER.** A rebuild alone does not replace the running process.
+**If you edit anything under `maxon-dev-mcp/mcp/` — or pull a commit that does — the fix has THREE
+steps and they only work in this order: (1) KILL the running MCP server process, which is safe to kill
+and which holds an open handle on its own binary; (2) rebuild — `maxon build maxon-dev-mcp/mcp`;
+(3) RESTART THE MCP SERVER.** Rebuilding first fails with `E6002: could not remove the previous build
+artifact ... it is locked or read-only`, and a rebuild alone does not replace the running process.
 
 You will not get away with forgetting: **every `tools/call` compares the running binary's
 timestamp against its own sources and REFUSES if a source is newer**, naming the file and the
